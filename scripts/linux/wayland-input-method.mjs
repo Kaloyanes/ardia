@@ -64,7 +64,12 @@ export class WaylandInputMethod {
       connection.once("error", reject);
     });
     const method = new WaylandInputMethod(socket);
-    await method.setUp(timeout);
+    try {
+      await method.setUp(timeout);
+    } catch (error) {
+      method.close();
+      throw error;
+    }
     return method;
   }
 

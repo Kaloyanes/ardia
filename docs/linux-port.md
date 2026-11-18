@@ -1668,7 +1668,9 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
     typed over or erased must be gone while the dialog is still open, and nothing may be left once it closes. With
     `--wayland` it runs under sway and also acts as the seat's input method (`wayland-input-method.mjs`, the
     zwp_input_method_v2 wire protocol in Node). It commits one password whole, composes one and commits it, and
-    composes one it then abandons. The abandoned composition must be gone while the dialog is open.
+    composes one it then abandons. While that composition is open, each of the three must be in memory as UTF-16,
+    showing the field received it (otherwise `ime-not-delivered`), and the abandoned one must be gone once it's
+    dropped. A run that can't bind the input method or start Ardia reports `setup-failed` and exits 2.
   - Wrong passwords back off 2 s, 5 s, 30 s, then 60 s. The grant window and supersession are polkit's.
   - `ProbeReauth` reports such a system as available (`loginPassword`), and `reauth.requested` says which method ran.
 - **Secret routes.**

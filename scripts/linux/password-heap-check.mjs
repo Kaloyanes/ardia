@@ -26,9 +26,13 @@ Flows, each typing random passwords except the login password:
   supersede  type, then a second request replaces the open dialog, Escape
   submit     type a wrong password, Enter, see the error, type the login
              password, Enter, and get the grant
-Each flow's answer must match (cancelled, cancelled, granted). Three scans:
+Each flow's answer must match (cancelled, cancelled, granted). The scans:
   while typed   the typed password is in memory exactly once, as UTF-16, and
                 not at all as UTF-8 (finding it at all shows the scanner works)
+  composing     with --wayland, while the third composition is still open, each
+                input-method password is in memory at least once as UTF-16:
+                the field received it (otherwise the verdict is
+                ime-not-delivered)
   after edits   in the open dialog, text that was selected and typed over or
                 erased with Backspace, or composed and abandoned, is gone
   after close   once every dialog has closed, no 10-character window of any
@@ -40,7 +44,10 @@ Each flow's answer must match (cancelled, cancelled, granted). Three scans:
   --dark             run with --force-dark-mode
 
 Exit status: 0 when nothing is found after the dialogs close, 1 when a copy
-is found, 2 when the run itself fails or a flow answers wrongly.`;
+is found, 2 when the run itself fails or a flow answers wrongly. report.json is
+written either way; its verdict is clean, copies-found, flows-wrong,
+ime-not-delivered, scanner-blind or setup-failed (the input method or Ardia
+didn't start).`;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lib = join(here, "..", "..", "apps", "desktop", "scripts", "acceptance", "lib");
@@ -263,24 +270,27 @@ async function main() {
     await pause(300);
   };
   const key = desk.key;
-  const inputMethod = options.wayland ? await (await import(join(here, "wayland-input-method.mjs"))).WaylandInputMethod.connect() : null;
-
-  const app = await ardia.launchArdia({
-    executable: options.executable,
-    scratch,
-    background: false,
-    ozone: desk.ozone,
-    extraArgs: options.dark ? ["--force-dark-mode"] : [],
-    env: { ...desk.env, ARDIA_LOGIN_PASSWORD: undefined },
-    label: "heap",
-    startTimeout: 90000,
-  });
+  let inputMethod = null;
+  let app = null;
+  let settingUp = true;
   let status = 2;
   try {
+    if (options.wayland) inputMethod = await (await import(join(here, "wayland-input-method.mjs"))).WaylandInputMethod.connect();
+    app = await ardia.launchArdia({
+      executable: options.executable,
+      scratch,
+      background: false,
+      ozone: desk.ozone,
+      extraArgs: options.dark ? ["--force-dark-mode"] : [],
+      env: { ...desk.env, ARDIA_LOGIN_PASSWORD: undefined },
+      label: "heap",
+      startTimeout: 90000,
+    });
     const shell = await app.mainShell({ timeout: 60000 });
     const pid = await browserPid(app.child.pid);
     if (!pid) throw new Error("no browser process found");
     step("launched", { pid });
+    settingUp = false;
     const host = (method, args) =>
       shell.eval(`(() => { const host = globalThis.__ardiaHost; return host.invoke(${JSON.stringify(method)}, { args: [host.bootstrap.profileId, ...${JSON.stringify(args)}] }).then((reply) => JSON.stringify(reply ?? null), (error) => "error:" + (error && (error.code || error.message))); })()`, { timeout: 20000 });
     step("seed login", { answer: await host("ArdiaPasswords.save", ["https://heap-check.invalid", "heap-check", "not-a-typed-secret"]) });
@@ -330,6 +340,11 @@ async function main() {
       await capture("3b-ime-composing");
       await inputMethod.commit(imeComposed);
       for (let end = 1; end <= imeAbandoned.length; end += 1) await inputMethod.preedit(imeAbandoned.slice(0, end));
+      await pause(500);
+      const received = await scan(pid, needlesFor("delivered", [imeCommitted, imeComposed, imeAbandoned]).filter((needle) => needle.scope === "whole" && needle.encoding === "utf16"));
+      const copiesOf = (part) => received.hits.filter((hit) => hit.part === part).reduce((sum, hit) => sum + hit.count, 0);
+      report.delivered = { committed: copiesOf(0), composed: copiesOf(1), composing: copiesOf(2) };
+      step("scan while composing", report.delivered);
       await inputMethod.preedit("");
       await pause(500);
       await capture("3c-ime-done");
@@ -382,19 +397,21 @@ async function main() {
     step("scan after close", { hits: report.after.hits, scannedBytes: report.after.scannedBytes, unreadableBytes: report.after.unreadableBytes });
     const cancelled = '{"unlocked":false}';
     const imeRight = !inputMethod || report.inputMethod?.password === true;
+    const imeDelivered = !inputMethod || Object.values(report.delivered).every((copies) => copies > 0);
     const flowsRight = imeRight && answers.cancel === cancelled && answers.replaced === cancelled && answers.replacing === cancelled && answers.submit === '{"unlocked":true}';
     const typedCopies = report.during.hits.filter((hit) => hit.encoding === "utf16" && hit.scope === "whole").reduce((sum, hit) => sum + hit.count, 0);
     const typedUtf8 = report.during.hits.filter((hit) => hit.encoding === "utf8" && hit.scope === "whole").reduce((sum, hit) => sum + hit.count, 0);
     report.typedCopies = { utf16: typedCopies, utf8: typedUtf8 };
     const leaked = typedCopies > 1 || typedUtf8 > 0 || report.edited.hits.length > 0 || report.after.hits.length > 0;
-    report.verdict = !flowsRight ? "flows-wrong" : typedCopies === 0 ? "scanner-blind" : leaked ? "copies-found" : "clean";
+    report.verdict = !flowsRight ? "flows-wrong" : !imeDelivered ? "ime-not-delivered" : typedCopies === 0 ? "scanner-blind" : leaked ? "copies-found" : "clean";
     status = report.verdict === "clean" ? 0 : report.verdict === "copies-found" ? 1 : 2;
   } catch (error) {
     report.error = String(error?.stack ?? error);
+    if (settingUp) report.verdict = "setup-failed";
     process.stderr.write(`${report.error}\n`);
   } finally {
     await writeFile(join(options.results, "report.json"), JSON.stringify(report, null, 2));
-    await writeFile(join(options.results, "browser.log"), await app.logText());
+    if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
     inputMethod?.close();
     await ardia.closeAllApps().catch(() => {});
   }

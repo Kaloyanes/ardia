@@ -29,6 +29,7 @@ SCENARIOS = r'''#include <malloc.h>
 #include <new>
 #include <optional>
 #include <string>
+#include <utility>
 #include "ui/base/ime/wipe_text.h"
 
 static bool g_watching = false;
@@ -77,7 +78,7 @@ int main() {
   WipesInPlace(std::string("QQQQQ"));
   std::u16string shrunk(u"QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ");
   shrunk.assign(u"ab");
-  WipesInPlace(shrunk);
+  WipesInPlace(std::move(shrunk));
 
   g_watching = true;
   {
