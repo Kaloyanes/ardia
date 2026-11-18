@@ -45,10 +45,12 @@ Each flow's answer must match (cancelled, cancelled, granted). The scans:
 
 Exit status: 0 when nothing is found after the dialogs close, 1 when a copy
 is found, 2 when the run itself fails or a flow answers wrongly. Once the
-arguments are valid and the results folder exists, report.json is written
-either way; its verdict is clean, copies-found, flows-wrong,
+arguments are valid and the results folder exists, the script tries to write
+report.json either way; its verdict is clean, copies-found, flows-wrong,
 ime-not-delivered, scanner-blind, setup-failed (the profile, the input
-method or Ardia didn't start) or run-failed (an error after setup). Missing
+method or Ardia didn't start) or run-failed (an error after setup). The
+verdict printed on stdout is write-failed when report.json or browser.log
+can't be written; then no complete report exists. Missing
 arguments, a missing display or an uncreatable results folder exit 2 with
 this text and no report. Any failure to finish, write the results or report
 exits 2, never 1.`;
@@ -425,6 +427,7 @@ async function main() {
       if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
     } catch (error) {
       process.stderr.write(`can't write the results: ${error.message}\n`);
+      report.verdict = "write-failed";
       status = 2;
     } finally {
       inputMethod?.close();
