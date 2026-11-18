@@ -47,9 +47,11 @@ Exit status: 0 when nothing is found after the dialogs close, 1 when a copy
 is found, 2 when the run itself fails or a flow answers wrongly. Once the
 arguments are valid and the results folder exists, report.json is written
 either way; its verdict is clean, copies-found, flows-wrong,
-ime-not-delivered, scanner-blind or setup-failed (the profile, the input
-method or Ardia didn't start). Missing arguments, a missing display or an
-uncreatable results folder exit 2 with this text and no report.`;
+ime-not-delivered, scanner-blind, setup-failed (the profile, the input
+method or Ardia didn't start) or run-failed (an error after setup). Missing
+arguments, a missing display or an uncreatable results folder exit 2 with
+this text and no report. Any failure to finish, write the results or report
+exits 2, never 1.`;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lib = join(here, "..", "..", "apps", "desktop", "scripts", "acceptance", "lib");
@@ -251,7 +253,12 @@ async function main() {
   }
   const ardia = await import(join(lib, "ardia.mjs"));
   const seed = await import(join(lib, "seed.mjs"));
-  await mkdir(options.results, { recursive: true });
+  try {
+    await mkdir(options.results, { recursive: true });
+  } catch (error) {
+    process.stderr.write(`can't create ${options.results}: ${error.message}\n\n${USAGE}\n`);
+    return 2;
+  }
   const scratch = join(options.results, "profile");
   const report = { dark: options.dark, wayland: options.wayland, steps: [], during: null, after: null };
   const step = (name, detail = {}) => {
@@ -409,12 +416,16 @@ async function main() {
     status = report.verdict === "clean" ? 0 : report.verdict === "copies-found" ? 1 : 2;
   } catch (error) {
     report.error = String(error?.stack ?? error);
-    if (settingUp) report.verdict = "setup-failed";
+    report.verdict = settingUp ? "setup-failed" : "run-failed";
+    status = 2;
     process.stderr.write(`${report.error}\n`);
   } finally {
     try {
       await writeFile(join(options.results, "report.json"), JSON.stringify(report, null, 2));
       if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
+    } catch (error) {
+      process.stderr.write(`can't write the results: ${error.message}\n`);
+      status = 2;
     } finally {
       inputMethod?.close();
       await ardia.closeAllApps().catch(() => {});
@@ -424,4 +435,7 @@ async function main() {
   return status;
 }
 
-process.exitCode = await main();
+process.exitCode = await main().catch((error) => {
+  process.stderr.write(`${error?.stack ?? error}\n`);
+  return 2;
+});

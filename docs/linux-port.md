@@ -1669,10 +1669,11 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
     `--wayland` it runs under sway and also acts as the seat's input method (`wayland-input-method.mjs`, the
     zwp_input_method_v2 wire protocol in Node). It commits one password whole, composes one and commits it, and
     composes one it then abandons. While that composition is open, the scan must find each of the three somewhere in
-    the browser process's memory as UTF-16 (otherwise `ime-not-delivered`). That shows each reached the browser, not
-    which allocation holds it: a committed string could match an earlier preedit copy. The abandoned one must be gone
-    once it's dropped. A run that can't seed its profile, bind the input method or start Ardia reports `setup-failed`
-    and exits 2.
+    the browser process's memory as UTF-16. That shows each reached the browser, not which allocation holds it: a
+    committed string could match an earlier preedit copy. Missing evidence gives `ime-not-delivered` once the flow
+    checks pass (a wrong answer or a non-password field purpose gives `flows-wrong` first). The abandoned one must be gone
+    once it's dropped. A run that can't seed its profile, bind the input method or start Ardia reports `setup-failed`,
+    an error after setup reports `run-failed`, and every failure to finish exits 2, never 1.
   - Wrong passwords back off 2 s, 5 s, 30 s, then 60 s. The grant window and supersession are polkit's.
   - `ProbeReauth` reports such a system as available (`loginPassword`), and `reauth.requested` says which method ran.
 - **Secret routes.**
