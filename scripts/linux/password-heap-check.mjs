@@ -49,8 +49,9 @@ arguments are valid and the results folder exists, the script tries to write
 report.json either way; its verdict is clean, copies-found, flows-wrong,
 ime-not-delivered, scanner-blind, setup-failed (the profile, the input
 method or Ardia didn't start) or run-failed (an error after setup). The
-verdict printed on stdout is write-failed when report.json or browser.log
-can't be written; then no complete report exists. Missing
+verdict is write-failed when browser.log can't be written (report.json then
+keeps the scan's verdict as scanVerdict) or when report.json itself can't
+be written (then no report exists). Missing
 arguments, a missing display or an uncreatable results folder exit 2 with
 this text and no report. Any failure to finish, write the results or report
 exits 2, never 1.`;
@@ -423,8 +424,16 @@ async function main() {
     process.stderr.write(`${report.error}\n`);
   } finally {
     try {
+      try {
+        if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
+      } catch (error) {
+        process.stderr.write(`can't write the browser log: ${error.message}\n`);
+        report.scanVerdict = report.verdict ?? null;
+        report.verdict = "write-failed";
+        report.writeError = String(error.message);
+        status = 2;
+      }
       await writeFile(join(options.results, "report.json"), JSON.stringify(report, null, 2));
-      if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
     } catch (error) {
       process.stderr.write(`can't write the results: ${error.message}\n`);
       report.verdict = "write-failed";
