@@ -44,10 +44,12 @@ Each flow's answer must match (cancelled, cancelled, granted). The scans:
   --dark             run with --force-dark-mode
 
 Exit status: 0 when nothing is found after the dialogs close, 1 when a copy
-is found, 2 when the run itself fails or a flow answers wrongly. report.json is
-written either way; its verdict is clean, copies-found, flows-wrong,
-ime-not-delivered, scanner-blind or setup-failed (the input method or Ardia
-didn't start).`;
+is found, 2 when the run itself fails or a flow answers wrongly. Once the
+arguments are valid and the results folder exists, report.json is written
+either way; its verdict is clean, copies-found, flows-wrong,
+ime-not-delivered, scanner-blind or setup-failed (the profile, the input
+method or Ardia didn't start). Missing arguments, a missing display or an
+uncreatable results folder exit 2 with this text and no report.`;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lib = join(here, "..", "..", "apps", "desktop", "scripts", "acceptance", "lib");
@@ -251,7 +253,6 @@ async function main() {
   const seed = await import(join(lib, "seed.mjs"));
   await mkdir(options.results, { recursive: true });
   const scratch = join(options.results, "profile");
-  await seed.writeProfileSeed(scratch, { session: seed.sessionSeed({ windows: [{ id: "main", urls: [""], frame: [0, 0, 1280, 800] }] }) });
   const report = { dark: options.dark, wayland: options.wayland, steps: [], during: null, after: null };
   const step = (name, detail = {}) => {
     report.steps.push({ name, at: new Date().toISOString(), ...detail });
@@ -275,6 +276,7 @@ async function main() {
   let settingUp = true;
   let status = 2;
   try {
+    await seed.writeProfileSeed(scratch, { session: seed.sessionSeed({ windows: [{ id: "main", urls: [""], frame: [0, 0, 1280, 800] }] }) });
     if (options.wayland) inputMethod = await (await import(join(here, "wayland-input-method.mjs"))).WaylandInputMethod.connect();
     app = await ardia.launchArdia({
       executable: options.executable,
@@ -410,10 +412,13 @@ async function main() {
     if (settingUp) report.verdict = "setup-failed";
     process.stderr.write(`${report.error}\n`);
   } finally {
-    await writeFile(join(options.results, "report.json"), JSON.stringify(report, null, 2));
-    if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
-    inputMethod?.close();
-    await ardia.closeAllApps().catch(() => {});
+    try {
+      await writeFile(join(options.results, "report.json"), JSON.stringify(report, null, 2));
+      if (app) await writeFile(join(options.results, "browser.log"), await app.logText());
+    } finally {
+      inputMethod?.close();
+      await ardia.closeAllApps().catch(() => {});
+    }
   }
   process.stdout.write(`${report.verdict ?? "error"}\n`);
   return status;
