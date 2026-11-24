@@ -495,9 +495,9 @@ still ships, and `publish` warns that Linux was skipped. After a stable release 
 `ardia-bin` to it (`scripts/linux/arch/publish-aur.sh`) when the `AUR_SSH_PRIVATE_KEY` secret is set; a dry run, or a
 missing secret, only shows the commit it would push.
 
-Linux engines are built on a Boat VM (boat.dev, `boat new --type xlarge --ttl 21600`, or resumed from a saved
+Linux engines are built in `msi`'s WSL 2 Ubuntu (or on a Boat VM as fallback: boat.dev, `boat new --type xlarge --ttl 21600`, or resumed from a saved
 builder snapshot and stopped right after publishing — never `--no-auto-stop`, and never in GitHub Actions). On the
-VM, at the commit whose engine key needs one:
+build host, at the commit whose engine key needs one:
 
 ```bash
 scripts/linux/build.sh --apply
