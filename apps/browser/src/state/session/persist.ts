@@ -90,7 +90,6 @@ const DOWNLOADS_FIELDS = {
 const DOCS: Doc[] = [doc(DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, DOWNLOADS_FIELDS), doc(SESSION_DOCUMENT, SESSION_VERSION, SESSION_FIELDS)];
 
 let sessionFile = SESSION_DOCUMENT;
-const fileOf = (name: string) => (name === SESSION_DOCUMENT ? sessionFile : name);
 
 function write(name: string, json: string): boolean {
   try {
@@ -152,7 +151,10 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const launch = hydrateAtLaunch(overrides);
   const loaded = launch.loaded;
   const newerSessionKept = fromNewerBuild(launch.session);
-  sessionFile = newerSessionKept ? OLDER_BUILD_SESSION_DOCUMENT : SESSION_DOCUMENT;
+  const ownSessionFile = newerSessionKept ? OLDER_BUILD_SESSION_DOCUMENT : SESSION_DOCUMENT;
+  const fileOf = (name: string) => (name === SESSION_DOCUMENT ? ownSessionFile : name);
+  sessionFile = ownSessionFile;
+  let stopped = false;
   const consent = consentToken();
   if (launch.session.state === "unusable") noteSessionSetAside(true, launch.session.reason, launch.restored?.ageDays ?? null, consent);
   if (launch.downloads.state === "unusable") noteSessionSetAside(false, launch.downloads.reason, null, consent);
@@ -179,6 +181,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   let cosmeticOnly = true;
 
   const schedule = (delay: number) => {
+    if (stopped) return;
     const at = Date.now() + delay;
     if (timer !== undefined && due <= at) return;
     clearTimeout(timer);
@@ -189,7 +192,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const save = () => {
     clearTimeout(timer);
     timer = undefined;
-    if (frozen) return;
+    if (frozen || stopped) return;
     const s = useBrowser.getState();
     const done = timeSessionSave();
     const held = new Set<string>();
@@ -282,5 +285,11 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
     check(useBrowser.getState());
     save();
   };
-  return useBrowser.subscribe((s) => check(s));
+  const unsubscribe = useBrowser.subscribe((s) => check(s));
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    timer = undefined;
+    unsubscribe();
+  };
 }

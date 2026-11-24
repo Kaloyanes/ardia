@@ -290,6 +290,35 @@ test("an older build's saves stay out of the daily backups, so the newer build's
   after();
 });
 
+test("a save queued by a stopped run never lands in the next run's held older-build file or the daily backups", async () => {
+  const primary = newerThanThisBuild(["https://newer-build.example/"]);
+  const broken = '{"version":';
+  clean();
+  const queued = [];
+  const scheduling = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, ms, ...args) => (queued.push(callback), scheduling(() => {}, 0));
+  let normal;
+  try {
+    normal = startPersistence();
+    S().createWindow({ url: "https://queued.example/" });
+  } finally {
+    globalThis.setTimeout = scheduling;
+  }
+  assert.ok(queued.length > 0, "the normal run queued a save");
+  normal();
+  stub.docs.set("session.json", primary);
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, broken);
+  stub.refusedCopies.on = true;
+  const rollback = startPersistence();
+  for (const fire of queued) fire();
+  await turn();
+  rollback();
+  assert.equal(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT), broken, "held until a copy lands");
+  assert.deepEqual(olderBuildAsides(), []);
+  assert.deepEqual(backupsOf(DAILY_BACKUP), []);
+  assert.equal(stub.docs.get("session.json"), primary);
+});
+
 test("an older build's own session is ignored once session.json is readable again", async () => {
   const current = realSession(["https://current.example/"]);
   const olderBuild = realSession(["https://older-build.example/"]);
