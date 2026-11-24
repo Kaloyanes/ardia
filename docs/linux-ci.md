@@ -219,15 +219,17 @@ it:
 2. fetches the exact engine (`--engine nearest`, an engine dir or a Chromium out dir make test builds);
 3. builds `apps/desktop/dist/linux`, the CLI and uBlock Origin;
 4. packages `Ardia-<version>-linux-x64.tar.xz` with `--version` and `--cli`, and the same tree as
-   `Ardia-<version>-linux-x64.deb` (which needs `dpkg-deb` and `readelf`), `Ardia-<version>-linux-x64.rpm` (`rpmbuild`)
-   and `Ardia-<version>-linux-x64.AppImage`, then `Ardia-<version>-linux-x64.flatpak` from the tarball (`flatpak` and
-   `flatpak-builder`; when it can't be built, a warning and a `flatpak dropped` line in `provenance.txt`, and the rest
-   goes on);
+   `Ardia-<version>-linux-x64.deb` (which needs `dpkg-deb` and `readelf`) and `Ardia-<version>-linux-x64.AppImage`,
+   then from the tarball `Ardia-<version>-linux-x64.rpm` (`rpmbuild`, `rpm`, `rpm2cpio` and `cpio`) and
+   `Ardia-<version>-linux-x64.flatpak` (`flatpak` and `flatpak-builder`). Both are optional: one that can't be built
+   gets a warning and an `rpm dropped` or `flatpak dropped` line in `provenance.txt`, and the rest goes on;
 5. writes `ardia-bin-<version>.src.tar.gz`, the PKGBUILD and `.SRCINFO` pinned to that tarball by
    `scripts/linux/arch/update-pkgbuild.sh`;
 6. writes the `.sha256` files and `provenance.txt` (version, channel, commit, engine key, Chromium version and the
    digests);
-7. runs the smoke gate on the tarball, the `.deb`, the `.rpm` and the AppImage.
+7. runs the smoke gate on the tarball, the `.deb`, the `.rpm` and the AppImage. A failure stops the build, except
+   for the `.rpm`: it is deleted with its `.sha256`, `provenance.txt` says `rpm dropped`, and the tarball, the
+   `.deb`, the AppImage and the update manifest still ship.
 
 Everything goes to `dist/<version>/linux/`, or to `--out`. It never uploads. It prints the `gh release upload` command
 for the tarball, the `.deb`, the `.rpm`, the AppImage, the Flatpak, the Arch source package, the CLI tarball (the pinned command, renamed for
@@ -240,7 +242,8 @@ The Release workflow (`release.yml`) runs it in its `linux` job, beside the Mac 
 Flatpak, and uploads the assets, their `.sha256` files and `provenance.txt` as the `linux` artifact. When an install
 test fails (after the package managers' and the image pulls' retries), the job deletes that package and its
 `.sha256`, adds a `deb dropped`, `rpm dropped` or `flatpak dropped` line to `provenance.txt` and warns, and still
-succeeds: the other assets ship without it. Only such a line lets `publish.sh` go on without the `.deb`, the `.rpm`
+succeeds: the other assets ship without it. An `.rpm` or Flatpak that `release.sh` already left out skips its install
+test with a warning. Only such a line lets `publish.sh` go on without the `.deb`, the `.rpm`
 or the Flatpak.
 The `linux-sign` job, the only one that sees the `LINUX_UPDATE_ED_PRIVATE_KEY` secret, downloads that artifact and
 signs `Ardia-<version>-linux-update.txt` with `scripts/linux/sign-update.mjs`, which refuses a key that doesn't match

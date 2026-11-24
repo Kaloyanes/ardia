@@ -7,13 +7,12 @@ nightly), the Linux counterpart of scripts/release.sh: it fetches the engine,
 builds apps/desktop/dist/linux, the ardia CLI and lib/ardia/ardia-update-verify
 (scripts/linux/update-verify.sh), prepares uBlock Origin, packages
 Ardia-<version>-linux-x64.tar.xz with lib/ardia/VERSION and the CLI, and the
-same build as Ardia-<version>-linux-x64.deb, .rpm and .AppImage and, from the
-tarball, the Flatpak bundle Ardia-<version>-linux-x64.flatpak (dev.ardia.Ardia;
-a Flatpak that fails to build is left out with a warning, recorded in
-provenance.txt),
-writes ardia-bin-<version>.src.tar.gz (the Arch PKGBUILD and .SRCINFO pinned to
-that tarball), the .sha256 files and provenance.txt, runs the smoke gate on
-the tarball, the .deb, the .rpm and the AppImage, and writes the self-update manifest
+same build as Ardia-<version>-linux-x64.deb and .AppImage and, from the
+tarball, Ardia-<version>-linux-x64.rpm and the Flatpak bundle
+Ardia-<version>-linux-x64.flatpak (dev.ardia.Ardia), writes
+ardia-bin-<version>.src.tar.gz (the Arch PKGBUILD and .SRCINFO pinned to that
+tarball), the .sha256 files and provenance.txt, runs the smoke gate on the
+tarball, the .deb, the .rpm and the AppImage, and writes the self-update manifest
 Ardia-<version>-linux-update.txt (scripts/linux/sign-update.mjs). It never
 publishes: it prints the gh release upload command for the assets.
 
@@ -40,11 +39,14 @@ It needs MARKETING_VERSION to be <version> and docs/release-notes/<version>.md,
 as scripts/release.sh does: the Linux assets go on the GitHub release the
 macOS release made. pnpm comes from PATH, else
 ~/ardia-linux-build-156/tools/pnpm/node_modules/.bin. The .deb needs dpkg-deb
-and readelf (apt install dpkg binutils, pacman -S dpkg binutils), the update
-verifier cargo and rustup (https://rustup.rs), the .rpm rpmbuild, rpm2cpio and
-cpio (apt install rpm cpio), and the Flatpak, left out without them, flatpak and
+and readelf (apt install dpkg binutils, pacman -S dpkg binutils), and the
+update verifier cargo and rustup (https://rustup.rs). The .rpm needs rpmbuild,
+rpm, rpm2cpio and cpio (apt install rpm cpio), and the Flatpak flatpak and
 flatpak-builder (apt install flatpak flatpak-builder), which fetch the runtime
-and Chromium base app from Flathub into the user installation.'
+and Chromium base app from Flathub into the user installation. Both are
+optional: an .rpm or a Flatpak that can'"'"'t be built, and an .rpm that fails
+the smoke gate, is left out with a warning and recorded in provenance.txt as
+"<format> dropped: <reason>", which publish.sh reads.'
 
 die() { echo "release.sh: $*" >&2; exit 1; }
 warn() { echo "warning: $*" >&2; }
@@ -94,7 +96,7 @@ if ! command -v pnpm >/dev/null; then
   [ -x "$fallback/pnpm" ] || die "pnpm is neither on PATH nor in $fallback"
   PATH="$fallback:$PATH"
 fi
-for tool in node python3 sha256sum tar xz git dpkg-deb readelf rpmbuild rpm2cpio cpio; do
+for tool in node python3 sha256sum tar xz git dpkg-deb readelf; do
   command -v "$tool" >/dev/null || die "$tool is required"
 done
 node scripts/lib/release-note.mjs "docs/release-notes/$version.md" headline >/dev/null \
@@ -102,7 +104,7 @@ node scripts/lib/release-note.mjs "docs/release-notes/$version.md" headline >/de
 
 release_output_entry() {
   case $1 in
-    provenance.txt|ui-build.log|update-verify.log|ubo.log|flatpak-build.log|smoke|smoke-deb|smoke-rpm|smoke-appimage) return 0 ;;
+    provenance.txt|ui-build.log|update-verify.log|ubo.log|rpm-build.log|flatpak-build.log|smoke|smoke-deb|smoke-rpm|smoke-appimage) return 0 ;;
     Ardia-*-linux-x64.tar.xz|Ardia-*-linux-x64.tar.xz.sha256) return 0 ;;
     Ardia-*-linux-x64.deb|Ardia-*-linux-x64.deb.sha256|Ardia-*-linux-x64.AppImage|Ardia-*-linux-x64.AppImage.sha256) return 0 ;;
     Ardia-*-linux-x64.rpm|Ardia-*-linux-x64.rpm.sha256|Ardia-*-linux-x64.flatpak|Ardia-*-linux-x64.flatpak.sha256) return 0 ;;
@@ -187,7 +189,23 @@ blocker=$(scripts/linux/fetch-ubo.sh 2>"$out/ubo.log") \
 echo "==> Package"
 python3 scripts/linux/package.py --out "$engine" --ui apps/desktop/dist/linux --content-blocker "$blocker" \
   --version "$version" --cli "$out/$cli_name" --update-verify "$update_verify" --destination "$out/$package_name" \
-  --deb "$out/$deb_name" --rpm "$out/$rpm_name" --appimage "$out/$appimage_name" >/dev/null
+  --deb "$out/$deb_name" --appimage "$out/$appimage_name" >/dev/null
+rpm_dropped=""
+drop_rpm() {
+  rpm_dropped=$1
+  rm -f "$out/$rpm_name" "$out/$rpm_name.sha256"
+  warn "the .rpm is left out of this release: $1"
+}
+missing_rpm_tools=""
+for tool in rpmbuild rpm rpm2cpio cpio; do
+  command -v "$tool" >/dev/null || missing_rpm_tools+=" $tool"
+done
+if [ -n "$missing_rpm_tools" ]; then
+  drop_rpm "building it needs${missing_rpm_tools}"
+else
+  python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --rpm "$out/$rpm_name" >"$out/rpm-build.log" 2>&1 \
+    || { tail -20 "$out/rpm-build.log" >&2; drop_rpm "building it failed (rpm-build.log)"; }
+fi
 flatpak_built=1
 python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --flatpak "$out/$flatpak_name" >"$out/flatpak-build.log" 2>&1 \
   || { flatpak_built=0; rm -f "$out/$flatpak_name"; tail -20 "$out/flatpak-build.log" >&2; warn "building the Flatpak failed ($out/flatpak-build.log): the release goes without it"; }
@@ -197,30 +215,38 @@ scripts/linux/arch/update-pkgbuild.sh "$version" --package "$out/$package_name" 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" -C "$srcpkg" -cf - ardia-bin \
   | gzip -n -9 > "$out/$srcpkg_name"
 rm -rf "$srcpkg"
-built_names=("$package_name" "$deb_name" "$rpm_name" "$appimage_name" "$srcpkg_name")
+built_names=("$package_name" "$deb_name" "$appimage_name" "$srcpkg_name")
+[ -n "$rpm_dropped" ] || built_names+=("$rpm_name")
 [ "$flatpak_built" = 0 ] || built_names+=("$flatpak_name")
 for built in "${built_names[@]}"; do
   (cd "$out" && sha256sum "$built" > "$built.sha256")
 done
 
-{
-  echo "version $version, $channel, linux-x64"
-  echo "commit $(git rev-parse HEAD)${dirty:+ + uncommitted changes}"
-  echo "engine key ${engine_key:-unknown} ($([ "$exact" = 1 ] && echo "exact, this commit's $head_key" || echo "not this commit's $head_key")), from $engine"
-  echo "engine source commit ${engine_commit:-unknown}"
-  echo "chromium ${chromium_version:-unknown}"
-  echo "package $(cut -d' ' -f1 "$out/$package_name.sha256")  $package_name"
-  echo "deb $(cut -d' ' -f1 "$out/$deb_name.sha256")  $deb_name"
-  echo "rpm $(cut -d' ' -f1 "$out/$rpm_name.sha256")  $rpm_name"
-  echo "appimage $(cut -d' ' -f1 "$out/$appimage_name.sha256")  $appimage_name"
-  if [ "$flatpak_built" = 1 ]; then
-    echo "flatpak $(cut -d' ' -f1 "$out/$flatpak_name.sha256")  $flatpak_name"
-  else
-    echo "flatpak dropped: building it failed (flatpak-build.log)"
-  fi
-  echo "arch $(cut -d' ' -f1 "$out/$srcpkg_name.sha256")  $srcpkg_name"
-  echo "cli $(cut -d' ' -f1 "$out/$cli_name.sha256")  $cli_name, from $(python3 -I scripts/release/official-plugins.py describe | grep '^plugin cli ')"
-} > "$out/provenance.txt"
+write_provenance() {
+  {
+    echo "version $version, $channel, linux-x64"
+    echo "commit $(git rev-parse HEAD)${dirty:+ + uncommitted changes}"
+    echo "engine key ${engine_key:-unknown} ($([ "$exact" = 1 ] && echo "exact, this commit's $head_key" || echo "not this commit's $head_key")), from $engine"
+    echo "engine source commit ${engine_commit:-unknown}"
+    echo "chromium ${chromium_version:-unknown}"
+    echo "package $(cut -d' ' -f1 "$out/$package_name.sha256")  $package_name"
+    echo "deb $(cut -d' ' -f1 "$out/$deb_name.sha256")  $deb_name"
+    if [ -z "$rpm_dropped" ]; then
+      echo "rpm $(cut -d' ' -f1 "$out/$rpm_name.sha256")  $rpm_name"
+    else
+      echo "rpm dropped: $rpm_dropped"
+    fi
+    echo "appimage $(cut -d' ' -f1 "$out/$appimage_name.sha256")  $appimage_name"
+    if [ "$flatpak_built" = 1 ]; then
+      echo "flatpak $(cut -d' ' -f1 "$out/$flatpak_name.sha256")  $flatpak_name"
+    else
+      echo "flatpak dropped: building it failed (flatpak-build.log)"
+    fi
+    echo "arch $(cut -d' ' -f1 "$out/$srcpkg_name.sha256")  $srcpkg_name"
+    echo "cli $(cut -d' ' -f1 "$out/$cli_name.sha256")  $cli_name, from $(python3 -I scripts/release/official-plugins.py describe | grep '^plugin cli ')"
+  } > "$out/provenance.txt"
+}
+write_provenance
 
 echo "==> Smoke"
 smoke_extra=()
@@ -229,8 +255,15 @@ node scripts/linux/smoke.mjs --package "$out/$package_name" --results "$out/smok
   || die "the smoke gate failed ($out/smoke/results.json)"
 node scripts/linux/smoke.mjs --package "$out/$deb_name" --results "$out/smoke-deb" --timeout-ms 600000 "${smoke_extra[@]}" \
   || die "the smoke gate failed for the .deb ($out/smoke-deb/results.json)"
-node scripts/linux/smoke.mjs --package "$out/$rpm_name" --results "$out/smoke-rpm" --timeout-ms 600000 "${smoke_extra[@]}" \
-  || die "the smoke gate failed for the .rpm ($out/smoke-rpm/results.json)"
+if [ -z "$rpm_dropped" ] && ! node scripts/linux/smoke.mjs --package "$out/$rpm_name" --results "$out/smoke-rpm" --timeout-ms 600000 "${smoke_extra[@]}"; then
+  drop_rpm "it failed the smoke gate (smoke-rpm/results.json)"
+  kept=()
+  for built in "${built_names[@]}"; do
+    [ "$built" = "$rpm_name" ] || kept+=("$built")
+  done
+  built_names=("${kept[@]}")
+  write_provenance
+fi
 node scripts/linux/smoke.mjs --package "$out/$appimage_name" --results "$out/smoke-appimage" --timeout-ms 600000 "${smoke_extra[@]}" \
   || die "the smoke gate failed for the AppImage ($out/smoke-appimage/results.json)"
 
@@ -258,6 +291,8 @@ else
   printf '  node scripts/linux/sign-update.mjs --key <LINUX_UPDATE_ED_PRIVATE_KEY pem> --dir %q --version %s\n' "$out" "$version"
   printf 'and upload both with\n  gh release upload v%s -R %s %q %q\n' "$version" "$REPO" "$out/$update_name" "$out/$update_name.sig"
 fi
+[ -z "$rpm_dropped" ] || echo "Left out: the .rpm ($rpm_dropped)."
+[ "$flatpak_built" = 1 ] || echo "Left out: the Flatpak (building it failed, flatpak-build.log)."
 echo "Install-test the .deb, the .rpm and the Flatpak with scripts/linux/deb-install-test.sh, rpm-install-test.sh and flatpak-install-test.sh, then"
 echo "publish it on the v$version release (made by the macOS release) with:"
 printf '  gh release upload v%s -R %s' "$version" "$REPO"

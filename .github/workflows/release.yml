@@ -374,6 +374,7 @@ jobs:
             libgbm1 libdrm2 libexpat1 libcairo2 libpango-1.0-0 libudev1 libasound2t64 libglib2.0-0t64
             libgtk-3-0t64 libsecret-1-0
       - name: Packaging tools
+        continue-on-error: true
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rpm cpio flatpak flatpak-builder
       - uses: ./.github/actions/linux-update-verify
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -406,7 +407,14 @@ jobs:
       - name: RPM package installs
         id: rpm-install
         continue-on-error: true
-        run: scripts/linux/rpm-install-test.sh "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-x64.rpm"
+        run: |
+          set -euo pipefail
+          if [ ! -f "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-x64.rpm" ]; then
+            echo "::warning::release.sh left the .rpm out ($(grep -m1 '^rpm dropped' "$RUNNER_TEMP/linux/provenance.txt" || echo 'see its log')), so the release ships without it"
+            echo "- Linux: the .rpm didn't build or failed the smoke gate and is left out" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          scripts/linux/rpm-install-test.sh "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-x64.rpm"
       - name: Drop the .rpm that failed its install test
         if: steps.rpm-install.outcome == 'failure'
         run: |
