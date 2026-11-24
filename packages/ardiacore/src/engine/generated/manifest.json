@@ -1495,8 +1495,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "502d825656a37b106f0f5314f2964be6ee286b41fcf546f8571fba1854e259b5",
-        "swift": "816b7b411a94fd55ea0b388a48ab1a4a203865eec0e22e42dc5a8332a399b736"
+        "types": "61009063b512da80275f0dd04c37f6e1ab06ce3fb7961d131e2f6144186b2d71",
+        "swift": "6fd9b54fdba75ce306cf9cba6b7ccf8a919b5518607cedd7c54a20f17a240dfb"
       },
       "modules": {
         "ArdiaShell": {
@@ -3425,6 +3425,20 @@
                 "tag",
                 "y",
                 "durationMs"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "steerScroll": {
+              "args": [
+                "tag",
+                "lo",
+                "hi",
+                "glideMs",
+                "canForward",
+                "canBack"
               ],
               "async": true,
               "mac": "custom",
