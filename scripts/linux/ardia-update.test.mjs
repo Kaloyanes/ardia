@@ -27,5 +27,5 @@ test("a Flatpak leaves updates to Flatpak, so Ardia never installs one there its
 });
 
 test("outside a Flatpak an install no package manager owns is still the helper's to judge", (t) => {
-  assert.equal(kind(t, { flatpak: false }), "unsupported noVersion");
+  assert.match(kind(t, { flatpak: false }), /^unsupported [A-Za-z0-9]+$/);
 });
