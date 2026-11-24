@@ -64,7 +64,7 @@ export function SettingsPage({ title, onBack, onClose, leading, trailing, childr
           mediumAppBar={mediumAppBar}
           collapsed={collapsed}
           scrolled={scrolled}
-          topInset={frame ? 0 : insets.top}
+          topInset={frame && !frame.fullScreen ? 0 : insets.top}
           leftInset={insets.left}
           rightInset={insets.right}
         />
@@ -227,11 +227,12 @@ function ClassicDivider({ inset = settingsLayout.rowInset }: { inset?: number })
 
 type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: boolean };
 
-function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, onPress }: RowBase & { value?: string; detail?: string; chevron?: boolean; onPress: () => void }) {
+function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, onPress, buttonRef }: RowBase & { value?: string; detail?: string; chevron?: boolean; onPress: () => void; buttonRef?: RefObject<ViewInstance | null> }) {
   const theme = useTheme();
   return (
     <View>
       <Pressable
+        ref={buttonRef}
         accessibilityRole="button"
         accessibilityLabel={detail ? `${title}, ${detail}` : title}
         accessibilityValue={value ? { text: value } : undefined}

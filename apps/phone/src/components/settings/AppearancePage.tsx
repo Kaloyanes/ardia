@@ -1,13 +1,13 @@
-import { useContext, useEffect, useMemo, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { themeAccent, themePalette } from "@ardia/core/src/theme.ts";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type ViewInstance } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { linearGradientCss } from "../../lib/gradient";
 import { wallpaperColorsEnabled } from "../../lib/material/schemePick";
 import { rainbow } from "../../lib/themeEditor";
 import { INTERFACE_STYLE_NAMES, INTERFACE_STYLES, offeredInterfaceStyle, offeredScheme, SCHEME_CHOICES, SCHEME_NAMES } from "../../lib/appearance";
 import { syncOffered } from "../../state/sync/offer";
-import { setColorChoice, setDynamicColors, setInterfaceStyle, setMaterialYou, setSchemeChoice } from "../../state/settings/actions";
+import { setColorChoice, setDynamicColors, setInterfaceStyle, setSchemeChoice } from "../../state/settings/actions";
 import { useAppearanceSummary } from "../../state/settings/appearance";
 import { openThemeEditor } from "../../state/settings/customTheme";
 import { usePreferences } from "../../state/settings/hooks";
@@ -16,6 +16,7 @@ import { matchMyMac } from "../../state/sync/actions";
 import { useSyncEnabled } from "../../state/sync/hooks";
 import { capsule, font, materialYouOffered, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
 import { MaterialSettingsLeading } from "./MaterialSettingsKit";
+import { useMaterialYouSwitch } from "./materialYouSwitch";
 import { Divider, Group, IconTile, NavRow, SettingsFormColorsContext, SettingsPage, ToggleRow } from "./SettingsKit";
 import { actionWords } from "../../lib/sharedWords";
 
@@ -40,8 +41,10 @@ export function AppearancePage() {
   const scheme = offeredScheme(usePreferences((p) => p.schemeChoice), offersSync);
   const styleChoices = offersSync ? INTERFACE_STYLES : INTERFACE_STYLES.filter((choice) => choice !== "matchMac");
   const schemeChoices = offersSync ? SCHEME_CHOICES : SCHEME_CHOICES.filter((choice) => choice !== "matchMac");
+  const materialSwitch = useRef<ViewInstance>(null);
+  const { reveal, change } = useMaterialYouSwitch(material, () => materialSwitch.current);
   return (
-    <SettingsPage title="Appearance" onBack={popSettings}>
+    <SettingsPage title="Appearance" onBack={popSettings} revealRef={reveal}>
       <Group footer={wallpaper ? "Turn off Dynamic Colors to choose a color." : material ? "Custom themes are available with Material You off." : undefined}>
         <ColorRow labelled={false} customAvailable={!material} presetsAvailable={!wallpaper} />
         {syncEnabled ? <MatchMyMac labelled={false} /> : null}
@@ -56,18 +59,18 @@ export function AppearancePage() {
           <CheckRow key={choice} title={SCHEME_NAMES[choice]} checked={scheme === choice} divider={index < schemeChoices.length - 1} onPress={() => setSchemeChoice(choice)} />
         ))}
       </Group>
-      {materialYouOffered() ? <AndroidAppearanceControls /> : null}
+      {materialYouOffered() ? <AndroidAppearanceControls materialSwitch={materialSwitch} onMaterialYou={change} /> : null}
     </SettingsPage>
   );
 }
 
-function AndroidAppearanceControls() {
+function AndroidAppearanceControls({ materialSwitch, onMaterialYou }: { materialSwitch: RefObject<ViewInstance | null>; onMaterialYou: (value: boolean) => void }) {
   const material = usePreferences((p) => p.materialYou);
   const colorChoice = usePreferences((p) => p.colorChoice);
   const dynamic = usePreferences((p) => p.dynamicColors);
   return (
     <Group>
-      <ToggleRow title="Material You" value={material} divider={material} onChange={setMaterialYou} />
+      <ToggleRow buttonRef={materialSwitch} title="Material You" value={material} divider={material} onChange={onMaterialYou} />
       {material ? <ToggleRow title="Dynamic Colors" value={wallpaperColorsEnabled(colorChoice, dynamic)} onChange={setDynamicColors} /> : null}
     </Group>
   );

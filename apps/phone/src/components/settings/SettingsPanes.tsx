@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type RefObject } from "react";
+import type { ViewInstance } from "react-native";
 import { refreshDefaultBrowser, useDefaultBrowser } from "../../state/settings/defaultBrowser";
 import { offersDefaultBrowser } from "../../state/settings/settingsRules";
 import { useSyncEnabled, useSyncView } from "../../state/sync/hooks";
@@ -46,12 +47,12 @@ const APP_LINKS = [
 
 const INTERVALS = (Object.keys(AUTO_ARCHIVE_INTERVALS) as AutoArchiveInterval[]).map((id) => ({ id, title: autoArchiveTitle(id) }));
 
-export function SettingsPaneList() {
+export function SettingsPaneList({ appearanceRow }: { appearanceRow?: RefObject<ViewInstance | null> }) {
   const panes = SETTINGS_PANES.filter(paneShown);
   return (
     <Group>
       {panes.map((pane, index) => (
-        <NavRow key={pane.page} title={pane.title} icon={pane.icon} tint={pane.tint} divider={index < panes.length - 1} onPress={() => pushSettings({ page: pane.page })} />
+        <NavRow key={pane.page} buttonRef={pane.page === "appearance" ? appearanceRow : undefined} title={pane.title} icon={pane.icon} tint={pane.tint} divider={index < panes.length - 1} onPress={() => pushSettings({ page: pane.page })} />
       ))}
     </Group>
   );

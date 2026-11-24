@@ -139,10 +139,10 @@ type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: bool
 
 const rowStyle = (supporting: unknown) => [styles.row, supporting ? styles.rowTwoLine : null];
 
-export function MaterialNavRow({ title, icon, value, onPress }: RowBase & { value?: string; onPress: () => void }) {
+export function MaterialNavRow({ title, icon, value, onPress, buttonRef }: RowBase & { value?: string; onPress: () => void; buttonRef?: RefObject<ViewInstance | null> }) {
   const ripple = useMaterialRipple();
   return (
-    <Pressable testID={`materialSettingsRow:${title}`} accessibilityRole="button" accessibilityLabel={title} accessibilityValue={value ? { text: value } : undefined} android_ripple={ripple} onPress={onPress} style={rowStyle(value)}>
+    <Pressable ref={buttonRef} testID={`materialSettingsRow:${title}`} accessibilityRole="button" accessibilityLabel={title} accessibilityValue={value ? { text: value } : undefined} android_ripple={ripple} onPress={onPress} style={rowStyle(value)}>
       <MaterialSettingsLeading icon={icon} />
       <ItemText title={title} supporting={value} />
     </Pressable>

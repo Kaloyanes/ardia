@@ -20,7 +20,7 @@ import { ExpoSettingsStack } from "./ExpoSettingsStack";
 import { BrowseForMePage } from "./BrowseForMePage";
 import { PageSummaryPage } from "./PageSummaryPage";
 import { ExperimentalPane, GeneralPane, SearchPane, TabsPane } from "./SettingsPanes";
-import { DesignProvider, rolesFor, useTheme } from "../ui";
+import { DesignProvider, rolesFor, useDesign, useTheme } from "../ui";
 import { SettingsFormColorsContext } from "./SettingsKit";
 
 export function SettingsPageFor({ route }: { route: SettingsRoute }) {
@@ -94,10 +94,11 @@ function PaneFor({ page }: { page: "general" | "tabs" | "search" | "experimental
 }
 
 export function SettingsView() {
+  const material = useDesign() === "material";
   if (Platform.OS === "ios") return <ExpoSettingsStack />;
   return (
-    <DesignProvider design="redesigned">
-      <HandBuiltSettings />
+    <DesignProvider design={material ? "material" : "redesigned"}>
+      <HandBuiltSettings material={material} />
     </DesignProvider>
   );
 }
@@ -109,8 +110,9 @@ const shownPageOf = (open: boolean, stack: readonly SettingsRoute[]): ShownPage 
   return route ? { key: `${stack.length}:${settingsRouteKey(route)}`, route } : null;
 };
 
-function HandBuiltSettings() {
-  const form = rolesFor(useTheme().dark);
+function HandBuiltSettings({ material }: { material: boolean }) {
+  const dark = useTheme().dark;
+  const form = material ? null : rolesFor(dark);
   const open = useSettingsNav((s) => s.open);
   const generation = useSettingsNav((s) => s.generation);
   const stack = useSettingsNav((s) => s.stack);

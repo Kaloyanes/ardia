@@ -50,7 +50,7 @@ afterEach(() => {
 
 onAndroid("where sync isn't offered, Android's Settings has no Sync card and no Spaces shortcut, the Spaces sheet and the sync pages never open, and Appearance offers no Match My Mac", () => {
   act(() => openSettings());
-  const root = inDesign("original", <SettingsView />);
+  const root = inDesign("material", <SettingsView />);
   const texts = root.root.findAll((node) => typeof node.type === "string" && typeof node.props.children === "string").map((node) => node.props.children as string);
   expect(texts).toContain("Archive");
   expect(texts).not.toContain("Spaces");
@@ -61,7 +61,7 @@ onAndroid("where sync isn't offered, Android's Settings has no Sync card and no 
   expect(useSettingsNav.getState().stack.map((route) => route.page)).toEqual(["root"]);
   act(() => openSettings({ page: "appearance" }));
   expect(textOf(root)).not.toContain("Match My Mac");
-  expect(labelled(root, "Glass")[0]!.props.accessibilityState).toEqual({ selected: true });
+  expect(labelled(root, "Glass")[0]!.props.accessibilityState).toMatchObject({ selected: true });
   expect(labelled(root, "System")[0]!.props.accessibilityState).toEqual({ selected: true });
   unmount(root);
 });

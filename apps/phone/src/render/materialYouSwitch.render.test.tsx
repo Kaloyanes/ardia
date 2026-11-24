@@ -1,15 +1,17 @@
 import { Platform, ScrollView, StyleSheet, Text } from "react-native";
 import { getByGestureTestId } from "react-native-gesture-handler/jest-utils";
-import { getAnimatedStyle } from "react-native-reanimated";
+import { getAnimatedStyle, LayoutAnimationConfig } from "react-native-reanimated";
 import { act, type ReactTestInstance } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { DesignProvider, Portal, useDesign } from "../components/ui";
+import * as coverFocus from "../components/ui/coverFocus";
+import * as settingsReveal from "../components/settings/settingsReveal";
 import { SettingsView } from "../components/settings/SettingsView";
 import { MaterialBottomBar } from "../components/ui/MaterialBottomBar";
 import { pages } from "../platform/pages";
 import { closeArchive, markSheetFromSettings, openArchive, openSpaces, useBrowse } from "../state/browse/store";
 import { handleSystemBack } from "../state/page/actions";
-import { closeSettings, openSettings, settingsScroll, useSettingsNav } from "../state/settings/nav";
+import { closeSettings, openSettings, pushSettings, settingsScroll, useSettingsNav } from "../state/settings/nav";
 import { currentPreferences, usePreferences } from "../state/settings/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { renderSurface, textOf, unmount, updateSurface, withTabs } from "../../test/render/harness";
@@ -63,38 +65,195 @@ onAndroid("Material You is off by default and the switch lives in Appearance", (
   unmount(root);
 });
 
-onAndroid("both flips keep the same Settings sheet, list and switch while changing the browser design", () => {
+const materialPages = (root: Root) => root.root.findAll((node) => node.props.testID === "materialSettingsPage" && typeof node.type === "string");
+const settingsList = (root: Root) => hostById(root, "settingsPage")!.findAll((node) => node.type === ScrollView)[0]!;
+
+onAndroid("turning Material You on in Appearance makes Settings the full-screen Material page in place, and turning it off brings the iPhone sheet back; each flip is counted", () => {
   const root = renderSurface(<Surfaces />);
   act(() => openSettings());
   settle();
   act(() => settingButton(root, "Appearance").props.onPress());
   const sheet = fullSheet(root);
-  const sheetTop = flat(sheet).top;
-  const content = hostById(root, "settingsPageContent");
-  const scroll = hostById(root, "settingsPage")!.findAll((node) => node.type === ScrollView)[0]!;
-  const toggle = materialYouRow(root)!;
+  const sheetTop = flat(sheet).top as number;
+  expect(sheetTop).toBeGreaterThan(40);
+  expect(materialPages(root)).toHaveLength(0);
+  const scroll = settingsList(root);
   act(() => scroll.props.onScroll({ nativeEvent: { contentOffset: { y: 100 } } }));
 
-  for (const enabled of [true, false]) {
-    act(() => toggle.props.onPress());
-    settle();
-    expect(useSettingsNav.getState().stack.at(-1)).toEqual({ page: "appearance" });
-    expect(fullSheet(root)).toBe(sheet);
-    expect(flat(sheet).top).toBe(sheetTop);
-    expect(hostById(root, "settingsPageContent")).toBe(content);
-    expect(settingsScroll("Appearance")).toBe(100);
-    expect(materialYouRow(root)).toBe(toggle);
-    expect(toggle.props.accessibilityState.checked).toBe(enabled);
-    expect(currentPreferences().materialYou).toBe(enabled);
-    expect(materialBars(root)).toHaveLength(enabled ? 1 : 0);
-    expect(counted).toHaveBeenCalledWith(enabled ? "material_you_turned_on" : "material_you_turned_off");
-  }
+  act(() => materialYouRow(root)!.props.onPress());
+  expect(fullSheet(root)).toBe(sheet);
+  expect(flat(sheet)).toMatchObject({ top: 0, left: 0, right: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 });
+  expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
+  settle();
+  expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
+  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }, { page: "appearance" }]);
+  expect(settingsList(root)).toBe(scroll);
+  expect(settingsScroll("Appearance")).toBe(100);
+  expect(materialPages(root)).toHaveLength(1);
+  expect(hostById(root, "materialTopAppBar")).toBeDefined();
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
+  expect(currentPreferences().materialYou).toBe(true);
+  expect(materialBars(root)).toHaveLength(1);
+  expect(counted).toHaveBeenCalledWith("material_you_turned_on");
 
-  act(() => toggle.props.onPress());
+  act(() => materialYouRow(root)!.props.onPress());
+  expect(fullSheet(root)).toBe(sheet);
+  expect(flat(sheet).top).toBe(sheetTop);
+  expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
+  settle();
+  expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
+  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }, { page: "appearance" }]);
+  expect(settingsList(root)).toBe(scroll);
+  expect(materialPages(root)).toHaveLength(0);
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(false);
+  expect(currentPreferences().materialYou).toBe(false);
+  expect(materialBars(root)).toHaveLength(0);
+  expect(counted).toHaveBeenCalledWith("material_you_turned_off");
+
   act(() => void handleSystemBack());
   expect(hostById(root, "settingsTitle")!.props.children).toBe("Settings");
   expect(settingButton(root, "Appearance")).toBeDefined();
   expect(materialYouRow(root)).toBeUndefined();
+  unmount(root);
+});
+
+onAndroid("with Material You on, Settings opens as the Material root with the switch in General, and turning it off there swaps in the iPhone pane list", () => {
+  usePreferences.setState({ materialYou: true });
+  const root = renderSurface(<Surfaces />);
+  act(() => openSettings());
+  settle();
+  const sheet = fullSheet(root);
+  expect(flat(sheet).top).toBe(0);
+  expect(materialPages(root)).toHaveLength(1);
+  expect(root.root.findAll((node) => node.props.accessibilityLabel === "Appearance" && typeof node.props.onPress === "function")).toHaveLength(0);
+  const scroll = settingsList(root);
+  act(() => scroll.props.onScroll({ nativeEvent: { contentOffset: { y: 120 } } }));
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
+
+  act(() => materialYouRow(root)!.props.onPress());
+  settle();
+  expect(fullSheet(root)).toBe(sheet);
+  expect(flat(sheet).top).toBeGreaterThan(40);
+  expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
+  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }]);
+  expect(settingsList(root)).toBe(scroll);
+  expect(settingsScroll("Settings")).toBe(120);
+  expect(materialPages(root)).toHaveLength(0);
+  expect(materialYouRow(root)).toBeUndefined();
+  expect(settingButton(root, "Appearance")).toBeDefined();
+  expect(hostById(root, "settingsTitle")!.props.children).toBe("Settings");
+  expect(currentPreferences().materialYou).toBe(false);
+  expect(counted).toHaveBeenCalledWith("material_you_turned_off");
+
+  act(() => settingButton(root, "Appearance").props.onPress());
+  act(() => materialYouRow(root)!.props.onPress());
+  settle();
+  expect(materialPages(root)).toHaveLength(1);
+  act(() => void handleSystemBack());
+  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }]);
+  expect(materialPages(root)).toHaveLength(1);
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
+  unmount(root);
+});
+
+onAndroid("a Material You flip swaps Settings' rows without their entering or exiting animations, inside the same scroll view, and leaves later scrolls alone", () => {
+  const root = renderSurface(<Surfaces />);
+  act(() => openSettings());
+  settle();
+  act(() => pushSettings({ page: "appearance" }));
+  const content = () => settingsList(root).findAll((node) => node.props.testID === "settingsPageContent" && typeof node.type === "string")[0]!;
+  const config = () => settingsList(root).findAll((node) => node.type === LayoutAnimationConfig)[0]!;
+  const list = settingsList(root);
+  const before = content();
+  const beforeConfig = config();
+  expect(beforeConfig.props).toMatchObject({ skipEntering: true, skipExiting: true });
+  act(() => list.props.onScroll({ nativeEvent: { contentOffset: { y: 60 } } }));
+  expect(content()).toBe(before);
+  act(() => materialYouRow(root)!.props.onPress());
+  settle();
+  expect(settingsList(root)).toBe(list);
+  expect(config()).not.toBe(beforeConfig);
+  expect(config().props).toMatchObject({ skipEntering: true, skipExiting: true });
+  expect(content()).not.toBe(before);
+  expect(settingsScroll("Appearance")).toBe(60);
+  const flipped = content();
+  act(() => list.props.onScroll({ nativeEvent: { contentOffset: { y: 90 } } }));
+  expect(content()).toBe(flipped);
+  unmount(root);
+});
+
+onAndroid("a Material You flip during Settings' entrance lands the new frame instead of jumping to a part-way slide", () => {
+  usePreferences.setState({ materialYou: true });
+  const root = renderSurface(<Surfaces />, { flushTimers: false });
+  act(() => openSettings());
+  act(() => jest.advanceTimersByTime(48));
+  const sheet = fullSheet(root);
+  expect((getAnimatedStyle(sheet) as { opacity: number }).opacity).toBeLessThan(1);
+  act(() => usePreferences.setState({ materialYou: false }));
+  act(() => jest.advanceTimersByTime(16));
+  expect(getAnimatedStyle(fullSheet(root))).toMatchObject({ transform: [{ translateY: 0 }] });
+  unmount(root);
+});
+
+const revealsWith = (y: number) => {
+  const actualReveal = settingsReveal.revealInList;
+  const scrolledTo: unknown[] = [];
+  const reveal = jest.spyOn(settingsReveal, "revealInList").mockImplementation((frame, target) => {
+    const list = frame.list as unknown as { getInnerViewRef: () => unknown; scrollTo: jest.Mock };
+    list.getInnerViewRef = () => ({});
+    list.scrollTo.mockImplementation((to: unknown) => void scrolledTo.push(to));
+    (target as unknown as { measureLayout: (relative: unknown, onSuccess: (x: number, y: number, width: number, height: number) => void) => void }).measureLayout = (_relative, onSuccess) => onSuccess(0, y, 393, 72);
+    actualReveal(frame, target);
+  });
+  return { reveal, scrolledTo };
+};
+
+onAndroid("turning Material You off from the Material root brings Appearance, where the switch now lives, into view before focusing it", () => {
+  const { reveal, scrolledTo } = revealsWith(40);
+  const focus = jest.spyOn(coverFocus, "focusForScreenReader").mockImplementation(() => () => undefined);
+  usePreferences.setState({ materialYou: true });
+  const root = renderSurface(<Surfaces />);
+  act(() => openSettings());
+  settle();
+  const list = settingsList(root);
+  act(() => list.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 393, height: 700 } } }));
+  act(() => list.props.onScroll({ nativeEvent: { contentOffset: { y: 260 } } }));
+  reveal.mockClear();
+  focus.mockClear();
+  act(() => materialYouRow(root)!.props.onPress());
+  settle();
+  expect(reveal).toHaveBeenCalledTimes(1);
+  const [frame, target] = reveal.mock.calls[0]!;
+  expect(frame).toMatchObject({ scrollY: 260, viewport: 700 });
+  expect(target).not.toBeNull();
+  expect(scrolledTo).toEqual([{ y: 40, animated: false }]);
+  expect(focus).toHaveBeenCalledTimes(1);
+  expect(focus.mock.calls[0]![0]()).toBe(target);
+  expect(reveal.mock.invocationCallOrder[0]!).toBeLessThan(focus.mock.invocationCallOrder[0]!);
+  unmount(root);
+});
+
+onAndroid("Material You returns TalkBack focus to the replacement switch after each flip in Appearance and after turning it on from the root", () => {
+  const focus = jest.spyOn(coverFocus, "focusForScreenReader").mockImplementation(() => () => undefined);
+  const root = renderSurface(<Surfaces />);
+  act(() => openSettings({ page: "appearance" }));
+  settle();
+  for (const enabled of [true, false]) {
+    focus.mockClear();
+    act(() => materialYouRow(root)!.props.onPress());
+    settle();
+    expect(currentPreferences().materialYou).toBe(enabled);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus.mock.calls[0]![0]()).not.toBeNull();
+  }
+  act(() => materialYouRow(root)!.props.onPress());
+  act(() => void handleSystemBack());
+  settle();
+  focus.mockClear();
+  act(() => materialYouRow(root)!.props.onPress());
+  settle();
+  expect(focus).toHaveBeenCalledTimes(1);
+  expect(focus.mock.calls[0]![0]()).not.toBeNull();
   unmount(root);
 });
 
@@ -141,7 +300,7 @@ test("a menu portal retains its opening design through its exit", () => {
   unmount(root);
 });
 
-onAndroid("Archive opened from Settings while Material You is on slides up as a sheet instead of appearing in place", () => {
+onAndroid("Archive opened from full-screen Material Settings slides up as a sheet instead of appearing in place", () => {
   usePreferences.setState({ materialYou: true });
   const root = renderSurface(<Surfaces />);
   act(() => openSettings());
@@ -175,10 +334,10 @@ for (const [name, open] of [["Archive", openArchive], ["Spaces", openSpaces]] as
     for (let pass = 0; pass < 4; pass++) settle();
     expect(getAnimatedStyle(fullSheet(root))).toMatchObject({ transform: [{ translateY: 0 }] });
     act(() => void handleSystemBack());
-    expect(hostById(root, "settingsTitle")!.props.children).toBe("Settings");
+    expect(materialPages(root)).toHaveLength(1);
     for (let frame = 0; frame < 20; frame++) {
       act(() => jest.advanceTimersByTime(16));
-      expect(getAnimatedStyle(fullSheet(root))).toMatchObject({ transform: [{ translateY: 0 }] });
+      expect(getAnimatedStyle(fullSheet(root))).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
     }
     act(() => {
       closeSettings();

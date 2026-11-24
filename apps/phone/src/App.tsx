@@ -178,7 +178,8 @@ export function Surfaces() {
   const layer = inkLayer({ onboarding, voice, sheet: sheetCovers, searching: searching || libraryCovers, surface });
   const incognitoScheme = useMaterialTheme(true).scheme;
   const behind = material && incognito ? incognitoScheme.surface : theme.backdrop[0];
-  const lightIcons = lightStatusIcons(layer, { cover: behind, surface: theme.canvas, deck: behind, incognito: incognito && !libraryCovers });
+  const settingsFullScreen = material && front === "settings";
+  const lightIcons = settingsFullScreen && layer === "sheet" ? theme.dark : lightStatusIcons(layer, { cover: behind, surface: theme.canvas, deck: behind, incognito: incognito && !libraryCovers });
   useEffect(goBackToStartIfEmpty, [tabId, surface]);
   const duo = useScreenLayout((s) => s.layout.name === "wide" || s.layout.name === "split");
   const deckMounted = useDeckStandby(surface, surface === "browsing" && tabId !== null && opening === null && leaving === null && !searching && !voice && !onboarding && front === null, tabId);
@@ -211,7 +212,7 @@ export function Surfaces() {
         </SheetBackground>
       </DesignProvider>
       <Layer covered={onboarding || voice}>
-        <FullSheet sheet={front} redesignedSheet="settings" dragEnabled={settings !== "filters"} progress={sheetProgress} onDismiss={front === "settings" ? closeSettings : front === "library" ? closeLibrary : closeArchive}>
+        <FullSheet sheet={front} fullScreenSheet="settings" dragEnabled={settings !== "filters"} progress={sheetProgress} onDismiss={front === "settings" ? closeSettings : front === "library" ? closeLibrary : closeArchive}>
           {(shown) => (shown === "settings" ? <SettingsView /> : shown === "library" ? <LibraryView /> : shown === "archive" ? <ArchiveView /> : <SpacesView />)}
         </FullSheet>
       </Layer>
