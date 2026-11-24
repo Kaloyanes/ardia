@@ -26,10 +26,13 @@
  void GetUserDataDirFromRegistryPolicyIfSet(const InstallConstants& mode,
                                             std::wstring* user_data_dir) {
    assert(user_data_dir);
-@@ -108,8 +120,332 @@
-   return GetCommandLineSwitch(command_line, L"headless").has_value();
+@@ -103,13 +115,362 @@
+   return true;
  }
  
+-// Returns true if the |command_line| contains --headless switch.
+-bool IsHeadlessMode(const std::wstring& command_line) {
+-  return GetCommandLineSwitch(command_line, L"headless").has_value();
 +std::wstring FinalPathOfHandle(HANDLE handle, DWORD volume) {
 +  const DWORD flags = volume | FILE_NAME_NORMALIZED;
 +  std::wstring path;
@@ -221,6 +224,49 @@
 +      c = static_cast<wchar_t>(c - L'A' + L'a');
 +  }
 +  return text;
+ }
+ 
++struct LaunchSwitches {
++  std::wstring shell;
++  std::wstring process_type;
++  bool headless = false;
++};
++
++LaunchSwitches ParseLaunchSwitches(const std::wstring& command_line) {
++  LaunchSwitches switches;
++  const std::wstring trimmed = TrimmedLikeBase(command_line);
++  if (trimmed.empty())
++    return switches;
++  const std::vector<std::wstring> tokens = TokenizeCommandLineToArray(trimmed);
++  bool parse_switches = true;
++  for (size_t i = 1; i < tokens.size(); ++i) {
++    const std::wstring arg = TrimmedLikeBase(tokens[i]);
++    parse_switches = parse_switches && arg != L"--";
++    if (!parse_switches)
++      continue;
++    const size_t prefix = SwitchPrefixLength(arg);
++    if (prefix == 0 || prefix == arg.size())
++      continue;
++    const size_t equals = arg.find(L'=');
++    const std::wstring switch_string = arg.substr(0, equals);
++    if (switch_string.substr(prefix) == L"single-argument")
++      break;
++    const std::wstring key = AsciiLower(switch_string);
++    const std::wstring name = key.substr(SwitchPrefixLength(key));
++    const std::wstring value =
++        equals == std::wstring::npos ? std::wstring() : arg.substr(equals + 1);
++    if (name == L"ardia-shell")
++      switches.shell = value;
++    else if (name == L"type")
++      switches.process_type = value;
++    else if (name == L"headless")
++      switches.headless = true;
++  }
++  return switches;
++}
++
++bool IsHeadlessMode(const std::wstring& command_line) {
++  return ParseLaunchSwitches(command_line).headless;
 +}
 +
 +bool VanishedWhileListing(DWORD error) {
@@ -283,11 +329,28 @@
 +          (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
 +}
 +
++std::wstring ExtendedLengthPath(std::wstring path) {
++  if (path.size() < MAX_PATH)
++    return path;
++  for (wchar_t& c : path) {
++    if (c == L'/')
++      c = L'\\';
++  }
++  if (path.starts_with(L"\\\\?\\") || path.starts_with(L"\\\\.\\"))
++    return path;
++  if (path.starts_with(L"\\\\"))
++    return L"\\\\?\\UNC\\" + path.substr(2);
++  const bool drive_absolute = ((path[0] >= L'A' && path[0] <= L'Z') ||
++                               (path[0] >= L'a' && path[0] <= L'z')) &&
++                              path[1] == L':' && path[2] == L'\\';
++  return drive_absolute ? L"\\\\?\\" + path : path;
++}
++
 +std::wstring ReactNativeAppLibraryPath() {
 +  const std::wstring folder = ExecutableDirectory();
 +  if (folder.empty())
 +    return std::wstring();
-+  const std::wstring library = folder + L"ArdiaApp.dll";
++  const std::wstring library = ExtendedLengthPath(folder + L"ArdiaApp.dll");
 +  return PlainFileExists(library) ? library : std::wstring();
 +}
 +
@@ -314,40 +377,10 @@
 +}
 +
 +bool IsWebUIShellCommandLine(const std::wstring& command_line) {
-+  const std::wstring trimmed = TrimmedLikeBase(command_line);
-+  if (trimmed.empty())
-+    return !ReactNativeAppLibraryBesideExe();
-+  const std::vector<std::wstring> tokens = TokenizeCommandLineToArray(trimmed);
-+  bool parse_switches = true;
-+  std::wstring shell;
-+  std::wstring process_type;
-+  bool headless = false;
-+  for (size_t i = 1; i < tokens.size(); ++i) {
-+    const std::wstring arg = TrimmedLikeBase(tokens[i]);
-+    parse_switches = parse_switches && arg != L"--";
-+    if (!parse_switches)
-+      continue;
-+    const size_t prefix = SwitchPrefixLength(arg);
-+    if (prefix == 0 || prefix == arg.size())
-+      continue;
-+    const size_t equals = arg.find(L'=');
-+    const std::wstring switch_string = arg.substr(0, equals);
-+    if (switch_string.substr(prefix) == L"single-argument")
-+      break;
-+    const std::wstring key = AsciiLower(switch_string);
-+    const std::wstring name = key.substr(SwitchPrefixLength(key));
-+    const std::wstring value =
-+        equals == std::wstring::npos ? std::wstring() : arg.substr(equals + 1);
-+    if (name == L"ardia-shell")
-+      shell = value;
-+    else if (name == L"type")
-+      process_type = value;
-+    else if (name == L"headless")
-+      headless = true;
-+  }
-+  return process_type.empty() && shell != L"rnw" &&
-+         (shell == L"webui" ||
-+          (!headless && !ReactNativeAppLibraryBesideExe()));
++  const LaunchSwitches switches = ParseLaunchSwitches(command_line);
++  return switches.process_type.empty() && switches.shell != L"rnw" &&
++         (switches.shell == L"webui" ||
++          (!switches.headless && !ReactNativeAppLibraryBesideExe()));
 +}
 +
 +bool WebUIShellSelectedForUserDataDirectory() {
@@ -359,7 +392,7 @@
  bool GetUserDataDirectoryImpl(const std::wstring& command_line,
                                const InstallConstants& mode,
                                std::wstring* result,
-@@ -135,6 +471,18 @@
+@@ -135,6 +496,18 @@
      }
    }
  
@@ -378,7 +411,7 @@
    // Headless Chrome instances are expected to run in parallel with the headful
    // Chrome and other headless Chrome instances. In order to do so, headless
    // Chrome needs a dedicated user data directory for each headless instance.
-@@ -157,8 +505,18 @@
+@@ -157,8 +530,18 @@
      user_data_dir.pop_back();
    }
  
@@ -397,7 +430,7 @@
    if (!got_valid_directory) {
      *invalid_supplied_directory = user_data_dir;
      got_valid_directory = GetDefaultUserDataDirectory(mode, &user_data_dir);
-@@ -171,6 +529,17 @@
+@@ -171,6 +554,17 @@
    if (!got_valid_directory)
      return false;
  
@@ -425,11 +458,13 @@
  #include <string>
  
  namespace install_static {
-@@ -49,6 +50,23 @@
+@@ -49,6 +50,25 @@
  // data directory specification.
  bool IsTemporaryUserDataDirectoryCreatedForHeadless();
  
 +bool PlainFileExists(const std::wstring& path);
++
++std::wstring ExtendedLengthPath(std::wstring path);
 +
 +std::wstring ReactNativeAppLibraryPath();
 +
@@ -567,7 +602,7 @@
    const std::wstring registry_user_data_dir(L"C:\\UserDataDir");
  
    registry_util::RegistryOverrideManager override_manager;
-@@ -215,7 +237,305 @@
+@@ -215,7 +237,336 @@
    EXPECT_THAT(invalid, IsEmpty());
  
    EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
@@ -669,8 +704,8 @@
 +  ::LocalFree(args);
 +  ::FreeLibrary(shell);
 +  return tokens;
-+}
-+
+ }
+ 
 +TEST_F(UserDataDir, ArdiaShellSwitchMatchesBaseCommandLine) {
 +  for (const bool react_native_app_present : {false, true}) {
 +    SetReactNativeAppLibraryPresentForTesting(react_native_app_present);
@@ -707,21 +742,84 @@
 +  EXPECT_FALSE(IsWebUIShellCommandLine(L"chrome.exe --ardia-shell=rnw"));
 +  EXPECT_FALSE(
 +      IsWebUIShellCommandLine(L"chrome.exe --type=renderer --ardia-shell=webui"));
- }
- 
++}
++
++void ExpectShellProfile(const wchar_t* command_line,
++                        bool react_native_app_present,
++                        bool webui) {
++  SCOPED_TRACE(base::WideToUTF8(command_line));
++  SCOPED_TRACE(react_native_app_present);
++  registry_util::RegistryOverrideManager override_manager;
++  std::wstring hklm, hkcu;
++  ASSERT_NO_FATAL_FAILURE(
++      override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE, &hklm));
++  ASSERT_NO_FATAL_FAILURE(
++      override_manager.OverrideRegistry(HKEY_CURRENT_USER, &hkcu));
++  ScopedNTRegistryTestingOverride nt_hklm(nt::HKLM, hklm);
++  ScopedNTRegistryTestingOverride nt_hkcu(nt::HKCU, hkcu);
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const std::wstring local = temp.GetPath().value() + L"\\Local";
++  const std::wstring roaming = temp.GetPath().value() + L"\\Roaming";
++  ASSERT_TRUE(::CreateDirectoryW(local.c_str(), nullptr));
++  ASSERT_TRUE(::CreateDirectoryW(roaming.c_str(), nullptr));
++  base::ScopedEnvironmentVariableOverride local_app_data(
++      "LOCALAPPDATA", base::WideToUTF8(local));
++  base::ScopedEnvironmentVariableOverride app_data("APPDATA",
++                                                   base::WideToUTF8(roaming));
++  SetReactNativeAppLibraryPresentForTesting(react_native_app_present);
++  std::wstring result, invalid;
++  ASSERT_TRUE(GetUserDataDirectoryImpl(command_line, kFakeInstallConstants,
++                                       &result, &invalid));
++  EXPECT_EQ(webui, result.ends_with(L"\\Ardia WebUI\\Chromium"));
++  EXPECT_EQ(!webui, result.ends_with(kUserDataDirNameSuffix));
++  EXPECT_EQ(std::wstring(), invalid);
++}
++
 +TEST_F(UserDataDir, FlaglessHeadlessKeepsItsOwnTemporaryProfile) {
 +  SetReactNativeAppLibraryPresentForTesting(false);
-+  EXPECT_FALSE(IsWebUIShellCommandLine(L"m.exe --headless"));
++  for (const wchar_t* command_line :
++       {L"m.exe --headless", L"m.exe --HEADLESS=new", L"m.exe /headless"}) {
++    SCOPED_TRACE(base::WideToUTF8(command_line));
++    EXPECT_FALSE(IsWebUIShellCommandLine(command_line));
++    std::wstring result, invalid;
++    ASSERT_TRUE(GetUserDataDirectoryImpl(command_line, kFakeInstallConstants,
++                                         &result, &invalid));
++    EXPECT_TRUE(IsTemporaryUserDataDirectoryCreatedForHeadless());
++    EXPECT_THAT(result, HasSubstr(L"\\Headless"));
++    EXPECT_FALSE(result.ends_with(L"\\Ardia WebUI\\Chromium"));
++    EXPECT_EQ(std::wstring(), invalid);
++    EXPECT_TRUE(::RemoveDirectory(result.c_str()));
++  }
 +  EXPECT_TRUE(IsWebUIShellCommandLine(L"m.exe --headless --ardia-shell=webui"));
-+  std::wstring result, invalid;
-+  ASSERT_TRUE(GetUserDataDirectoryImpl(L"m.exe --headless",
-+                                       kFakeInstallConstants, &result,
-+                                       &invalid));
-+  EXPECT_TRUE(IsTemporaryUserDataDirectoryCreatedForHeadless());
-+  EXPECT_THAT(result, HasSubstr(L"\\Headless"));
-+  EXPECT_FALSE(result.ends_with(L"\\Ardia WebUI\\Chromium"));
-+  EXPECT_EQ(std::wstring(), invalid);
-+  EXPECT_TRUE(::RemoveDirectory(result.c_str()));
++}
++
++TEST_F(UserDataDir, HeadlessAfterTheSwitchTerminatorIsNotHeadless) {
++  SetReactNativeAppLibraryPresentForTesting(false);
++  EXPECT_TRUE(IsWebUIShellCommandLine(L"m.exe -- --headless"));
++  ExpectShellProfile(L"m.exe -- --headless", false, true);
++  EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
++}
++
++TEST_F(UserDataDir, ExtendedLengthPathPrefixesOnlyLongAbsolutePaths) {
++  const std::wstring tail(MAX_PATH, L'a');
++  EXPECT_EQ(L"C:\\Ardia\\ArdiaApp.dll",
++            ExtendedLengthPath(L"C:\\Ardia\\ArdiaApp.dll"));
++  EXPECT_EQ(L"C:/Ardia/ArdiaApp.dll",
++            ExtendedLengthPath(L"C:/Ardia/ArdiaApp.dll"));
++  EXPECT_EQ(L"\\\\?\\C:\\" + tail, ExtendedLengthPath(L"C:\\" + tail));
++  EXPECT_EQ(L"\\\\?\\d:\\" + tail + L"\\x",
++            ExtendedLengthPath(L"d:/" + tail + L"/x"));
++  EXPECT_EQ(L"\\\\?\\UNC\\server\\share\\" + tail,
++            ExtendedLengthPath(L"\\\\server\\share\\" + tail));
++  EXPECT_EQ(L"\\\\?\\UNC\\server\\share\\" + tail,
++            ExtendedLengthPath(L"//server/share/" + tail));
++  EXPECT_EQ(L"\\\\?\\C:\\" + tail,
++            ExtendedLengthPath(L"\\\\?\\C:\\" + tail));
++  EXPECT_EQ(L"\\\\.\\C:\\" + tail,
++            ExtendedLengthPath(L"\\\\.\\C:\\" + tail));
++  EXPECT_EQ(L"Ardia\\" + tail, ExtendedLengthPath(L"Ardia\\" + tail));
++  EXPECT_EQ(L"\\" + tail, ExtendedLengthPath(L"\\" + tail));
 +}
 +
 +TEST_F(UserDataDir, ReactNativeAppLibraryProbeFindsNothingBesideTheTestBinary) {
@@ -756,38 +854,6 @@
 +  EXPECT_FALSE(PlainFileExists(dangling));
 +  EXPECT_FALSE(PlainFileExists(linked));
 +  EXPECT_FALSE(PlainFileExists(std::wstring()));
-+}
-+
-+void ExpectShellProfile(const wchar_t* command_line,
-+                        bool react_native_app_present,
-+                        bool webui) {
-+  SCOPED_TRACE(base::WideToUTF8(command_line));
-+  SCOPED_TRACE(react_native_app_present);
-+  registry_util::RegistryOverrideManager override_manager;
-+  std::wstring hklm, hkcu;
-+  ASSERT_NO_FATAL_FAILURE(
-+      override_manager.OverrideRegistry(HKEY_LOCAL_MACHINE, &hklm));
-+  ASSERT_NO_FATAL_FAILURE(
-+      override_manager.OverrideRegistry(HKEY_CURRENT_USER, &hkcu));
-+  ScopedNTRegistryTestingOverride nt_hklm(nt::HKLM, hklm);
-+  ScopedNTRegistryTestingOverride nt_hkcu(nt::HKCU, hkcu);
-+  base::ScopedTempDir temp;
-+  ASSERT_TRUE(temp.CreateUniqueTempDir());
-+  const std::wstring local = temp.GetPath().value() + L"\\Local";
-+  const std::wstring roaming = temp.GetPath().value() + L"\\Roaming";
-+  ASSERT_TRUE(::CreateDirectoryW(local.c_str(), nullptr));
-+  ASSERT_TRUE(::CreateDirectoryW(roaming.c_str(), nullptr));
-+  base::ScopedEnvironmentVariableOverride local_app_data(
-+      "LOCALAPPDATA", base::WideToUTF8(local));
-+  base::ScopedEnvironmentVariableOverride app_data("APPDATA",
-+                                                   base::WideToUTF8(roaming));
-+  SetReactNativeAppLibraryPresentForTesting(react_native_app_present);
-+  std::wstring result, invalid;
-+  ASSERT_TRUE(GetUserDataDirectoryImpl(command_line, kFakeInstallConstants,
-+                                       &result, &invalid));
-+  EXPECT_EQ(webui, result.ends_with(L"\\Ardia WebUI\\Chromium"));
-+  EXPECT_EQ(!webui, result.ends_with(kUserDataDirNameSuffix));
-+  EXPECT_EQ(std::wstring(), invalid);
 +}
 +
 +TEST_F(UserDataDir, ArdiaShellPicksTheProfileForEachLaunch) {
@@ -873,3 +939,50 @@
 +
  }  // namespace
  }  // namespace install_static
+--- a/chrome/chrome_elf/chrome_elf.def
++++ b/chrome/chrome_elf/chrome_elf.def
+@@ -25,6 +25,7 @@
+   DumpProcessWithoutCrash
+   GetUserDataDirectoryThunk
+   IsTemporaryUserDataDirectoryCreatedForHeadless
++  IsWebUIShellSelectedForUserDataDirectory
+   SignalChromeElf
+   SignalInitializeCrashReporting
+   IsExtensionPointDisableSet
+--- a/chrome/chrome_elf/chrome_elf_main.cc
++++ b/chrome/chrome_elf/chrome_elf_main.cc
+@@ -59,6 +59,10 @@
+   return install_static::IsTemporaryUserDataDirectoryCreatedForHeadless();
+ }
+ 
++bool IsWebUIShellSelectedForUserDataDirectory() {
++  return install_static::WebUIShellSelectedForUserDataDirectory();
++}
++
+ // DllMain
+ // -------
+ // Warning: The OS loader lock is held during DllMain.  Be careful.
+--- a/chrome/chrome_elf/chrome_elf_main.h
++++ b/chrome/chrome_elf/chrome_elf_main.h
+@@ -25,6 +25,8 @@
+ // data directory specification.
+ bool IsTemporaryUserDataDirectoryCreatedForHeadless();
+ 
++bool IsWebUIShellSelectedForUserDataDirectory();
++
+ // This function is a temporary workaround for https://crbug.com/41280821. We
+ // need to come up with a better way to initialize crash reporting that can
+ // happen inside DllMain().
+--- a/chrome/chrome_elf/chrome_elf_test_stubs.cc
++++ b/chrome/chrome_elf/chrome_elf_test_stubs.cc
+@@ -42,6 +42,10 @@
+   return false;
+ }
+ 
++bool IsWebUIShellSelectedForUserDataDirectory() {
++  return false;
++}
++
+ void SetMetricsClientId(const char* client_id) {}
+ 
+ //------------------------------------------------------------------------------

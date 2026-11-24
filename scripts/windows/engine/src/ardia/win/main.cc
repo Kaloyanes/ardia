@@ -42,6 +42,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+#include "chrome/chrome_elf/chrome_elf_main.h"
 #include "chrome/install_static/user_data_dir.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
@@ -160,13 +161,21 @@ bool BrowserProcess(const base::CommandLine& command_line) {
   return command_line.GetSwitchValueNative(switches::kProcessType).empty();
 }
 
+constexpr size_t kLongestUserDataDirectory = 32768;
+
 std::wstring ChromiumUserDataDir() {
-  std::wstring user_data_dir;
-  std::wstring invalid;
-  if (!install_static::GetUserDataDirectory(&user_data_dir, &invalid) ||
-      !invalid.empty()) {
+  std::wstring user_data_dir(kLongestUserDataDirectory, L'\0');
+  std::wstring invalid(kLongestUserDataDirectory, L'\0');
+  if (!GetUserDataDirectoryThunk(user_data_dir.data(), user_data_dir.size(),
+                                 invalid.data(), invalid.size()) ||
+      invalid[0] != L'\0') {
     return std::wstring();
   }
+  const size_t end = user_data_dir.find(L'\0');
+  if (end == std::wstring::npos) {
+    return std::wstring();
+  }
+  user_data_dir.resize(end);
   return user_data_dir;
 }
 
@@ -468,9 +477,13 @@ void ClaimGuardUntilOwned(int attempts_left) {
 bool StartApp() {
   App& app = TheApp();
   const std::wstring path = install_static::ReactNativeAppLibraryPath();
-  app.module = path.empty() ? nullptr
-                            : ::LoadLibraryExW(path.c_str(), nullptr,
-                                               LOAD_WITH_ALTERED_SEARCH_PATH);
+  const DWORD load_flags =
+      path.starts_with(L"\\\\?\\")
+          ? LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+          : LOAD_WITH_ALTERED_SEARCH_PATH;
+  app.module = path.empty()
+                   ? nullptr
+                   : ::LoadLibraryExW(path.c_str(), nullptr, load_flags);
   if (!app.module) {
     const DWORD error = path.empty() ? ERROR_MOD_NOT_FOUND : ::GetLastError();
     FailStart(error == ERROR_MOD_NOT_FOUND
@@ -657,7 +670,7 @@ void RefuseReactNativeFolders(const std::wstring& app_data,
 }
 
 void RefuseShellModeDisagreement(bool webui) {
-  const bool early = install_static::WebUIShellSelectedForUserDataDirectory();
+  const bool early = IsWebUIShellSelectedForUserDataDirectory();
   const bool reparsed = WebUIShellRequested(
       base::CommandLine::FromString(::GetCommandLineW()));
   if (webui == early && reparsed == early) {
