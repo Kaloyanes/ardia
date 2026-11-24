@@ -10,7 +10,14 @@ const { settingsAdapter } = await import("../sync/settingsAdapter.ts");
 const { PRESETS } = await import("../onboarding/presets.ts");
 const { search } = await import("../../components/settings/searchMatch.ts");
 const { findSetting, SETTINGS_INDEX } = await import("../../components/settings/settingsIndex.ts");
+const { flushPersistence, startPersistence } = await import("../session/persist.ts");
+const onboarding = await import("../onboarding/onboarding.ts");
+const { questionKeys } = await import("../onboarding/questions.ts");
+const { tabLayoutOf } = await import("../browser/model.ts");
+const { usePlugins } = await import("../plugins/store.ts");
 const stub = await import("../../test-native/index.ts");
+
+usePlugins.setState({ scanned: true });
 
 const S = () => useBrowser.getState();
 const KEY = "cmdClickCreatesTabGroup";
@@ -51,8 +58,8 @@ test("a new install doesn't group ⌘-clicked links: the setting is off by defau
   assert.ok(S().settingsMeta.inferred.includes(APPLIED));
 });
 
-test("onboarding's no-source prefill (the Dia preset) leaves it off too", () => {
-  assert.equal(PRESETS.dia[KEY], false);
+test("no onboarding preset turns it on, and the Dia preset leaves it to the default instead of writing an off", () => {
+  assert.equal(KEY in PRESETS.dia, false);
   for (const preset of Object.values(PRESETS)) assert.notEqual(preset[KEY], true);
 });
 
@@ -101,4 +108,79 @@ test("the settings row explains itself and turns up for tab-group and grouping s
   for (const query of ["cmd click", "ctrl click", "tab group", "auto group", "grouping", "nested tabs"]) {
     assert.ok(search(SETTINGS_INDEX, query).some((h) => h.entry.id === ROW), query);
   }
+});
+
+test("a true the old onboarding saved as chosen (the Dia prefill or a click, saved state can't tell them apart) is an explicit choice and stays on", () => {
+  stub.docs.set("onboarding.json", JSON.stringify({ version: 1, completedAt: 1, source: "dia", preset: "dia", picked: { tabsMore: [] } }));
+  assert.deepEqual(load(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [KEY, "tabLayout", "peekModifier"], inferred: [] })), { on: true, chosen: true, inferred: false });
+  assert.equal(pushed(), true);
+  stub.docs.delete("onboarding.json");
+});
+
+const O = () => onboarding.useOnboarding.getState();
+const TABS_MORE = questionKeys("tabsMore");
+const tabsMoreValues = () => onboarding.resolveDraft(TABS_MORE, O().draft, onboarding.draftPreset(O()), { ...S().settings, tabLayout: tabLayoutOf(S(), O().windowId) }, S().settingsMeta.chosen);
+const redoAsDia = (on) => {
+  stub.docs.clear();
+  S().hydrate({});
+  stub.docs.set("onboarding.json", JSON.stringify({ version: 1, completedAt: 1, source: "chrome", preset: "chrome" }));
+  const id = S().createWindow();
+  settingsAdapter.apply(new Map([[`set:${KEY}`, { v: on }]]), [`set:${KEY}`]);
+  assert.equal(S().settings[KEY], on);
+  assert.equal(onboarding.redoOnboarding(id), id);
+  onboarding.chooseSource("dia");
+  onboarding.confirmAnswer("source", onboarding.sourcePatch(), ["Coming from Dia"]);
+  assert.ok(onboarding.questionsFor("tabs").some((q) => q.id === "tabsMore"), "coming from Dia asks about the tab habits it no longer answers");
+};
+const settleOnboarding = () => {
+  onboarding.cancelOnboarding();
+  onboarding.useOnboarding.setState({ windowId: null, leaving: false, redo: false });
+  stub.docs.delete("onboarding.json");
+};
+
+test("redoing onboarding as Dia on a Mac where sync turned grouping on keeps it on and publishes nothing for it", () => {
+  redoAsDia(true);
+  assert.equal(tabsMoreValues()[KEY], true, "the checkbox shows the setting as it is");
+  onboarding.confirmAnswer("tabsMore", onboarding.touchedOrPresetPatch(TABS_MORE, tabsMoreValues()), []);
+  assert.deepEqual({ on: S().settings[KEY], chosen: S().settingsMeta.chosen.includes(KEY) }, { on: true, chosen: false });
+  assert.equal(pushed(), false);
+  settleOnboarding();
+});
+
+test("unticking the box while redoing onboarding as Dia is a choice: it turns off and syncs", () => {
+  redoAsDia(true);
+  onboarding.setOnboardingDraft({ [KEY]: false });
+  onboarding.confirmAnswer("tabsMore", onboarding.touchedOrPresetPatch(TABS_MORE, tabsMoreValues()), []);
+  assert.deepEqual({ on: S().settings[KEY], chosen: S().settingsMeta.chosen.includes(KEY) }, { on: false, chosen: true });
+  assert.equal(pushed(), true);
+  settleOnboarding();
+});
+
+const launchWith = async (saved) => {
+  stub.docs.clear();
+  stub.docs.set("session.json", JSON.stringify(saved));
+  const before = stub.docs.get("session.json");
+  const stop = startPersistence();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flushPersistence();
+  stop();
+  const after = stub.docs.get("session.json");
+  return { written: after !== before, saved: JSON.parse(after) };
+};
+
+test("a launch that retires the old on writes the session even when nothing else changed, so the off and its marker reach disk", async () => {
+  const { written, saved } = await launchWith(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED] }));
+  assert.equal(written, true);
+  assert.ok(saved.settingsMeta.inferred.includes(APPLIED));
+  assert.notEqual(saved.settings[KEY], true);
+});
+
+test("a launch that only marks the flip, with no on to retire, leaves the write to the next real change", async () => {
+  const { written } = await launchWith(doc({ ...DEFAULT_SETTINGS, [KEY]: false }, { chosen: [], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED] }));
+  assert.equal(written, false);
+});
+
+test("a launch with every default already retired doesn't rewrite the session", async () => {
+  const { written } = await launchWith(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [KEY], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED, APPLIED] }));
+  assert.equal(written, false);
 });

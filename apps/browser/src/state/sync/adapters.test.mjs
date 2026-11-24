@@ -8,12 +8,14 @@ const model = await import("../browser/model.ts");
 const { Clock, emptyScope, syncScope } = await import("@ardia/sync");
 const adapters = { ...(await import("./adapters.ts")), ...(await import("./historyAdapter.ts")) };
 const { useEditClock } = await import("./editClock.ts");
-const { settingsAdapter, settingsToReapply } = await import("./settingsAdapter.ts");
+const { settingsAdapter, settleSettingsFromSavedSync } = await import("./settingsAdapter.ts");
 const pinnedArea = await import("./pinned.ts");
 const { pinnedOrderAdapter } = await import("./pinnedOrderAdapter.ts");
 const { pinnedRowsAdapter } = await import("./pinnedRowsAdapter.ts");
 const stub = await import("../../test-native/index.ts");
-const { loadSession } = await import("../session/persist.ts");
+const { loadSession, SESSION_VERSION } = await import("../session/persist.ts");
+const { versionedJson } = await import("../../lib/savedDocument.ts");
+const { savedDocumentValue } = await import("../session/documentJson.ts");
 const passwords = await import("../../platform/passwords.ts");
 const history = await import("../../platform/history.ts");
 
@@ -71,7 +73,7 @@ class Device {
     this.passwords = adapters.passwordsAdapter("default", sealedLogins())(true);
   }
   loadSaved() {
-    this.with(() => (this.scopes.app.unapplied = [...new Set([...this.scopes.app.unapplied, ...settingsToReapply(this.scopes.app.records)])]));
+    this.with(() => settleSettingsFromSavedSync(this.scopes.app));
   }
   with(fn) {
     useEditClock(this.clock);
@@ -174,6 +176,50 @@ test("settings: what a Mac only has by default isn't sent; nulls from another Ma
   });
   b.with(() => settingsAdapter.apply(new Map([["set:cmdClickCreatesTabGroup", { v: false }]]), ["set:cmdClickCreatesTabGroup"]));
   b.with(() => assert.equal(S().settings.cmdClickCreatesTabGroup, false, "an explicit off is taken"));
+});
+
+test("settings: a ⌘-click grouping on synced from another Mac survives the launch that retires its old default, even with the sync folder out of reach", async () => {
+  const folder = new Folder();
+  const a = new Device("A", folder);
+  const b = new Device("B", folder);
+  a.with(() => S().updateSettings({ cmdClickCreatesTabGroup: true }));
+  await syncAll([a, b]);
+  assert.deepEqual(b.with(() => [S().settings.cmdClickCreatesTabGroup, S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup")]), [true, false], "B took A's on without choosing it");
+  const { settingsMeta } = b.with(() => S());
+  const markers = new Set(["cmdClickCreatesTabGroup:offByDefault"]);
+  const unmarked = { chosen: settingsMeta.chosen, inferred: settingsMeta.inferred.filter((k) => !markers.has(k)) };
+  b.with(() => {
+    stub.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: S().profiles, profileOrder: S().profileOrder, settings: { ...S().settings }, settingsMeta: unmarked, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
+    S().hydrate(loadSession());
+  });
+  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), false, "the session alone can't tell a synced on from the old default");
+  folder.transport = () => {
+    throw new Error("the sync folder is out of reach");
+  };
+  b.loadSaved();
+  assert.deepEqual(b.with(() => [S().settings.cmdClickCreatesTabGroup, S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup")]), [true, false], "the saved sync record puts it back at launch, still unchosen");
+  const extraction = b.with(() => settingsAdapter.extract(() => undefined));
+  assert.equal(extraction.values.has("set:cmdClickCreatesTabGroup"), false, "and B doesn't publish it as its own");
+  b.with(() => {
+    stub.docs.set("session.json", versionedJson(savedDocumentValue("session.json", S()), SESSION_VERSION));
+    S().hydrate(loadSession());
+  });
+  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), true, "the next launch keeps it: the default retires once");
+});
+
+test("settings: the saved sync record restores only what sync holds explicitly and the user didn't choose here", async () => {
+  const folder = new Folder();
+  const a = new Device("A", folder);
+  const b = new Device("B", folder);
+  a.with(() => S().updateSettings({ cmdClickCreatesTabGroup: true }));
+  await syncAll([a, b]);
+  b.with(() => S().updateSettings({ cmdClickCreatesTabGroup: false }));
+  b.loadSaved();
+  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), false, "an off chosen here wins over the saved record");
+  const c = new Device("C", new Folder());
+  c.scopes.app.records["set:cmdClickCreatesTabGroup"] = { v: { v: null } };
+  c.loadSaved();
+  assert.equal(c.with(() => S().settings.cmdClickCreatesTabGroup), false, "a record with no say leaves the default");
 });
 
 test("settings: the clean-up time goes out as hours, the key a Mac a version behind reads, and comes back as exact minutes", () => {

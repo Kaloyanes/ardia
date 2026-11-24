@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { useBrowser } from "../browser/store";
 import { engineProfile } from "../browser/model";
 import { historyExpired } from "./historyAdapter";
-import { settingsToReapply } from "./settingsAdapter";
+import { settleSettingsFromSavedSync } from "./settingsAdapter";
 import { watchExtensionIntents } from "./extensions";
 import { appAdapters, extensionsOf, forgetScopeAdapters, profileAdapters, typeSynced } from "./scopeAdapters";
 import { APP_SCOPE, emptyDoc, emptyUi, type DataType, type SendTarget, type SyncDoc, type SyncUi } from "./syncDoc";
@@ -207,7 +207,7 @@ async function loadSavedState() {
   await loadState();
   startEditClock(doc.deviceId ?? "", doc.clock);
   const app = doc.scopes[APP_SCOPE];
-  if (app) app.unapplied = [...new Set([...app.unapplied, ...settingsToReapply(app.records)])];
+  if (app) settleSettingsFromSavedSync(app);
   settleThemeAdoption(doc.profiles, app, false);
 }
 

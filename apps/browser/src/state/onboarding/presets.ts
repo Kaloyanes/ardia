@@ -59,7 +59,6 @@ export const PRESETS: Record<Preset, Partial<Settings>> = {
     balancedTopApps: false,
     peekModifier: "shift",
     undoReopensClosedTab: false,
-    cmdClickCreatesTabGroup: false,
     appearance: "auto",
     extendWebsiteColor: true,
     hideToolbarWhileScrolling: true,

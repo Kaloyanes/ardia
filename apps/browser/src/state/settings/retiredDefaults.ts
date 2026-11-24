@@ -15,8 +15,8 @@ type Retired<S> = { settings: S | undefined; settingsMeta: SettingsMeta };
 function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied }: RetiredDefault): Retired<S> {
   if (meta.inferred.includes(applied)) return { settings: saved, settingsMeta: meta };
   const marked = (m: SettingsMeta): SettingsMeta => ({ chosen: m.chosen, inferred: [...m.inferred, applied] });
-  const untouchedOld = !!saved && (saved as Record<string, unknown>)[key] === old && !(meta.chosen.includes(key) && !meta.inferred.includes(key));
-  if (!untouchedOld) return { settings: saved, settingsMeta: marked(meta) };
+  const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !(meta.chosen.includes(key) && !meta.inferred.includes(key));
+  if (!oldDefaultNobodyChose) return { settings: saved, settingsMeta: marked(meta) };
   const { [key]: _untouched, ...settings } = saved as Record<string, unknown>;
   const without = (keys: string[]) => keys.filter((k) => k !== key);
   return { settings: settings as S, settingsMeta: marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }) };
@@ -24,3 +24,11 @@ function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: m
 
 export const withRetiredDefaults = <S extends object>(saved: S | undefined, meta: SettingsMeta): Retired<S> =>
   RETIRED_DEFAULTS.reduce<Retired<S>>(withRetiredDefault, { settings: saved, settingsMeta: meta });
+
+type SettingsState = { settings: unknown; settingsMeta: SettingsMeta };
+
+const valueOf = (settings: unknown, key: string) => (settings && typeof settings === "object" ? (settings as Record<string, unknown>)[key] : undefined);
+
+export const retiredDefaultsAppliedSince = (saved: SettingsState, now: SettingsState) =>
+  RETIRED_DEFAULTS.some(({ key, old, applied }) =>
+    !saved.settingsMeta.inferred.includes(applied) && now.settingsMeta.inferred.includes(applied) && valueOf(saved.settings, key) === old && valueOf(now.settings, key) !== old);
