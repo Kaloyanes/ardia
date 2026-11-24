@@ -18,6 +18,7 @@
 
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/win/launch_guard.h"
+#include "ardia/win/webui/webui_mode.h"
 #include "ardia/win/webui/webui_policy.h"
 #include "ardia/win/webui/webui_update_policy.h"
 #include "base/command_line.h"
@@ -116,6 +117,7 @@ struct Installation {
   base::FilePath app_data;
   policy::Feed feed = policy::ReleaseFeed();
   bool test_feed = false;
+  bool isolated = true;
 };
 
 std::wstring EnvironmentText(const wchar_t* name) {
@@ -257,8 +259,26 @@ std::optional<FileIdentity> IdentityOf(HANDLE handle) {
   return FileIdentity{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
 }
 
-base::win::ScopedHandle HoldDirectory(const std::wstring& path, std::wstring* final_path) {
-  base::win::ScopedHandle directory(::CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+bool Dispose(HANDLE handle) {
+  FILE_DISPOSITION_INFO disposition{};
+  disposition.DeleteFile = TRUE;
+  return ::SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition)) != FALSE;
+}
+
+void DisposePlainChild(const std::wstring& folder, const std::wstring& path) {
+  base::win::ScopedHandle file =
+      OpenWithoutFollowing(path, DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_DELETE);
+  if (!file.is_valid()) {
+    return;
+  }
+  const std::optional<FileFacts> facts = RegularFileFacts(file.get());
+  if (facts && facts->links == 1 && IsDirectChildOfWinDirectory(folder, facts->final_path)) {
+    Dispose(file.get());
+  }
+}
+
+base::win::ScopedHandle HoldDirectory(const std::wstring& path, std::wstring* final_path, DWORD extra_access = 0) {
+  base::win::ScopedHandle directory(::CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE | extra_access,
                                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (!directory.is_valid()) {
@@ -281,15 +301,14 @@ base::win::ScopedHandle HoldDirectory(const std::wstring& path, std::wstring* fi
 base::win::ScopedHandle CreateExclusive(const std::wstring& folder, const std::wstring& leaf, DWORD access,
                                         std::wstring* final_path) {
   const std::wstring path = folder + L"\\" + leaf;
-  base::win::ScopedHandle file(::CreateFileW(path.c_str(), access, 0, nullptr, CREATE_NEW,
+  base::win::ScopedHandle file(::CreateFileW(path.c_str(), access | DELETE, 0, nullptr, CREATE_NEW,
                                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (!file.is_valid()) {
     return {};
   }
   const std::optional<FileFacts> facts = RegularFileFacts(file.get());
   if (!facts || facts->links != 1 || facts->size != 0 || !IsDirectChildOfWinDirectory(folder, facts->final_path)) {
-    file.Close();
-    ::DeleteFileW(path.c_str());
+    Dispose(file.get());
     return {};
   }
   *final_path = facts->final_path;
@@ -333,7 +352,7 @@ std::optional<std::string> ReadAll(HANDLE file, size_t limit) {
 
 base::win::ScopedHandle ReopenReadOnly(const std::wstring& path, const std::wstring& folder,
                                        const FileIdentity& identity, uint64_t size, std::wstring* final_path) {
-  base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ, FILE_SHARE_READ);
+  base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ | DELETE, FILE_SHARE_READ);
   if (!file.is_valid()) {
     return {};
   }
@@ -366,10 +385,8 @@ class Scratch {
         return;
       }
       std::wstring final_path;
-      base::win::ScopedHandle held = HoldDirectory(path, &final_path);
+      base::win::ScopedHandle held = HoldDirectory(path, &final_path, DELETE);
       if (!held.is_valid() || !IsDirectChildOfWinDirectory(updates, final_path)) {
-        held.Close();
-        ::RemoveDirectoryW(path.c_str());
         return;
       }
       folder_handle_ = std::move(held);
@@ -379,13 +396,12 @@ class Scratch {
   Scratch(const Scratch&) = delete;
   Scratch& operator=(const Scratch&) = delete;
   ~Scratch() {
-    held_.clear();
-    for (const std::wstring& file : files_) {
-      ::DeleteFileW(file.c_str());
+    for (base::win::ScopedHandle& file : held_) {
+      Dispose(file.get());
     }
-    folder_handle_.Close();
-    if (!folder_.empty()) {
-      ::RemoveDirectoryW(folder_.c_str());
+    held_.clear();
+    if (folder_handle_.is_valid()) {
+      Dispose(folder_handle_.get());
     }
   }
 
@@ -400,15 +416,19 @@ class Scratch {
     if (!file.is_valid()) {
       return std::nullopt;
     }
-    files_.push_back(created);
     const std::optional<FileIdentity> identity = IdentityOf(file.get());
     if (!identity || !WriteAll(file.get(), bytes.data(), bytes.size()) || !::FlushFileBuffers(file.get())) {
+      Dispose(file.get());
       return std::nullopt;
     }
     file.Close();
     std::wstring final_path;
     base::win::ScopedHandle held = ReopenReadOnly(created, folder_, *identity, bytes.size(), &final_path);
-    if (!held.is_valid() || ReadAll(held.get(), bytes.size()) != bytes) {
+    if (!held.is_valid()) {
+      return std::nullopt;
+    }
+    if (ReadAll(held.get(), bytes.size()) != bytes) {
+      Dispose(held.get());
       return std::nullopt;
     }
     held_.push_back(std::move(held));
@@ -419,7 +439,6 @@ class Scratch {
   base::win::ScopedHandle updates_;
   base::win::ScopedHandle folder_handle_;
   std::wstring folder_;
-  std::vector<std::wstring> files_;
   std::vector<base::win::ScopedHandle> held_;
 };
 
@@ -608,10 +627,22 @@ std::optional<Identity> ReadIdentity(const base::FilePath& file) {
   return Identity{*version, static_cast<uint64_t>(number)};
 }
 
+std::wstring ProductionAppData() {
+  std::wstring local = EnvironmentText(L"LOCALAPPDATA");
+  if (local.empty()) {
+    base::FilePath known;
+    if (base::PathService::Get(base::DIR_LOCAL_APP_DATA, &known)) {
+      local = known.value();
+    }
+  }
+  return WebUIAppDataDirectory(std::wstring(), local);
+}
+
 Installation ReadInstallation(base::FilePath app_data) {
   base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
   Installation found;
   found.app_data = std::move(app_data);
+  found.isolated = policy::ScratchDataDirectory(found.app_data.value(), ProductionAppData());
   base::FilePath exe_directory;
   if (!base::PathService::Get(base::DIR_EXE, &exe_directory)) {
     return found;
@@ -704,8 +735,7 @@ class InstallerSink {
   InstallerSink& operator=(const InstallerSink&) = delete;
   ~InstallerSink() {
     if (staging_.is_valid()) {
-      staging_.Close();
-      ::DeleteFileW(staging_path_.c_str());
+      Dispose(staging_.get());
     }
   }
 
@@ -728,7 +758,7 @@ class InstallerSink {
       prepared.complete = true;
       return prepared;
     }
-    ::DeleteFileW(target.c_str());
+    DisposePlainChild(updates_path_, target);
     const std::wstring leaf = base::UTF8ToWide(policy::StagingFileName(offer_.sha256, base::RandUint64()));
     staging_ = CreateExclusive(updates_path_, leaf, GENERIC_READ | GENERIC_WRITE | DELETE, &staging_path_);
     if (!staging_.is_valid()) {
@@ -784,7 +814,6 @@ class InstallerSink {
     staging_.Close();
     staging_path_.clear();
     if (!HoldMatchingInstaller(target, identity)) {
-      ::DeleteFileW(target.c_str());
       return std::string(policy::kChecksumReason);
     }
     return std::string();
@@ -844,21 +873,24 @@ class InstallerSink {
           !policy::IsInstallerLeftover(base::WideToUTF8(name))) {
         continue;
       }
-      ::DeleteFileW((updates_path_ + L"\\" + name).c_str());
+      DisposePlainChild(updates_path_, updates_path_ + L"\\" + name);
     } while (::FindNextFileW(search, &found));
     ::FindClose(search);
   }
 
   bool HoldMatchingInstaller(const std::wstring& path, const std::optional<FileIdentity>& expected) {
-    base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ, FILE_SHARE_READ);
+    base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ | DELETE, FILE_SHARE_READ);
     if (!file.is_valid()) {
       return false;
     }
     const std::optional<FileFacts> facts = RegularFileFacts(file.get());
     const std::optional<FileIdentity> identity = IdentityOf(file.get());
-    if (!facts || !identity || facts->links != 1 || facts->size != offer_.bytes ||
-        (expected && !(*identity == *expected)) || !IsDirectChildOfWinDirectory(updates_path_, facts->final_path) ||
-        HashOf(file.get()) != offer_.sha256) {
+    if (!facts || !identity || facts->links != 1 || (expected && !(*identity == *expected)) ||
+        !IsDirectChildOfWinDirectory(updates_path_, facts->final_path)) {
+      return false;
+    }
+    if (facts->size != offer_.bytes || HashOf(file.get()) != offer_.sha256) {
+      Dispose(file.get());
       return false;
     }
     held_ = std::move(file);
@@ -867,10 +899,10 @@ class InstallerSink {
   }
 
   void Discard() {
-    held_.Close();
-    if (!held_path_.empty()) {
-      ::DeleteFileW(held_path_.c_str());
+    if (held_.is_valid()) {
+      Dispose(held_.get());
     }
+    held_.Close();
     held_path_.clear();
   }
 
@@ -1099,7 +1131,12 @@ class Service {
     WithInstallation(base::BindOnce(&Service::UpdateWith, weak_factory_.GetWeakPtr(), build, std::move(done)));
   }
 
-  bool Claim(int run) { return policy::ClaimOutcome(state_, run); }
+  void Claim(int run, UpdateReply done) {
+    if (!installation_ || !policy::ClaimOutcome(state_, run)) {
+      return std::move(done).Run(true, base::Value(false));
+    }
+    AnswerStatus(std::move(done), *installation_);
+  }
 
   void Restart(UpdateReply done, base::OnceClosure quit) {
     if (!installation_ || installation_->kind != policy::kInstallerKind) {
@@ -1169,7 +1206,7 @@ class Service {
       status.Set("current", base::Value());
     }
     status.Set("background", ardiacore::BackgroundInstance());
-    status.Set("isolated", base::CommandLine::ForCurrentProcess()->HasSwitch(ardiacore::kDataDirSwitch));
+    status.Set("isolated", installation.isolated);
     status.Set("testFeed", installation.test_feed);
     std::move(done).Run(true, base::Value(std::move(status)));
   }
@@ -1343,6 +1380,7 @@ class Service {
   void Launched(int run, UpdateReply done, base::OnceClosure quit, std::string reason) {
     if (!reason.empty()) {
       LOG(WARNING) << "Ardia updates: the installer did not start: " << reason;
+      installer_.Reset();
       policy::InstallRefused(state_, run, reason);
       return std::move(done).Run(true, base::Value(false));
     }
@@ -1436,7 +1474,7 @@ void InvokeUpdates(std::string_view method, const base::ListValue& args, UpdateR
     if (!run) {
       return std::move(done).Run(false, base::Value("claimOutcome takes a run number"));
     }
-    return std::move(done).Run(true, base::Value(Service::Get().Claim(*run)));
+    return Service::Get().Claim(*run, std::move(done));
   }
   if (method == "ArdiaUpdates.restart") {
     if (!args.empty()) {

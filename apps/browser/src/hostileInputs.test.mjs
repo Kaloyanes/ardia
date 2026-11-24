@@ -677,3 +677,32 @@ test("windows update manifest and verified update parser refuse every hostile in
   assert.equal({}.ardiaPolluted, undefined);
   assert.equal(Object.prototype.polluted, undefined);
 });
+
+test("windows webui native update policy keeps every hostile input away from the installer download and launch gate while passing a valid control", (t) => {
+  const { spawnSync } = process.getBuiltinModule("node:child_process");
+  const { mkdtempSync, rmSync, writeFileSync } = process.getBuiltinModule("node:fs");
+  const { tmpdir } = process.getBuiltinModule("node:os");
+  const { join } = process.getBuiltinModule("node:path");
+  const repo = new URL("../../../", import.meta.url).pathname;
+  const compiler = ["c++", "clang++", "g++"].find((name) => spawnSync(name, ["--version"], { stdio: "ignore" }).status === 0);
+  if (!compiler) {
+    if (process.env.CI) assert.fail("no C++ compiler to build scripts/windows/engine/tests/webui_update_policy_test.cc");
+    return t.skip("no C++ compiler");
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "ardia-update-policy-"));
+  try {
+    const binary = join(scratch, "webui_update_policy_test");
+    const build = spawnSync(compiler, ["-std=c++20", "-I", join(repo, "scripts/windows/engine/src"), join(repo, "scripts/windows/engine/tests/webui_update_policy_test.cc"), "-o", binary], { encoding: "utf8" });
+    assert.equal(build.status, 0, build.stderr);
+    const strings = HOSTILE_STRINGS.map(({ value }) => value);
+    const corpus = join(scratch, "hostile.hex");
+    writeFileSync(corpus, strings.map((value) => Buffer.from(value, "utf8").toString("hex")).join("\n") + "\n");
+    const run = spawnSync(binary, ["--hostile", corpus], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.match(run.stdout, new RegExp(`hostile: ${strings.length} values, ${strings.length * 33} answers, \\d+ reached the download gate with a valid offer, control reached it`));
+    const unit = spawnSync(binary, [], { encoding: "utf8" });
+    assert.equal(unit.status, 0, unit.stderr || unit.stdout);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});

@@ -1290,12 +1290,16 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   never a URL, hash or path. `update` streams the installer into an unpredictably named staging file, hashing it as it
   is written, renames it to `Ardia-Setup-<sha16>.exe` through its handle, reopens it read-only and holds that handle
   through `windows-package` and until `restart` starts it with the RNW updater's silent arguments and quits, so nothing
-  can change it in between. One install runs at a time: a second `restart`, from any window, answers `busy`. A hidden
-  instance never starts it. The kind is `installer` beside
+  can change it in between. One install runs at a time: a second `restart`, from any window, answers `busy`, and a
+  launch that fails releases the held installer. A file that fails a check is deleted only through its own handle,
+  never by path. A hidden instance never starts it. `claimOutcome` answers with the outcome it consumed, and each run
+  keeps the consent period it started in (in `windows-updates.json`), so a window that settles another window's run
+  counts it under that period or not at all. The kind is `installer` beside
   `unins000.exe`, `portable` without it, and `unsupported` without the verifier, key or `Ardia.build.json`.
 - The WebUI side in the shared UI is `apps/desktop/src/platform/win/hostUpdates.ts` (wired through `updater.win.ts`
   and `updates.win.ts`). It keeps the RNW behaviour: checks 30 s after launch and every 6 hours from one window, never
-  in a hidden instance or a scratch data folder unless a test instance names `updateFeed`, preferences in
+  in a hidden instance or a scratch data folder (an app-data folder other than `%LOCALAPPDATA%\Ardia WebUI`) unless a
+  test instance names `updateFeed`, preferences in
   `windows-updates.json`, and the app menu's Check for Updates… turns into Restart to Update once the installer is
   ready. A portable copy points to the release page. It reuses the existing counts: `update_checks_*`,
   `update_downloads_*`, `update_download_failures_<reason>`, `update_install_failures_<reason>`, `update_restarts` and

@@ -8,6 +8,7 @@ import { showToast } from "../../../../browser/src/state/app/toasts";
 import { openUrls } from "../../../../browser/src/state/browser/actions";
 import { openUrlFromSettings } from "../../../../browser/src/state/settings/settingsWindows";
 import { noteUpdateNoticeDismissed, noteUpdatePageOpened } from "../../../../browser/src/state/telemetry/updateCounts.ts";
+import { consentToken } from "../../../../browser/src/state/telemetry/consentPeriod";
 
 const updaters = new WeakMap<ArdiaHost, WindowsUpdater>();
 const UPDATE_ICON = "arrow.down.circle";
@@ -29,9 +30,25 @@ export function windowsUpdaterFor(host: ArdiaHost): WindowsUpdater {
     read: readDocument,
     write: saveDocument,
     refresh: refreshDocument,
-    ask: (title, message, confirmTitle) =>
-      confirm({ title, message, confirmTitle, cancelTitle: "Later", windowId }).then((answer) => answer.confirmed, () => false),
-    tell: async (title, message) => toast(windowId, title, message, { icon: UPDATE_ICON }),
+    pointToRelease: (title, message) => {
+      if (browserWindow) {
+        return void showToast(windowId, title, message, {
+          icon: UPDATE_ICON,
+          sticky: true,
+          action: { title: "Open Release Page", run: () => (noteUpdatePageOpened(), open(WINDOWS_RELEASE_PAGE)) },
+          secondary: { title: "Later", run: noteUpdateNoticeDismissed },
+        });
+      }
+      const consent = consentToken();
+      void confirm({ title, message, confirmTitle: "Open Release Page", cancelTitle: "Later", windowId }).then(
+        (answer) => answer.confirmed && (noteUpdatePageOpened(consent), open(WINDOWS_RELEASE_PAGE)),
+        () => console.info(`[ardia windows] ${title}: ${message}`),
+      );
+    },
+    tell: async (title, message) => {
+      if (browserWindow) return showToast(windowId, title, message, { icon: UPDATE_ICON });
+      void confirm({ title, message, confirmTitle: "OK", cancelTitle: "", windowId }).catch(() => console.info(`[ardia windows] ${title}: ${message}`));
+    },
     offer: (update, failed) =>
       toast(windowId, `Ardia ${update.version} is available`, failed ? "Ardia couldn't install it. Download the installer from its release page." : "Download the installer from its release page.", {
         icon: UPDATE_ICON,

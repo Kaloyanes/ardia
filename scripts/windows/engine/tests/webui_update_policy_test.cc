@@ -2,8 +2,10 @@
 
 #include <cassert>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -241,6 +243,21 @@ void TestCommands() {
   assert(HexLower(bytes, 4) == "000fa0ff");
 }
 
+void TestDataDirectories() {
+  const std::wstring production = L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI";
+  assert(!ScratchDataDirectory(production, production));
+  assert(!ScratchDataDirectory(L"c:\\users\\ada\\appdata\\local\\ARDIA WEBUI\\", production));
+  assert(!ScratchDataDirectory(L"C:/Users/Ada/AppData/Local/Ardia WebUI", production));
+  assert(!ScratchDataDirectory(L"\\\\?\\C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI", production));
+  assert(!ScratchDataDirectory(L"  C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI  ", production));
+  assert(ScratchDataDirectory(L"C:\\Temp\\ardia-scratch-41", production));
+  assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI\\nested", production));
+  assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia", production));
+  assert(ScratchDataDirectory(L"", production));
+  assert(ScratchDataDirectory(production, L""));
+  assert(FoldedPath(L"C:\\") == L"c:\\");
+}
+
 void TestInstallKinds() {
   assert(InstallKind({true, true, true, true}) == kInstallerKind);
   assert(InstallKind({true, true, true, false}) == kPortableKind);
@@ -313,15 +330,123 @@ void TestStateMachine() {
          PhaseName(Phase::kFailed) == "failed");
 }
 
+bool ReachesDownload(const VerifierAnswer& answer, Offer* reached) {
+  UpdateState state;
+  const std::optional<int> check = BeginCheck(state);
+  CheckFinished(state, *check, answer.verdict, answer.offer, answer.reason);
+  if (!state.offer) {
+    assert(!BeginDownload(state, answer.offer.build));
+    return false;
+  }
+  const std::optional<int> run = BeginDownload(state, state.offer->build);
+  assert(run);
+  DownloadFinished(state, *run, true, "");
+  assert(BeginInstall(state) == InstallStart::kStarted);
+  *reached = *state.offer;
+  return true;
 }
 
-int main() {
+void CheckReachedOffer(const Offer& offer) {
+  assert(ValidVersion(offer.version));
+  assert(ValidBuild(offer.build) && offer.build > 100);
+  assert(ValidInstallerUrl(offer.url, kReleasesUnder));
+  assert(ValidSha256(offer.sha256));
+  assert(offer.bytes >= 1 && offer.bytes <= kInstallerLimit);
+  for (const char c : offer.url + offer.version) {
+    assert(c > 0x20 && c < 0x7f && c != '"' && c != '\\' && c != '%' && c != '?' && c != '#' && c != '@');
+  }
+}
+
+std::optional<std::string> Unhex(std::string_view hex) {
+  if (hex.size() % 2 != 0) {
+    return std::nullopt;
+  }
+  std::string bytes;
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const auto digit = [](char c) -> int {
+      if (c >= '0' && c <= '9') return c - '0';
+      if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+      return -1;
+    };
+    const int high = digit(hex[i]);
+    const int low = digit(hex[i + 1]);
+    if (high < 0 || low < 0) {
+      return std::nullopt;
+    }
+    bytes.push_back(static_cast<char>(high * 16 + low));
+  }
+  return bytes;
+}
+
+int RunHostileCorpus(const char* path) {
+  std::ifstream input(path);
+  assert(input);
+  const std::string sha = kSha;
+  const std::string url = kInstaller;
+  const std::string control = "ok 0.3.0 120 " + url + " " + sha + " 1048576";
+  Offer reached;
+  assert(ReachesDownload(ReadVerifierAnswer(true, 0, control, 100, kReleasesUnder), &reached));
+  CheckReachedOffer(reached);
+  size_t values = 0;
+  size_t answers = 0;
+  size_t downloads = 0;
+  std::string line;
+  while (std::getline(input, line)) {
+    const std::optional<std::string> value = Unhex(line);
+    assert(value);
+    ++values;
+    const std::string& h = *value;
+    assert(!TestFeed(h) || ValidFeedUrl(h));
+    assert(!ValidPublishedUnder(h) || h.starts_with("https://") || h.starts_with("http://"));
+    assert(!ValidInstallerUrl(h, kReleasesUnder) || h.starts_with(kReleasesUnder));
+    assert(!InstanceValue(h, "updateFeed") || h.size() <= kInstanceLimit);
+    const std::wstring wide(h.begin(), h.end());
+    if (const std::optional<std::wstring> command = InstallerCommand(wide)) {
+      assert(command->front() == L'"' && command->find(L'\n') == std::wstring::npos);
+    }
+    const std::vector<std::string> lines = {
+        h,
+        "ok " + h,
+        "failed " + h,
+        "ok " + h + " 120 " + url + " " + sha + " 1",
+        "ok 0.3.0 " + h + " " + url + " " + sha + " 1",
+        "ok 0.3.0 120 " + h + " " + sha + " 1",
+        "ok 0.3.0 120 " + std::string(kReleasesUnder) + "windows-alpha/" + h + ".exe " + sha + " 1",
+        "ok 0.3.0 120 " + url + " " + h + " 1",
+        "ok 0.3.0 120 " + url + " " + sha + " " + h,
+        control + "\n" + h,
+        h + "\n" + control,
+    };
+    for (const std::string& candidate : lines) {
+      for (const int exit_code : {0, 1, 2}) {
+        ++answers;
+        if (ReachesDownload(ReadVerifierAnswer(true, exit_code, candidate, 100, kReleasesUnder), &reached)) {
+          ++downloads;
+          CheckReachedOffer(reached);
+          assert(exit_code == 0);
+        }
+      }
+    }
+  }
+  assert(values > 0);
+  std::cout << "webui_update_policy_test hostile: " << values << " values, " << answers << " answers, " << downloads
+            << " reached the download gate with a valid offer, control reached it\n";
+  return 0;
+}
+
+}
+
+int main(int argc, char** argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--hostile") {
+    return RunHostileCorpus(argv[2]);
+  }
   TestVersionsAndBuilds();
   TestFeedsAndUrls();
   TestInstanceValues();
   TestVerifierAnswers();
   TestStagingNames();
   TestCommands();
+  TestDataDirectories();
   TestInstallKinds();
   TestStateMachine();
   std::cout << "webui_update_policy_test: all assertions passed\n";

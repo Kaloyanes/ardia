@@ -17,7 +17,7 @@ import {
 } from "./hostUpdates.ts";
 import { SELF_UPDATE_METHODS } from "../../hostCapabilities.ts";
 import { takeUpdateCounts } from "../../../../browser/src/state/telemetry/updateCounts.ts";
-import { setConsentPeriod } from "../../../../browser/src/state/telemetry/consentPeriod.ts";
+import { consentToken, setConsentPeriod } from "../../../../browser/src/state/telemetry/consentPeriod.ts";
 import { windowsUpdateCounts } from "../../../../browser/src/platform/windowsUpdateCounts.win.ts";
 import { HOSTILE_VALUES } from "../../../../../scripts/security/hostile-inputs.mjs";
 
@@ -67,7 +67,7 @@ function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: 
       engine.claimed = true;
       engine.claims.push(run);
     }
-    return answer;
+    return answer ? engine.status() : false;
   };
   engine.installing = false;
   engine.launched = 0;
@@ -109,7 +109,10 @@ function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS,
     host,
     read: (name) => docs.get(name) ?? null,
     write: async (name, contents) => void docs.set(name, contents),
-    ask: async (title, message, confirmTitle) => (seen.asked.push({ title, message, confirmTitle }), answers),
+    pointToRelease: (title, message) => {
+      seen.asked.push({ title, message });
+      if (answers) seen.opened.push(WINDOWS_RELEASE_PAGE);
+    },
     tell: async (title, message) => void seen.told.push({ title, message }),
     offer: (update, failed) => void seen.offered.push(failed ? `${update.build} failed` : `${update.build}`),
     offerInstall: (update, install) => void seen.offeredInstalls.push({ build: update.build, install }),
@@ -287,7 +290,7 @@ test("a download that fails offers the release page once and isn't retried autom
   assert.deepEqual(engine.updates, [OFFER.build], "an automatic check skips the build that failed");
   await updater.check(true);
   await settled(() => seen.asked.length === 1);
-  assert.equal(seen.asked[0].confirmTitle, "Open Release Page");
+  assert.equal(seen.asked[0].title, "Ardia couldn't install the update");
   assert.deepEqual(seen.opened, [WINDOWS_RELEASE_PAGE]);
 });
 
@@ -420,4 +423,113 @@ test("windows webui update replies refuse every hostile input while passing a va
     assert.equal(fields.background || fields.isolated || fields.testFeed, value === true, `${id} flags`);
   }
   assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("a download started while sharing was off is never counted, even when another window settles it after sharing turns on", async () => {
+  takeUpdateCounts();
+  setConsentPeriod(false, null);
+  try {
+    const engine = fakeEngine();
+    const docs = new Map();
+    const settings = harness({ engine, docs, showsToasts: false });
+    await settings.updater.check(true);
+    await settled(() => engine.phase === "ready");
+    assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).started.consent, null, "the run keeps the period it started in");
+    setConsentPeriod(true, "windows-updates-later");
+    const browser = harness({ engine, docs });
+    await browser.updater.watch();
+    await browser.updater.watch();
+    assert.equal(browser.seen.ready.length, 1, "the browser window still shows the ready notice");
+    assert.deepEqual(engine.claims, [1]);
+    const counts = takeUpdateCounts();
+    assert.equal(counts.update_downloads_started, 0);
+    assert.equal(counts.update_downloads_finished, 0);
+  } finally {
+    setConsentPeriod(true, "windows-updates-test");
+  }
+});
+
+test("a run settled by another window counts once under the period it started in", async () => {
+  takeUpdateCounts();
+  const engine = fakeEngine();
+  const docs = new Map();
+  const settings = harness({ engine, docs, showsToasts: false });
+  await settings.updater.check(true);
+  await settled(() => engine.phase === "ready");
+  assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).started.consent, consentToken());
+  const browser = harness({ engine, docs });
+  await browser.updater.watch();
+  await browser.updater.watch();
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), { update_downloads_started: 1, update_downloads_finished: 1 });
+});
+
+test("a window counts and shows only the outcome its claim consumed, never ready for a launch that failed", async () => {
+  takeUpdateCounts();
+  const engine = fakeEngine({ launches: false });
+  const docs = new Map();
+  const first = harness({ engine, docs });
+  await first.updater.check(true);
+  await settled(() => first.seen.ready.length === 1);
+  takeUpdateCounts();
+  const status = engine.status();
+  await engine.restart();
+  assert.equal(engine.phase, "failed");
+  const second = harness({ engine, docs });
+  second.host.invoke = async (method, { args }) => {
+    if (method === "ArdiaUpdates.status") return status;
+    if (method === "ArdiaUpdates.claimOutcome") return engine.claim(...args);
+    throw new Error(`unexpected ${method}`);
+  };
+  await second.updater.watch();
+  await second.updater.watch();
+  assert.deepEqual(second.seen.ready, [], "the claim consumed the failed launch, so no Ready notice");
+  assert.deepEqual(second.seen.offered, [`${OFFER.build} failed`]);
+});
+
+test("following a run stops when the engine has moved on to another run", async () => {
+  const engine = fakeEngine();
+  const { seen } = harness({ engine });
+  let polls = 0;
+  const followed = windowsUpdater({
+    host: harness({ engine }).host,
+    read: () => null,
+    write: async () => {},
+    pointToRelease: () => {},
+    tell: async () => {},
+    offer: () => {},
+    offerInstall: () => {},
+    ready: (update) => seen.ready.push({ build: update.build }),
+    open: () => {},
+    wait: async () => {
+      polls++;
+      if (polls === 1) Object.assign(engine, { phase: "downloading", run: engine.run + 1, claimed: false });
+      else engine.advance();
+      await tick();
+    },
+    now: () => 1_000,
+  });
+  await followed.check(true);
+  await settled(() => polls >= 1);
+  await tick();
+  assert.deepEqual(engine.claims, [], "run 1's follower never claims run 2");
+  assert.deepEqual(seen.ready, []);
+});
+
+test("Check for Updates during an automatic check says one is under way and starts no second check", async () => {
+  let release;
+  const engine = fakeEngine({ answer: () => ({ status: "upToDate" }) });
+  const { updater, seen, host } = harness({ engine });
+  const invoke = host.invoke;
+  host.invoke = async (method, options) => {
+    if (method === "ArdiaUpdates.check") await new Promise((resolve) => (release = resolve));
+    return invoke(method, options);
+  };
+  const automatic = updater.check(false);
+  await settled(() => typeof release === "function");
+  await updater.check(true);
+  assert.deepEqual(seen.told.map((told) => told.title), ["Ardia is already checking for updates"]);
+  release();
+  await automatic;
+  assert.equal(engine.checks, 1);
+  assert.deepEqual(seen.told.map((told) => told.title), ["Ardia is already checking for updates"], "the automatic check stays quiet");
 });

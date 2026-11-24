@@ -380,6 +380,9 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (HandlesUpdateCall(method)) {
     static const base::NoDestructor<base::ListValue> kNoUpdateArguments;
+    if (args.Find("args") && !values) {
+      return std::move(done).Run(false, base::Value("args must be a list"));
+    }
     return InvokeUpdates(method, values ? *values : *kNoUpdateArguments,
                          std::move(done), base::BindOnce(&QuitEverything));
   }

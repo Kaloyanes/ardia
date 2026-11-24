@@ -538,6 +538,35 @@ inline std::string HexLower(const uint8_t* bytes, size_t count) {
   return hex;
 }
 
+inline std::wstring FoldedPath(std::wstring_view path) {
+  constexpr std::wstring_view kLongPrefix = L"\\\\?\\";
+  while (!path.empty() && (path.front() == L' ' || path.front() == L'\t')) {
+    path.remove_prefix(1);
+  }
+  while (!path.empty() && (path.back() == L' ' || path.back() == L'\t')) {
+    path.remove_suffix(1);
+  }
+  if (path.starts_with(kLongPrefix)) {
+    path.remove_prefix(kLongPrefix.size());
+  }
+  std::wstring folded;
+  folded.reserve(path.size());
+  for (const wchar_t c : path) {
+    const wchar_t slash = c == L'/' ? L'\\' : c;
+    folded.push_back(slash >= L'A' && slash <= L'Z' ? static_cast<wchar_t>(slash - L'A' + L'a') : slash);
+  }
+  while (folded.size() > 3 && folded.back() == L'\\') {
+    folded.pop_back();
+  }
+  return folded;
+}
+
+inline bool ScratchDataDirectory(std::wstring_view active, std::wstring_view production) {
+  const std::wstring folded_active = FoldedPath(active);
+  const std::wstring folded_production = FoldedPath(production);
+  return folded_active.empty() || folded_production.empty() || folded_active != folded_production;
+}
+
 struct Installation {
   bool identity = false;
   bool verifier = false;
