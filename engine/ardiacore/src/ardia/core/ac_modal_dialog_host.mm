@@ -140,7 +140,7 @@ ACTabDialogHost::~ACTabDialogHost() = default;
 void ACTabDialogHost::ContentsDestroyed() {
   contents_ = nullptr;
   if (!observers_.empty()) {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostNonNestableTask(
         FROM_HERE, base::BindOnce(&ACTabDialogHost::CloseOrphanedDialogs,
                                   weak_factory_.GetWeakPtr()));
   }
