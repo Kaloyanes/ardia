@@ -26,7 +26,7 @@
  void GetUserDataDirFromRegistryPolicyIfSet(const InstallConstants& mode,
                                             std::wstring* user_data_dir) {
    assert(user_data_dir);
-@@ -103,13 +115,362 @@
+@@ -103,13 +115,390 @@
    return true;
  }
  
@@ -224,8 +224,8 @@
 +      c = static_cast<wchar_t>(c - L'A' + L'a');
 +  }
 +  return text;
- }
- 
++}
++
 +struct LaunchSwitches {
 +  std::wstring shell;
 +  std::wstring process_type;
@@ -263,8 +263,8 @@
 +      switches.headless = true;
 +  }
 +  return switches;
-+}
-+
+ }
+ 
 +bool IsHeadlessMode(const std::wstring& command_line) {
 +  return ParseLaunchSwitches(command_line).headless;
 +}
@@ -332,18 +332,46 @@
 +std::wstring ExtendedLengthPath(std::wstring path) {
 +  if (path.size() < MAX_PATH)
 +    return path;
-+  for (wchar_t& c : path) {
-+    if (c == L'/')
-+      c = L'\\';
-+  }
-+  if (path.starts_with(L"\\\\?\\") || path.starts_with(L"\\\\.\\"))
++  const auto separator = [](wchar_t c) { return c == L'\\' || c == L'/'; };
++  if (separator(path[0]) && separator(path[1]) &&
++      (path[2] == L'?' || path[2] == L'.') && separator(path[3])) {
 +    return path;
-+  if (path.starts_with(L"\\\\"))
-+    return L"\\\\?\\UNC\\" + path.substr(2);
-+  const bool drive_absolute = ((path[0] >= L'A' && path[0] <= L'Z') ||
-+                               (path[0] >= L'a' && path[0] <= L'z')) &&
-+                              path[1] == L':' && path[2] == L'\\';
-+  return drive_absolute ? L"\\\\?\\" + path : path;
++  }
++  const bool unc = separator(path[0]) && separator(path[1]);
++  const bool drive = ((path[0] >= L'A' && path[0] <= L'Z') ||
++                      (path[0] >= L'a' && path[0] <= L'z')) &&
++                     path[1] == L':' && separator(path[2]);
++  if (!unc && !drive)
++    return path;
++  std::vector<std::wstring> segments;
++  size_t fixed = 0;
++  size_t start = unc ? 2 : 3;
++  while (start <= path.size()) {
++    size_t end = start;
++    while (end < path.size() && !separator(path[end]))
++      ++end;
++    const std::wstring segment = path.substr(start, end - start);
++    start = end + 1;
++    if (segment.empty() || segment == L".")
++      continue;
++    if (segment == L"..") {
++      if (segments.size() > fixed)
++        segments.pop_back();
++      continue;
++    }
++    segments.push_back(segment);
++    if (unc && fixed < 2)
++      fixed = segments.size();
++  }
++  if (unc && fixed < 2)
++    return path;
++  std::wstring extended =
++      unc ? std::wstring(L"\\\\?\\UNC") : L"\\\\?\\" + path.substr(0, 2);
++  for (const std::wstring& segment : segments)
++    extended += L"\\" + segment;
++  if (segments.size() == fixed)
++    extended += L"\\";
++  return extended;
 +}
 +
 +std::wstring ReactNativeAppLibraryPath() {
@@ -392,7 +420,7 @@
  bool GetUserDataDirectoryImpl(const std::wstring& command_line,
                                const InstallConstants& mode,
                                std::wstring* result,
-@@ -135,6 +496,18 @@
+@@ -135,6 +524,18 @@
      }
    }
  
@@ -411,7 +439,7 @@
    // Headless Chrome instances are expected to run in parallel with the headful
    // Chrome and other headless Chrome instances. In order to do so, headless
    // Chrome needs a dedicated user data directory for each headless instance.
-@@ -157,8 +530,18 @@
+@@ -157,8 +558,18 @@
      user_data_dir.pop_back();
    }
  
@@ -430,7 +458,7 @@
    if (!got_valid_directory) {
      *invalid_supplied_directory = user_data_dir;
      got_valid_directory = GetDefaultUserDataDirectory(mode, &user_data_dir);
-@@ -171,6 +554,17 @@
+@@ -171,6 +582,17 @@
    if (!got_valid_directory)
      return false;
  
@@ -602,10 +630,12 @@
    const std::wstring registry_user_data_dir(L"C:\\UserDataDir");
  
    registry_util::RegistryOverrideManager override_manager;
-@@ -215,7 +237,336 @@
+@@ -213,9 +235,353 @@
+                            &invalid);
+   EXPECT_THAT(result, StrEq(registry_user_data_dir));
    EXPECT_THAT(invalid, IsEmpty());
- 
-   EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
++
++  EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
 +}
 +
 +
@@ -704,8 +734,8 @@
 +  ::LocalFree(args);
 +  ::FreeLibrary(shell);
 +  return tokens;
- }
- 
++}
++
 +TEST_F(UserDataDir, ArdiaShellSwitchMatchesBaseCommandLine) {
 +  for (const bool react_native_app_present : {false, true}) {
 +    SetReactNativeAppLibraryPresentForTesting(react_native_app_present);
@@ -775,7 +805,7 @@
 +  EXPECT_EQ(!webui, result.ends_with(kUserDataDirNameSuffix));
 +  EXPECT_EQ(std::wstring(), invalid);
 +}
-+
+ 
 +TEST_F(UserDataDir, FlaglessHeadlessKeepsItsOwnTemporaryProfile) {
 +  SetReactNativeAppLibraryPresentForTesting(false);
 +  for (const wchar_t* command_line :
@@ -798,9 +828,9 @@
 +  SetReactNativeAppLibraryPresentForTesting(false);
 +  EXPECT_TRUE(IsWebUIShellCommandLine(L"m.exe -- --headless"));
 +  ExpectShellProfile(L"m.exe -- --headless", false, true);
-+  EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
-+}
-+
+   EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
+ }
+ 
 +TEST_F(UserDataDir, ExtendedLengthPathPrefixesOnlyLongAbsolutePaths) {
 +  const std::wstring tail(MAX_PATH, L'a');
 +  EXPECT_EQ(L"C:\\Ardia\\ArdiaApp.dll",
@@ -819,7 +849,22 @@
 +  EXPECT_EQ(L"\\\\.\\C:\\" + tail,
 +            ExtendedLengthPath(L"\\\\.\\C:\\" + tail));
 +  EXPECT_EQ(L"Ardia\\" + tail, ExtendedLengthPath(L"Ardia\\" + tail));
++  EXPECT_EQ(L"Ardia/" + tail + L"/x",
++            ExtendedLengthPath(L"Ardia/" + tail + L"/x"));
 +  EXPECT_EQ(L"\\" + tail, ExtendedLengthPath(L"\\" + tail));
++  EXPECT_EQ(L"C:" + tail, ExtendedLengthPath(L"C:" + tail));
++  EXPECT_EQ(L"\\\\?\\C:\\a\\" + tail + L"\\y",
++            ExtendedLengthPath(L"C:\\a\\.\\b\\..\\" + tail + L"\\x\\..\\y"));
++  EXPECT_EQ(L"\\\\?\\C:\\" + tail, ExtendedLengthPath(L"C:\\..\\..\\" + tail));
++  EXPECT_EQ(L"\\\\?\\C:\\a\\" + tail,
++            ExtendedLengthPath(L"C:/a//./" + tail + L"/"));
++  EXPECT_EQ(L"\\\\?\\UNC\\server\\share\\" + tail,
++            ExtendedLengthPath(L"\\\\server\\share\\..\\..\\" + tail));
++  EXPECT_EQ(L"\\\\?\\UNC\\server\\share\\" + tail,
++            ExtendedLengthPath(L"//server/share/a/./../" + tail));
++  EXPECT_EQ(L"\\\\?\\UNC\\server\\share\\",
++            ExtendedLengthPath(L"\\\\server\\share\\" + tail + L"\\.."));
++  EXPECT_EQ(L"\\\\" + tail, ExtendedLengthPath(L"\\\\" + tail));
 +}
 +
 +TEST_F(UserDataDir, ReactNativeAppLibraryProbeFindsNothingBesideTheTestBinary) {
@@ -986,3 +1031,14 @@
  void SetMetricsClientId(const char* client_id) {}
  
  //------------------------------------------------------------------------------
+--- a/chrome/app/chrome_exe_main_win.cc
++++ b/chrome/app/chrome_exe_main_win.cc
+@@ -130,6 +130,8 @@
+ 
+ bool AttemptFastNotify(const base::CommandLine& command_line) {
+   if (ContainsNonFastStartFlag(command_line))
++    return false;
++  if (IsWebUIShellSelectedForUserDataDirectory())
+     return false;
+ 
+   base::FilePath user_data_dir;

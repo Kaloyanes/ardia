@@ -794,7 +794,8 @@ void BeforeChromeMain() {
     BeforeWebUIChromeMain(command_line);
     return;
   }
-  if (!install_static::ReactNativeAppLibraryBesideExe()) {
+  if (command_line->HasSwitch(kHeadlessSwitch) ||
+      !install_static::ReactNativeAppLibraryBesideExe()) {
     return;
   }
   std::wstring data_dir = Environment(L"ARDIA_DATA_DIR");
