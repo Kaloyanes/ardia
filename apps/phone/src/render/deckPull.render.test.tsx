@@ -534,9 +534,7 @@ test("a pull ended on JS keeps the bar the page's: a bar-cleared report the page
 });
 
 test("a card that grows right after a pull ended keeps the bar: the old end's hand-back, reaching JS after the grow took the bar, never gives the bar back to the page mid-grow", () => {
-  const root = app();
-  const target = deckPull.target.value!;
-  unmount(mounted.splice(mounted.indexOf(root), 1)[0]!);
+  const target = { id: currentTabs().selectedId!, screenWidth: SCREEN.width, screenHeight: SCREEN.height, width: 160, height: 356, centerX: 100, centerY: 300, corner: 12, screenCorner: 40, reach: 500, pull: 400 };
   const ui = deferUiWork();
   act(() => pull.endDeckPull());
   act(() => void pull.growDeckPull(target, jest.fn(), jest.fn()));

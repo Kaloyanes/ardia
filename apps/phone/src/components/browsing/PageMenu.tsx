@@ -75,31 +75,39 @@ const countPageMenuExpansion = () => countUsage("site_settings_sheet_expanded");
 const menuArrived = () => markMenuPhase("appeared");
 const MENU_CATCH_UP_PING_MS = Platform.OS === "android" ? FABRIC_CATCH_UP_PING_MS : undefined;
 
-type PageMenuProps = { tabId: string; open: boolean; onHidden: (showing: number) => void; live?: boolean };
+type PageMenuProps = { tabId: string; open: boolean; onHidden: (showing: number) => void };
 
 export const usesWarmPageMenu = (design: Design, systemMenu: boolean) => design === "redesigned" && !systemMenu;
 
 export const WarmPageMenuHost = memo(function WarmPageMenuHost({ tabId }: { tabId: string }) {
   const open = useMenuOpen();
-  const opening = useMenuOpening();
   const [armed, setArmed] = useState(open);
   const quiet = usePageQuiet(tabId, armed);
   if (!armed && (open || quiet)) setArmed(true);
+  return armed ? <ArmedPageMenu tabId={tabId} open={open} /> : null;
+});
+
+function ArmedPageMenu({ tabId, open }: { tabId: string; open: boolean }) {
+  const opening = useMenuOpening();
   const [showing, setShowing] = useState<number | null>(open ? opening : null);
   if (open && showing !== opening) setShowing(opening);
   const hidden = useCallback((gone: number) => setShowing((now) => (now === gone ? null : now)), []);
-  if (!armed) return null;
   const live = open || showing !== null;
+  const model = useMenuModel(tabId, live);
   return (
     <Activity mode={live ? "visible" : "hidden"}>
-      <DrawnPageMenu tabId={tabId} open={open} live={live} onHidden={hidden} />
+      <DrawnPageMenu tabId={tabId} model={model} open={open} onHidden={hidden} />
     </Activity>
   );
-});
+}
 
 export function PageMenu(props: PageMenuProps) {
   if (usesSystemPageMenu(useDesign())) return <SystemPageMenu tabId={props.tabId} open={props.open} onPresentation={(event) => presentSystemPageMenu(event, props.onHidden)} />;
-  return <DrawnPageMenu {...props} />;
+  return <ColdPageMenu {...props} />;
+}
+
+function ColdPageMenu(props: PageMenuProps) {
+  return <DrawnPageMenu {...props} model={useMenuModel(props.tabId)} />;
 }
 
 function presentSystemPageMenu(event: MenuPresentation, onHidden: (showing: number) => void) {
@@ -107,8 +115,7 @@ function presentSystemPageMenu(event: MenuPresentation, onHidden: (showing: numb
   if (event.phase === "dismiss") onHidden(event.token);
 }
 
-function DrawnPageMenu({ tabId, open, onHidden, live = true }: PageMenuProps) {
-  const model = useMenuModel(tabId, live);
+function DrawnPageMenu({ tabId, model, open, onHidden }: PageMenuProps & { model: MenuModel }) {
   const opening = useMenuOpening();
   useLayoutEffect(() => {
     if (open) markMenuPhase("rendered");

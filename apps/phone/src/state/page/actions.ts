@@ -387,10 +387,10 @@ export function openSiteSettingsSheet() {
   afterPageMenu(() => openSettingsPage({ page: "siteSettings" }), { sameDocument: false });
 }
 
-function somethingElseOverPage() {
+function somethingElseOverPage(tabId: string) {
   const ui = pageUi();
   const browse = useBrowse.getState();
-  return ui.menuOpen || ui.findOpen || ui.readerTabId !== null || ui.press !== null || browse.surface !== "browsing" || browse.sheet !== null || searchState().open || settingsNav().open || useLibrary.getState().open || useVoice.getState().presented;
+  return pageRequest(tabId) !== null || pageIsFullscreen(tabId) || ui.menuOpen || ui.findOpen || ui.readerTabId !== null || ui.press !== null || browse.surface !== "browsing" || browse.sheet !== null || searchState().open || settingsNav().open || useLibrary.getState().open || useVoice.getState().presented;
 }
 
 export function openSiteSettingsOverMenu() {
@@ -407,7 +407,7 @@ export function openSiteSettingsOverMenu() {
     return;
   }
   requestAnimationFrame(() => {
-    if (opening?.id !== document.opening || selectedId() !== document.tabId || somethingElseOverPage()) return;
+    if (opening?.id !== document.opening || selectedId() !== document.tabId || somethingElseOverPage(document.tabId)) return;
     open();
   });
 }

@@ -3956,45 +3956,26 @@ trace glass visibility and the search stage during a close.
 
 #### Android's page menu and Site Settings (2026-11-25)
 
-The owner found Android's ··· page menu and its Site Settings slow and janky in the default look (Material You off).
-Three causes, all on Android only:
-- The iPhone keeps its menu mounted (`SystemPageMenuHost`), but Android built the whole sheet and its rows on the press.
-- Site Settings waited for the menu's close spring, up to its 900 ms fallback, before Settings started to rise.
-- The sheet opened at half height, which hid Site Settings and the Library rows until a drag.
+In Android's default look, the page menu built its rows on the press. The sheet opened at half height, which hid Site
+Settings and Library until a drag. Site Settings then waited for the menu's close spring or its 900 ms fallback.
 
-What changed:
-- `WarmPageMenuHost` (`PageMenu.tsx`) mounts the drawn menu once the page is quiet, as the iPhone does, inside a hidden
-  React `Activity`, so the press only reveals rows that are already built.
-  - While hidden it is `display: none`: no touches, no TalkBack focus, no effects or gesture handlers.
-  - Its updates run at idle priority, and its model (`useMenuModel(id, live)`) holds still through page loads and
-    blocked-request ticks.
-  - One host serves the shown tab, never one per tab.
-  - Material You keeps its cold `MaterialSheet` menu, unchanged.
-- Each exit carries the opening token of the showing it closes. A late hide from an earlier showing can neither hide
-  the menu that opened after it nor run that menu's Print, Summarize or search follow-up.
-- Site Settings in the drawn menu (`openSiteSettingsOverMenu`) closes the menu on the press. On the next frame it
-  opens Settings at Site Settings, while the menu slides away, if the same opening is still current, the same tab is
-  selected and the page is still showing. Back from it closes Settings; the menu doesn't come back.
-  - The iPhone's system sheet still waits for its own dismissal (`openSiteSettingsSheet`), because UIKit can't present
-    a second sheet over a leaving one.
-- The sheet opens as tall as its rows, up to the safe top, with a drag handle, as the iPhone's fitted detent does.
-  - The half height (`Sheet`'s `halfOpen`, 9a4ffde20) is gone from the page menu, so `site_settings_sheet_expanded`
-    no longer counts a drag in the default look.
-- `FabricCatchUp` wakes the JS thread at most once per 60 ms of motion instead of every frame. Its leaf still remounts
-  at least 60 ms after the last change, so Fabric still learns where the moved controls are.
-- The items, their order and their roles are the iPhone's, from the shared `PageMenuWords`. Android keeps its genuine
-  differences:
-  - Print is a row, where the iPhone's is in Share.
-  - Share closes the menu before Android's chooser.
-  - The Library opens in Android's own sheet.
-  - A tap anywhere on a toggle row flips it.
-  - Pin to Mac answers in a toast.
+`WarmPageMenuHost` mounts one hidden menu for the current tab after the page first goes quiet. The hidden menu retains
+its rows, suppresses effects and focus, and skips model changes while a page loads or its blocked-request count changes.
+The sheet fits the shared `PageMenuWords` row groups up to the safe top, with a drag handle and scrolling for overflow.
+Reopening resets the scroll position. Android offers Print as a row and opens Share and Library in separate sheets.
 
-Lab lines: `PAGELAB menu rendered` and `appeared` now also print for Android's drawn sheet, and `siteSettingsPressed`
-and `siteSettingsOpened` time the handoff within the same menu run. There is no new field event. Watch
-`site_settings_sheet_expanded` fall to Material You only, and `page_menu_tapped_away` and `library_opened` hold.
-Checks: `warmPageMenu.render.test.tsx`, the Site Settings rows in `pageMenuDesigns.render.test.tsx` and the throttle
-row in `fabricCatchUp.render.test.tsx`.
+Site Settings starts rising on the next frame while the menu leaves. A new menu, tab selection or overlay cancels the
+pending open. Every menu exit carries its opening token so a delayed exit cannot run a newer menu's follow-up. The
+drawn menu limits Fabric catch-up callbacks to one per 60 ms of motion and still commits after the motion stops.
+
+On tab return, the deck releases its ownership of the Liquid DOM bar on the UI thread and acknowledges that release on
+JS. Both sides carry the current handoff number, so an old callback cannot hide the page's glass or clear a newer pull's
+ownership. To check it on Android, switch from one distinctive page to another and pick the first tab in the deck. The
+three glass plates should resolve against the returning page as the card gives up control.
+
+`PAGELAB menu rendered` and `appeared` cover the drawn sheet. `siteSettingsPressed` and `siteSettingsOpened` time the
+handoff in the same menu run. Watch `site_settings_sheet_expanded` fall to Material You only and monitor existing deck
+pull and tab swipe timing. The menu, Fabric and deck-pull render suites cover both late-callback orders.
 
 What changed, by area:
 - **Touch and motion:**
