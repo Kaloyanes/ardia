@@ -160,7 +160,7 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     lineIds.value = ids;
     span.value = w;
     const inFlight = cursorTurn.value > ackedTurn.value;
-    const followed = !inFlight && cursor.value !== shown;
+    const followed = moved && !inFlight && cursor.value !== shown;
     if (followed) cursor.value = shown;
     if (!inFlight) landed.value = "";
     if (!moved) return;

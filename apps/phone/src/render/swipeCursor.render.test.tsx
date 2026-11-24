@@ -3,6 +3,7 @@ import { State } from "react-native-gesture-handler";
 import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { Dimensions, Platform } from "react-native";
+import { useSyncExternalStore } from "react";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { besideIn, heldPose, restOf, swipeRefusal, zeroArmedTurn } from "../components/browsing/TabPager";
 import { FloatingBar, hereShown, landedBackHere, landedLeafShown, type SwipeAddresses } from "../components/browsing/FloatingBar";
@@ -428,14 +429,26 @@ function visibleAddresses(root: ReactTestRenderer): string[] {
   return leaves.filter((node) => getAnimatedStyle(node).opacity !== 0).map((node) => [...new Set(textsIn(node))].join(" "));
 }
 
+function middleOfFive() {
+  withTabs(5);
+  browsingNow();
+  const from = currentTabs().selectedId!;
+  const others = browse.swipeOrder().filter((id) => id !== from);
+  const line = [...others.slice(0, 2), from, ...others.slice(2)];
+  browse.useBrowse.setState({ frozenOrder: line });
+  expect(browse.swipeOrder()).toEqual(line);
+  return { line, at: 2 };
+}
+
+for (const toward of ["right", "left"] as const)
 for (const rebaseFirst of [false, true])
-  test(`from the lift through each JS turn of the commit, its render and the rebase${rebaseFirst ? ", with the UI rebase landing before the render" : ""}, the bar's visible address is the destination at every step and its bar mark rises once`, () => {
-    const root = startAt(4, 1);
+  test(`toward the ${toward} neighbour, from the lift through each JS turn of the commit, its render and the rebase${rebaseFirst ? ", with the UI rebase landing before the render" : ""}, the bar's visible address is the destination at every step and its bar mark rises once`, () => {
+    const { line, at } = middleOfFive();
+    const root = renderSurface(<Page />);
     const from = currentTabs().selectedId!;
-    const line = order();
-    const right = line[line.indexOf(from) + 1];
-    const dx: -1 | 1 = right ? -1 : 1;
-    const wanted = right ?? line[line.indexOf(from) - 1]!;
+    expect(line[at]).toBe(from);
+    const dx: -1 | 1 = toward === "right" ? -1 : 1;
+    const wanted = line[toward === "right" ? at + 1 : at - 1]!;
     const host = (id: string) => display(findTab(currentTabs(), id)!.url).host;
     const destination = host(wanted);
     const source = host(from);
@@ -475,5 +488,52 @@ for (const rebaseFirst of [false, true])
     step("settled");
     expect(currentTabs().selectedId).toBe(wanted);
     expect(rises).toEqual([`dest-bar:${wanted}`]);
+    unmount(root);
+  });
+
+const lagging = { id: "", listeners: new Set<() => void>() };
+const followLagging = (listener: () => void) => {
+  lagging.listeners.add(listener);
+  return () => void lagging.listeners.delete(listener);
+};
+
+function LaggingPage() {
+  const id = useSyncExternalStore(followLagging, () => lagging.id);
+  return <BrowsingScreen tabId={id} />;
+}
+
+const showLagging = (id: string) =>
+  act(() => {
+    lagging.id = id;
+    lagging.listeners.forEach((listener) => listener());
+  });
+
+for (const toward of ["right", "left"] as const)
+  test(`toward the ${toward} neighbour, a render that still shows the source after the commit, with a new swipe order but the same neighbours, leaves the cursor on the destination, so the bar never shows the source again`, () => {
+    const { line, at } = middleOfFive();
+    const from = currentTabs().selectedId!;
+    lagging.id = from;
+    const root = renderSurface(<LaggingPage />);
+    const dx: -1 | 1 = toward === "right" ? -1 : 1;
+    const wanted = line[toward === "right" ? at + 1 : at - 1]!;
+    const host = (id: string) => display(findTab(currentTabs(), id)!.url).host;
+    const destination = host(wanted);
+    expect(visibleAddresses(root)).toEqual([host(from)]);
+    flick(dx);
+    expect(visibleAddresses(root)).toEqual([destination]);
+    frames(48);
+    expect(currentTabs().selectedId).toBe(wanted);
+    expect(visibleAddresses(root)).toEqual([destination]);
+    const reordered = [...browse.swipeOrder()];
+    const far = reordered.map((_, index) => index).filter((index) => Math.abs(index - reordered.indexOf(from)) > 1);
+    expect(far.length).toBeGreaterThan(1);
+    [reordered[far[0]!], reordered[far[1]!]] = [reordered[far[1]!]!, reordered[far[0]!]!];
+    act(() => browse.useBrowse.setState({ frozenOrder: reordered }));
+    frames(48);
+    expect(visibleAddresses(root)).toEqual([destination]);
+    showLagging(wanted);
+    expect(visibleAddresses(root)).toEqual([destination]);
+    frames(64);
+    expect(visibleAddresses(root)).toEqual([destination]);
     unmount(root);
   });
