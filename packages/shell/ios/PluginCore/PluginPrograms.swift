@@ -21,9 +21,12 @@ struct ProgramsLinked: Equatable {
   let version: String
   let fresh: Bool
   let linked: [String]
-  let refused: [String: String]
+  let refusals: [String: LinkRefusal]
   var adoption: LegacyAdoption = .none
   var kept: String? = nil
+
+  var refused: [String: String] { refusals.mapValues(\.reason) }
+  var causes: [String: String] { refusals.mapValues(\.cause.rawValue) }
 
   var adopted: Bool { adoption == .adopted }
   var adoptBusy: Bool { adoption == .busy }
@@ -94,36 +97,40 @@ enum PluginPrograms {
     let legacy = adoption.map { lockLegacy($0, plugin: plugin, places: places) }
     defer { legacy?.release() }
     if legacy?.outcome == .busy {
-      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refused: [:], adoption: .busy))
+      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: [:], adoption: .busy))
     }
     let before = linkTarget((pluginStore as NSString).appendingPathComponent(currentName))
     let replacing = before.map { $0 != name && isRealFolder((pluginStore as NSString).appendingPathComponent($0)) } ?? false
     let adoptTarget = { (program: PluginProgram) -> String? in
       adoption?.program == program.name && legacy?.held == true ? adoption.map(legacyLauncherPath) : nil
     }
+    let deadLegacyLauncher = { (program: PluginProgram) -> String? in
+      adoption?.program == program.name && legacy?.outcome == LegacyAdoption.none ? adoption.map(legacyLauncherPath) : nil
+    }
     guard let bin = binLock(places) else {
-      var refused: [String: String] = [:]
-      for program in programs { refused[program.name] = "\(places.binDir) couldn't be locked" }
-      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refused: refused, kept: replacing ? before : nil))
+      var refusals: [String: LinkRefusal] = [:]
+      for program in programs { refusals[program.name] = LinkRefusal(reason: "\(places.binDir) couldn't be locked", cause: .busy) }
+      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: refusals, kept: replacing ? before : nil))
     }
     defer { close(bin) }
     if replacing {
-      var held: [String: String] = [:]
+      var held: [String: LinkRefusal] = [:]
       for program in programs {
-        if let problem = linkProblem(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program)) { held[program.name] = problem }
+        if let problem = linkProblem(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { held[program.name] = problem }
       }
-      if !held.isEmpty { return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refused: held, kept: before)) }
+      if !held.isEmpty { return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: held, kept: before)) }
     }
     let snapshot = Dictionary(uniqueKeysWithValues: programs.map { ($0.name, linkTarget((places.binDir as NSString).appendingPathComponent($0.name))) })
     guard swapLink(in: pluginStore, named: currentName, to: name) else {
       return .failure(FolderRefusal(reason: "its programs couldn't be switched to the new version"))
     }
     var linked: [String] = []
-    var refused: [String: String] = [:]
+    var refusals: [String: LinkRefusal] = [:]
     var outcome: LegacyAdoption = legacy?.outcome == .failed ? .failed : .none
     for program in programs {
-      if let problem = link(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program)) { refused[program.name] = problem } else { linked.append(program.name) }
+      if let problem = link(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { refusals[program.name] = problem } else { linked.append(program.name) }
     }
+    let refused = refusals.mapValues(\.reason)
     if replacing, !refused.isEmpty, let before {
       var restored = swapLink(in: pluginStore, named: currentName, to: before)
       for name in linked {
@@ -137,13 +144,13 @@ enum PluginPrograms {
       guard restored else {
         return .failure(FolderRefusal(reason: "\(refused.values.first ?? "a program was refused"), and the earlier version couldn't be put back on PATH"))
       }
-      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refused: refused, kept: before))
+      return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: refusals, kept: before))
     }
     if let before, before != name { _ = swapLink(in: pluginStore, named: previousName, to: before) }
     unlinkOthers(plugin: plugin, keeping: Set(programs.map(\.name)), places: places)
     sweepLocked(plugin: plugin, places: places, keepCurrent: true)
     if let legacy, let entry = adoption, legacy.held, linked.contains(entry.program) { outcome = adoptLegacyLocked(legacy, plugin: plugin, places: places, entry: entry) }
-    return .success(ProgramsLinked(version: name, fresh: fresh, linked: linked, refused: refused, adoption: outcome))
+    return .success(ProgramsLinked(version: name, fresh: fresh, linked: linked, refusals: refusals, adoption: outcome))
   }
 
   static func withdraw(plugin: String, programs: [String], places: ProgramPlaces, keepCopy: Bool = false) {

@@ -1,47 +1,91 @@
 import Darwin
 import Foundation
 
+struct LinkRefusal: Equatable {
+  enum Cause: String {
+    case name
+    case binFolder = "bin_folder"
+    case binShared = "bin_shared"
+    case shadowed
+    case taken
+    case otherPlugin = "other_plugin"
+    case busy
+    case io
+  }
+
+  let reason: String
+  let cause: Cause
+}
+
 extension PluginPrograms {
-  static func linkProblem(_ program: PluginProgram, plugin: String, places: ProgramPlaces, adoptTarget: String? = nil) -> String? {
-    guard isName(program.name) else { return "\(program.name) isn't a program name" }
+  static func isOwnedBinFolder(_ path: String) -> Bool {
+    var info = stat()
+    return stat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR && info.st_uid == geteuid()
+  }
+
+  static func binFolder(_ places: ProgramPlaces) -> LinkRefusal? {
+    var info = stat()
+    if lstat(places.binDir, &info) != 0 { _ = realFolder(places.binDir, creating: true) }
+    guard isOwnedBinFolder(places.binDir) else { return LinkRefusal(reason: "\(places.binDir) isn't a folder you own", cause: .binFolder) }
+    guard hasPrivateAncestry(places.binDir, followingLinks: true) else { return LinkRefusal(reason: "\(places.binDir) is inside a folder other users can change", cause: .binShared) }
+    return nil
+  }
+
+  static func isArdiaLink(_ existing: String, target: String, places: ProgramPlaces, deadLegacyLauncher: String?) -> Bool {
+    if let deadLegacyLauncher, existing == deadLegacyLauncher { return true }
+    if isInside(existing, places.store) {
+      var info = stat()
+      if stat(existing, &info) != 0 { return true }
+    }
+    guard let real = realpath(existing, nil) else { return false }
+    defer { free(real) }
+    guard let wanted = realpath(target, nil) else { return false }
+    defer { free(wanted) }
+    return strcmp(real, wanted) == 0
+  }
+
+  static func linkProblem(_ program: PluginProgram, plugin: String, places: ProgramPlaces, adoptTarget: String? = nil, deadLegacyLauncher: String? = nil) -> LinkRefusal? {
+    guard isName(program.name) else { return LinkRefusal(reason: "\(program.name) isn't a program name", cause: .name) }
     var folder = stat()
-    if lstat(places.binDir, &folder) == 0 && !isRealFolder(places.binDir) { return "\(places.binDir) isn't a folder you own" }
+    if lstat(places.binDir, &folder) == 0 && !isOwnedBinFolder(places.binDir) { return LinkRefusal(reason: "\(places.binDir) isn't a folder you own", cause: .binFolder) }
     if let hidden = places.shadowable.map({ ($0 as NSString).appendingPathComponent(program.name) }).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-      return "\(program.name) would hide \(hidden), so it isn't put on PATH"
+      return LinkRefusal(reason: "\(program.name) would hide \(hidden), so it isn't put on PATH", cause: .shadowed)
     }
     let path = (places.binDir as NSString).appendingPathComponent(program.name)
     let target = linkTargetPath(program, plugin: plugin, places: places)
     var info = stat()
-    guard lstat(path, &info) == 0 else { return errno == ENOENT ? nil : "\(path) couldn't be checked" }
-    guard (info.st_mode & S_IFMT) == S_IFLNK, let existing = linkTarget(path) else { return "\(path) is someone else's; remove it to use this one" }
+    guard lstat(path, &info) == 0 else { return errno == ENOENT ? nil : LinkRefusal(reason: "\(path) couldn't be checked", cause: .io) }
+    let taken = LinkRefusal(reason: "\(path) is someone else's; remove it to use this one", cause: .taken)
+    guard (info.st_mode & S_IFMT) == S_IFLNK, let existing = linkTarget(path) else { return taken }
     if existing == target || isInside(existing, places.pluginStore(plugin)) || (adoptTarget != nil && existing == adoptTarget) { return nil }
+    if isArdiaLink(existing, target: target, places: places, deadLegacyLauncher: deadLegacyLauncher) { return nil }
     if isInside(existing, places.store), let other = owner(of: existing, store: places.store) {
-      return "\(program.name) comes from the \(other) plugin; turn that one off to use this one"
+      return LinkRefusal(reason: "\(program.name) comes from the \(other) plugin; turn that one off to use this one", cause: .otherPlugin)
     }
-    return "\(path) is someone else's; remove it to use this one"
+    return taken
   }
 
   static func linkTargetPath(_ program: PluginProgram, plugin: String, places: ProgramPlaces) -> String {
     ((places.pluginStore(plugin) as NSString).appendingPathComponent(currentName) as NSString).appendingPathComponent(program.path)
   }
 
-  static func link(_ program: PluginProgram, plugin: String, places: ProgramPlaces, adoptTarget: String? = nil) -> String? {
-    guard isName(program.name) else { return "\(program.name) isn't a program name" }
-    guard realFolder(places.binDir, creating: true) != nil else { return "\(places.binDir) isn't a folder you own" }
-    guard hasPrivateAncestry(places.binDir, followingLinks: true) else { return "\(places.binDir) is inside a folder other users can change" }
-    if let problem = linkProblem(program, plugin: plugin, places: places, adoptTarget: adoptTarget) { return problem }
+  static func link(_ program: PluginProgram, plugin: String, places: ProgramPlaces, adoptTarget: String? = nil, deadLegacyLauncher: String? = nil) -> LinkRefusal? {
+    guard isName(program.name) else { return LinkRefusal(reason: "\(program.name) isn't a program name", cause: .name) }
+    if let problem = binFolder(places) { return problem }
+    if let problem = linkProblem(program, plugin: plugin, places: places, adoptTarget: adoptTarget, deadLegacyLauncher: deadLegacyLauncher) { return problem }
     let path = (places.binDir as NSString).appendingPathComponent(program.name)
     let target = linkTargetPath(program, plugin: plugin, places: places)
+    let failed = LinkRefusal(reason: "\(path) couldn't be linked", cause: .io)
     var info = stat()
     if lstat(path, &info) != 0 {
-      return symlink(target, path) == 0 ? nil : "\(path) couldn't be linked"
+      return symlink(target, path) == 0 ? nil : failed
     }
     if linkTarget(path) == target { return nil }
     let temporary = (places.binDir as NSString).appendingPathComponent(".\(program.name).ardia-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
-    guard symlink(target, temporary) == 0 else { return "\(path) couldn't be linked" }
+    guard symlink(target, temporary) == 0 else { return failed }
     guard rename(temporary, path) == 0 else {
       unlink(temporary)
-      return "\(path) couldn't be linked"
+      return failed
     }
     return nil
   }
@@ -63,16 +107,16 @@ extension PluginPrograms {
       return .failure(FolderRefusal(reason: "its earlier copy has no \(program.path)"))
     }
     var linked: [String] = []
-    var refused: [String: String] = [:]
+    var refusals: [String: LinkRefusal] = [:]
     guard let bin = binLock(places) else {
-      for program in programs { refused[program.name] = "\(places.binDir) couldn't be locked" }
-      return .success(ProgramsLinked(version: version, fresh: false, linked: [], refused: refused))
+      for program in programs { refusals[program.name] = LinkRefusal(reason: "\(places.binDir) couldn't be locked", cause: .busy) }
+      return .success(ProgramsLinked(version: version, fresh: false, linked: [], refusals: refusals))
     }
     defer { close(bin) }
     for program in programs {
-      if let problem = link(program, plugin: plugin, places: places) { refused[program.name] = problem } else { linked.append(program.name) }
+      if let problem = link(program, plugin: plugin, places: places) { refusals[program.name] = problem } else { linked.append(program.name) }
     }
-    return .success(ProgramsLinked(version: version, fresh: false, linked: linked, refused: refused, kept: version))
+    return .success(ProgramsLinked(version: version, fresh: false, linked: linked, refusals: refusals, kept: version))
   }
 
   static func legacyCopy(plugin: String, places: ProgramPlaces) -> String? {

@@ -12,6 +12,29 @@ struct OpenedFolder {
 
 struct FolderRefusal: Error {
   let reason: String
+  var cause: FailureCause = .other
+}
+
+enum FailureCause: String {
+  case permission
+  case disk
+  case folder
+  case mismatch
+  case unpack
+  case server
+  case network
+  case timeout
+  case io
+  case other
+
+  init(errno code: Int32) {
+    switch code {
+    case EACCES, EPERM: self = .permission
+    case ENOSPC, EDQUOT, EROFS: self = .disk
+    case EXDEV, ENOTDIR, ELOOP, EEXIST, ENOTEMPTY: self = .folder
+    default: self = .io
+    }
+  }
 }
 
 enum ManifestRead: Equatable {
