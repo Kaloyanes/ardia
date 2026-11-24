@@ -161,7 +161,7 @@ test("settings: what a Mac only has by default isn't sent; nulls from another Ma
   const b = new Device("B", folder);
   b.with(() => S().updateSettings({ cmdClickCreatesTabGroup: true, optShiftClickOpensInGroup: true, cleanUpInactiveTabsAfterMinutes: 720 }));
   relaunch(a, OLD_SESSION);
-  assert.equal(a.with(() => S().settings.cmdClickCreatesTabGroup), true, "filled in at launch");
+  assert.equal(a.with(() => S().settings.cmdClickCreatesTabGroup), false, "filled in at launch");
   const extraction = a.with(() => settingsAdapter.extract(() => undefined));
   assert.ok(!extraction.values.has("set:cmdClickCreatesTabGroup") && extraction.ignore("set:cmdClickCreatesTabGroup"), "a default filled in abstains");
   assert.ok(!extraction.values.has("set:cleanUpInactiveTabsAfterHours"), "an old session's Never, its default, never published: no say either");
