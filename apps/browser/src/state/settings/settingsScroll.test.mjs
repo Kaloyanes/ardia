@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { forgetSettingsScroll, goToSettingsPane, noteSettingsScrollOffset, replaceSettingsPlace, settingsBack, settingsForward, useSettingsNav } = await import("./settingsWindows.ts");
+const { forgetSettingsScroll, goToSettingsPane, rememberSettingsScrollOffset, replaceSettingsPlace, settingsBack, settingsForward, useSettingsNav } = await import("./settingsWindows.ts");
 const { settingsScrollFor } = await import("./settingsWindows.ts");
 const { paneScroll } = await import("./paneScroll.ts");
 const mount = () => paneScroll(nav().visit, settingsScrollFor(nav().visit));
 
 const nav = () => useSettingsNav.getState();
-const scrollShown = (y) => noteSettingsScrollOffset(nav().visit, y);
+const scrollShown = (y) => rememberSettingsScrollOffset(nav().visit, y);
 
 function fresh() {
   useSettingsNav.setState({ pane: "general", profileId: null, detail: null, scroll: 0, visit: 0, back: [], forward: [] });
-  noteSettingsScrollOffset(-1, 0);
+  rememberSettingsScrollOffset(-1, 0);
 }
 
 test("Back returns to the parent pane where it was left, Forward to the sub-page's own spot", () => {
@@ -78,7 +78,7 @@ test("an offset noted for one visit is never taken for another visit of the same
   const stale = nav().visit;
   goToSettingsPane("general");
   goToSettingsPane("tabs");
-  noteSettingsScrollOffset(stale, 999);
+  rememberSettingsScrollOffset(stale, 999);
   settingsBack();
   settingsForward();
   assert.equal(nav().scroll, 0);

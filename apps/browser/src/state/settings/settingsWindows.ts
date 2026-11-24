@@ -28,7 +28,7 @@ export const newSettingsVisit = () => ++lastVisit;
 
 let shownOffset = { visit: -1, y: 0 };
 
-export function noteSettingsScrollOffset(visit: number, y: number) {
+export function rememberSettingsScrollOffset(visit: number, y: number) {
   if (visit === useSettingsNav.getState().visit) shownOffset = { visit, y };
 }
 
