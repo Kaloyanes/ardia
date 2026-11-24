@@ -1288,13 +1288,15 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   before a byte is written, then reopened read-only (only `FILE_SHARE_READ`) as the same file and held while the
   verifier reads it. The verified offer stays in the browser process: the shell only says which build to download,
   never a URL, hash or path. `update` streams the installer into an unpredictably named staging file, hashing it as it
-  is written, renames it to `Ardia-Setup-<sha16>.exe` through its handle, reopens it read-only and holds that handle
+  is written, renames it to `Ardia-Setup-<sha16>.exe` through its handle, reopens it read-only (no `DELETE` access, so
+  `CreateProcessW` can open it, and only `FILE_SHARE_READ`) as the same file and holds that handle
   through `windows-package` and until `restart` starts it with the RNW updater's silent arguments and quits, so nothing
   can change it in between. One install runs at a time: a second `restart`, from any window, answers `busy`, and a
   launch that fails releases the held installer. A file that fails a check is deleted only through its own handle,
   never by path. A hidden instance never starts it. `claimOutcome` answers with the outcome it consumed, and each run
   keeps the consent period it started in (in `windows-updates.json`), so a window that settles another window's run
-  counts it under that period or not at all. The kind is `installer` beside
+  counts it under that period or not at all. `update` says whether it started the run, so a stale Update click in another
+  window never takes over the run's consent period. The kind is `installer` beside
   `unins000.exe`, `portable` without it, and `unsupported` without the verifier, key or `Ardia.build.json`.
 - The WebUI side in the shared UI is `apps/desktop/src/platform/win/hostUpdates.ts` (wired through `updater.win.ts`
   and `updates.win.ts`). It keeps the RNW behaviour: checks 30 s after launch and every 6 hours from one window, never

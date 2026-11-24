@@ -53,8 +53,9 @@ function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: 
   };
   engine.update = (build) => {
     engine.updates.push(build);
-    if (engine.kind === "installer" && engine.phase === "available" && engine.offer?.build === build) Object.assign(engine, { phase: "downloading", run: engine.run + 1, claimed: false, reason: null });
-    return engine.status();
+    const starts = engine.kind === "installer" && engine.phase === "available" && engine.offer?.build === build;
+    if (starts) Object.assign(engine, { phase: "downloading", run: engine.run + 1, claimed: false, reason: null });
+    return { ...engine.status(), started: starts };
   };
   engine.advance = () => {
     if (engine.phase !== "downloading") return;
@@ -532,4 +533,34 @@ test("Check for Updates during an automatic check says one is under way and star
   await automatic;
   assert.equal(engine.checks, 1);
   assert.deepEqual(seen.told.map((told) => told.title), ["Ardia is already checking for updates"], "the automatic check stays quiet");
+});
+
+test("an old Update toast clicked in another window never takes over a run that started with sharing off", async () => {
+  takeUpdateCounts();
+  setConsentPeriod(false, null);
+  try {
+    const engine = fakeEngine();
+    const docs = new Map([[UPDATE_PREFERENCES, JSON.stringify({ automaticDownloads: false })]]);
+    const browser = harness({ engine, docs });
+    await browser.updater.check(false);
+    assert.equal(browser.seen.offeredInstalls.length, 1, "window B shows Update");
+    const settings = harness({ engine, docs, showsToasts: false });
+    await settings.updater.check(true);
+    assert.equal(engine.run, 1);
+    assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).started.consent, null);
+    setConsentPeriod(true, "windows-updates-later");
+    browser.seen.offeredInstalls[0].install();
+    await settled(() => engine.updates.length === 2);
+    await settled(() => engine.phase === "ready");
+    await browser.updater.watch();
+    await browser.updater.watch();
+    await tick();
+    assert.equal(engine.run, 1, "the stale click started no second run");
+    assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).started.consent, null, "the run keeps the period it started in");
+    const counts = takeUpdateCounts();
+    assert.equal(counts.update_downloads_started, 0);
+    assert.equal(counts.update_downloads_finished, 0);
+  } finally {
+    setConsentPeriod(true, "windows-updates-test");
+  }
 });

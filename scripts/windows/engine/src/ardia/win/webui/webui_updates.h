@@ -18,7 +18,7 @@ using UpdateReply = base::OnceCallback<void(bool, base::Value)>;
 bool HandlesUpdateCall(std::string_view method);
 
 void InvokeUpdates(std::string_view method,
-                   const base::ListValue& args,
+                   const base::Value* args,
                    UpdateReply done,
                    base::OnceClosure quit);
 

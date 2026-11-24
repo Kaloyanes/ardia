@@ -1,9 +1,11 @@
 #include "ardia/win/webui/webui_update_policy.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -258,6 +260,62 @@ void TestDataDirectories() {
   assert(FoldedPath(L"C:\\") == L"c:\\");
 }
 
+void TestHeldInstallerHandle() {
+  assert(HeldInstallerLetsItRun(kHeldInstallerAccess, kHeldInstallerShare));
+  assert((kHeldInstallerAccess & kDeleteAccess) == 0);
+  assert(kHeldInstallerShare == kFileShareRead);
+  assert(!HeldInstallerLetsItRun(kHeldInstallerAccess | kDeleteAccess, kHeldInstallerShare));
+  assert(!HeldInstallerLetsItRun(kHeldInstallerAccess | 0x00000002, kHeldInstallerShare));
+  assert(!HeldInstallerLetsItRun(kHeldInstallerAccess, kFileShareRead | 0x00000002));
+  assert(!HeldInstallerLetsItRun(kHeldInstallerAccess, kFileShareRead | 0x00000004));
+}
+
+const char* const kUpdateMethods[] = {"ArdiaUpdates.installKind", "ArdiaUpdates.status", "ArdiaUpdates.check",
+                                      "ArdiaUpdates.update", "ArdiaUpdates.claimOutcome", "ArdiaUpdates.restart"};
+
+CallCheck Call(std::string_view method, std::vector<CallArgument> args, ArgumentsShape shape = ArgumentsShape::kList) {
+  return CheckUpdateCall(method, shape, args);
+}
+
+void TestUpdateCalls() {
+  const CallArgument build{ArgumentKind::kInt, 120};
+  for (const char* method : kUpdateMethods) {
+    assert(ParseUpdateCall(method));
+    assert(!Call(method, {}, ArgumentsShape::kNotList).request);
+    assert(!Call(method, {build, build}).request);
+  }
+  assert(!ParseUpdateCall("ArdiaUpdates.releases"));
+  assert(!ParseUpdateCall("ardiaupdates.check"));
+  assert(Call("ArdiaUpdates.nope", {}).refusal == "Unknown update method");
+  for (const char* method : {"ArdiaUpdates.installKind", "ArdiaUpdates.status", "ArdiaUpdates.check", "ArdiaUpdates.restart"}) {
+    assert(Call(method, {}).request);
+    assert(Call(method, {}, ArgumentsShape::kOmitted).request);
+    assert(!Call(method, {build}).request);
+    assert(!Call(method, {CallArgument{}}).request);
+  }
+  const CallCheck update = Call("ArdiaUpdates.update", {build});
+  assert(update.request && update.request->call == UpdateCall::kUpdate && update.request->build == 120);
+  assert(Call("ArdiaUpdates.update", {CallArgument{ArgumentKind::kDouble, 9007199254740991.0}}).request);
+  assert(Call("ArdiaUpdates.claimOutcome", {CallArgument{ArgumentKind::kInt, 3}}).request->run == 3);
+  assert(Call("ArdiaUpdates.claimOutcome", {CallArgument{ArgumentKind::kInt, 0}}).request);
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double refused_numbers[] = {0.0, -1.0, 0.5, 9007199254740993.0, infinity, -infinity};
+  for (const double number : refused_numbers) {
+    assert(!Call("ArdiaUpdates.update", {CallArgument{ArgumentKind::kDouble, number}}).request);
+  }
+  assert(!Call("ArdiaUpdates.update", {CallArgument{ArgumentKind::kDouble, std::nan("")}}).request);
+  for (const double number : {-1.0, 0.5, 1e10, infinity}) {
+    assert(!Call("ArdiaUpdates.claimOutcome", {CallArgument{ArgumentKind::kDouble, number}}).request);
+  }
+  for (const ArgumentKind kind : {ArgumentKind::kNull, ArgumentKind::kBool, ArgumentKind::kString, ArgumentKind::kList, ArgumentKind::kDict}) {
+    assert(!Call("ArdiaUpdates.update", {CallArgument{kind, 120}}).request);
+    assert(!Call("ArdiaUpdates.claimOutcome", {CallArgument{kind, 1}}).request);
+  }
+  assert(!Call("ArdiaUpdates.update", {}).request);
+  assert(!Call("ArdiaUpdates.update", {}, ArgumentsShape::kOmitted).request);
+  assert(!Call("ArdiaUpdates.claimOutcome", {}).request);
+}
+
 void TestInstallKinds() {
   assert(InstallKind({true, true, true, true}) == kInstallerKind);
   assert(InstallKind({true, true, true, false}) == kPortableKind);
@@ -378,6 +436,82 @@ std::optional<std::string> Unhex(std::string_view hex) {
   return bytes;
 }
 
+std::optional<CallArgument> ParseArgument(std::string_view description, std::optional<std::string>* text) {
+  if (description.size() < 2 || description[1] != ':') {
+    return std::nullopt;
+  }
+  const std::string payload(description.substr(2));
+  switch (description[0]) {
+    case 's':
+      *text = Unhex(payload);
+      return text->has_value() ? std::optional<CallArgument>(CallArgument{ArgumentKind::kString, 0}) : std::nullopt;
+    case 'i':
+      return CallArgument{ArgumentKind::kInt, std::stod(payload)};
+    case 'd':
+      return CallArgument{ArgumentKind::kDouble, std::stod(payload)};
+    case 'b':
+      return CallArgument{ArgumentKind::kBool, 0};
+    case 'z':
+      return CallArgument{ArgumentKind::kNull, 0};
+    case 'a':
+      return CallArgument{ArgumentKind::kList, 0};
+    case 'o':
+      return CallArgument{ArgumentKind::kDict, 0};
+  }
+  return std::nullopt;
+}
+
+bool ReachesCallSink(const CallCheck& checked) {
+  if (!checked.request) {
+    return false;
+  }
+  UpdateState state;
+  const std::optional<int> check = BeginCheck(state);
+  CheckFinished(state, *check, Verdict::kOk, Offer{"0.3.0", 120, kInstaller, kSha, 1048576}, "");
+  switch (checked.request->call) {
+    case UpdateCall::kUpdate:
+      return BeginDownload(state, checked.request->build).has_value();
+    case UpdateCall::kClaimOutcome: {
+      const std::optional<int> run = BeginDownload(state, 120);
+      DownloadFinished(state, *run, true, "");
+      return ClaimOutcome(state, checked.request->run);
+    }
+    default:
+      return true;
+  }
+}
+
+size_t CheckHostileCall(const CallArgument& value, ArgumentsShape shape, const std::vector<CallArgument>& as_args) {
+  size_t reached = 0;
+  for (const char* method : kUpdateMethods) {
+    const CallCheck single = CheckUpdateCall(method, ArgumentsShape::kList, std::vector<CallArgument>{value});
+    if (single.request) {
+      assert(single.request->call == UpdateCall::kUpdate || single.request->call == UpdateCall::kClaimOutcome);
+      assert(value.kind == ArgumentKind::kInt || value.kind == ArgumentKind::kDouble);
+      assert(std::isfinite(value.number) && std::floor(value.number) == value.number);
+      if (single.request->call == UpdateCall::kUpdate) {
+        assert(ValidBuild(single.request->build));
+      } else {
+        assert(single.request->run >= 0 && single.request->run <= kLargestRun);
+      }
+    }
+    if (ReachesCallSink(single)) {
+      ++reached;
+      assert(single.request->call != UpdateCall::kUpdate || single.request->build == 120);
+      assert(single.request->call != UpdateCall::kClaimOutcome || single.request->run == 1);
+    }
+    assert(!CheckUpdateCall(method, ArgumentsShape::kList, std::vector<CallArgument>{value, value}).request);
+    const CallCheck whole = CheckUpdateCall(method, shape, as_args);
+    if (shape == ArgumentsShape::kNotList) {
+      assert(!whole.request && whole.refusal == "args must be a list");
+    }
+    if (whole.request && as_args.empty()) {
+      assert(whole.request->call != UpdateCall::kUpdate && whole.request->call != UpdateCall::kClaimOutcome);
+    }
+  }
+  return reached;
+}
+
 int RunHostileCorpus(const char* path) {
   std::ifstream input(path);
   assert(input);
@@ -387,15 +521,52 @@ int RunHostileCorpus(const char* path) {
   Offer reached;
   assert(ReachesDownload(ReadVerifierAnswer(true, 0, control, 100, kReleasesUnder), &reached));
   CheckReachedOffer(reached);
+  assert(ReachesCallSink(CheckUpdateCall("ArdiaUpdates.update", ArgumentsShape::kList,
+                                         std::vector<CallArgument>{{ArgumentKind::kInt, 120}})));
+  assert(ReachesCallSink(CheckUpdateCall("ArdiaUpdates.claimOutcome", ArgumentsShape::kList,
+                                         std::vector<CallArgument>{{ArgumentKind::kInt, 1}})));
   size_t values = 0;
+  size_t strings = 0;
   size_t answers = 0;
   size_t downloads = 0;
+  size_t calls = 0;
+  size_t call_sinks = 0;
   std::string line;
   while (std::getline(input, line)) {
-    const std::optional<std::string> value = Unhex(line);
+    const size_t bar = line.find('|');
+    assert(bar != std::string::npos);
+    std::optional<std::string> text;
+    const std::optional<CallArgument> value = ParseArgument(std::string_view(line).substr(0, bar), &text);
     assert(value);
     ++values;
-    const std::string& h = *value;
+    const std::string_view whole = std::string_view(line).substr(bar + 1);
+    assert(!whole.empty());
+    ArgumentsShape shape = ArgumentsShape::kOmitted;
+    std::vector<CallArgument> as_args;
+    if (whole[0] == 'N') {
+      shape = ArgumentsShape::kNotList;
+    } else if (whole[0] == 'L') {
+      shape = ArgumentsShape::kList;
+      std::string_view rest = whole.substr(1);
+      while (!rest.empty()) {
+        const size_t comma = rest.find(',');
+        std::optional<std::string> element_text;
+        const std::optional<CallArgument> element = ParseArgument(rest.substr(0, comma), &element_text);
+        assert(element);
+        as_args.push_back(*element);
+        rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+      }
+    } else {
+      assert(whole[0] == 'O');
+    }
+    calls += std::size(kUpdateMethods) * 3;
+    call_sinks += CheckHostileCall(*value, shape, as_args);
+    if (!text) {
+      continue;
+    }
+    ++strings;
+    const std::string& h = *text;
+    assert(!ParseUpdateCall(h) || std::string_view(h).starts_with("ArdiaUpdates."));
     assert(!TestFeed(h) || ValidFeedUrl(h));
     assert(!ValidPublishedUnder(h) || h.starts_with("https://") || h.starts_with("http://"));
     assert(!ValidInstallerUrl(h, kReleasesUnder) || h.starts_with(kReleasesUnder));
@@ -428,9 +599,10 @@ int RunHostileCorpus(const char* path) {
       }
     }
   }
-  assert(values > 0);
-  std::cout << "webui_update_policy_test hostile: " << values << " values, " << answers << " answers, " << downloads
-            << " reached the download gate with a valid offer, control reached it\n";
+  assert(values > 0 && strings > 0);
+  std::cout << "webui_update_policy_test hostile: " << values << " values, " << strings << " strings, " << answers
+            << " answers, " << downloads << " reached the download gate with a valid offer, " << calls << " calls, "
+            << call_sinks << " reached a call sink with a valid request, controls reached them\n";
   return 0;
 }
 
@@ -447,6 +619,8 @@ int main(int argc, char** argv) {
   TestStagingNames();
   TestCommands();
   TestDataDirectories();
+  TestHeldInstallerHandle();
+  TestUpdateCalls();
   TestInstallKinds();
   TestStateMachine();
   std::cout << "webui_update_policy_test: all assertions passed\n";

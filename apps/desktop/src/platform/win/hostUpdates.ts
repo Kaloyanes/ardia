@@ -305,14 +305,17 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   }
 
   async function startRun(update: WindowsUpdate, from: StartedFrom, consent: ConsentToken | null) {
-    const started = readEngineStatus(await invokeHost<unknown>(UPDATE_METHOD, { args: [update.build] }, deps.host).catch(() => null));
+    const answer = await invokeHost<unknown>(UPDATE_METHOD, { args: [update.build] }, deps.host).catch(() => null);
+    const started = readEngineStatus(answer);
     if (!started || (started.phase !== "downloading" && started.phase !== "ready") || started.offer?.build !== update.build) {
       noteUpdateDownloadStarted(consent);
       noteUpdateDownloadFailed("other", consent);
       return fallBack(update, from);
     }
-    runConsents.set(started.run, consent);
-    await remember({ started: { run: started.run, build: update.build, consent } }).catch(() => {});
+    if (isRecord(answer) && answer.started === true) {
+      runConsents.set(started.run, consent);
+      await remember({ started: { run: started.run, build: update.build, consent } }).catch(() => {});
+    }
     void followRun(started, { update, from }).catch((error: unknown) => console.info(`[ardia windows] the update to ${named(update)} stopped: ${String(error)}`));
   }
 

@@ -3,7 +3,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,6 +46,18 @@ inline constexpr wchar_t kInstallerArguments[] =
 inline constexpr std::string_view kRedirectHosts[] = {
     "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"};
 inline constexpr std::string_view kLocalHttpHosts[] = {"127.0.0.1", "localhost", "10.0.2.2"};
+
+inline constexpr uint32_t kFileReadData = 0x00000001;
+inline constexpr uint32_t kFileReadAttributes = 0x00000080;
+inline constexpr uint32_t kSynchronize = 0x00100000;
+inline constexpr uint32_t kDeleteAccess = 0x00010000;
+inline constexpr uint32_t kFileShareRead = 0x00000001;
+inline constexpr uint32_t kHeldInstallerAccess = kFileReadData | kFileReadAttributes | kSynchronize;
+inline constexpr uint32_t kHeldInstallerShare = kFileShareRead;
+
+constexpr bool HeldInstallerLetsItRun(uint32_t access, uint32_t share) {
+  return (access & kDeleteAccess) == 0 && (access & ~kHeldInstallerAccess) == 0 && share == kFileShareRead;
+}
 
 inline constexpr std::string_view kInstallerKind = "installer";
 inline constexpr std::string_view kPortableKind = "portable";
@@ -579,6 +593,85 @@ constexpr std::string_view InstallKind(const Installation& found) {
     return kUnsupportedKind;
   }
   return found.uninstaller ? kInstallerKind : kPortableKind;
+}
+
+enum class UpdateCall { kInstallKind, kStatus, kCheck, kUpdate, kClaimOutcome, kRestart };
+
+inline constexpr int kLargestRun = 1000000000;
+
+constexpr std::optional<UpdateCall> ParseUpdateCall(std::string_view method) {
+  if (method == "ArdiaUpdates.installKind") return UpdateCall::kInstallKind;
+  if (method == "ArdiaUpdates.status") return UpdateCall::kStatus;
+  if (method == "ArdiaUpdates.check") return UpdateCall::kCheck;
+  if (method == "ArdiaUpdates.update") return UpdateCall::kUpdate;
+  if (method == "ArdiaUpdates.claimOutcome") return UpdateCall::kClaimOutcome;
+  if (method == "ArdiaUpdates.restart") return UpdateCall::kRestart;
+  return std::nullopt;
+}
+
+enum class ArgumentKind { kNull, kBool, kInt, kDouble, kString, kList, kDict };
+
+struct CallArgument {
+  ArgumentKind kind = ArgumentKind::kNull;
+  double number = 0;
+};
+
+enum class ArgumentsShape { kOmitted, kList, kNotList };
+
+struct CallRequest {
+  UpdateCall call = UpdateCall::kStatus;
+  uint64_t build = 0;
+  int run = 0;
+};
+
+struct CallCheck {
+  std::optional<CallRequest> request;
+  std::string_view refusal;
+};
+
+inline std::optional<double> WholeNumber(const CallArgument& argument) {
+  if (argument.kind != ArgumentKind::kInt && argument.kind != ArgumentKind::kDouble) {
+    return std::nullopt;
+  }
+  if (!std::isfinite(argument.number) || std::floor(argument.number) != argument.number) {
+    return std::nullopt;
+  }
+  return argument.number;
+}
+
+inline CallCheck CheckUpdateCall(std::string_view method, ArgumentsShape shape, std::span<const CallArgument> args) {
+  const std::optional<UpdateCall> call = ParseUpdateCall(method);
+  if (!call) {
+    return {std::nullopt, "Unknown update method"};
+  }
+  if (shape == ArgumentsShape::kNotList) {
+    return {std::nullopt, "args must be a list"};
+  }
+  switch (*call) {
+    case UpdateCall::kInstallKind:
+    case UpdateCall::kStatus:
+    case UpdateCall::kCheck:
+    case UpdateCall::kRestart:
+      if (!args.empty()) {
+        return {std::nullopt, "this update call takes no arguments"};
+      }
+      return {CallRequest{*call, 0, 0}, {}};
+    case UpdateCall::kUpdate: {
+      const std::optional<double> build = args.size() == 1 ? WholeNumber(args[0]) : std::nullopt;
+      if (!build || *build < 1 || *build > static_cast<double>(kLargestBuild)) {
+        return {std::nullopt, "update takes a build number"};
+      }
+      return {CallRequest{*call, static_cast<uint64_t>(*build), 0}, {}};
+    }
+    case UpdateCall::kClaimOutcome: {
+      const std::optional<double> run = args.size() == 1 ? WholeNumber(args[0]) : std::nullopt;
+      if (!run || *run < 0 || *run > kLargestRun) {
+        return {std::nullopt, "claimOutcome takes a run number"};
+      }
+      return {CallRequest{*call, 0, static_cast<int>(*run)}, {}};
+    }
+  }
+  return {std::nullopt, "Unknown update method"};
 }
 
 enum class Phase { kIdle, kChecking, kUpToDate, kAvailable, kDownloading, kReady, kFailed };

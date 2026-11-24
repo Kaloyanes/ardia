@@ -259,6 +259,11 @@ std::optional<FileIdentity> IdentityOf(HANDLE handle) {
   return FileIdentity{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
 }
 
+static_assert(policy::kHeldInstallerAccess == (FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE));
+static_assert(policy::kDeleteAccess == DELETE);
+static_assert(policy::kHeldInstallerShare == FILE_SHARE_READ);
+static_assert(policy::HeldInstallerLetsItRun(policy::kHeldInstallerAccess, policy::kHeldInstallerShare));
+
 bool Dispose(HANDLE handle) {
   FILE_DISPOSITION_INFO disposition{};
   disposition.DeleteFile = TRUE;
@@ -273,6 +278,20 @@ void DisposePlainChild(const std::wstring& folder, const std::wstring& path) {
   }
   const std::optional<FileFacts> facts = RegularFileFacts(file.get());
   if (facts && facts->links == 1 && IsDirectChildOfWinDirectory(folder, facts->final_path)) {
+    Dispose(file.get());
+  }
+}
+
+void DisposeIfSame(const std::wstring& folder, const std::wstring& path, const FileIdentity& identity) {
+  base::win::ScopedHandle file =
+      OpenWithoutFollowing(path, DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_DELETE);
+  if (!file.is_valid()) {
+    return;
+  }
+  const std::optional<FileFacts> facts = RegularFileFacts(file.get());
+  const std::optional<FileIdentity> reopened = IdentityOf(file.get());
+  if (facts && reopened && *reopened == identity && facts->links == 1 &&
+      IsDirectChildOfWinDirectory(folder, facts->final_path)) {
     Dispose(file.get());
   }
 }
@@ -879,7 +898,8 @@ class InstallerSink {
   }
 
   bool HoldMatchingInstaller(const std::wstring& path, const std::optional<FileIdentity>& expected) {
-    base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ | DELETE, FILE_SHARE_READ);
+    base::win::ScopedHandle file =
+        OpenWithoutFollowing(path, policy::kHeldInstallerAccess, policy::kHeldInstallerShare);
     if (!file.is_valid()) {
       return false;
     }
@@ -890,7 +910,8 @@ class InstallerSink {
       return false;
     }
     if (facts->size != offer_.bytes || HashOf(file.get()) != offer_.sha256) {
-      Dispose(file.get());
+      file.Close();
+      DisposeIfSame(updates_path_, facts->final_path, *identity);
       return false;
     }
     held_ = std::move(file);
@@ -899,10 +920,11 @@ class InstallerSink {
   }
 
   void Discard() {
-    if (held_.is_valid()) {
-      Dispose(held_.get());
-    }
+    const std::optional<FileIdentity> identity = held_.is_valid() ? IdentityOf(held_.get()) : std::nullopt;
     held_.Close();
+    if (identity && !held_path_.empty()) {
+      DisposeIfSame(updates_path_, held_path_, *identity);
+    }
     held_path_.clear();
   }
 
@@ -1189,6 +1211,18 @@ class Service {
     }
   }
 
+  void AnswerUpdate(UpdateReply done, const Installation& installation, bool started) {
+    AnswerStatus(base::BindOnce(
+                     [](UpdateReply done, bool started, bool ok, base::Value status) {
+                       if (status.is_dict()) {
+                         status.GetDict().Set("started", started);
+                       }
+                       std::move(done).Run(ok, std::move(status));
+                     },
+                     std::move(done), started),
+                 installation);
+  }
+
   void AnswerStatus(UpdateReply done, const Installation& installation) {
     base::DictValue status;
     status.Set("phase", policy::PhaseName(state_.phase));
@@ -1297,7 +1331,7 @@ class Service {
 
   void UpdateWith(uint64_t build, UpdateReply done, const Installation& installation) {
     if (installation.kind != policy::kInstallerKind) {
-      return AnswerStatus(std::move(done), installation);
+      return AnswerUpdate(std::move(done), installation, false);
     }
     const std::optional<int> run = policy::BeginDownload(state_, build);
     if (run) {
@@ -1307,7 +1341,7 @@ class Service {
           .WithArgs(installation.app_data, *state_.offer)
           .Then(base::BindOnce(&Service::InstallerPrepared, weak_factory_.GetWeakPtr(), *run));
     }
-    AnswerStatus(std::move(done), installation);
+    AnswerUpdate(std::move(done), installation, run.has_value());
   }
 
   void InstallerPrepared(int run, Prepared prepared) {
@@ -1401,88 +1435,64 @@ class Service {
   base::WeakPtrFactory<Service> weak_factory_{this};
 };
 
-std::optional<int> RunArgument(const base::ListValue& args) {
-  if (args.size() != 1) {
-    return std::nullopt;
+std::vector<policy::CallArgument> CallArguments(const base::Value* given, policy::ArgumentsShape* shape) {
+  std::vector<policy::CallArgument> arguments;
+  if (!given) {
+    *shape = policy::ArgumentsShape::kOmitted;
+    return arguments;
   }
-  if (args[0].is_int()) {
-    return args[0].GetInt();
+  if (!given->is_list()) {
+    *shape = policy::ArgumentsShape::kNotList;
+    return arguments;
   }
-  if (!args[0].is_double()) {
-    return std::nullopt;
+  *shape = policy::ArgumentsShape::kList;
+  for (const base::Value& value : given->GetList()) {
+    policy::CallArgument argument;
+    if (value.is_int()) {
+      argument = {policy::ArgumentKind::kInt, static_cast<double>(value.GetInt())};
+    } else if (value.is_double()) {
+      argument = {policy::ArgumentKind::kDouble, value.GetDouble()};
+    } else if (value.is_bool()) {
+      argument.kind = policy::ArgumentKind::kBool;
+    } else if (value.is_string()) {
+      argument.kind = policy::ArgumentKind::kString;
+    } else if (value.is_list()) {
+      argument.kind = policy::ArgumentKind::kList;
+    } else if (value.is_dict()) {
+      argument.kind = policy::ArgumentKind::kDict;
+    }
+    arguments.push_back(argument);
   }
-  const double value = args[0].GetDouble();
-  if (!std::isfinite(value) || value < 0 || value > 1e9 || std::floor(value) != value) {
-    return std::nullopt;
-  }
-  return static_cast<int>(value);
-}
-
-std::optional<uint64_t> BuildArgument(const base::ListValue& args) {
-  if (args.size() != 1) {
-    return std::nullopt;
-  }
-  double value = 0;
-  if (args[0].is_int()) {
-    value = args[0].GetInt();
-  } else if (args[0].is_double()) {
-    value = args[0].GetDouble();
-  } else {
-    return std::nullopt;
-  }
-  if (!std::isfinite(value) || std::floor(value) != value || value < 1 ||
-      value > static_cast<double>(policy::kLargestBuild)) {
-    return std::nullopt;
-  }
-  return static_cast<uint64_t>(value);
+  return arguments;
 }
 
 }
 
 bool HandlesUpdateCall(std::string_view method) {
-  return std::ranges::any_of(kUpdateCapabilities, [method](std::string_view listed) { return listed == method; });
+  return policy::ParseUpdateCall(method).has_value();
 }
 
-void InvokeUpdates(std::string_view method, const base::ListValue& args, UpdateReply done, base::OnceClosure quit) {
-  if (method == "ArdiaUpdates.installKind") {
-    if (!args.empty()) {
-      return std::move(done).Run(false, base::Value("installKind takes no arguments"));
-    }
-    return Service::Get().InstallKind(std::move(done));
+void InvokeUpdates(std::string_view method, const base::Value* given, UpdateReply done, base::OnceClosure quit) {
+  policy::ArgumentsShape shape = policy::ArgumentsShape::kOmitted;
+  const std::vector<policy::CallArgument> arguments = CallArguments(given, &shape);
+  const policy::CallCheck checked = policy::CheckUpdateCall(method, shape, arguments);
+  if (!checked.request) {
+    return std::move(done).Run(false, base::Value(checked.refusal));
   }
-  if (method == "ArdiaUpdates.status") {
-    if (!args.empty()) {
-      return std::move(done).Run(false, base::Value("status takes no arguments"));
-    }
-    return Service::Get().Status(std::move(done));
+  switch (checked.request->call) {
+    case policy::UpdateCall::kInstallKind:
+      return Service::Get().InstallKind(std::move(done));
+    case policy::UpdateCall::kStatus:
+      return Service::Get().Status(std::move(done));
+    case policy::UpdateCall::kCheck:
+      return Service::Get().Check(std::move(done));
+    case policy::UpdateCall::kUpdate:
+      return Service::Get().Update(checked.request->build, std::move(done));
+    case policy::UpdateCall::kClaimOutcome:
+      return Service::Get().Claim(checked.request->run, std::move(done));
+    case policy::UpdateCall::kRestart:
+      return Service::Get().Restart(std::move(done), std::move(quit));
   }
-  if (method == "ArdiaUpdates.check") {
-    if (!args.empty()) {
-      return std::move(done).Run(false, base::Value("check takes no arguments"));
-    }
-    return Service::Get().Check(std::move(done));
-  }
-  if (method == "ArdiaUpdates.update") {
-    const std::optional<uint64_t> build = BuildArgument(args);
-    if (!build) {
-      return std::move(done).Run(false, base::Value("update takes a build number"));
-    }
-    return Service::Get().Update(*build, std::move(done));
-  }
-  if (method == "ArdiaUpdates.claimOutcome") {
-    const std::optional<int> run = RunArgument(args);
-    if (!run) {
-      return std::move(done).Run(false, base::Value("claimOutcome takes a run number"));
-    }
-    return Service::Get().Claim(*run, std::move(done));
-  }
-  if (method == "ArdiaUpdates.restart") {
-    if (!args.empty()) {
-      return std::move(done).Run(false, base::Value("restart takes no arguments"));
-    }
-    return Service::Get().Restart(std::move(done), std::move(quit));
-  }
-  std::move(done).Run(false, base::Value("Unknown update method"));
 }
 
 }
