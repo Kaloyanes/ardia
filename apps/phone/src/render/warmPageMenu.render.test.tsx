@@ -135,13 +135,22 @@ test("a closed page menu's model holds still while its page loads and as request
   unmount(root);
 });
 
-test("the page menu opens as tall as its rows, up to the safe top, with a grabber, as the iPhone's fitted sheet does", async () => {
+test("on Android the page menu opens as the iPhone's inset card at its medium stop, with a grabber, and elsewhere keeps its fitted sheet", async () => {
   page("https://site0.example/", false);
   const root = host();
   await open();
   const style = StyleSheet.flatten(panelOf(root).props.style);
-  expect(style.height).toBeUndefined();
-  expect(style.maxHeight).toBeGreaterThan(0);
+  const floating = root.root.findAll((node) => typeof node.type === "string" && node.props.testID === "floatingSheetCard");
+  if (Platform.OS === "android") {
+    expect(floating).toHaveLength(1);
+    expect(sheetOf(root).props.floating).toBe(true);
+    expect(style.height).toBeGreaterThan(0);
+    expect(style.maxHeight).toBeUndefined();
+  } else {
+    expect(floating).toHaveLength(0);
+    expect(style.height).toBeUndefined();
+    expect(style.maxHeight).toBeGreaterThan(0);
+  }
   expect(root.root.findAll((node) => typeof node.type === "string" && node.props.testID === "sheetGrabber")).toHaveLength(1);
   expect(sheetOf(root).props.catchUpPingMs).toBe(Platform.OS === "android" ? FABRIC_CATCH_UP_PING_MS : undefined);
   unmount(root);

@@ -74,6 +74,7 @@ const PAGE_MENU_LIST_HEIGHT_RATIO = 0.52;
 const countPageMenuExpansion = () => countUsage("site_settings_sheet_expanded");
 const menuArrived = () => markMenuPhase("appeared");
 const MENU_CATCH_UP_PING_MS = Platform.OS === "android" ? FABRIC_CATCH_UP_PING_MS : undefined;
+const FLOATING_MENU = Platform.OS === "android";
 
 type PageMenuProps = { tabId: string; open: boolean; onHidden: (showing: number) => void };
 
@@ -146,7 +147,7 @@ function DrawnPageMenu({ tabId, model, open, onHidden }: PageMenuProps & { model
   }
   if (redesigned) {
     return (
-      <Sheet open={open} onDismiss={closePageMenu} onHidden={hidden} onShown={menuArrived} fill={ink.solid} onTapAway={tappedAway} grabber catchUpPingMs={MENU_CATCH_UP_PING_MS}>
+      <Sheet open={open} onDismiss={closePageMenu} onHidden={hidden} onShown={menuArrived} fill={ink.solid} onTapAway={tappedAway} grabber floating={FLOATING_MENU} catchUpPingMs={MENU_CATCH_UP_PING_MS}>
         {confirmation}
         <PageMenuWords tabId={tabId} model={model} onTranslate={translate} showing={opening} />
       </Sheet>

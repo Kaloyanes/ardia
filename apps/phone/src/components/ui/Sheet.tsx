@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Pressable, StyleSheet, useWindowDimensions, View, type ScrollViewProps, type ViewInstance } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -17,12 +17,12 @@ import {
   trayDragDismisses,
   trayDragOffset,
 } from "../../lib/trayMotion";
-import { halfSheetPosition, sheetDetentAfterDrag, sheetHalfRest } from "../../lib/sheetDetent";
+import { floatingSheetHalfRest, floatingSheetScale, halfSheetPosition, sheetDetentAfterDrag, sheetHalfRest } from "../../lib/sheetDetent";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCoverFocus } from "./coverFocus";
 import { reducedMotionMs, tabsCurve, tabsMotion, trayMotion } from "./motion";
 import { useTheme } from "./theme";
-import { menuLayout, sheetInk } from "./tokens";
+import { floatingSheetLayout, menuLayout, sheetInk } from "./tokens";
 import { useReduceMotion, useScreenReader } from "./contrast";
 import { MenuFrostProvider } from "./Menu";
 import { useDesign } from "./design";
@@ -38,6 +38,8 @@ const DIM_TRAVEL_RADII = 8;
 const AT_TOP_SLOP = 0.5;
 
 export const sheetMaxHeight = (height: number, safeTop: number) => Math.max(height - safeTop - menuLayout.sheetTopGap, 0);
+
+export const floatingSheetMaxHeight = (height: number, safeTop: number) => Math.max(height - safeTop - floatingSheetLayout.topGap, 0);
 
 export const sheetPullTranslation = (translationY: number, scrolls: boolean, atTop: boolean) => {
   "worklet";
@@ -124,6 +126,7 @@ type Props = {
   onTapAway?: () => void;
   halfOpen?: boolean;
   grabber?: boolean;
+  floating?: boolean;
   onExpand?: () => void;
   onShown?: () => void;
   catchUpPingMs?: number;
@@ -134,10 +137,12 @@ export function Sheet(props: Props) {
   return useDesign() === "material" ? <MaterialSheet open={props.open} onDismiss={props.onDismiss} onTapAway={props.onTapAway} onBack={props.onBack} onHidden={props.onHidden}>{props.children}</MaterialSheet> : <ClassicSheet {...props} />;
 }
 
-function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = false, grabber: wantsGrabber = false, onExpand, onShown, catchUpPingMs, children }: Props) {
+function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen: wantsHalf = false, grabber: wantsGrabber = false, floating = false, onExpand, onShown, catchUpPingMs, children }: Props) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
+  const halfOpen = wantsHalf || floating;
+  const floatScale = floatingSheetScale(width - insets.left - insets.right, floatingSheetLayout.inset);
   const shown = useSharedValue(0);
   const panel = useRef<ViewInstance>(null);
   useCoverFocus(panel, open);
@@ -148,8 +153,8 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
   const atTop = useSharedValue(true);
   const scrolls = useSharedValue(false);
   const native = useMemo(() => Gesture.Native(), []);
-  const settled = sheetMaxHeight(height, insets.top);
-  const halfRestNow = halfOpen && !screenReader ? sheetHalfRest(settled, height) : 0;
+  const settled = floating ? floatingSheetMaxHeight(height, insets.top) : sheetMaxHeight(height, insets.top);
+  const halfRestNow = !halfOpen || screenReader ? 0 : floating ? floatingSheetHalfRest(settled, height, floatingSheetLayout.halfShare, floatScale) : sheetHalfRest(settled, height);
   const halfRest = useSharedValue(halfRestNow);
   const rest = useSharedValue(halfRestNow);
   const startedFull = useSharedValue(halfRestNow === 0);
@@ -270,6 +275,41 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
     "worklet";
     return (1 - shown.value) * sheetHeight.value + rest.value + drag.value;
   };
+  const dimLayer = (
+    <Animated.View style={[StyleSheet.absoluteFill, dim]}>
+      <Pressable
+        accessibilityLabel={dismissWords.close}
+        style={[StyleSheet.absoluteFill, { backgroundColor: theme.trayDim }]}
+        onPress={() => {
+          if (menuLayout.sheetGrabber) onTapAway?.();
+          onDismiss();
+        }}
+      />
+    </Animated.View>
+  );
+  if (floating) {
+    return (
+      <View style={StyleSheet.absoluteFill} collapsable={false} {...closingGate(!open, "box-none")}>
+        {open ? <FabricCatchUp motion={sheetMotionNow} testID="sheetFabricCatchUp" pingMs={catchUpPingMs} /> : null}
+        {dimLayer}
+        <FloatingCard
+          gesture={pull}
+          panel={panel}
+          motion={{ shown, rest, drag, halfRest, sheetHeight }}
+          scale={floatScale}
+          height={settled}
+          insets={insets}
+          fill={fill ?? (theme.dark ? sheetInk.fill.dark : sheetInk.fill.light)}
+          handleInk={theme.tertiaryLabel}
+          onEscape={open ? onDismiss : undefined}
+        >
+          <SheetScrollContext.Provider value={scroll}>
+            <MenuFrostProvider value={null}>{children}</MenuFrostProvider>
+          </SheetScrollContext.Provider>
+        </FloatingCard>
+      </View>
+    );
+  }
   const grabber = menuLayout.sheetGrabber ?? (halfOpen || wantsGrabber ? menuLayout.halfSheetGrabber : null);
   const grabberRoom = menuLayout.sheetGrabber ? 0 : grabber ? grabber.top + grabber.height : 0;
   return (
@@ -279,16 +319,7 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
       {...closingGate(!open, "box-none")}
     >
       {open ? <FabricCatchUp motion={sheetMotionNow} testID="sheetFabricCatchUp" pingMs={catchUpPingMs} /> : null}
-      <Animated.View style={[StyleSheet.absoluteFill, dim]}>
-        <Pressable
-          accessibilityLabel={dismissWords.close}
-          style={[StyleSheet.absoluteFill, { backgroundColor: theme.trayDim }]}
-          onPress={() => {
-            if (menuLayout.sheetGrabber) onTapAway?.();
-            onDismiss();
-          }}
-        />
-      </Animated.View>
+      {dimLayer}
       <GestureDetector gesture={pull}>
         <Animated.View
           ref={panel}
@@ -329,6 +360,68 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
   );
 }
 
+type FloatingMotion = { shown: SharedValue<number>; rest: SharedValue<number>; drag: SharedValue<number>; halfRest: SharedValue<number>; sheetHeight: SharedValue<number> };
+
+type FloatingCardProps = {
+  gesture: ReturnType<typeof Gesture.Pan>;
+  panel: RefObject<ViewInstance | null>;
+  motion: FloatingMotion;
+  scale: number;
+  height: number;
+  insets: { left: number; right: number; bottom: number };
+  fill: string;
+  handleInk: string;
+  onEscape?: () => void;
+  children: ReactNode;
+};
+
+function FloatingCard({ gesture, panel, motion: { shown, rest, drag, halfRest, sheetHeight }, scale, height, insets, fill, handleInk, onEscape, children }: FloatingCardProps) {
+  const card = useAnimatedStyle(() => {
+    const y = rest.value + drag.value;
+    const window = Math.min(y, halfRest.value);
+    const lifted = halfRest.value > 0 ? clampedProgress(window, halfRest.value) : 0;
+    const away = (1 - shown.value) * (sheetHeight.value - window + floatingSheetLayout.inset);
+    return { transform: [{ translateY: away + Math.max(y - halfRest.value, 0) - lifted * floatingSheetLayout.inset }, { scale: 1 - lifted * (1 - scale) }] };
+  });
+  const top = useAnimatedStyle(() => ({ transform: [{ translateY: Math.min(rest.value + drag.value, halfRest.value) }] }));
+  const rows = useAnimatedStyle(() => ({ transform: [{ translateY: Math.min(rest.value + drag.value, halfRest.value) }] }));
+  const bottom = useAnimatedStyle(() => {
+    const window = Math.min(rest.value + drag.value, halfRest.value);
+    const radius = (halfRest.value > 0 ? clampedProgress(window, halfRest.value) : 0) * (floatingSheetLayout.bottomRadius / scale);
+    return { transform: [{ translateY: -window }], borderBottomLeftRadius: radius, borderBottomRightRadius: radius };
+  });
+  const handle = floatingSheetLayout.grabber;
+  return (
+    <GestureDetector gesture={gesture}>
+      <Animated.View
+        ref={panel}
+        testID="floatingSheetCard"
+        accessibilityViewIsModal
+        onAccessibilityEscape={onEscape}
+        onLayout={(event) => {
+          sheetHeight.value = event.nativeEvent.layout.height;
+        }}
+        style={[styles.floatingCard, { height, left: insets.left, right: insets.right }, card]}
+      >
+        <Animated.View testID="floatingSheetTop" style={[styles.floatingTop, { height }, top]}>
+          <Animated.View testID="sheetFill" style={[styles.floatingBottom, { backgroundColor: fill }, bottom]}>
+            <Animated.View testID="floatingSheetContent" style={[styles.floatingContent, { paddingBottom: insets.bottom }, rows]}>
+              {children}
+              <View
+                testID="sheetGrabber"
+                pointerEvents="none"
+                importantForAccessibility="no-hide-descendants"
+                accessibilityElementsHidden
+                style={[styles.grabber, { top: handle.top, width: handle.width, height: handle.height, borderRadius: handle.height / 2, marginLeft: -handle.width / 2, backgroundColor: handleInk }]}
+              />
+            </Animated.View>
+          </Animated.View>
+        </Animated.View>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
 const styles = StyleSheet.create({
   sheet: {
     position: "absolute",
@@ -341,4 +434,17 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   grabber: { position: "absolute", left: "50%" },
+  floatingCard: { position: "absolute", bottom: 0, transformOrigin: "50% 100%" },
+  floatingTop: {
+    overflow: "hidden",
+    borderTopLeftRadius: menuLayout.sheetRadius,
+    borderTopRightRadius: menuLayout.sheetRadius,
+  },
+  floatingBottom: {
+    flex: 1,
+    overflow: "hidden",
+    borderTopLeftRadius: menuLayout.sheetRadius,
+    borderTopRightRadius: menuLayout.sheetRadius,
+  },
+  floatingContent: { flex: 1 },
 });
