@@ -69,6 +69,7 @@ for (const [manager, configDirectory] of [["Flatpak", FLATPAK_DATA], ["package",
     assert.equal(ui.toasts.length, 1);
     assert.doesNotMatch(ui.toasts[0].message, /flatpak update/);
     assert.equal(ui.toasts[0].options.action.title, "View");
+    assert.equal(ui.toasts[0].options.secondary.title, "Later");
     ui.toasts[0].options.action.run();
     assert.deepEqual([ui.opened, ui.copied], [[RELEASE_PAGE], []]);
     assert.equal(takeUpdateCounts().update_release_page_opens, 1);
