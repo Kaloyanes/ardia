@@ -5,6 +5,7 @@ import {
   FIRST_CHECK_AFTER_MS,
   UPDATE_CHECK_LOCK,
   UPDATE_PREFERENCES,
+  UPDATE_RUN_LOCK,
   WATCH_EVERY_MS,
   WINDOWS_RELEASE_PAGE,
   WINDOWS_UPDATE_METHODS,
@@ -649,4 +650,52 @@ test("after a relaunch the same build ready again shows Restart, whatever an ear
   assert.equal(fresh.seen.ready.length, 1, "a fresh session shows the Restart toast for its own ready run");
   await fresh.updater.watch();
   assert.equal(fresh.seen.ready.length, 1, "and only once for that run");
+});
+
+test("clicking Update while another window's check is running keeps the offer and counts nothing", async () => {
+  takeUpdateCounts();
+  const engine = fakeEngine();
+  const docs = new Map([[UPDATE_PREFERENCES, JSON.stringify({ automaticDownloads: false })]]);
+  const browser = harness({ engine, docs });
+  await browser.updater.check(false);
+  assert.equal(browser.seen.offeredInstalls.length, 1);
+  assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).notified, OFFER.build);
+  takeUpdateCounts();
+  engine.phase = "checking";
+  browser.seen.offeredInstalls[0].install();
+  await settled(() => browser.seen.told.length === 1);
+  assert.deepEqual(browser.seen.told.map((told) => told.title), ["Ardia is checking for updates"]);
+  assert.equal(engine.run, 0, "no download started");
+  assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).notified, null, "the offer can be shown again");
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), {});
+  engine.phase = "idle";
+  await browser.updater.check(false);
+  assert.equal(browser.seen.offeredInstalls.length, 2, "the finished check offers Update again");
+  browser.seen.offeredInstalls[1].install();
+  await settled(() => browser.seen.ready.length === 1);
+  assert.equal(engine.run, 1);
+});
+
+test("a watcher and a manual check queued behind the run lock show one Restart toast for the run", async () => {
+  const locks = lockManager();
+  const engine = fakeEngine();
+  engine.check();
+  engine.update(OFFER.build);
+  engine.advance();
+  const { updater, seen } = harness({ engine, locks });
+  await updater.watch();
+  let releaseLock;
+  locks.request(UPDATE_RUN_LOCK, () => new Promise((resolve) => (releaseLock = resolve)));
+  await tick();
+  const watching = updater.watch();
+  const asking = updater.check(true);
+  await tick();
+  await tick();
+  assert.deepEqual(engine.claims, []);
+  releaseLock();
+  await Promise.all([watching, asking]);
+  assert.deepEqual(engine.claims, [1]);
+  assert.equal(seen.ready.length, 1, "only the claim that consumed the run shows Restart");
+  await updater.check(true);
+  assert.equal(seen.ready.length, 2, "a later Check for Updates still shows it again on request");
 });

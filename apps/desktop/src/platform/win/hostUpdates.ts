@@ -201,6 +201,11 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   }
 
   const runConsents = new Map<number, ConsentToken | null>();
+  const readyShown = new Set<number>();
+  const showReady = (run: number, update: WindowsUpdate) => {
+    readyShown.add(run);
+    deps.ready(update, restartToUpdate);
+  };
   const serialized = <T,>(work: () => Promise<T>): Promise<T> => (deps.locks ? (deps.locks.request(UPDATE_RUN_LOCK, work) as Promise<T>) : work());
 
   async function claim(run: number): Promise<EngineStatus | null> {
@@ -260,8 +265,9 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
     if (deps.showsToasts !== false && status.run > settledRun) {
       const claimed = await claimAndCount(status.run);
       if (claimed && claimed.phase !== "ready") return;
+      if (!claimed && readyShown.has(status.run)) return;
     }
-    deps.ready(status.offer, restartToUpdate);
+    showReady(status.run, status.offer);
   }
 
   async function offeredOnce(update: WindowsUpdate) {
@@ -287,7 +293,7 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
     if (!claimed) return;
     const target = claimed.offer ?? own?.update;
     if (!target) return;
-    if (claimed.phase === "ready") return deps.ready(target, restartToUpdate);
+    if (claimed.phase === "ready") return showReady(claimed.run, target);
     console.info(`[ardia windows] the update to ${named(target)} failed: ${claimed.reason ?? "unknown"}`);
     await fallBack(target, own?.from ?? "automatic");
   }
@@ -318,6 +324,11 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
     const joins = !!started && (started.phase === "downloading" || started.phase === "ready") && started.offer?.build === update.build;
     if (!joins && started && isRecord(answer.reply) && answer.reply.started === false) {
       console.info(`[ardia windows] the engine declined ${named(update)}: it is ${started.phase}${started.offer ? ` with ${named(started.offer)}` : ""}`);
+      if (started.phase === "checking") {
+        if ((await preferences()).notified === update.build) await remember({ notified: null }).catch(() => {});
+        await deps.tell("Ardia is checking for updates", "Try Update again once the check finishes.");
+        return;
+      }
       if (from === "asked" && (started.phase === "downloading" || started.phase === "ready")) await deps.tell("Ardia is already updating", "It tells you when the update is ready to install.");
       return;
     }
