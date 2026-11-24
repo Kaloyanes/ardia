@@ -252,6 +252,12 @@ void TestDataDirectories() {
   assert(!ScratchDataDirectory(L"C:/Users/Ada/AppData/Local/Ardia WebUI", production));
   assert(!ScratchDataDirectory(L"\\\\?\\C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI", production));
   assert(!ScratchDataDirectory(L"  C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI  ", production));
+  assert(!ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI\\.", production));
+  assert(!ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI\\.\\", production));
+  assert(!ScratchDataDirectory(L"C:\\Users\\Ada\\.\\AppData\\Local\\.\\Ardia WebUI", production));
+  assert(!ScratchDataDirectory(L"C:/Users/Ada/AppData/Local/Ardia WebUI/./", production));
+  assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI\\..", production));
+  assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI.", production));
   assert(ScratchDataDirectory(L"C:\\Temp\\ardia-scratch-41", production));
   assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia WebUI\\nested", production));
   assert(ScratchDataDirectory(L"C:\\Users\\Ada\\AppData\\Local\\Ardia", production));

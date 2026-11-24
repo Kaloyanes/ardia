@@ -569,6 +569,12 @@ inline std::wstring FoldedPath(std::wstring_view path) {
     const wchar_t slash = c == L'/' ? L'\\' : c;
     folded.push_back(slash >= L'A' && slash <= L'Z' ? static_cast<wchar_t>(slash - L'A' + L'a') : slash);
   }
+  for (size_t dot = folded.find(L"\\.\\"); dot != std::wstring::npos; dot = folded.find(L"\\.\\")) {
+    folded.erase(dot, 2);
+  }
+  while (folded.size() > 2 && folded.ends_with(L"\\.")) {
+    folded.resize(folded.size() - 2);
+  }
   while (folded.size() > 3 && folded.back() == L'\\') {
     folded.pop_back();
   }

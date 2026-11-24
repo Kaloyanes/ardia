@@ -683,7 +683,8 @@ test("windows webui native update policy keeps every hostile input and call argu
   const { mkdtempSync, rmSync, writeFileSync } = process.getBuiltinModule("node:fs");
   const { tmpdir } = process.getBuiltinModule("node:os");
   const { join } = process.getBuiltinModule("node:path");
-  const repo = new URL("../../../", import.meta.url).pathname;
+  const { fileURLToPath } = process.getBuiltinModule("node:url");
+  const repo = fileURLToPath(new URL("../../../", import.meta.url));
   const compiler = ["c++", "clang++", "g++"].find((name) => spawnSync(name, ["--version"], { stdio: "ignore" }).status === 0);
   if (!compiler) {
     if (process.env.CI) assert.fail("no C++ compiler to build scripts/windows/engine/tests/webui_update_policy_test.cc");
