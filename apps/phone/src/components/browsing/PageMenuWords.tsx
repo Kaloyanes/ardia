@@ -16,6 +16,7 @@ import {
   menuStop,
   openInDefaultBrowser,
   openLibraryInMenu,
+  openSiteSettingsOverMenu,
   openSiteSettingsSheet,
   pinCurrentToMac,
   printCurrentPage,
@@ -116,7 +117,7 @@ export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, 
         {model.pageRows ? <ToggleRow which="desktopSite" icon="desktop" title="Desktop Site" value={model.desktopSite} enabled={model.isWebPage} onChange={setDesktopSite} /> : null}
         {model.pageRows ? <Row icon="translate" title={model.translateTitle} enabled={model.translate} onPress={onTranslate} /> : null}
         {canPrintPages() && !shareOffersPrint() ? <Row icon="printer" title="Print" enabled={model.print} onPress={printCurrentPage} /> : null}
-        <Row icon="gearshape" title="Site Settings" enabled onPress={openSiteSettingsSheet} />
+        <Row icon="gearshape" title="Site Settings" enabled onPress={systemSheet ? openSiteSettingsSheet : openSiteSettingsOverMenu} />
       </Group>
       <Group>
         <Row icon="clockArrow" title={destinationWords.history} enabled onPress={() => openSection("history")} />

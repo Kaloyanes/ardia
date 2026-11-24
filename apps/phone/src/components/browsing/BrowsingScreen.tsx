@@ -64,7 +64,7 @@ import { HostPill, pillHoldAsked, pillSampleHold, useBarFold } from "./HostPill"
 import { hostPillLayout } from "./hostPillTokens";
 import { FindBar } from "./FindBar";
 import { MaterialFindBar } from "./MaterialFindBar";
-import { PageMenu } from "./PageMenu";
+import { PageMenu, usesWarmPageMenu, WarmPageMenuHost } from "./PageMenu";
 import { SystemPageMenuHost, usesSystemPageMenu } from "./SystemPageMenu";
 import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
@@ -400,7 +400,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const statusStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value && !toneSwitchesTab ? withTiming(top, { duration: tabsMotion.barTone }) : top }), [top, toneSwitchesTab]);
   const barStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value && !toneSwitchesTab ? withTiming(bottom, { duration: tabsMotion.barTone }) : bottom }), [bottom, toneSwitchesTab]);
   const { scheme: materialScheme } = useMaterialTheme(tab.isPrivate);
-  const pageMenu = systemMenu ? <SystemPageMenuHost tabId={tab.id} /> : menu.mounted ? <PageMenu tabId={tab.id} open={menuOpen} onHidden={menu.hidden} /> : null;
+  const pageMenu = systemMenu ? <SystemPageMenuHost tabId={tab.id} /> : usesWarmPageMenu(design, systemMenu) ? <WarmPageMenuHost tabId={tab.id} /> : menu.mounted ? <PageMenu tabId={tab.id} open={menuOpen} onHidden={menu.hidden} /> : null;
   const siteSettingsSheet = design === "material" && menuDocked ? pageMenu : null;
   const barBlocked = collapse.hidden || siteSettingsSheet !== null;
   const materialBarFold = useMaterialBarFold(design === "material" ? collapse.fold.progress : null);

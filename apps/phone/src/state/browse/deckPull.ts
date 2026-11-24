@@ -319,6 +319,7 @@ function endDeckPullOnUI() {
   "worklet";
   resetDeckPull();
   deckPull.barCleared.value = false;
+  runOnJS(setDeckOwnsBar)(false);
   deckPull.pageLive.value = false;
   deckPull.barBack.value = 0;
   deckPull.steady.value = false;

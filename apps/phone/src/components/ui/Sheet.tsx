@@ -118,7 +118,10 @@ type Props = {
   fill?: string;
   onTapAway?: () => void;
   halfOpen?: boolean;
+  grabber?: boolean;
   onExpand?: () => void;
+  onShown?: () => void;
+  catchUpPingMs?: number;
   children: ReactNode;
 };
 
@@ -126,7 +129,7 @@ export function Sheet(props: Props) {
   return useDesign() === "material" ? <MaterialSheet open={props.open} onDismiss={props.onDismiss} onTapAway={props.onTapAway} onBack={props.onBack} onHidden={props.onHidden}>{props.children}</MaterialSheet> : <ClassicSheet {...props} />;
 }
 
-function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = false, onExpand, children }: Props) {
+function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = false, grabber: wantsGrabber = false, onExpand, onShown, catchUpPingMs, children }: Props) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -166,12 +169,20 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
       rest.value = halfRest.value;
       setFull(halfRest.value === 0);
       atTop.value = true;
+      const arrived = (finished?: boolean) => {
+        "worklet";
+        if (finished && onShown) runOnJS(onShown)();
+      };
       shown.value = reduceMotion
-        ? withTiming(1, {
-            duration: SHEET_REDUCED_MS,
-            easing: tabsCurve.easeOut,
-          })
-        : withSpring(1, tabsMotion.sheetIn);
+        ? withTiming(
+            1,
+            {
+              duration: SHEET_REDUCED_MS,
+              easing: tabsCurve.easeOut,
+            },
+            arrived,
+          )
+        : withSpring(1, tabsMotion.sheetIn, arrived);
       return;
     }
     const hidden = (finished?: boolean) => {
@@ -254,7 +265,7 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
     "worklet";
     return (1 - shown.value) * sheetHeight.value + rest.value + drag.value;
   };
-  const grabber = menuLayout.sheetGrabber ?? (halfOpen ? menuLayout.halfSheetGrabber : null);
+  const grabber = menuLayout.sheetGrabber ?? (halfOpen || wantsGrabber ? menuLayout.halfSheetGrabber : null);
   const grabberRoom = menuLayout.sheetGrabber ? 0 : grabber ? grabber.top + grabber.height : 0;
   return (
     <View
@@ -262,7 +273,7 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
       collapsable={false}
       {...closingGate(!open, "box-none")}
     >
-      {open ? <FabricCatchUp motion={sheetMotionNow} testID="sheetFabricCatchUp" /> : null}
+      {open ? <FabricCatchUp motion={sheetMotionNow} testID="sheetFabricCatchUp" pingMs={catchUpPingMs} /> : null}
       <Animated.View style={[StyleSheet.absoluteFill, dim]}>
         <Pressable
           accessibilityLabel={dismissWords.close}

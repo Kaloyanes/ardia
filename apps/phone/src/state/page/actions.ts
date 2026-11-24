@@ -387,6 +387,25 @@ export function openSiteSettingsSheet() {
   afterPageMenu(() => openSettingsPage({ page: "siteSettings" }), { sameDocument: false });
 }
 
+export function openSiteSettingsOverMenu() {
+  const document = currentDocument();
+  markMenuPhase("siteSettingsPressed");
+  afterMenu = null;
+  closePageMenu();
+  const open = () => {
+    markMenuPhase("siteSettingsOpened");
+    openSettingsPage({ page: "siteSettings" });
+  };
+  if (!document) {
+    open();
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (opening?.id !== document.opening || pageUi().menuOpen || selectedId() !== document.tabId || useBrowse.getState().surface !== "browsing") return;
+    open();
+  });
+}
+
 export function openSiteSettingsRoute(route: SettingsRoute, { direct = false } = {}) {
   closePageMenu();
   openSettings(route, { direct });

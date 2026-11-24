@@ -500,6 +500,26 @@ test("the bar is one bar throughout: its three glass shapes stay while the brows
   frame();
 });
 
+test("ending a pull on the UI thread hands the bar back to the page on JS too, so a bar-cleared report that reaches JS after the pull's JS end never leaves the page bar's glass hidden", () => {
+  const reanimated = require("react-native-reanimated") as typeof import("react-native-reanimated");
+  act(() => {
+    deckPull.barCleared.value = true;
+    pull.setDeckOwnsBar(true);
+  });
+  const onUi: (() => void)[] = [];
+  const deferred = jest.spyOn(reanimated, "runOnUI").mockImplementation(((work: (...args: unknown[]) => void) => (...args: unknown[]) => void onUi.push(() => work(...args))) as never);
+  act(() => pull.endDeckPull());
+  deferred.mockRestore();
+  expect(pull.usePullBar.getState().deckOwns).toBe(false);
+  act(() => pull.setDeckOwnsBar(true));
+  expect(onUi).toHaveLength(1);
+  act(() => onUi.splice(0).forEach((work) => work()));
+  frame();
+  expect(deckPull.barCleared.value).toBe(false);
+  expect(deckPull.barOwned.value).toBe(false);
+  expect(pull.usePullBar.getState().deckOwns).toBe(false);
+});
+
 const onAndroid = Platform.OS === "android" ? test : test.skip;
 
 const PULL_SETTLE_STARTED_MS = 100;

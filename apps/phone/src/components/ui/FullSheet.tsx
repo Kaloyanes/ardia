@@ -44,9 +44,9 @@ const SheetFrameContext = createContext<SheetFrame | null>(null);
 
 export const useSheetFrame = (): SheetFrame | null => useContext(SheetFrameContext);
 
-type Props<T extends string> = { sheet: T | null; progress: SharedValue<number>; onDismiss: () => void; redesignedSheet?: T; dragEnabled?: boolean; children: (shown: T) => ReactNode };
+type Props<T extends string> = { sheet: T | null; progress: SharedValue<number>; onDismiss: () => void; redesignedSheet?: T; dragEnabled?: boolean; catchUpPingMs?: number; children: (shown: T) => ReactNode };
 
-export function FullSheet<T extends string>({ sheet, progress, onDismiss, redesignedSheet, dragEnabled = true, children }: Props<T>) {
+export function FullSheet<T extends string>({ sheet, progress, onDismiss, redesignedSheet, dragEnabled = true, catchUpPingMs, children }: Props<T>) {
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
   const reduceMotion = useReduceMotion();
@@ -174,7 +174,7 @@ export function FullSheet<T extends string>({ sheet, progress, onDismiss, redesi
   if (!shown) return null;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={sheet ? "auto" : "none"} collapsable={false} importantForAccessibility={sheet ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!sheet}>
-      {sheet ? <FabricCatchUp motion={sheetMotionNow} testID="fullSheetFabricCatchUp" /> : null}
+      {sheet ? <FabricCatchUp motion={sheetMotionNow} testID="fullSheetFabricCatchUp" pingMs={catchUpPingMs} /> : null}
       <Animated.View style={[StyleSheet.absoluteFill, material ? { backgroundColor: withAlpha(scheme.scrim, MATERIAL_STATE.scrim) } : styles.scrim, scrim]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" />
       <GestureDetector gesture={drag}>
         <Animated.View

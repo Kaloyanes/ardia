@@ -14,6 +14,7 @@ import { tabSwitchCuts } from "./state/browse/tabSwitch";
 import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { ImportFailedView } from "./components/upgrade/ImportFailedView";
 import { ExpoSettingsSheet } from "./components/settings/ExpoSettingsStack";
+import { FABRIC_CATCH_UP_PING_MS } from "./components/ui/FabricCatchUp";
 import { ExpoArchiveSheet } from "./components/tabs/ExpoArchive";
 import { ExpoSpacesSheet } from "./components/sync/ExpoSpaces";
 import { ExpoLibrarySheet } from "./components/library/ExpoLibrary";
@@ -130,6 +131,7 @@ export default function App() {
 }
 
 const SYSTEM_SHEETS = Platform.OS === "ios";
+const SETTINGS_CATCH_UP_PING_MS = Platform.OS === "android" ? FABRIC_CATCH_UP_PING_MS : undefined;
 
 function applyDesign(design: Design) {
   setSpacesDesign(design);
@@ -211,7 +213,7 @@ export function Surfaces() {
         </SheetBackground>
       </DesignProvider>
       <Layer covered={onboarding || voice}>
-        <FullSheet sheet={front} redesignedSheet="settings" dragEnabled={settings !== "filters"} progress={sheetProgress} onDismiss={front === "settings" ? closeSettings : front === "library" ? closeLibrary : closeArchive}>
+        <FullSheet sheet={front} redesignedSheet="settings" dragEnabled={settings !== "filters"} catchUpPingMs={front === "settings" ? SETTINGS_CATCH_UP_PING_MS : undefined} progress={sheetProgress} onDismiss={front === "settings" ? closeSettings : front === "library" ? closeLibrary : closeArchive}>
           {(shown) => (shown === "settings" ? <SettingsView /> : shown === "library" ? <LibraryView /> : shown === "archive" ? <ArchiveView /> : <SpacesView />)}
         </FullSheet>
       </Layer>
