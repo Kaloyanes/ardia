@@ -38,16 +38,14 @@ enum TranslationSessions {
     return out
   }
 
-  static func translateBlocks(source: String, target: String, owner: String, _ blocks: [[String]]) async -> (parts: [[String]?], errors: [String]) {
+  static func translateBlocks(source: String, target: String, owner: String, _ blocks: [[String]]) async -> [[String]?] {
     let keys = blocks.map { PassageKey(source: source, target: target, pieces: $0) }
     var found: [PassageKey: [String]] = [:]
     await withTaskGroup(of: (PassageKey, [String]?).self) { group in
       for key in Set(keys) { group.addTask { @MainActor in (key, await passage(key, owner: owner)) } }
       for await (key, parts) in group { if let parts { found[key] = parts } }
     }
-    let errors = Array(Set(failures)).sorted()
-    failures.removeAll()
-    return (keys.map { found[$0] }, errors)
+    return keys.map { found[$0] }
   }
 
   private static func record(_ error: Error) {
