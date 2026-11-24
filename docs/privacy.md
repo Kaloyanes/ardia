@@ -102,12 +102,15 @@ other than us, so it is listed here although Ardia itself contacts nothing for i
   ask-first mode, and Claude Code is told to ask you before it runs the command that posts a report, or `gh`, even
   if your own settings allow those without asking.
 - **Consent.** The first run shows all of this and asks. Only a typed yes agrees, and it is remembered;
-  `ardia triage --reset-consent` asks again. Nothing is read before the yes.
+  `ardia triage --reset-consent` asks again. Nothing is collected before the yes. The command's own usage count
+  (that `ardia triage` ran, and whether you said no) follows "Share anonymous crash reports and usage stats" like
+  every other `ardia` command's.
 - **What the command itself contacts.** `api.github.com` and `raw.githubusercontent.com`, once, for the current
   playbook (no cookies, no account, no redirects followed), and `github.com` or `ardia.dev/api/feedback` only to
   file a report. A report sent to `ardia.dev` this way stays private: the feedback service never opens a public
-  issue for it. Like any `ardia feedback` it carries Ardia's and the command's versions, the OS and the names of the
-  last few `ardia` commands run, and the evidence files only if you say yes to those.
+  issue for it. Like any `ardia feedback` it carries Ardia's and the command's versions, the OS and CPU, which
+  agent ran the command and the names and exit codes of the last few `ardia` commands run, and the evidence files
+  only if you say yes to those.
 
 ## Hosts named in the source that Ardia doesn't contact
 
