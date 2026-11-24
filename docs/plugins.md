@@ -761,15 +761,18 @@ Ardia never runs a plugin's program itself, with one exception for official plug
 - **Whose link.** A name that's free is linked without replacing anything, so two Ardias racing for it can't both
   win; all of this happens under one lock for the bin folder (`Programs/.bin.lock`). Ardia replaces only a link that
   already points into that plugin's store, or, for a registry legacy install's owner only, into that old home (below).
-  It also replaces a link it made itself that leads nowhere now: one into its own store whose target is gone, the old
-  installer's exact `<old home>/current/bin/<program>` when that old home has nothing to adopt, and one that resolves
-  to the very file it would link (the same target spelled through another path). A file, or a link to
+  It also replaces a link it made itself that leads nowhere now (the target is missing, `ENOENT` or `ENOTDIR`; a target
+  it can't check isn't taken for gone): one into its own store, and the old installer's exact
+  `<old home>/current/bin/<program>` when that old home has nothing to adopt. A link that resolves, from the bin
+  folder, to the very file it would link (same device and inode) is reused too. A file, or a link to
   anywhere else, is left alone and the plugin's page says so ("~/.local/bin/ardia is someone else's; remove it to use
   this one"); a link into another plugin's store names that plugin. Two plugins that are on never share a command.
-- **A linked bin folder.** `~/.local/bin` may itself be a symlink (a dotfiles repo often makes it one). Ardia follows
-  it when the folder it reaches is yours and nothing on the way to it, on either path, is open to other users; the
-  links go into that folder and the symlink stays as it was. A link to a folder someone else owns, or one that leads
-  nowhere, is refused, never replaced.
+- **A linked bin folder.** `~/.local/bin` may itself be a symlink (a dotfiles repo often makes it one). Ardia resolves
+  it one step at a time through open folders (`PluginCore/PluginBinFolder.swift`): every folder it passes through must
+  be yours or root's and closed to other users (sticky folders like `/tmp` excepted), every symlink on the way yours or
+  root's, at most 32 of them, and the folder it ends in yours with no group or world write, sticky or not. The links
+  go into that folder through its open descriptor (`symlinkat`, `renameat`, `unlinkat`), so nothing re-walks the path,
+  and the symlink stays as it was. Anything else is refused, never replaced.
 - **Leases.** A program that wants its version kept while it runs writes `<its version folder>/.leases/<pid>` at start
   and removes it at exit (the folder above `bin/`; the `ardia` command does). A lease counts
   while that process runs and started no later than the lease's modification time, so a reused process id pins

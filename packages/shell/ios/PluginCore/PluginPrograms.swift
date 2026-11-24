@@ -107,20 +107,22 @@ enum PluginPrograms {
     let deadLegacyLauncher = { (program: PluginProgram) -> String? in
       adoption?.program == program.name && legacy?.outcome == LegacyAdoption.none ? adoption.map(legacyLauncherPath) : nil
     }
-    guard let bin = binLock(places) else {
+    guard let binHeld = binLock(places) else {
       var refusals: [String: LinkRefusal] = [:]
       for program in programs { refusals[program.name] = LinkRefusal(reason: "\(places.binDir) couldn't be locked", cause: .busy) }
       return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: refusals, kept: replacing ? before : nil))
     }
-    defer { close(bin) }
+    defer { close(binHeld) }
+    let bin = openBin(places, creating: true)
+    let openedBin = try? bin.get()
     if replacing {
       var held: [String: LinkRefusal] = [:]
       for program in programs {
-        if let problem = linkProblem(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { held[program.name] = problem }
+        if let problem = linkProblem(program, plugin: plugin, places: places, bin: bin, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { held[program.name] = problem }
       }
       if !held.isEmpty { return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: held, kept: before)) }
     }
-    let snapshot = Dictionary(uniqueKeysWithValues: programs.map { ($0.name, linkTarget((places.binDir as NSString).appendingPathComponent($0.name))) })
+    let snapshot = Dictionary(uniqueKeysWithValues: programs.map { ($0.name, openedBin?.target($0.name)) })
     guard swapLink(in: pluginStore, named: currentName, to: name) else {
       return .failure(FolderRefusal(reason: "its programs couldn't be switched to the new version"))
     }
@@ -128,16 +130,19 @@ enum PluginPrograms {
     var refusals: [String: LinkRefusal] = [:]
     var outcome: LegacyAdoption = legacy?.outcome == .failed ? .failed : .none
     for program in programs {
-      if let problem = link(program, plugin: plugin, places: places, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { refusals[program.name] = problem } else { linked.append(program.name) }
+      if let problem = link(program, plugin: plugin, places: places, bin: bin, adoptTarget: adoptTarget(program), deadLegacyLauncher: deadLegacyLauncher(program)) { refusals[program.name] = problem } else { linked.append(program.name) }
     }
     let refused = refusals.mapValues(\.reason)
     if replacing, !refused.isEmpty, let before {
       var restored = swapLink(in: pluginStore, named: currentName, to: before)
       for name in linked {
-        let path = (places.binDir as NSString).appendingPathComponent(name)
+        guard let openedBin else {
+          restored = false
+          continue
+        }
         if let target = snapshot[name] ?? nil {
-          if linkTarget(path) != target && !swapLink(in: places.binDir, named: name, to: target) { restored = false }
-        } else if unlink(path) != 0 && errno != ENOENT {
+          if openedBin.target(name) != target && !openedBin.swap(name, to: target) { restored = false }
+        } else if !openedBin.remove(name) {
           restored = false
         }
       }
@@ -147,7 +152,7 @@ enum PluginPrograms {
       return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: refusals, kept: before))
     }
     if let before, before != name { _ = swapLink(in: pluginStore, named: previousName, to: before) }
-    unlinkOthers(plugin: plugin, keeping: Set(programs.map(\.name)), places: places)
+    if let openedBin { unlinkOthers(plugin: plugin, keeping: Set(programs.map(\.name)), places: places, in: openedBin) }
     sweepLocked(plugin: plugin, places: places, keepCurrent: true)
     if let legacy, let entry = adoption, legacy.held, linked.contains(entry.program) { outcome = adoptLegacyLocked(legacy, plugin: plugin, places: places, entry: entry) }
     return .success(ProgramsLinked(version: name, fresh: fresh, linked: linked, refusals: refusals, adoption: outcome))
@@ -274,27 +279,15 @@ enum PluginPrograms {
     return fd
   }
 
-  static func unlinkOthers(plugin: String, keeping: Set<String>, places: ProgramPlaces) {
-    for (name, target) in linksIntoStore(places) where !keeping.contains(name) && isInside(target, places.pluginStore(plugin)) {
-      unlink((places.binDir as NSString).appendingPathComponent(name))
-    }
-  }
-
-  static func linksIntoStore(_ places: ProgramPlaces) -> [(String, String)] {
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: places.binDir)) ?? []
-    return names.compactMap { name in
-      guard isName(name), let target = linkTarget((places.binDir as NSString).appendingPathComponent(name)), isInside(target, places.store) else { return nil }
-      return (name, target)
-    }
-  }
-
   static func withdrawAllBut(_ active: Set<String>, places: ProgramPlaces, keepingCopies: Set<String> = []) {
-    if let bin = binLock(places) {
-      for (name, target) in linksIntoStore(places) {
-        guard let owner = owner(of: target, store: places.store), !active.contains(owner) else { continue }
-        unlink((places.binDir as NSString).appendingPathComponent(name))
+    if let binHeld = binLock(places) {
+      if case .success(let bin) = openBin(places) {
+        for (name, target) in linksIntoStore(places, in: bin) {
+          guard let owner = owner(of: target, store: places.store), !active.contains(owner) else { continue }
+          bin.remove(name)
+        }
       }
-      close(bin)
+      close(binHeld)
     }
     let stores = (try? FileManager.default.contentsOfDirectory(atPath: places.store)) ?? []
     for plugin in stores where isName(plugin) && !active.contains(plugin) && isRealFolder(places.pluginStore(plugin)) {

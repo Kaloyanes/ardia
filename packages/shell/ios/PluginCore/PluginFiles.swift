@@ -35,6 +35,40 @@ enum FailureCause: String {
     default: self = .io
     }
   }
+
+  private static let transferFileCodes: Set<URLError.Code> = [
+    .cannotCreateFile, .cannotOpenFile, .cannotCloseFile, .cannotWriteToFile, .cannotRemoveFile, .cannotMoveFile, .fileDoesNotExist, .fileIsDirectory,
+    .noPermissionsToReadFile,
+  ]
+
+  init(file error: Error) {
+    let outer = error as NSError
+    let posix = [outer, outer.userInfo[NSUnderlyingErrorKey] as? NSError].compactMap { $0 }.first { $0.domain == NSPOSIXErrorDomain }
+    if let posix {
+      self.init(errno: Int32(posix.code))
+      return
+    }
+    switch (outer.domain, outer.code) {
+    case (NSCocoaErrorDomain, NSFileWriteNoPermissionError), (NSCocoaErrorDomain, NSFileReadNoPermissionError): self = .permission
+    case (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError), (NSCocoaErrorDomain, NSFileWriteVolumeReadOnlyError): self = .disk
+    case (NSURLErrorDomain, URLError.noPermissionsToReadFile.rawValue): self = .permission
+    default: self = .io
+    }
+  }
+
+  init(transfer error: Error) {
+    guard let code = (error as? URLError)?.code else {
+      self.init(file: error)
+      return
+    }
+    if code == .timedOut {
+      self = .timeout
+    } else if Self.transferFileCodes.contains(code) {
+      self.init(file: error)
+    } else {
+      self = .network
+    }
+  }
 }
 
 enum ManifestRead: Equatable {

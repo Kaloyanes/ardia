@@ -24,16 +24,6 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
     var cause: FailureCause = .other
   }
 
-  static func cause(of error: Error) -> FailureCause {
-    let posix = [error as NSError, (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError].compactMap { $0 }.first { $0.domain == NSPOSIXErrorDomain }
-    if let posix { return FailureCause(errno: Int32(posix.code)) }
-    switch (error as NSError).code {
-    case NSFileWriteNoPermissionError, NSFileReadNoPermissionError: return .permission
-    case NSFileWriteOutOfSpaceError, NSFileWriteVolumeReadOnlyError: return .disk
-    default: return .io
-    }
-  }
-
   private let lock = NSLock()
   private var running: [String: Running] = [:]
   private var cancelled: Set<String> = []
@@ -138,7 +128,7 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
       try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: archive)
       return .success(())
     } catch {
-      return .failure(Failure(code: "failed", reason: "\(file) couldn't be copied (\(error.localizedDescription))", cause: Self.cause(of: error)))
+      return .failure(Failure(code: "failed", reason: "\(file) couldn't be copied (\(error.localizedDescription))", cause: FailureCause(file: error)))
     }
   }
 
@@ -158,7 +148,7 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
         do {
           try FileManager.default.moveItem(at: temporary, to: archive)
         } catch {
-          outcome = .failure(Failure(code: "failed", reason: "the download couldn't be kept (\(error.localizedDescription))", cause: Self.cause(of: error)))
+          outcome = .failure(Failure(code: "failed", reason: "the download couldn't be kept (\(error.localizedDescription))", cause: FailureCause(file: error)))
           finished.signal()
           return
         }
@@ -202,7 +192,7 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
       try FileManager.default.moveItem(at: location, to: kept)
       found.finish(.success(kept))
     } catch {
-      found.finish(.failure(Failure(code: "failed", reason: "the download couldn't be kept", cause: Self.cause(of: error))))
+      found.finish(.failure(Failure(code: "failed", reason: "the download couldn't be kept", cause: FailureCause(file: error))))
     }
   }
 
@@ -232,6 +222,6 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
       return found.finish(.failure(tooBig ? Failure(code: "verify", reason: "the download is over \(OfficialArchive.maxDownload >> 20) MB", cause: .mismatch) : Failure(code: "cancelled", reason: "Cancelled.")))
     }
     let offline = urlError.map { Self.offlineCodes.contains($0.code) } ?? false
-    found.finish(.failure(Failure(code: offline ? "offline" : "failed", reason: error.localizedDescription, cause: urlError?.code == .timedOut ? .timeout : .network)))
+    found.finish(.failure(Failure(code: offline ? "offline" : "failed", reason: error.localizedDescription, cause: FailureCause(transfer: error))))
   }
 }

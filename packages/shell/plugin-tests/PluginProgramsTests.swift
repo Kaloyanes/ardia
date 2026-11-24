@@ -206,6 +206,84 @@ final class PluginProgramsTests: XCTestCase {
     XCTAssertEqual(PluginPrograms.linkTarget(places.binDir), "\(root)/missing")
   }
 
+  func testABinLinkRedirectedThroughAFolderOthersCanChangeIsRefusedEvenWhenItEndsSomewherePrivate() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    let mine = "\(root)/private"
+    try FileManager.default.createDirectory(atPath: "\(mine)/bin", withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(atPath: "\(root)/shared", withIntermediateDirectories: true)
+    XCTAssertEqual(chmod("\(root)/shared", 0o777), 0)
+    XCTAssertEqual(symlink(mine, "\(root)/shared/redirect"), 0)
+    XCTAssertEqual(symlink("\(root)/shared/redirect/bin", places.binDir), 0)
+    let refused = try install(folder, version: "1.0.0")
+    XCTAssertEqual(refused.linked, [])
+    XCTAssertEqual(refused.causes["hello-tool"], "bin_shared", "another user could swap the redirect, so it isn't followed")
+    XCTAssertNil(PluginPrograms.linkTarget("\(mine)/bin/hello-tool"))
+    XCTAssertEqual(chmod("\(root)/shared", 0o755), 0)
+    XCTAssertEqual(try install(folder, version: "1.0.0").linked, ["hello-tool"], "the same chain through folders only you can change is followed")
+    XCTAssertEqual(PluginPrograms.linkTarget("\(mine)/bin/hello-tool"), "\(pluginStore)/current/bin/hello")
+  }
+
+  func testABinFolderOthersCanWriteIsRefusedEvenWithItsStickyBit() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    for mode in [mode_t(0o1777), 0o1775, 0o775, 0o757] {
+      XCTAssertEqual(chmod(places.binDir, mode), 0)
+      let refused = try install(folder, version: "1.0.0")
+      XCTAssertEqual(refused.linked, [], String(mode, radix: 8))
+      XCTAssertEqual(refused.causes["hello-tool"], "bin_shared", String(mode, radix: 8))
+      XCTAssertNil(PluginPrograms.linkTarget(binPath))
+    }
+    XCTAssertEqual(chmod(places.binDir, 0o755), 0)
+    XCTAssertEqual(try install(folder, version: "1.0.0").linked, ["hello-tool"])
+  }
+
+  func testALiveOldHomeReachedThroughASymlinkIsNeverOverwritten() throws {
+    let real = "\(root)/RealCLI"
+    try FileManager.default.createDirectory(atPath: "\(real)/0.2.41/bin", withIntermediateDirectories: true)
+    try "#!/bin/sh\necho old\n".write(toFile: "\(real)/0.2.41/bin/hello-tool", atomically: true, encoding: .utf8)
+    XCTAssertEqual(chmod("\(real)/0.2.41/bin/hello-tool", 0o755), 0)
+    XCTAssertEqual(symlink("0.2.41", "\(real)/current"), 0)
+    XCTAssertEqual(symlink(real, "\(root)/OldCLI"), 0)
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    XCTAssertEqual(symlink("\(root)/OldCLI/current/bin/hello-tool", binPath), 0)
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    let refused = try install(folder, version: "1.0.0", adopt: true)
+    XCTAssertEqual(refused.linked, [], "the old home can't be adopted through a link, and its launcher still runs, so it isn't dead")
+    XCTAssertEqual(refused.causes["hello-tool"], "taken")
+    XCTAssertEqual(PluginPrograms.linkTarget(binPath), "\(root)/OldCLI/current/bin/hello-tool")
+    XCTAssertEqual(run(binPath), "old")
+  }
+
+  func testALinkIntoTheStoreThatCantBeCheckedIsntTakenForDead() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    try FileManager.default.createDirectory(atPath: "\(places.store)/locked/current/bin", withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    XCTAssertEqual(symlink("\(places.store)/locked/current/bin/hello", binPath), 0)
+    XCTAssertEqual(chmod("\(places.store)/locked", 0o000), 0)
+    defer { chmod("\(places.store)/locked", 0o755) }
+    var info = stat()
+    XCTAssertNotEqual(stat(binPath, &info), 0)
+    XCTAssertEqual(errno, EACCES)
+    let refused = try install(folder, version: "1.0.0")
+    XCTAssertEqual(refused.linked, [], "EACCES isn't proof the target is gone")
+    XCTAssertEqual(refused.causes["hello-tool"], "other_plugin")
+    XCTAssertEqual(PluginPrograms.linkTarget(binPath), "\(places.store)/locked/current/bin/hello")
+  }
+
+  func testARelativeLinkIsResolvedFromTheBinFolderNotArdiasWorkingFolder() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    _ = try install(folder, version: "1.0.0")
+    unlink(binPath)
+    XCTAssertEqual(symlink("greeter/current/bin/hello", binPath), 0)
+    let before = FileManager.default.currentDirectoryPath
+    XCTAssertTrue(FileManager.default.changeCurrentDirectoryPath(places.store))
+    defer { FileManager.default.changeCurrentDirectoryPath(before) }
+    let refused = try install(folder, version: "1.0.0")
+    XCTAssertEqual(refused.linked, [], "from the bin folder it leads nowhere Ardia made, whatever the working folder")
+    XCTAssertEqual(refused.causes["hello-tool"], "taken")
+    XCTAssertEqual(PluginPrograms.linkTarget(binPath), "greeter/current/bin/hello")
+  }
+
   func testADeadLinkIntoArdiasOwnStoreIsReplaced() throws {
     let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
     try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)

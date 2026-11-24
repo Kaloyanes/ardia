@@ -211,6 +211,23 @@ final class OfficialPluginsTests: XCTestCase {
     XCTAssertEqual(left, [], "no half-made copy or download stays behind")
   }
 
+  func testTransferFailuresAreClassifiedByWhatFailed() {
+    let posix = { (code: Int32) in NSError(domain: NSPOSIXErrorDomain, code: Int(code)) }
+    let cases: [(Error, FailureCause)] = [
+      (URLError(.timedOut), .timeout),
+      (URLError(.notConnectedToInternet), .network),
+      (URLError(.badServerResponse), .network),
+      (URLError(.cannotCreateFile, userInfo: [NSUnderlyingErrorKey: posix(EACCES)]), .permission),
+      (URLError(.cannotWriteToFile, userInfo: [NSUnderlyingErrorKey: posix(ENOSPC)]), .disk),
+      (URLError(.cannotMoveFile, userInfo: [NSUnderlyingErrorKey: posix(EXDEV)]), .folder),
+      (URLError(.cannotMoveFile), .io),
+      (URLError(.noPermissionsToReadFile), .permission),
+      (NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError), .permission),
+      (NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError), .disk),
+    ]
+    for (error, expected) in cases { XCTAssertEqual(FailureCause(transfer: error), expected, "\(error)") }
+  }
+
   func testPromotionTakesOnlyTheExactApprovalOfTheDownload() throws {
     let archive = try pluginArchive(manifest())
     let sha = try XCTUnwrap(OfficialArchive.sha256(file: archive))
