@@ -79,9 +79,12 @@ For the architecture and the test tooling, read `docs/agent-brief.md`.
   - **ARM64 Windows engines** run on **`mini`** (ARM64 host) while x86_64 hosts hit V8's `mksnapshot` arm64 simulator
     crash (`docs/engine-build-windows.md`); check free disk on `mini` first. Linux ARM64 isn't built or shipped yet.
   - **Incremental builds and testing** run on whichever Mac (`mbp1`, `mbp2`, `mini`) or Windows/WSL machine (`msi`)
-    has free CPU, RAM and disk and the shorter queue. Check before CPU-heavy work (Xcode or Chromium builds, full
-    test runs, video renders) and stay on that machine until it's short of resources while another has room or a
-    shorter queue; then move.
+    has free CPU, RAM and disk and the shorter queue — **prioritizing plugged-in (AC power) machines** (`pmset -g batt`
+    on Macs; `mini` is always on AC). If both MacBooks (`mbp1`, `mbp2`) are on battery, run Mac builds and heavy tests
+    on **`mini`** instead; likewise avoid heavy builds on an unplugged laptop when a plugged-in machine can take them.
+    Check before CPU-heavy work (Xcode or Chromium builds, full test runs, video renders) and stay on that machine
+    until it's short of resources (or goes on battery) while another plugged-in machine has room or a shorter queue;
+    then move.
 - **Coordinate compute across running threads.** When blocked on compute (a busy Chromium tree or builder, a loaded
   Mac, `msi`, or Boat VM start quota), inspect all running threads across linked environments (`t3_thread_list` with
   `includeSubagents: true`, plus `ssh msi` and `boat list` when Boat is used) and message the owning thread or

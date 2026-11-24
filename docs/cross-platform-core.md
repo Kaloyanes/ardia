@@ -41,7 +41,7 @@ engine/ardiacore                          macOS: AppKit only
 
 ## Engine keys are the first constraint
 
-`engine/engine-key.py` hashes everything under `engine/`, minus what it can prove belongs to other platforms. It knows three platforms: series selectors are `all` or platform sets (`linux,win`), and GN conditions on `is_mac`, `is_linux` and `is_win` joined by `!`, `&&` and `||` parse into the platforms they can hold on; any other condition counts toward every key. A Mac key move means an incremental Mac engine build on whichever Mac (`mbp1`, `mbp2`, `mini`) is free (fresh Mac Chromium rebuilds run on `mbp1` and sync to the others), and a new framework for every agent's next build.
+`engine/engine-key.py` hashes everything under `engine/`, minus what it can prove belongs to other platforms. It knows three platforms: series selectors are `all` or platform sets (`linux,win`), and GN conditions on `is_mac`, `is_linux` and `is_win` joined by `!`, `&&` and `||` parse into the platforms they can hold on; any other condition counts toward every key. A Mac key move means an incremental Mac engine build on whichever plugged-in Mac (`mbp1`, `mbp2`, `mini`; `mini` when both MacBooks are on battery) is free (fresh Mac Chromium rebuilds run on `mbp1` and sync to the others), and a new framework for every agent's next build.
 
 So the first change is tooling. It changes no artifact, and it must not move a published key:
 

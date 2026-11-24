@@ -57,8 +57,9 @@ variables) is in `docs/conventions.md`, enforced by `apps/browser/src/convention
 ## The engine
 - ArdiaCore is built outside the repo in `~/chromium-build` (the tree and its patches: `engine/patches`,
   `docs/engine-build.md` › "Rebuilding"; `engine/chromium/apply.sh` and `engine/ardiacore/apply.sh` copy our code in).
-  Fresh Mac Chromium builds (full rebuilds and version bumps) run on `mbp1` (MacBook M5 Pro) and are synced to `mbp2`
-  and `mini`; incremental builds run on whichever Mac has resources free.
+  Fresh Mac Chromium builds (full rebuilds and version bumps) run on `mbp1` (MacBook M5 Pro, when plugged in) and are
+  synced to `mbp2` and `mini`; incremental builds run on whichever Mac has resources free, prioritizing plugged-in
+  machines (`pmset -g batt`; if both MacBooks are on battery, use `mini`).
   The app's build stages a copy of `out/Release_GN_arm64/Chromium Framework.framework`
   (`packages/ardiacore/scripts/stage-framework.sh`: copied and signed once per engine build into
   `apps/browser/build-ardiacore/staged`, then cloned into each build's own derived data, `ARDIACORE_STAGE_DIR`), links it
