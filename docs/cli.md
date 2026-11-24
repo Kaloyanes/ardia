@@ -171,7 +171,10 @@ side (the flags, the consent, what it collects, how it files) is in its manual. 
 - **What leaves the machine.** Ardia sends nothing for a triage. The agent's provider sees what the agent reads, under
   the user's own account with them, after a consent the command shows on the first run (`docs/privacy.md`). A report
   goes out only when the user approves its exact text: as a GitHub issue under their own account, or, with no GitHub
-  account, as a private report through `ardia feedback` (`docs/feedback.md`).
+  account, as a private report through the feedback service, which never opens a public issue for one
+  (`diagnostics.via: "triage"`, `docs/feedback.md`).
+- **Fixes.** Inside a triage session `ardia` runs `triage file` and `plugins list` and little else, so the agent
+  can't read or change settings through it: for a setting, it gives the user the `ardia config set` command to run.
 - **When Ardia won't launch.** The command doesn't need Ardia running: it reads the files Ardia left behind. The live
   state it can ask a running Ardia for is an extra.
 

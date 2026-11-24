@@ -88,20 +88,25 @@ other than us, so it is listed here although Ardia itself contacts nothing for i
 - **Who sees what.** The command starts your own Claude Code or Codex. What the agent reads goes to that agent's
   provider under your account with them, on their terms, whether or not "Share anonymous crash reports and usage
   stats" is on. Ardia and ardia.dev receive nothing unless you later send a report.
-- **What it reads.** Ardia's version and channel, `config.json`, recent crash reports, log tails and the 7-day local
+- **What it reads.** Ardia's version and channel, `config.json`, recent crash reports on macOS, and the 7-day local
   usage log (`docs/feedback.md` › Local copy: counts, timings, enums and flags, never a URL or a title). The command
   copies these into a session folder and removes secrets, emails, home folder names and the paths and queries of URLs
-  first.
+  first. A site's name stays where your settings name one (a search provider, a rule for a site). Linux crash dumps
+  hold the crashed process's memory, so they are listed, never copied.
 - **What it doesn't.** Cookies, saved passwords, history, bookmarks, open tabs, page content and site storage. The
-  command collects none of them, names them as off limits to the agent, starts Claude Code with rules that refuse to
-  read them, and refuses its own page, tab and cookie commands for that session.
+  command collects none of them and tells the agent that Ardia's whole data folder is off limits. It starts Claude
+  Code with rules that refuse to read that folder, and for that session it refuses every `ardia` command that would
+  show pages, tabs, cookies or settings.
 - **Guard rails, not a lock.** The agent runs as you, with a shell. The rules above stop accidents; they can't stop an
-  agent that ignores its instructions. The consent says so before anything is collected.
-- **Consent.** The first run shows all of this and asks. A yes is remembered; `ardia triage --reset-consent` asks
-  again. Nothing is read before the yes.
+  agent that ignores its instructions. The consent says so before anything is collected. The agent is started in its
+  ask-first mode, and Claude Code is told to ask you before it runs the command that posts a report, or `gh`, even
+  if your own settings allow those without asking.
+- **Consent.** The first run shows all of this and asks. Only a typed yes agrees, and it is remembered;
+  `ardia triage --reset-consent` asks again. Nothing is read before the yes.
 - **What the command itself contacts.** `api.github.com` and `raw.githubusercontent.com`, once, for the current
-  playbook (no cookies, no account), and `github.com` or `ardia.dev/api/feedback` only to file a report whose exact
-  text you approved.
+  playbook (no cookies, no account, no redirects followed), and `github.com` or `ardia.dev/api/feedback` only to
+  file a report. A report sent to `ardia.dev` this way stays private: the feedback service never opens a public
+  issue for it.
 
 ## Hosts named in the source that Ardia doesn't contact
 

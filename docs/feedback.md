@@ -66,6 +66,8 @@ contract the app, the CLI, the feedback service and the dashboard build against.
   page address and diagnostics never go to GitHub. The form says so.
 - Issue labels follow the repo's rule: `feedback` on every report, plus `bug` for bug and slow,
   `enhancement` for idea, and nothing more for other.
+- A report whose `diagnostics.via` is `"triage"` never gets an issue, with or without the token: `ardia triage file
+  --via feedback` sends those for people who chose a private report over a public one (`docs/cli.md` › Triage).
 - Without `GITHUB_ISSUES_TOKEN` it skips the issue and still stores the report. Production runs that way for now. To turn issues on, create the Hexclave secret `FEEDBACK_GITHUB_ISSUES_TOKEN` (fine-grained, Issues read and write on `ardia-browser/ardia`), add `GITHUB_ISSUES_TOKEN: secret(SECRETS.feedbackGithubIssuesToken)` back to `infra/feedback/hexclave.deploy.ts`, create the `feedback` label, and redeploy with `infra/feedback/deploy.sh`.
 - Kept forever for now, like all telemetry.
 - Storage: `ardia-feedback-objects` has a 10 GB volume of 18 volumes of 512 MB (so the largest file, 100 MB, fits
