@@ -47,6 +47,8 @@ export const LINUX_WORDING: readonly Wording[] = [
     replacements: [
       ...[PHRASES_ONLY_WITH.freezeWatch ?? []].flat().map((phrase): [string, string] => [phrase, ""]),
       ["how many tab changes this Mac sent,", "how many tab changes this computer sent,"],
+      [" on macOS how many update downloads started, finished or failed and why (like a network error or a full disk), how many updates began installing, and how many couldn't be unpacked, failed their signature check or didn't install,", ""],
+      ["      \"At launch on macOS: how many of the password manager apps Ardia connects to (1Password, Bitwarden, KeePassXC and Proton Pass) have a helper Ardia could register so their browser extension can reach the app, how many Ardia registered, how many were already set up some other way and left alone, how many it couldn't write, and how many of those apps are installed but have no helper Ardia can use. Counts only, never which apps\",\n", ""],
       ["while the Mac reported its memory running low or critically low,", "while the system reported its memory running low or critically low,"],
       ["Sent to ardia.dev with a random ID made on this Mac, and kept", "Sent to ardia.dev with a random ID made on this computer, and kept"],
       [`keptOnThisMac: "Kept on this Mac"`, `keptOnThisMac: "Kept on this computer"`],

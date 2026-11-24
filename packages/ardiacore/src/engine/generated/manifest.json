@@ -1397,6 +1397,11 @@
           "desktop": "absent",
           "windows": "absent"
         },
+        "takePageMetrics": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
         "takeFirstPaintHolds": {
           "mac": "custom",
           "desktop": "absent",

@@ -39,6 +39,7 @@ export type SystemInfo = {
   forceReleaseNotes?: boolean;
   processStart?: number | null;
   bootTime?: number | null;
+  nativeMessagingHosts?: { found?: number; registered?: number; keptTheirs?: number; writeFailures?: number; unusable?: number };
   launchMarks?: {
     mainStarted?: number;
     startupPrepared?: number;

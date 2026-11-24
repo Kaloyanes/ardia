@@ -4,6 +4,7 @@ enum UsageConsent {
   private static let defaults = UserDefaults(suiteName: "ardia-usage-consent") ?? .standard
   private static let sharingKey = "sharing"
   private static let generationKey = "generation"
+  private static let sinceKey = "since"
   static let lock = NSLock()
 
   static func set(sharing: Bool) {
@@ -11,12 +12,20 @@ enum UsageConsent {
       if defaults.object(forKey: generationKey) != nil, defaults.bool(forKey: sharingKey) == sharing { return }
       defaults.set(sharing, forKey: sharingKey)
       defaults.set(defaults.integer(forKey: generationKey) + 1, forKey: generationKey)
-      if !sharing { PendingCounts.clearLocked() }
+      if sharing { defaults.set(Date().timeIntervalSince1970 * 1000, forKey: sinceKey) }
+      if !sharing {
+        PendingCounts.clearLocked()
+        PhoneExits.clearLocked()
+      }
     }
   }
 
   static func state() -> (sharing: Bool, generation: Int) {
     lock.withLock { (defaults.bool(forKey: sharingKey), defaults.integer(forKey: generationKey)) }
+  }
+
+  static func sharingSinceLocked() -> Double? {
+    defaults.bool(forKey: sharingKey) ? defaults.double(forKey: sinceKey) : nil
   }
 
   static func windowLocked() -> Int? {

@@ -217,6 +217,15 @@
    ]
   },
   {
+   "id": "chromium-page-message:pageMetrics",
+   "source": "page",
+   "guard": "Main frame only; counts read as finite numbers, floored, clamped to a million per message, dropped frames capped at frames, media errors at five fixed slots; summed into fixed counter names",
+   "checks": [
+    "packages/ardiacore/ios/ArdiaWebView+PageMetrics.mm",
+    "apps/browser/src/state/telemetry/telemetryGaps.test.mjs"
+   ]
+  },
+  {
    "id": "chromium-page-message:scroll",
    "source": "page",
    "guard": "Main frame only; enum state for toolbar hiding",

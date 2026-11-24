@@ -11,6 +11,7 @@ import { keyringMessage, presentSyncState, SYNC_KEY_NOT_SAVED } from "./syncKeyS
 import { consentToken } from "../../browser/src/state/telemetry/client";
 import { noteSyncOpenFailures } from "../../browser/src/state/telemetry/syncFileCounts";
 import { warnFor } from "../../browser/src/state/telemetry/logs";
+import { noteKeyringFailure } from "../../browser/src/state/telemetry/keyringCounts";
 import {
   claimSyncAuthority,
   configureHeldLogins,
@@ -82,6 +83,7 @@ function resumeWhenKeyringOpens(host: ArdiaHost) {
     },
     status: () => syncKeyStoreStatus(host),
     seen: (status) => {
+      if (status.keyStore === "secretService" && status.keyStoreStatus !== keyStore?.keyStoreStatus && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable")) noteKeyringFailure("sync", status.keyStoreStatus);
       const shown = keyringMessage(keyStore, false);
       keyStore = status;
       if (keyringMessage(status, false) !== shown) engine.useSync.setState({});

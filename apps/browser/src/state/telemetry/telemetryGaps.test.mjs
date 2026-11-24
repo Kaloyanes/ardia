@@ -1,0 +1,160 @@
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+
+globalThis.__DEV__ = false;
+await import("../../test-native/index.ts");
+globalThis.fetch = async () => ({ status: 200 });
+
+const client = await import("./client.ts");
+const downloads = await import("./downloadWork.ts");
+const keyring = await import("./keyringCounts.ts");
+const updates = await import("./updateCounts.ts");
+const share = await import("./sharePreviewCounts.ts");
+const misses = await import("./autoPipMisses.ts");
+const { processCpuFields } = await import("./processCpu.ts");
+const { pageMetricsFields } = await import("./diagnostics.ts");
+const { nativeMessagingProperties } = await import("./launchEvents.ts");
+const { inlineChance } = await import("../omnibox/inlineMiss.ts");
+
+before(() => client.setSharing(true, "settings"));
+after(() => client.setSharing(false, "settings"));
+
+const MB = 1_048_576;
+
+test("a download is counted once when it starts and once when it ends, and a finished one lands in its speed bucket", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteDownloadSeen({ id: "a", state: "downloading", received: 0, startTime: 1_000 }, 1_000);
+  downloads.noteDownloadSeen({ id: "a", state: "downloading", received: MB, startTime: 1_000 }, 2_000);
+  downloads.noteDownloadSeen({ id: "a", state: "finished", received: 4 * MB, startTime: 1_000 }, 3_000);
+  downloads.noteDownloadSeen({ id: "a", state: "finished", received: 4 * MB, startTime: 1_000 }, 3_500);
+  downloads.noteDownloadSeen({ id: "b", state: "downloading", received: 0 }, 4_000);
+  downloads.noteDownloadSeen({ id: "b", state: "failed", received: 10 }, 5_000);
+  const taken = downloads.takeDownloadWork(6_000);
+  assert.equal(taken.downloads_started, 2);
+  assert.equal(taken.downloads_finished, 1);
+  assert.equal(taken.downloads_failed, 1);
+  assert.equal(taken.downloads_timed, 1);
+  assert.equal(taken.download_speeds_under_10mbs, 1);
+  assert.equal(downloads.takeDownloadWork(7_000).downloads_started, 0);
+});
+
+test("download speed buckets leave out downloads too small or too quick to time", () => {
+  assert.equal(downloads.downloadSpeedBucket(MB / 2, 10_000), null);
+  assert.equal(downloads.downloadSpeedBucket(10 * MB, 500), null);
+  assert.equal(downloads.downloadSpeedBucket(MB, 20_000), "download_speeds_under_100kbs");
+  assert.equal(downloads.downloadSpeedBucket(MB, 2_000), "download_speeds_under_1mbs");
+  assert.equal(downloads.downloadSpeedBucket(100 * MB, 2_000), "download_speeds_10mbs_up");
+});
+
+test("an allowed request for several downloads counts whether any and how many downloads followed within 15 seconds", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteMultipleDownloadsAsked();
+  downloads.noteMultipleDownloadsAnswered(true, 10_000);
+  downloads.noteDownloadSeen({ id: "c", state: "downloading", received: 0 }, 11_000);
+  const first = downloads.takeDownloadWork(30_000);
+  assert.deepEqual([first.multiple_download_asks, first.multiple_download_allows, first.multiple_download_follow_ups, first.multiple_download_single_follow_ups], [1, 1, 1, 1]);
+  downloads.noteMultipleDownloadsAnswered(false, 40_000);
+  const second = downloads.takeDownloadWork(60_000);
+  assert.deepEqual([second.multiple_download_blocks, second.multiple_download_follow_ups], [1, 0]);
+});
+
+test("keyring checks count the protection and failures, never which profile, and reset once taken", () => {
+  keyring.takeKeyringCounts();
+  keyring.noteKeyringCheck({ protection: "keyring", protectionFallback: false, passwords: { reason: "keyringLocked" } });
+  keyring.noteKeyringCheck({ protection: "https://example.com", protectionFallback: true });
+  keyring.noteKeyringFailure("sync", "unavailable");
+  const taken = keyring.takeKeyringCounts();
+  assert.equal(taken.keyring_checks, 2);
+  assert.equal(taken.keyring_protection_keyring, 1);
+  assert.equal(taken.keyring_protection_unknown, 1);
+  assert.equal(taken.keyring_fallbacks, 1);
+  assert.equal(taken.keyring_passwords_locked, 1);
+  assert.equal(taken.keyring_sync_unavailable, 1);
+  assert.ok(Object.values(taken).every((value) => typeof value === "number"));
+  assert.equal(keyring.takeKeyringCounts().keyring_checks, 0);
+});
+
+test("Sparkle's update steps and failures land in the same counters as Linux's self-updates", () => {
+  updates.takeUpdateCounts();
+  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadStarted" });
+  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadFinished" });
+  updates.noteSparkleUpdate({ type: "updateStep", step: "installing" });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "signature" });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "extract" });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "download", reason: "a path /Users/someone" });
+  const taken = updates.takeUpdateCounts();
+  assert.equal(taken.update_downloads_started, 1);
+  assert.equal(taken.update_downloads_finished, 1);
+  assert.equal(taken.update_installs_sparkle, 1);
+  assert.equal(taken.update_install_failures_signature, 1);
+  assert.equal(taken.update_install_failures_extract, 1);
+  assert.equal(taken.update_download_failures_other, 1);
+});
+
+test("the share picker's flat and black previews are told apart from the thumbnails themselves", () => {
+  const split = share.splitSharePreviews({ "window:1:0": "jpeg", "@blank": "2", "@black": "5" });
+  assert.deepEqual(split, { thumbs: { "window:1:0": "jpeg" }, blank: 2, black: 2 });
+  assert.deepEqual(share.splitSharePreviews({ "@blank": "nope" }), { thumbs: {}, blank: 0, black: 0 });
+  share.takeSharePreviewCounts();
+  share.startSharePreviews(3).found(0, split.blank, split.black);
+  const taken = share.takeSharePreviewCounts();
+  assert.deepEqual([taken.share_previews_asked, taken.share_previews_blank, taken.share_previews_black], [3, 2, 2]);
+});
+
+test("automatic Picture in Picture misses count by what hid the tab", () => {
+  misses.takeAutoPipMisses();
+  assert.equal(misses.isAutoPipMiss("missedAppSwitch"), true);
+  assert.equal(misses.isAutoPipMiss("onScreen"), false);
+  misses.noteAutoPipMiss("missedAppSwitch", "");
+  misses.noteAutoPipMiss("leftOnSpaceSwitchJoining", "");
+  const taken = misses.takeAutoPipMisses();
+  assert.equal(Object.values(taken).length, 6);
+});
+
+test("process CPU sums each kind of process and keeps the busiest page process", () => {
+  const fields = processCpuFields([
+    { type: "browser", cpu: 12.34 },
+    { type: "gpu", cpu: 30 },
+    { type: "renderer", cpu: 50 },
+    { type: "renderer", cpu: 7.5 },
+    { type: "utility", cpu: 1 },
+    { type: "renderer", cpu: Number.NaN },
+  ]);
+  assert.deepEqual(fields, { browser_cpu_pct: 12.3, gpu_cpu_pct: 30, renderer_cpu_pct: 57.5, renderer_cpu_max_pct: 50, helper_cpu_pct: 1 });
+});
+
+test("page metrics from native keep only the known counters, rounded", () => {
+  assert.deepEqual(pageMetricsFields({ media_errors_decode: 2, video_frames_60hz: 600.4, video_frames_dropped_120hz_low_power: 3, scroll_bursts: 1, "https://example.com": 4, scroll_ms_90hz: 1, media_errors_network: -1 }), {
+    media_errors_decode: 2,
+    video_frames_60hz: 600,
+    video_frames_dropped_120hz_low_power: 3,
+    scroll_bursts: 1,
+  });
+  assert.deepEqual(pageMetricsFields(null), {});
+});
+
+test("native messaging host health is sent as small counts only", () => {
+  assert.deepEqual(nativeMessagingProperties({ found: 2, registered: 1, keptTheirs: 1, writeFailures: 0, unusable: 99 }), {
+    native_messaging_hosts: 2,
+    native_messaging_registered: 1,
+    native_messaging_kept_theirs: 1,
+    native_messaging_write_failures: 0,
+    native_messaging_unusable: 16,
+  });
+  assert.deepEqual(nativeMessagingProperties(undefined), {});
+});
+
+test("an inline completion counts as missed only when the typing began a top site and nothing was completed", () => {
+  const history = [
+    { url: "https://www.github.com/a", visits: 40 },
+    { url: "https://github.com/b", visits: 5 },
+    { url: "https://news.ycombinator.com/", visits: 10 },
+  ];
+  assert.equal(inlineChance("git", "", history, false), "missed");
+  assert.equal(inlineChance("git", "hub.com", history, false), "offered");
+  assert.equal(inlineChance("g", "", history, false), "none");
+  assert.equal(inlineChance("git", "", history, true), "none");
+  assert.equal(inlineChance("github.com", "", history, false), "none");
+  assert.equal(inlineChance("git hub", "", history, false), "none");
+  assert.equal(inlineChance("zzz", "", history, false), "none");
+});

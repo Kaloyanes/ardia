@@ -14,6 +14,7 @@ import { startDeviceChoosers } from "./deviceChoosers";
 import { originForSecurityDisplay } from "../../lib/url";
 import { permissionGate } from "./permissionGate";
 import { noteNotificationRequestAutoDenied } from "../telemetry/notificationRequestCounts";
+import { noteMultipleDownloadsAnswered, noteMultipleDownloadsAsked } from "../telemetry/downloadWork";
 
 const queues = new Map<string, PermissionRequest[]>();
 let started = false;
@@ -64,6 +65,7 @@ function gated(tabId: string, request: PermissionRequest) {
 
 function enqueue(tabId: string, request: PermissionRequest) {
   if (pageOf(tabId).permission?.id === request.id || queues.get(tabId)?.some((r) => r.id === request.id)) return;
+  if (request.permissions.includes("multipleDownloads")) noteMultipleDownloadsAsked();
   if (!pageOf(tabId).permission) patchPage(tabId, { permission: request });
   else queues.set(tabId, [...(queues.get(tabId) ?? []), request]);
 }
@@ -86,6 +88,7 @@ export function answerPermission(tabId: string, requestId: string, result: Permi
   const request = pageOf(tabId).permission;
   if (!request || request.id !== requestId) return;
   void resolvePermission(request.id, result, result !== "dismiss");
+  if (request.permissions.includes("multipleDownloads") && result !== "dismiss") noteMultipleDownloadsAnswered(result === "accept");
   if (result === "accept" && request.permissions.includes("notifications")) {
     void ensureNotificationPermission(useBrowser.getState().tabs[tabId]?.windowId);
   }

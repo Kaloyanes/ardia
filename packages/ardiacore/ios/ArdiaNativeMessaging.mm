@@ -75,7 +75,12 @@ bool IsUsable(NSDictionary *manifest, NSString *name) {
          path.isAbsolutePath && [NSFileManager.defaultManager isExecutableFileAtPath:path];
 }
 
-NSDictionary<NSString *, NSData *> *InstalledHosts() {
+NSString *AppBundleOf(NSString *path) {
+  NSRange app = [path rangeOfString:@".app/"];
+  return app.location == NSNotFound ? nil : [path substringToIndex:app.location + 4];
+}
+
+NSDictionary<NSString *, NSData *> *InstalledHosts(NSUInteger *unusable) {
   NSMutableDictionary<NSString *, NSData *> *hosts = [NSMutableDictionary dictionary];
   for (NSDictionary *manifest in KnownHosts()) {
     NSString *name = manifest[@"name"];
@@ -86,6 +91,8 @@ NSDictionary<NSString *, NSData *> *InstalledHosts() {
       hosts[name] = [NSJSONSerialization dataWithJSONObject:manifest
                                                     options:NSJSONWritingPrettyPrinted | NSJSONWritingWithoutEscapingSlashes
                                                       error:nil];
+    else if (NSString *bundle = AppBundleOf(manifest[@"path"]); bundle && [NSFileManager.defaultManager fileExistsAtPath:bundle])
+      (*unusable)++;
   }
   for (NSString *name in SystemRegisteredHosts()) {
     NSData *system = [NSData dataWithContentsOfFile:ManifestPath(kChromeSystemDir, name)];
@@ -94,6 +101,23 @@ NSDictionary<NSString *, NSData *> *InstalledHosts() {
   return hosts;
 }
 
+NSLock *gSyncLock = [[NSLock alloc] init];
+NSDictionary<NSString *, NSNumber *> *gLastSync;
+
+void Record(NSUInteger found, NSUInteger registered, NSUInteger kept, NSUInteger writeFailures, NSUInteger unusable) {
+  NSDictionary *health = @{@"found" : @(found), @"registered" : @(registered), @"keptTheirs" : @(kept), @"writeFailures" : @(writeFailures), @"unusable" : @(unusable)};
+  [gSyncLock lock];
+  gLastSync = health;
+  [gSyncLock unlock];
+}
+
+}
+
+NSDictionary<NSString *, NSNumber *> *LastSync() {
+  [gSyncLock lock];
+  NSDictionary *last = gLastSync ?: @{};
+  [gSyncLock unlock];
+  return last;
 }
 
 void SyncHosts(NSString *userDataDir) {
@@ -105,17 +129,24 @@ void SyncHosts(NSString *userDataDir) {
   NSArray *previous = listData ? [NSJSONSerialization JSONObjectWithData:listData options:0 error:nil] : nil;
   NSSet<NSString *> *managed = [previous isKindOfClass:NSArray.class] ? [NSSet setWithArray:previous] : [NSSet set];
 
-  NSDictionary<NSString *, NSData *> *hosts = InstalledHosts();
+  NSUInteger unusable = 0, kept = 0, writeFailures = 0;
+  NSDictionary<NSString *, NSData *> *hosts = InstalledHosts(&unusable);
   NSMutableSet<NSString *> *nowManaged = [NSMutableSet set];
   for (NSString *name in hosts) {
     NSString *path = ManifestPath(dir, name);
     bool ours = [managed containsObject:name];
-    if (!ours && [fm fileExistsAtPath:path]) continue;
-    if (![[NSData dataWithContentsOfFile:path] isEqualToData:hosts[name]] &&
-        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:nil])
+    if (!ours && [fm fileExistsAtPath:path]) {
+      kept++;
       continue;
+    }
+    if (![[NSData dataWithContentsOfFile:path] isEqualToData:hosts[name]] &&
+        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:nil]) {
+      writeFailures++;
+      continue;
+    }
     [nowManaged addObject:name];
   }
+  Record(hosts.count, nowManaged.count, kept, writeFailures, unusable);
   for (NSString *name in managed)
     if (![nowManaged containsObject:name]) [fm removeItemAtPath:ManifestPath(dir, name) error:nil];
 

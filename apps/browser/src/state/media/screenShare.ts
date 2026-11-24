@@ -12,7 +12,7 @@ import { useBrowserWhile, useStoreWhile } from "../tabs/tabWatch";
 export { getDisplayMediaSources, screenRecordingAllowed, type DisplayMediaAudio, type DisplayMediaSource } from "../../platform/media";
 export { getDisplayMediaThumbnails } from "../../platform/media";
 export { noteScreenRecordingMissing } from "../telemetry/usage";
-export { startSharePreviews } from "../telemetry/sharePreviewCounts";
+export { splitSharePreviews, startSharePreviews } from "../telemetry/sharePreviewCounts";
 
 export type ShareFound = [string, TabShare];
 

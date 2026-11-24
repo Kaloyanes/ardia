@@ -1,6 +1,6 @@
 export const PHONE_SHARING_COPY = {
   toggle: "Share anonymous usage stats",
-  summary: "How fast Ardia opens, rough counts of what you use, and how often a page stops. Never the sites you visit, anything you type or search, or what’s in your tabs.",
+  summary: "How fast Ardia opens, rough counts of what you use, how often a page stops, and when Ardia itself stops unexpectedly. Never the sites you visit, anything you type or search, or what’s in your tabs.",
   whatsSent: "What’s Sent",
   footnote:
     "Off unless you turn it on. Sent to ardia.dev with a random ID made on this phone, and kept on our own servers. No third parties. Turning it off stops it at once and deletes anything waiting to be sent. This setting doesn’t sync.",
@@ -48,6 +48,18 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
       {
         text: "On Android, with each launch, whether the Material You design was off, and with it on, whether Dynamic Colors used your wallpaper, Ardia used your custom color, or the phone gave no wallpaper palette and Ardia used its own",
         fields: ["material_colors"],
+      },
+      {
+        text: "With each launch, whether Ardia last closed cleanly by going to the background, was still open when it stopped (a crash or the system ending it), or there was nothing to compare, because this is the first launch or sharing was off then",
+        fields: ["previous_session"],
+      },
+      {
+        text: "When Ardia stopped unexpectedly while sharing was on: what kind of stop it was (an error in Ardia’s own code, a crash, a hang, running out of memory, using too much of the phone, the system ending it, or a watchdog timeout), its cause from a fixed list (the error type, like TypeError, never its message; the signal, like SIGSEGV; or the reason Android or iOS gave), whether Ardia was on screen, and roughly how long ago it was. Sent at the next launch, at most 10 at a time. Never what you were doing, which page was open, or any part of a crash log",
+        fields: ["app_crashed", "kind", "reason", "foreground", "ago"],
+      },
+      {
+        text: "In the same daily counts: how many errors in Ardia’s own code it recovered from without stopping. A count only, never the error",
+        fields: ["js_errors"],
       },
       {
         text: "How long Ardia took to open, from when the system started it to its first screen, and how much of that passed before its code began to run",

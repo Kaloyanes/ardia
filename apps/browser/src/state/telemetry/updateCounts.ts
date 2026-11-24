@@ -1,8 +1,8 @@
 import { consentOrNow, countFor, type ConsentToken } from "./consentPeriod";
 
 export const UPDATE_DOWNLOAD_FAILURES = ["version", "kind", "network", "manifest", "tooLarge", "busy", "disk", "other"] as const;
-export const UPDATE_INSTALL_FAILURES = ["usage", "missing", "manifest", "signature", "notNewer", "kind", "checksum", "install", "busy", "polkit", "timeout", "other"] as const;
-const UPDATE_INSTALL_KINDS = ["deb", "tarball", "appimage"] as const;
+export const UPDATE_INSTALL_FAILURES = ["usage", "missing", "manifest", "signature", "notNewer", "kind", "checksum", "install", "busy", "polkit", "timeout", "extract", "auth", "relaunch", "disk", "other"] as const;
+const UPDATE_INSTALL_KINDS = ["deb", "tarball", "appimage", "sparkle"] as const;
 
 type UpdateDownloadFailure = (typeof UPDATE_DOWNLOAD_FAILURES)[number];
 type UpdateInstallFailure = (typeof UPDATE_INSTALL_FAILURES)[number];
@@ -51,6 +51,16 @@ export const noteUpdateDownloadFailed = (reason: unknown, consent: ConsentToken 
 export const noteUpdateInstalled = (kind: UpdateInstallKind, consent: ConsentToken | null) => countSelfUpdate(installField(kind), consent);
 export const noteUpdateInstallFailed = (reason: unknown, consent: ConsentToken | null) => countSelfUpdate(installFailureField(updateInstallFailure(reason)), consent);
 export const noteUpdateRestart = (consent: ConsentToken | null) => countSelfUpdate("update_restarts", consent);
+
+export type SparkleUpdateEvent = { type: "updateStep"; step: "downloadStarted" | "downloadFinished" | "installing" } | { type: "updateFailed"; stage: "download" | "install"; reason: string };
+
+export function noteSparkleUpdate(event: SparkleUpdateEvent, consent?: ConsentToken | null) {
+  const now = consentOrNow(consent);
+  if (event.type === "updateFailed") return event.stage === "download" ? noteUpdateDownloadFailed(event.reason, now) : noteUpdateInstallFailed(event.reason, now);
+  if (event.step === "downloadStarted") noteUpdateDownloadStarted(now);
+  else if (event.step === "downloadFinished") noteUpdateDownloadFinished(now);
+  else if (event.step === "installing") noteUpdateInstalled("sparkle", now);
+}
 
 export function noteSwitchRefresh(result: "updated" | "failed" | "already") {
   if (result === "updated") checks.switchRefreshes += 1;

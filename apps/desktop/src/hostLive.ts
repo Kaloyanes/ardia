@@ -1,5 +1,6 @@
 import { LiveError, type LiveErrorKind, type LiveSourceId } from "../../browser/src/state/live/types";
 import { ardiaHost, hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
+import { noteKeyringFailure } from "../../browser/src/state/telemetry/keyringCounts";
 
 export const LIVE_CAPABILITIES = ["ArdiaLive.request", "ArdiaLive.connect", "ArdiaLive.cancel", "ArdiaLive.disconnect"] as const;
 
@@ -30,6 +31,8 @@ export function liveError(error: unknown, connected: boolean): LiveError {
   const code = (error as { code?: unknown })?.code;
   const message = String((error as Error)?.message ?? error);
   if (code === "ERR_LIVE_NOT_CONNECTED") return new LiveError(connected ? "signedOut" : "notConfigured", "Not signed in");
+  if (code === "ERR_LIVE_KEYRING_LOCKED") noteKeyringFailure("live", "locked");
+  if (code === "ERR_LIVE_KEYRING_UNAVAILABLE") noteKeyringFailure("live", "unavailable");
   return new LiveError(((typeof code === "string" && KINDS[code]) || "other") as LiveErrorKind, message);
 }
 

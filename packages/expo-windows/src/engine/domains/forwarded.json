@@ -96,6 +96,7 @@
       "setVideoUpscaling",
       "setVideoUpscalingTestConditions",
       "takeContentDrift",
+      "takePageMetrics",
       "takeFirstPaintHolds",
       "videoUpscalingState"
     ],

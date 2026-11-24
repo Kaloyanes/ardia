@@ -198,7 +198,7 @@ type PreviousLaunch = { lastLaunchAt: number | null; lastQuitAt: number | null; 
 let previousLaunch: PreviousLaunch = { lastLaunchAt: null, lastQuitAt: null, firstOfVersion: null };
 let firstRootCommitted = false;
 
-export function launchCommitted(renderedAt?: number) {
+export function launchCommitted(renderedAt?: number, committedAt = Date.now()) {
   if (firstRootCommitted) return;
   firstRootCommitted = true;
   if (launch || launchSent || !on) return;
@@ -206,11 +206,11 @@ export function launchCommitted(renderedAt?: number) {
   if (!start) return;
   const s = useBrowser.getState();
   const keys: string[] = [];
-  for (const id of s.windowOrder) {
+  if (fieldTiming.pageMarks !== false) for (const id of s.windowOrder) {
     const tab = activeTabId(s, id);
     if (tab && s.tabs[tab]?.url && !isAsleep(s.tabs[tab])) keys.push(tab);
   }
-  launch = { journey: "j1", t0: start, render: renderedAt, commit: Date.now(), keys, tabs: Object.keys(s.tabs).length, windows: s.windowOrder.length };
+  launch = { journey: "j1", t0: start, render: renderedAt, commit: committedAt, keys, tabs: Object.keys(s.tabs).length, windows: s.windowOrder.length };
   frame("launch", "content");
   probeUsable(launch);
   begin(launch);
@@ -342,7 +342,7 @@ export function journeySuggestions(tabId: string) {
 }
 
 export function journeyNavigate(tabId: string) {
-  if (!on) return;
+  if (!on || fieldTiming.pageMarks === false) return;
   const now = Date.now();
   const t0 = lastInput(now) ?? now;
   for (const p of pending) if (p.journey === "j4" && p.key === tabId && p.until === undefined) p.until = t0;

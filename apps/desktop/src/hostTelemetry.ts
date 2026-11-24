@@ -101,6 +101,13 @@ async function handleTelemetryOp(op: TelemetryOp, arg?: string): Promise<unknown
 }
 
 let leadership: TelemetryLeadership | null = null;
+let led = false;
+const afterLead: (() => void)[] = [];
+
+export function whenTelemetryLeads(run: () => void) {
+  if (led) run();
+  else afterLead.push(run);
+}
 let offeredInstallId: string | null = null;
 
 const shownChoice = () => JSON.stringify(useTelemetry.getState());
@@ -166,6 +173,8 @@ export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolea
       reloadChoice();
       sessionEnded = continuing && !savedChoice().sessionOpen;
       startTelemetry({ continuing });
+      led = true;
+      for (const run of afterLead.splice(0)) run();
       await documentSaved(STATE_DOC).catch(report);
       current.announce();
     },

@@ -6,7 +6,8 @@ import { lookBudget, nativeGlassRender, systemLook, systemLookNow } from "../../
 import { create } from "zustand";
 import { createGate, DAILY_KEY, type SharingSource } from "../../lib/telemetryGate";
 import { backdropProps, COUNTED, launchProps, launchTrayProps, legacyImportOutcome, parseDaily, pendingUsage, type Counted } from "../../lib/telemetrySchema";
-import { canPostTelemetry, deviceFacts, JS_STARTED_AT, launchBackdropShownAt, newTelemetryId, postTelemetry, processStartedAt, setUsageConsent, takePendingCounts } from "../../platform/telemetry";
+import { canPostTelemetry, deviceFacts, JS_STARTED_AT, launchBackdropShownAt, newTelemetryId, postTelemetry, processStartedAt, setUsageConsent, takeExits, takePendingCounts } from "../../platform/telemetry";
+import { crashesToSend, jsErrorReason, MOST_CRASHES_PER_LAUNCH, PENDING_CRASH_KEY, pendingJsCrash, previousSession, readPendingCrash, SESSION_KEY, sessionMark, type PreviousSession } from "../../lib/crashReports";
 import { appearanceTelemetry, chromeStyle, colorChoiceTelemetry, glassRenderTelemetry, macLookOf, offeredInterfaceStyle, offeredScheme } from "../../lib/appearance";
 import { useBoot } from "../app/bootState";
 import { isDemoSession } from "../app/launchFlags";
@@ -35,8 +36,51 @@ const gate = createGate({
   onChange: (sharing) => {
     useUsageSharing.setState({ sharing });
     setUsageConsent(sharing);
+    markSession(AppState.currentState === "active");
   },
 });
+
+let lastMark: string | null = null;
+let launchPrevious: PreviousSession = "unknown";
+
+function markSession(active: boolean) {
+  const mark = sessionMark(active, gate.isSharing());
+  if (mark === lastMark) return;
+  lastMark = mark;
+  writePreference(browserDatabase(), SESSION_KEY, mark);
+}
+
+function reportCrashes() {
+  const db = browserDatabase();
+  const pending = readPreferences(db)[PENDING_CRASH_KEY] ?? null;
+  if (pending !== null) writePreference(db, PENDING_CRASH_KEY, null);
+  const exits = takeExits();
+  if (!gate.isSharing() || isDemoSession()) return;
+  const now = Date.now();
+  const js = readPendingCrash(pending, now);
+  for (const props of [...(js ? [js] : []), ...crashesToSend(exits, now)].slice(0, MOST_CRASHES_PER_LAUNCH)) gate.capture("app_crashed", props);
+}
+
+type GlobalErrorHandler = (error: unknown, isFatal?: boolean) => void;
+type ErrorUtilsShape = { getGlobalHandler(): GlobalErrorHandler | undefined; setGlobalHandler(handler: GlobalErrorHandler): void };
+
+function noteJsError(error: unknown, isFatal: boolean | undefined) {
+  if (!gate.isSharing() || isDemoSession()) return;
+  if (isFatal) writePreference(browserDatabase(), PENDING_CRASH_KEY, pendingJsCrash(jsErrorReason(error), Date.now()));
+  else gate.count("js_errors");
+}
+
+function watchJsErrors() {
+  const utils = (globalThis as { ErrorUtils?: ErrorUtilsShape }).ErrorUtils;
+  if (!utils) return;
+  const previous = utils.getGlobalHandler();
+  utils.setGlobalHandler((error, isFatal) => {
+    try {
+      noteJsError(error, isFatal);
+    } catch {}
+    previous?.(error, isFatal);
+  });
+}
 
 let started = false;
 
@@ -50,12 +94,18 @@ export function startTelemetry() {
   gate.load();
   useUsageSharing.setState({ sharing: gate.isSharing() });
   setUsageConsent(gate.isSharing());
+  launchPrevious = previousSession(readPreferences(browserDatabase())[SESSION_KEY] ?? null);
+  markSession(AppState.currentState === "active");
+  watchJsErrors();
   gate.rollDaily();
   countPendingUsage();
+  reportCrashes();
   AppState.addEventListener("change", (next) => {
+    markSession(next === "active");
     if (next === "active") {
       gate.rollDaily();
       countPendingUsage();
+      reportCrashes();
     } else gate.flushNow();
   });
   setInterval(() => gate.rollDaily(), DAILY_CHECK_MS);
@@ -82,7 +132,7 @@ export async function reportLaunch(firstScreenAt: number) {
   const design = useAppearanceDesign.getState().design;
   const { status, view } = syncData();
   const glass_render = glassRenderTelemetry(Platform.OS, design, chromeStyle(design, interfaceStyle, macLookOf(status.isEnabled, view.look), systemLookNow().reduceTransparency), nativeGlassRender());
-  gate.capture("app_launched", { legacy_import: legacyImportOutcome(boot.outcome), legacy_import_failures: boot.failures, look_mode: look, ...appearanceTelemetry(offeredInterfaceStyle(interfaceStyle, syncOffered()), offeredScheme(schemeChoice, syncOffered())), material_colors, color_choice, glass_render });
+  gate.capture("app_launched", { legacy_import: legacyImportOutcome(boot.outcome), legacy_import_failures: boot.failures, look_mode: look, ...appearanceTelemetry(offeredInterfaceStyle(interfaceStyle, syncOffered()), offeredScheme(schemeChoice, syncOffered())), material_colors, color_choice, glass_render, previous_session: launchPrevious });
   const processStart = await processStartedAt();
   const timings = launchProps(processStart, JS_STARTED_AT, firstScreenAt);
   if (timings) gate.capture("perf_launch", timings);

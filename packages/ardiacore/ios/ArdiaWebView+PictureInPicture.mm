@@ -11,6 +11,7 @@ using namespace ardia_web_view;
 using namespace ardia_runtime;
 
 static const NSUInteger kControlPressesKept = 8;
+static const NSTimeInterval kAutoPictureInPictureGrace = 2.5;
 static const NSTimeInterval kControlClickLifetime = 10;
 static const NSTimeInterval kControlKeyLifetime = 2;
 static const double kControlClickMatchMs = 1;
@@ -223,10 +224,33 @@ BOOL TracingPictureInPicture() {
   [self emit:@"autoPictureInPictureKept" payload:[ArdiaConsentStamp.begin onto:@{@"appSwitch" : @YES}]];
 }
 
+- (NSString *)autoPictureInPictureMissReason {
+  if (!_visible) return @"missedTabSwitch";
+  if (!NSApp.isActive) return @"missedAppSwitch";
+  if (self.window && !self.window.isOnActiveSpace) return @"missedSpaceSwitch";
+  return @"missedOther";
+}
+
+- (void)watchAutoPictureInPictureOpens {
+  if (_reports.inPictureInPicture) return;
+  NSString *reason = self.autoPictureInPictureMissReason;
+  ArdiaConsentStamp *stamp = ArdiaConsentStamp.begin;
+  const NSUInteger watch = ++_reports.autoPictureInPictureWatch;
+  __weak ArdiaWebView *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAutoPictureInPictureGrace * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    ArdiaWebView *view = weakSelf;
+    if (!view || view->_reports.autoPictureInPictureWatch != watch || !view->_tab) return;
+    if (view->_reports.seenByUser || view->_reports.inPictureInPicture || !view.playsForAutoPictureInPicture) return;
+    [view traceAutoPictureInPicture:[@"app: auto PiP didn't open, " stringByAppendingString:reason]];
+    [view emit:@"autoPictureInPictureKept" payload:[stamp onto:@{@"reason" : reason}]];
+  });
+}
+
 - (void)updateAutoPictureInPicture {
   if (!_tab) return;
   if (!_reports.seenByUser && self.playsForAutoPictureInPicture) {
     [self traceAutoPictureInPicture:@"app: auto PiP left to Chrome"];
+    [self watchAutoPictureInPictureOpens];
   } else if (_reports.seenByUser && (_reports.autoPictureInPictureActive || _reports.inPictureInPicture)) {
     [self notePictureInPictureSight:@"exit requested"];
     _reports.autoPictureInPictureActive = NO;

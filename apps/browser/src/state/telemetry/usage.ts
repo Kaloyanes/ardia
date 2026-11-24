@@ -17,7 +17,7 @@ import { percentile } from "./transport";
 import { reportNativeCrashes } from "./errors";
 import { emitJourneys, journeysEnding, startJourneys } from "./journeys";
 import { commandBarPlacementLabel, takeExternalAppRequests, takeNotificationRequestCounts, takeRecentlyClosedCounts, takeHistoryRemovalCounts, takeOmniboxLatency, takePopupTabCounts, takeSearchSuggests } from "./track";
-import { contextSamples, noteAppMemory, recordContext, takeMainProcessWork, takeContentDriftCounts, takeColdTabHoldCounts, takeStopBreathing, startContextSamples, stopContextSamples, watchEngineReports } from "./diagnostics";
+import { contextSamples, noteAppMemory, recordContext, takeMainProcessWork, takeContentDriftCounts, takePageMetrics, takeColdTabHoldCounts, takeStopBreathing, startContextSamples, stopContextSamples, watchEngineReports } from "./diagnostics";
 import { emitTabPresses } from "./tabPresses";
 import { takeFreezeCounts } from "./freezes";
 import { switcherSwitchProperties } from "./switcherPresses";
@@ -53,6 +53,9 @@ import { takeDockCounts } from "./dockCounts";
 import { takeCliCounts } from "./cliCounts";
 import { pluginsSnapshot, takePluginCounts } from "./pluginCounts";
 import { passwordManagerSnapshot } from "../site/passwordManager";
+import { isAutoPipMiss, noteAutoPipMiss, type AutoPipMiss } from "./autoPipMisses";
+import { processCpuFields } from "./processCpu";
+import { ctrlTabChoice } from "../commands/commandShortcuts";
 import { keptTabsAdded } from "./keptTabs";
 import { takeTabStripCounts } from "./tabStripCounts";
 import { takeFocusFeatureCounts } from "./focusFeatureCounts";
@@ -163,8 +166,8 @@ export const noteScreenRecordingMissing = () => counts.screenRecordingMissing++;
 export const noteScreenRecordingAsked = () => counts.screenRecordingAsked++;
 
 export const noteWebKitPageKeptHidden = () => counts.webKitPagesKeptHidden++;
-export const noteAutoPictureInPictureKept = (reason: "onScreen" | "appSwitch" | "nothingPlaying", epoch: string) =>
-  counted(nativeConsent({ epoch }), () => (reason === "nothingPlaying" ? noteAutoPictureInPictureNothingPlaying() : counts[reason === "appSwitch" ? "autoPictureInPictureStayedOnAppSwitch" : "autoPictureInPictureKept"]++));
+export const noteAutoPictureInPictureKept = (reason: "onScreen" | "appSwitch" | "nothingPlaying" | AutoPipMiss, epoch: string) =>
+  isAutoPipMiss(reason) ? noteAutoPipMiss(reason, epoch) : counted(nativeConsent({ epoch }), () => (reason === "nothingPlaying" ? noteAutoPictureInPictureNothingPlaying() : counts[reason === "appSwitch" ? "autoPictureInPictureStayedOnAppSwitch" : "autoPictureInPictureKept"]++));
 
 export const noteExtensionInstallPrompt = () => counts.extensionInstallPrompts++;
 export const noteExtensionInstallPromptStale = (consent?: ConsentToken | null) => bump(consent, { extensionInstallPromptsStale: 1 });
@@ -308,11 +311,12 @@ async function sampleMemory(consent: ConsentToken | null) {
     const mainProcessWork = await takeMainProcessWork();
     const contentDrift = await takeContentDriftCounts();
     const coldTabHolds = await takeColdTabHoldCounts();
-    capture("perf_memory", { ...mainProcessWork, ...contentDrift, ...takeFreezeCounts(consent), ...coldTabHolds, ...(stillValid(consent) ? takeStopBreathing() : {}),
+    const pageMetrics = await takePageMetrics();
+    capture("perf_memory", { ...mainProcessWork, ...contentDrift, ...pageMetrics, ...takeFreezeCounts(consent), ...coldTabHolds, ...(stillValid(consent) ? takeStopBreathing() : {}),
       total_mb: mb(total),
       browser_mb: mb(browser),
       gpu_mb: mb(gpu),
-      renderer_processes: renderers,
+      renderer_processes: renderers, ...processCpuFields(tasks),
       tabs: size(useBrowser.getState().tabs),
       uptime_hours: Math.round((Date.now() - startedAt) / HOUR_MS),
     }, consent);
@@ -330,7 +334,7 @@ function snapshotSettings(consent: ConsentToken | null) {
   const today = utcDay(Date.now()), passwordManagers = passwordManagerSnapshot();
   if (settingsSnapshotDay() === today || !passwordManagers) return;
   const state = useBrowser.getState();
-  const settings = { ...settingsSnapshot(state.settings), ...customColorProfiles(state.profiles, state.settings.defaultProfileId), ...openTabSyncProfiles(state.profiles), ...narrowWindows(state.windows, state.settings.sidebarWidth), ...airTrafficSnapshot(), ...currentThemeFileSnapshot(), ...pluginsSnapshot(), ...windowButtonLayoutSnapshot(), ...passwordManagers };
+  const settings = { ...settingsSnapshot(state.settings), ...customColorProfiles(state.profiles, state.settings.defaultProfileId), ...openTabSyncProfiles(state.profiles), ...narrowWindows(state.windows, state.settings.sidebarWidth), ...airTrafficSnapshot(), ...currentThemeFileSnapshot(), ...pluginsSnapshot(), ...windowButtonLayoutSnapshot(), ...passwordManagers, ctrl_tab_mode: ctrlTabChoice(state) };
   void Promise.all([currentAppIcon().catch(() => null), listComponents().catch(() => null)]).then(([icon, components]) => (capture(SETTINGS_SNAPSHOT_EVENT, { ...settings, ...appIconSetting(icon), ...widevineSetting(components) }, consent), stillValid(consent) && markSettingsSnapshot(today)));
 }
 

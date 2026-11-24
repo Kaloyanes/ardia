@@ -193,6 +193,7 @@ public final class AppUpdater: NSObject {
   private var sessionObservation: NSKeyValueObservation?
   private var firstCheckPending = false
   private var started = false
+  private var downloading = false
 
   public var isConfigured: Bool {
     guard !Self.isOff else { return false }
@@ -315,6 +316,33 @@ extension AppUpdater: SPUUpdaterDelegate {
     guard firstCheckPending else { return [] }
     firstCheckPending = false
     return [["key": "first", "value": "1"]]
+  }
+
+  public func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+    downloading = true
+    ShellEvents.send(.app, ["type": "updateStep", "step": "downloadStarted"])
+  }
+
+  public func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+    downloading = false
+    ShellEvents.send(.app, ["type": "updateStep", "step": "downloadFinished"])
+  }
+
+  public func userDidCancelDownload(_ updater: SPUUpdater) {
+    downloading = false
+  }
+
+  public func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+    ShellEvents.send(.app, ["type": "updateStep", "step": "installing"])
+  }
+
+  public func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+    let nsError = error as NSError
+    let failure = SparkleFailure.of(domain: nsError.domain, code: nsError.code, downloading: downloading)
+    downloading = false
+    guard let failure else { return }
+    NSLog("Ardia: update failed while \(failure.stage == .download ? "downloading" : "installing") (\(failure.reason))")
+    ShellEvents.send(.app, failure.event)
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
