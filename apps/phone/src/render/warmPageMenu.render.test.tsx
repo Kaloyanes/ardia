@@ -99,8 +99,10 @@ test("a menu armed on a quiet web page builds its page rows while hidden, and op
 });
 
 test("a hidden menu catches up with a page that settles while it is closed, so the rows a new page needs are built before the press", async () => {
-  page("about:blank", false);
+  act(() => usePages.setState((state) => ({ ...state, navigation: {} })));
   const root = host();
+  await open();
+  closeAndSettle();
   const nightShade = () => root.root.findAll((node) => typeof node.type === "string" && node.props.testID === "menuToggle:Night Shade")[0];
   expect(nightShade()).toBeUndefined();
   page("https://site0.example/", true, 3);
@@ -113,18 +115,23 @@ test("a hidden menu catches up with a page that settles while it is closed, so t
   unmount(root);
 });
 
-test("a closed page menu's model holds still while its page loads and blocks requests, and reads the page afresh the moment it goes live", () => {
+test("a closed page menu's model holds still while its page loads and as requests are blocked, follows the page once it settles, and reads it afresh the moment it goes live", () => {
   page("https://site0.example/", false);
   const seen = jest.fn();
   const root = renderSurface(<ModelProbe live={false} seen={seen} />);
   seen.mockClear();
-  for (let blocked = 1; blocked <= 5; blocked++) page("https://site0.example/next", blocked < 5, blocked);
+  for (let blocked = 1; blocked <= 4; blocked++) page("https://site0.example/next", true, blocked);
   expect(seen).not.toHaveBeenCalled();
-  updateSurface(root, <ModelProbe live seen={seen} />);
+  page("https://site0.example/next", false, 5);
   expect(seen).toHaveBeenCalledTimes(1);
-  expect(seen.mock.calls[0]![0]).toMatchObject({ reload: "reload", blockedCount: "5" });
-  page("https://site0.example/next", true, 6);
+  expect(seen.mock.calls[0]![0]).toMatchObject({ reload: "reload", blockedCount: null });
+  page("https://site0.example/next", false, 6);
+  expect(seen).toHaveBeenCalledTimes(1);
+  updateSurface(root, <ModelProbe live seen={seen} />);
   expect(seen).toHaveBeenCalledTimes(2);
+  expect(seen.mock.calls[1]![0]).toMatchObject({ reload: "reload", blockedCount: "6" });
+  page("https://site0.example/next", true, 7);
+  expect(seen).toHaveBeenCalledTimes(3);
   unmount(root);
 });
 

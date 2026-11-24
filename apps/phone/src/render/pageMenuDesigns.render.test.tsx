@@ -34,6 +34,7 @@ beforeEach(() => {
   withTabs(1);
   page("https://site0.example/");
   useBrowse.setState({ surface: "browsing", sheet: null });
+  useLibrary.setState({ open: false });
   useSettingsNav.setState({ open: false, stack: [{ page: "root" }], popping: false });
   useDefaultBrowser.setState({ status: { isDefault: false, canAsk: true } });
   useSync.setState((state) => ({ ...state, status: OFF_STATUS, view: { devices: [], profiles: [], search: null, syncedAt: null, selectedProfileId: null, receivers: [] } as never }));
