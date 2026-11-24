@@ -82,11 +82,15 @@ test("a Flatpak's dialog says flatpak update can't update a bundle installed fro
   assert.match(ui.confirms[0].message, /install the new \.flatpak from its release page/);
 });
 
-test("from Settings with no regular window to open it in, nothing opens and no visit is counted", async () => {
+test("from Settings with no regular window to open it in, Ardia says so and offers the link to copy, and counts no visit", async () => {
   reset();
   ui.settingsOpens = false;
   await linuxUpdaterFor(managedHost(FLATPAK_DATA, "settings")).methods.checkForUpdates();
-  assert.equal(ui.confirms.length, 1);
-  assert.deepEqual(ui.opened, []);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ui.confirms.length, 2);
+  assert.equal(ui.confirms[1].title, "Ardia couldn't open the release page");
+  assert.match(ui.confirms[1].message, new RegExp(RELEASE_PAGE.replaceAll(".", "\\.")));
+  assert.deepEqual([ui.confirms[1].confirmTitle, ui.confirms[1].cancelTitle], ["Copy Link", "OK"]);
+  assert.deepEqual([ui.opened, ui.copied], [[], [RELEASE_PAGE]]);
   assert.equal(takeUpdateCounts().update_release_page_opens, 0);
 });

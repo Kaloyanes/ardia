@@ -3,6 +3,7 @@ import { AUR_UPDATE_COMMAND, linuxUpdater, scheduleUpdateChecks, updatesAvailabl
 import { isLinuxUtility } from "../../session.ts";
 import { refreshDocument } from "../../shims/shellBase";
 import { systemInfo } from "../../../../browser/src/platform/app";
+import { copyText } from "../../../../browser/src/platform/clipboard";
 import { confirm } from "../../../../browser/src/platform/dialogs";
 import { readDocument, saveDocument } from "../../../../browser/src/platform/documents";
 import { showToast } from "../../../../browser/src/state/app/toasts";
@@ -21,7 +22,15 @@ export function linuxUpdaterFor(host: ArdiaHost): LinuxUpdater {
   if (known) return known;
   const windowId = host.bootstrap.windowId;
   const browserWindow = !isLinuxUtility(windowId);
-  const open = (url: string) => (browserWindow ? (openUrls([url], windowId), true) : openUrlFromSettings(url));
+  const offerLink = (url: string) =>
+    void confirm({
+      title: "Ardia couldn't open the release page",
+      message: `No browser window is open to show it in. Open a window and go to ${url}, or copy the link.`,
+      confirmTitle: "Copy Link",
+      cancelTitle: "OK",
+      windowId,
+    }).then((answer) => void (answer.confirmed && copyText(url)), () => {});
+  const open = (url: string) => (browserWindow ? (openUrls([url], windowId), true) : openUrlFromSettings(url) || (offerLink(url), false));
   const toast: typeof showToast = (...args) => {
     if (browserWindow) showToast(...args);
   };

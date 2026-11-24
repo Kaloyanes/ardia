@@ -970,7 +970,8 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
   is told to update there and offered the release page (Open Release Page, or the toast's View): a Flatpak to
   install the new `.flatpak`, the others the AUR command or the new `.rpm`. No command is copied: the `.rpm` and the
   Flatpak bundle have no repository or remote to update from, and `ardia-update kind` says only `managed`, so the
-  dialog can't tell an AUR install apart (#4078). A failed download or install falls back to the release page once and isn't retried automatically.
+  dialog can't tell an AUR install apart (#4078). When Check Now runs in Settings and no regular window is open to show the page, a dialog gives
+  its link with Copy Link instead. A failed download or install falls back to the release page once and isn't retried automatically.
 - **Self-update.** `ac_linux_self_update.cc` serves `ArdiaUpdates.installKind`, `update(version)`, `status()`,
   `claimOutcome(run)` and `restart`; the rules are in `ac_linux_self_update_policy.h`. The engine owns each run, so it
   carries on whatever window started it or closes.
