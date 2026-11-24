@@ -55,7 +55,7 @@ After that, the rule for every later change is:
 | Where the change lands | Keys it moves | Build it needs |
 | --- | --- | --- |
 | `engine/ardiacore` | mac | Free Mac (`mbp1`/`mbp2`/`mini`), incremental (`mbp1` for fresh builds) |
-| `engine/ardiacore-desktop` (`linux,win`, after selector sets) | linux, win | `msi` WSL (Boat fallback) for Linux and Win x64; `mini` for Win arm64 |
+| `engine/ardiacore-desktop` (`linux,win`, after selector sets) | linux, win | `msi` WSL for Linux and Win x64; `mini` for Win arm64 |
 | `engine/ardiacore-linux`, `engine/ardiacore-win` | that one | that one |
 | `engine/chromium` | all | all; batch these |
 | `packages/core-rs` (via `copies.tsv`) | linux, win | as above; macOS links it into the pods instead |

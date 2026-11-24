@@ -2,14 +2,14 @@
 
 The Windows engine is the same tree as the Mac's (`docs/engine-build.md`): **Chromium 158.0.8127.36**, **Helium**
 0.22.2 (helium-chromium) with **helium-windows** 0.22.2.1 in place of helium-macos, then our patch series. **x64**
-engines are cross-built on a **Linux host**, primarily **`msi`'s WSL 2 Ubuntu** (or an `xlarge` Boat VM as fallback;
-[On a Linux host](#on-a-linux-host)): Linux is Chromium's supported host for Windows cross builds (`docs/win_cross.md`
-in the tree). **ARM64** engines cannot safely be built on x86_64 hosts (`msi` or x64 Boat VMs) while V8's `mksnapshot`
-arm64 simulator produces crashing snapshots ([On a Linux host](#on-a-linux-host)); until that is fixed, build ARM64
-Windows engines on **`mini`** (Mac mini, ARM64) in `~/chromium-build-win` (check free disk first — the tree needs
-~52–85 GB — and never touch `~/chromium-build`). Keep Windows x64 cross-builds off the MacBooks unless explicitly asked.
-No Windows build machine is required for the engine itself, though **`msi`** runs native Windows 11 for app/WebUI
-development and testing.
+engines are cross-built on a **Linux host**, in **`msi`'s WSL 2 Ubuntu** ([On a Linux host](#on-a-linux-host)):
+Linux is Chromium's supported host for Windows cross builds (`docs/win_cross.md` in the tree). **ARM64** engines
+cannot safely be built on x86_64 hosts (including `msi`'s WSL) while V8's `mksnapshot` arm64 simulator produces
+crashing snapshots ([On a Linux host](#on-a-linux-host)); until that is fixed, build ARM64 Windows engines on
+**`mini`** (Mac mini, ARM64) in `~/chromium-build-win` (check free disk first — the tree needs ~52–85 GB — and never
+touch `~/chromium-build`). Keep Windows x64 cross-builds off the MacBooks unless explicitly asked. No Windows build
+machine is required for the engine itself, though **`msi`** runs native Windows 11 for app/WebUI development and
+testing.
 
 The scripts are in `scripts/windows/engine/`, not next to the Mac ones: nothing for Windows may live under `engine/`,
 because `engine/engine-key.sh` hashes what is under `engine/` into the keys the Mac and Linux prebuilt engines are
@@ -85,13 +85,9 @@ took hours. When the Chromium version moves, take the new versions from a full `
 
 ## On a Linux host
 
-x64 Windows engines are cross-built primarily in **`msi`'s WSL 2 Ubuntu** (16 vCPU, 24 GB RAM + 16 GB swap, ~890 GB
-free, `/dev/fuse` available, `~/chromium-build-win` and `~/winengine` already provisioned). When `msi` is busy or
-offline, fall back to an `xlarge` Boat VM (16 vCPU, 32 GB, 294 GB, Ubuntu 24.04) created with `--ttl 21600`
-and Boat's built-in auto-stop left enabled (never `--no-auto-stop`), or resumed from a saved builder snapshot and
-stopped as soon as the engine is published. Each CPU target needs its own tree (~62–85 GB with one out dir); on Boat,
-take a second `xlarge` VM with `--ttl 21600 --no-snapshots` if needed and delete it once the engine is published.
-Nothing from Microsoft's packages leaves the build host except inside the built engine.
+x64 Windows engines are cross-built in **`msi`'s WSL 2 Ubuntu** (16 vCPU, 24 GB RAM + 16 GB swap, ~890 GB free,
+`/dev/fuse` available, `~/chromium-build-win` and `~/winengine` already provisioned; ~62–85 GB per tree). Nothing
+from Microsoft's packages leaves the build host except inside the built engine.
 
 Once per VM:
 

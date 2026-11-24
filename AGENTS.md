@@ -86,11 +86,9 @@ For the architecture and the test tooling, read `docs/agent-brief.md`.
     until it's short of resources (or goes on battery) while another plugged-in machine has room or a shorter queue;
     then move.
 - **Coordinate compute across running threads.** When blocked on compute (a busy Chromium tree or builder, a loaded
-  Mac, `msi`, or Boat VM start quota), inspect all running threads across linked environments (`t3_thread_list` with
-  `includeSubagents: true`, plus `ssh msi` and `boat list` when Boat is used) and message the owning thread or
-  subagent (`t3_thread_send`) to hand off warm resources instead of waiting. Coordinators relay to their subagents to
-  keep a live builder or guest running across handoffs (skip `boat stop` when another thread is queued behind you),
-  pass its layout and lock state along, and stop it only once no thread needs it.
+  Mac, or `msi`), inspect all running threads across linked environments (`t3_thread_list` with
+  `includeSubagents: true`, plus `ssh msi`) and message the owning thread or subagent (`t3_thread_send`) to hand off
+  warm resources and lock state instead of waiting.
 - **Progress reports.** Keep them short and plain: what shipped, what's left, what needs the owner.
 - **Clean up.** Quit your test instances, stop the servers and background jobs you started, and never
   kill processes you didn't start.
@@ -128,17 +126,9 @@ One browser UI (`apps/browser/src` and `packages/*/src`) runs on three platforms
 engine. A change to the shared UI reaches all three, so check the other two before calling it done: Linux's
 `pnpm -C apps/desktop typecheck`, `test:graph` and `test:host` (each covers `--mode linux` and `--mode win`), and the Windows workflow, which runs on any pull
 request touching shared code. Copy that names Mac things (⌘, "macOS", the menu bar) needs its Linux and Windows
-wording. When the machine you're on isn't the platform you're changing, use **`msi`** first (native Windows 11 for
-x64 Windows; WSL 2 Ubuntu for x64 Linux and x64 Windows engine cross-builds). Use a Boat VM (`boat` CLI, signed in)
-as overflow or fallback when `msi` is busy or offline, or when you need an isolated Linux desktop/container, sized
-to the job: `--type small` (2 vCPU / 4 GB, half rate) for quick Linux scripts and unit tests, `--type default`
-(4 vCPU / 8 GB, 1× rate) for Linux UI checks, `boat desktop`, X11 real-input runs and screen recordings, `--type large`
-(8 vCPU / 16 GB, 2× rate) for heavier test suites, and `--type xlarge` (16 vCPU / 32 GB, $0.20/hr, 5.56× `default`)
-**only** for Chromium engine builds or Windows 11 QEMU. Leave Boat's built-in auto-stop on (never pass
-`--no-auto-stop`), set `--ttl` (`7200` for normal tasks, `21600` for engine builds), pass `--no-snapshots` on
-throwaway VMs so stopping erases them cleanly, and stop or delete VMs as soon as you finish — keep named
-`boat snapshot`s only for reusable Chromium builders and keep them stopped between builds. A Boat VM's desktop is
-yours: the hidden-instance and focus rules are for the owner's Mac.
+wording. When the machine you're on isn't the platform you're changing, use **`msi`** (native Windows 11 for x64
+Windows; WSL 2 Ubuntu for x64 Linux and x64 Windows engine cross-builds) or **`mini`** for ARM64 Windows engine
+cross-builds. Don't spin up Boat VMs.
 - **macOS** is the main app: `apps/browser` (React Native macOS) on `engine/ardiacore` and the Mac engine. The rest
   of this file is written for it.
 - **Linux** (`docs/linux-port.md`): Chromium's own `chrome` is the app and serves the UI from `chrome://ardia/`;
@@ -147,21 +137,20 @@ yours: the hidden-instance and focus rules are for the owner's Mac.
   sits in `src/platform/linux`, reached through `@platform/<name>` seams that resolve `<name>.linux.ts` or
   `<name>.win.ts` before `<name>.desktop.ts`. `engine/ardiacore-linux` plus `engine/patches/chromium-linux-*.patch`
   are Linux's native layer. The x64 engine is built from
-  source in `msi`'s WSL 2 Ubuntu (or on a Boat builder VM as fallback) (`scripts/linux/build.sh --apply`, incremental like the Mac's), published with
+  source in `msi`'s WSL 2 Ubuntu (`scripts/linux/build.sh --apply`, incremental like the Mac's), published with
   `scripts/linux/publish-engine.sh --upload`, and pinned by a row in `packages/ardiacore/prebuilt-engines-linux.tsv`.
   Each platform has its own engine key (`engine/engine-key.sh --platform macos|linux`): a change only Linux builds
   (`engine/ardiacore-linux`, a `linux` line of `engine/patches/series` and its patch) needs a new Linux engine and
   keeps the Mac's, and the reverse; a shared change needs both. CI: `.github/workflows/linux.yml` (`docs/linux-ci.md`); acceptance: `docs/linux-acceptance.md`.
 - **Windows** (`docs/windows.md`): `apps/browser/windows` (React Native Windows) and `packages/expo-windows` host
   Chromium's `chrome.dll`, renamed Ardia, with each tab's page in its own window under the app's. The x64 engine is
-  cross-built in `msi`'s WSL 2 Ubuntu in `~/chromium-build-win` (Boat `xlarge` VM as fallback), and the ARM64 engine
+  cross-built in `msi`'s WSL 2 Ubuntu in `~/chromium-build-win`, and the ARM64 engine
   is cross-built on `mini` in `~/chromium-build-win` (`docs/engine-build-windows.md`; never `~/chromium-build`), because
   x86_64 hosts hit V8's `mksnapshot` arm64 simulator crash. Its
   sources and patches live in `scripts/windows/engine/` (never under `engine/`, which would move the Mac's engine
   key), and `scripts/windows/engine/prebuilt.json` pins the release CI fetches. CI: `.github/workflows/windows.yml`
   builds x64 and ARM64 on Windows runners, launches the app, tours pages with real input and installs the
-  installer. To run or test it yourself, use **`msi`** natively on Windows 11 (Windows 11 in QEMU on a Boat VM, nested
-  KVM, `dockurr/windows`, is the fallback only).
+  installer. To run or test it yourself, use **`msi`** natively on Windows 11.
 
 ## Building features
 - **Conventions.** Folders, import direction, tokens, state, names, the translation layer and environment
