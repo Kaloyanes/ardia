@@ -49,19 +49,7 @@ enum TranslationSessions {
   }
 
   private static func record(_ error: Error) {
-    let kind: String
-    if error is CancellationError {
-      kind = "cancelled"
-    } else {
-      switch error {
-      case TranslationError.nothingToTranslate: kind = "nothing_to_translate"
-      case TranslationError.unableToIdentifyLanguage: kind = "unable_to_identify_language"
-      case TranslationError.internalError: kind = "internal_error"
-      case TranslationError.unsupportedSourceLanguage: kind = "unsupported_source_language"
-      case TranslationError.unsupportedLanguagePairing: kind = "unsupported_language_pairing"
-      default: kind = "other"
-      }
-    }
+    let kind = error is CancellationError ? "cancelled" : "other"
     if failures.count < 20 { failures.append(kind) }
   }
 
