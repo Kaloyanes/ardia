@@ -113,6 +113,13 @@ export const builtInEngine = (s: Pick<BrowserState, "settings">, url: string | u
 export const chosenEngine = (s: Pick<BrowserState, "settings">, url: string | undefined | null): PageEngine | undefined =>
   modeEngine(s, url) ?? (webStorePage(url) ? "chromium" : undefined) ?? ruleFor(s, url) ?? builtInEngine(s, url);
 
+export type RefusedVideoSite = { listed: boolean; routedToWebKit: boolean };
+
+export const refusedVideoSite = (s: Pick<BrowserState, "settings">, url: string | undefined | null): RefusedVideoSite => ({
+  listed: protectedVideoSite(url),
+  routedToWebKit: chosenEngine(s, url) === "webkit",
+});
+
 export const recommendedEngineFor = (s: Pick<BrowserState, "settings">, url: string | undefined | null): PageEngine => modeEngine(s, url) ?? builtInEngine(s, url) ?? defaultEngine(s);
 
 export const engineForUrl = (s: Pick<BrowserState, "settings">, url: string | undefined | null): PageEngine => chosenEngine(s, url) ?? defaultEngine(s);

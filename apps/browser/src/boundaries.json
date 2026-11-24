@@ -662,6 +662,15 @@
    ]
   },
   {
+   "id": "evaluate-result:state/engines/siteMoves.ts",
+   "source": "main-world",
+   "guard": "Opener check: only a boolean counts, and only false lets a tab a page opened move engines; anything else retries, then keeps the tab where it is",
+   "count": 1,
+   "checks": [
+    "apps/browser/src/state/engines/siteMoves.ts#openerAnswer"
+   ]
+  },
+  {
    "id": "evaluate-result:state/extensions/webStore.ts",
    "source": "main-world",
    "guard": "Web Store page only; the id must pass webStoreExtensionId and be installed; removal asks the user (B3)",

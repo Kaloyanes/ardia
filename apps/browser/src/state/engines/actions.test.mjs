@@ -17,7 +17,8 @@ const { useBrowser } = await import("../browser/store.ts");
 const model = await import("../browser/model.ts");
 const { webviews } = await import("../../platform/webviews.ts");
 const { patchPage, pageOf } = await import("../tabs/pageState.ts");
-const { followSiteChoice, goBackAcrossEngines, noteWebKitPage, offerWebKit, openPageIn, setEngineMode, useEngineModeSwitch, useEngineOffers } = await import("./actions.ts");
+const { followSiteChoice } = await import("./siteMoves.ts");
+const { goBackAcrossEngines, noteWebKitPage, offerWebKit, openPageIn, setEngineMode, useEngineModeSwitch, useEngineOffers } = await import("./actions.ts");
 const { takeStreamingSiteCounts } = await import("../telemetry/streamingSiteCounts.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
 const { tabEngine } = await import("./engines.ts");
@@ -419,4 +420,100 @@ test("a WebKit tab arriving on a streaming site the list sent there is counted o
   S().updateSettings({ protectedVideoInWebKit: true });
   page("https://open.spotify.com/");
   assert.deepEqual(takeStreamingSiteCounts(), {});
+});
+
+const { takeEngineSwitchCounts } = await import("../telemetry/engineSwitchCounts.ts");
+const { arrivedFromOpener } = await import("../tabs/pageEvents.ts");
+
+async function waitFor(done, ms = 3000) {
+  const until = Date.now() + ms;
+  while (!done()) {
+    if (Date.now() > until) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
+function openedTab(w, opener, url, openerAnswers) {
+  const id = S().newTab(w, { url, adoptId: "ardiacore:7", openerId: opener });
+  const answers = [...openerAnswers];
+  webviews.set(id, {
+    evaluate: (script) => (script.includes("window.opener") ? (answers.length > 1 ? answers.shift() : answers[0])() : Promise.resolve(false)),
+    pageCookies: () => Promise.resolve([]),
+  });
+  return id;
+}
+
+const notReady = () => Promise.reject(new Error("not ready"));
+const answer = (value) => () => Promise.resolve(value);
+
+test("a tab a page opened onto a streaming site moves to WebKit once its page answers that nothing holds it as a pop-up, and one its opener can still script stays", async () => {
+  setConsentPeriod(true, "opened-tab-moves");
+  S().hydrate({});
+  S().updateSettings({ protectedVideoInWebKit: true });
+  webviews.clear();
+  const w = S().createWindow({ url: "https://blog.example/" });
+  const opener = model.activeTabId(S(), w);
+  S().updateTab(opener, { engine: "chromium", url: "https://blog.example/" });
+  takeEngineSwitchCounts();
+
+  const film = openedTab(w, opener, "https://www.disneyplus.com/", [notReady, answer(false)]);
+  assert.equal(tabEngine(S(), film), "chromium");
+  S().updateTab(film, { url: "https://www.disneyplus.com/" });
+  arrivedFromOpener(film, "https://www.disneyplus.com/", "chromium");
+  assert.ok(await waitFor(() => tabEngine(S(), film) === "webkit"), "the opened tab moves to WebKit");
+  assert.equal(S().tabs[film].openerId, opener, "it still goes back to the tab that opened it");
+  assert.equal(pageOf(film).engineBack ?? null, null, "a first page has no page before it to go back to");
+  dropSwap(film);
+
+  const popup = openedTab(w, opener, "https://www.netflix.com/", [answer(true)]);
+  S().updateTab(popup, { url: "https://www.netflix.com/" });
+  arrivedFromOpener(popup, "https://www.netflix.com/", "chromium");
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(tabEngine(S(), popup), "chromium", "a page its opener can still reach keeps the opener's engine");
+
+  const counts = takeEngineSwitchCounts();
+  assert.equal(counts.engine_site_moves, 1);
+  assert.equal(counts.engine_site_moves_opened_tabs, 1);
+  assert.equal(counts.engine_site_moves_kept_for_opener, 1);
+  assert.equal(counts.engine_site_moves_dropped, 0);
+  webviews.clear();
+  setConsentPeriod(false, null);
+});
+
+test("a tab a page opened onto a site with a Chromium rule stays in Chromium, and only a page Chrome made for a link counts as arriving from its opener", async () => {
+  S().hydrate({});
+  S().updateSettings({ protectedVideoInWebKit: true, websiteEngines: { "https://www.hulu.com": "chromium" } });
+  webviews.clear();
+  const w = S().createWindow({ url: "https://blog.example/" });
+  const opener = model.activeTabId(S(), w);
+  S().updateTab(opener, { engine: "chromium", url: "https://blog.example/" });
+  const ruled = openedTab(w, opener, "https://www.hulu.com/", [answer(false)]);
+  S().updateTab(ruled, { url: "https://www.hulu.com/" });
+  arrivedFromOpener(ruled, "https://www.hulu.com/", "chromium");
+  const loaded = S().newTab(w, { url: "https://www.max.com/", openerId: opener });
+  S().updateTab(loaded, { engine: "chromium" });
+  arrivedFromOpener(loaded, "https://www.max.com/", "chromium");
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(tabEngine(S(), ruled), "chromium", "a website rule wins over the streaming list");
+  assert.equal(tabEngine(S(), loaded), "chromium", "only a page Chrome made for a link counts as arriving from its opener");
+  webviews.clear();
+  S().updateSettings({ websiteEngines: {} });
+});
+
+test("a move after a link to a streaming site still lands when the page moves on within that site meanwhile, and loads where it got to", async () => {
+  S().hydrate({});
+  S().updateSettings({ protectedVideoInWebKit: true });
+  const w = S().createWindow({ url: "https://search.example/?q=film" });
+  const tabId = model.activeTabId(S(), w);
+  S().updateTab(tabId, { engine: "chromium", url: "https://search.example/?q=film" });
+  webviews.set(tabId, { evaluate: () => new Promise((resolve) => setTimeout(() => resolve(false), 20)), pageCookies: () => Promise.resolve([]) });
+  S().updateTab(tabId, { url: "https://www.netflix.com/" });
+  followSiteChoice(tabId, "chromium", "https://www.netflix.com/", "https://search.example/?q=film");
+  S().updateTab(tabId, { url: "https://www.netflix.com/browse" });
+  assert.ok(await waitFor(() => tabEngine(S(), tabId) === "webkit"), "the move lands");
+  assert.equal(S().tabs[tabId].page.nav.url, "https://www.netflix.com/browse");
+  assert.deepEqual(pageOf(tabId).engineBack, { engine: "chromium", url: "https://search.example/?q=film" });
+  dropSwap(tabId);
+  webviews.clear();
 });

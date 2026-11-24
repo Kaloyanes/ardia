@@ -722,3 +722,39 @@ test("windows webui native update policy keeps every hostile input and call argu
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("a tab a page opened moves engines only when its page answers the opener check with false, whatever else it returns", async () => {
+  const { followSiteChoice, openerAnswer } = await import("./state/engines/siteMoves.ts");
+  const { tabEngine } = await import("./state/engines/engines.ts");
+  const { dropSwap } = await import("./state/engines/engineSwap.ts");
+  S().hydrate({});
+  S().updateSettings({ protectedVideoInWebKit: true, engineMode: "automatic" });
+  const w = S().createWindow({ url: "https://blog.example/" });
+  const opener = activeTabId(S(), w);
+  S().updateTab(opener, { engine: "chromium", url: "https://blog.example/" });
+  const asked = new Map();
+  const plant = (value) => {
+    const tab = S().newTab(w, { url: "https://www.netflix.com/", adoptId: "ardiacore:9", openerId: opener, background: true });
+    webviews.set(tab, {
+      evaluate: async () => {
+        asked.set(tab, { count: (asked.get(tab)?.count ?? 0) + 1, at: Date.now() });
+        return value;
+      },
+      pageCookies: async () => [],
+    });
+    S().updateTab(tab, { url: "https://www.netflix.com/" });
+    followSiteChoice(tab, "chromium", "https://www.netflix.com/", "");
+    return tab;
+  };
+  const planted = HOSTILE_VALUES.filter(({ value }) => value !== false).map(({ id, value }) => ({ id, tab: plant(value) }));
+  const control = plant(false);
+  const settled = (tab) => (asked.get(tab)?.count ?? 0) > 0 && Date.now() - asked.get(tab).at > 800;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline && !(tabEngine(S(), control) === "webkit" && planted.every(({ tab }) => settled(tab)))) await wait(50);
+  for (const { id, tab } of planted) assert.ok(settled(tab), `${id} stopped asking`);
+  for (const { id, tab } of planted) assert.equal(tabEngine(S(), tab), "chromium", id);
+  assert.equal(tabEngine(S(), control), "webkit", "positive control: a page that answers false moves");
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(openerAnswer(value), typeof value === "boolean" ? value : null, id);
+  dropSwap(control);
+  webviews.clear();
+});

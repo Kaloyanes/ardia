@@ -8,13 +8,12 @@ import {
   builtInEngine,
   canSwitchEngine,
   chosenEngine,
-  chromiumOnly,
   drivenByChrome,
   ENGINE_NAMES,
   engineMode,
   engineUnderMode,
   modeEngineFor,
-  needsChromium,
+  refusedVideoSite,
   ruleFor,
   singleEngine,
   siteOf,
@@ -48,9 +47,7 @@ const store = () => useBrowser.getState();
 const declinedSites = new Set<string>();
 const toldInChromiumMode = new Set<string>();
 const movingTabs = new Set<string>();
-const siteMoves = new Map<string, number>();
 const webKitSites = new Map<string, string>();
-const SITE_MOVE_SPACING_MS = 10_000;
 const hostLabel = (site: string) => new URL(site).hostname.replace(/^www\./, "");
 
 export const useEngineModeSwitch = create<{ pending: EngineMode | null }>()(() => ({ pending: null }));
@@ -63,7 +60,7 @@ function stillThisSwitch(mode: EngineMode): () => boolean {
   return () => request === modeRequests && (useEngineModeSwitch.getState().pending ?? engineMode(store())) === mode;
 }
 
-function modeStillHolds(): () => boolean {
+export function modeStillHolds(): () => boolean {
   const generation = modeGeneration;
   const mode = engineMode(store());
   return () => generation === modeGeneration && engineMode(store()) === mode && !useEngineModeSwitch.getState().pending;
@@ -107,7 +104,7 @@ async function mayLeavePage(t: Tab, title: string, message: string, confirmTitle
   return confirmed;
 }
 
-const pageUrl = (t: Tab | undefined) => t?.url || navigationOf(t)?.url || "";
+export const pageUrl = (t: Tab | undefined) => t?.url || navigationOf(t)?.url || "";
 
 export async function goBackAcrossEngines(tabId: string, mayAct: () => boolean = () => true, ask: typeof confirm = confirm): Promise<boolean> {
   const back = pageOf(tabId).engineBack;
@@ -133,7 +130,7 @@ export async function goBackAcrossEngines(tabId: string, mayAct: () => boolean =
   return true;
 }
 
-type MoveOptions = { rule?: PageEngine | null; checkWork?: boolean; mayWrite?: () => boolean };
+type MoveOptions = { rule?: PageEngine | null; checkWork?: boolean; mayWrite?: () => boolean; followsSite?: boolean };
 
 const switchingTabs = new Set<string>();
 
@@ -169,7 +166,8 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
   const from = tabEngine(store(), tabId);
   const held = from !== engine && wantsPage(store().tabs[tabId]) ? await holdPageForSwap(tabId, from, engine, url, true, holds) : null;
   const now = store().tabs[tabId];
-  if (!holds() || !now || pageUrl(now) !== url || (options.mayWrite && !options.mayWrite())) {
+  const samePage = !!now && (pageUrl(now) === url || (!!options.followsSite && siteOf(pageUrl(now)) === siteOf(url)));
+  if (!holds() || !now || !samePage || (options.mayWrite && !options.mayWrite())) {
     dropSwap(tabId, held);
     return false;
   }
@@ -183,6 +181,8 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
 }
 
 export const togglePageEngine = (tabId: string, mayWrite?: () => boolean) => openPageIn(tabId, tabEngine(store(), tabId) === "webkit" ? "chromium" : "webkit", { mayWrite });
+
+export const refusedVideoSiteOf = (tabId: string) => refusedVideoSite(store(), store().tabs[tabId]?.url);
 
 export function offerWebKit(tabId: string, { keySystem }: ProtectedMediaRequest) {
   const s = store();
@@ -239,7 +239,7 @@ async function moveForProtectedVideo(tabId: string, site: string) {
   movingTabs.add(tabId);
   const holds = modeStillHolds();
   try {
-    if (!(await openPageIn(tabId, "webkit")) && holds()) {
+    if (!(await openPageIn(tabId, "webkit", { followsSite: true })) && holds()) {
       declinedSites.add(site);
       return;
     }
@@ -247,37 +247,6 @@ async function moveForProtectedVideo(tabId: string, site: string) {
     movingTabs.delete(tabId);
   }
 }
-
-function moveAfterNavigation(tabId: string, from: PageEngine, to: PageEngine, previousUrl: string) {
-  const now = Date.now();
-  if (now - (siteMoves.get(tabId) ?? 0) < SITE_MOVE_SPACING_MS) return;
-  siteMoves.set(tabId, now);
-  watchClosedTabs();
-  const holds = modeStillHolds();
-  void openPageIn(tabId, to, { checkWork: false }).then((moved) => {
-    if (moved && holds() && (canSwitchEngine(previousUrl) || needsChromium(previousUrl))) patchPage(tabId, { engineBack: { engine: from, url: previousUrl } });
-  });
-}
-
-export function followSiteChoice(tabId: string, engine: PageEngine, url: string, previousUrl: string) {
-  const s = store();
-  const t = s.tabs[tabId];
-  if (!t) return;
-  if (singleEngine(s)) {
-    const forced = modeEngineFor(s, t, url);
-    const followsMode = forced === "chromium" || chromiumOnly(previousUrl) || (leftForChromium(previousUrl) && !googleSignIn(url));
-    if (forced && forced !== engine && followsMode && (canSwitchEngine(url) || needsChromium(url))) moveAfterNavigation(tabId, engine, forced, previousUrl);
-    return;
-  }
-  const site = siteOf(url);
-  if (!site || site === siteOf(previousUrl) || t.openerId) return;
-  const chosen = chosenEngine(s, url);
-  if (chosen && chosen !== engine) moveAfterNavigation(tabId, engine, chosen, previousUrl);
-}
-
-const GOOGLE_SIGN_IN = /^https:\/\/accounts\.google\.com([/?#]|$)/i;
-const googleSignIn = (url: string | undefined | null) => !!url && GOOGLE_SIGN_IN.test(url);
-const leftForChromium = (url: string | undefined | null) => webStorePage(url) || googleSignIn(url);
 
 const MODE_NAMES: Record<EngineMode, string> = { automatic: "Automatic", chromium: ENGINE_NAMES.chromium, webkit: ENGINE_NAMES.webkit };
 
@@ -363,7 +332,6 @@ function watchClosedTabs() {
       visitedTabs.delete(id);
       visits.close(id);
     }
-    for (const id of siteMoves.keys()) if (!s.tabs[id]) siteMoves.delete(id);
     for (const id of webKitSites.keys()) if (!s.tabs[id] || tabEngine(s, id) !== "webkit") webKitSites.delete(id);
   });
 }

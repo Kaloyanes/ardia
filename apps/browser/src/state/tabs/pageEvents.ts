@@ -3,7 +3,8 @@ import type { PageEngine } from "../../platform/tabs";
 import { dismissPermissions } from "../site/permissions";
 import { answerExternalApp } from "../site/prompts";
 import { setPageSelection } from "../site/selection";
-import { clearEngineOffer, followSiteChoice } from "../engines/actions";
+import { clearEngineOffer } from "../engines/actions";
+import { followSiteChoice } from "../engines/siteMoves";
 import { revealToolbar } from "../windows/toolbarAutoHide";
 import { noteCaptureIndicatorCleared, noteMediaCardCleared } from "../telemetry/tabSleepCounts";
 import { setNowPlaying, useMedia } from "../media/media";
@@ -13,8 +14,9 @@ import { closeTabNow } from "./actions";
 import { closedByUnload } from "../profiles/profileUnloading";
 import { forgetRendererHang } from "../telemetry/freezes";
 import { forgetVerificationCodes } from "../site/verificationCodes";
+import { useBrowser } from "../browser/store";
 
-export function leftPage(tabId: string, url: string, previousPage: string, engine: PageEngine, inPeek: boolean) {
+export function leftPage(tabId: string, url: string, previousPage: string, engine: PageEngine) {
   if (pageOf(tabId).externalApp && hostOf(url) !== hostOf(previousPage)) answerExternalApp(tabId, false);
   dismissPermissions(tabId);
   setPopover(tabId, null);
@@ -23,7 +25,12 @@ export function leftPage(tabId: string, url: string, previousPage: string, engin
   forgetVerificationCodes(tabId);
   patchPage(tabId, { popups: [], passwordPrompt: null, crashed: null, status: "" });
   revealToolbar(tabId);
-  if (!inPeek) followSiteChoice(tabId, engine, url, previousPage);
+  followSiteChoice(tabId, engine, url, previousPage);
+}
+
+export function arrivedFromOpener(tabId: string, url: string, engine: PageEngine) {
+  const t = useBrowser.getState().tabs[tabId];
+  if (t?.openerId && t.page.kind === "adopted") followSiteChoice(tabId, engine, url, "");
 }
 
 export function pageEnded(tabId: string) {
