@@ -23,7 +23,6 @@ enum TranslationSessions {
   private static var memo: [PassageKey: [String]] = [:]
   private static let work = SharedWork<PassageKey, [String]>()
   private static let memoLimit = 5000
-  private static var failures: [String] = []
 
   static func translations(source: String, target: String, standard: Bool = false, _ requests: [TranslationSession.Request]) async throws -> [TranslationSession.Response] {
     try await run(source: source, target: target, standard: standard) { try await $0.translations(from: requests) }
@@ -38,36 +37,14 @@ enum TranslationSessions {
     return out
   }
 
-  static func translateBlocks(source: String, target: String, owner: String, _ blocks: [[String]]) async -> (parts: [[String]?], errors: [String]) {
+  static func translateBlocks(source: String, target: String, owner: String, _ blocks: [[String]]) async -> [[String]?] {
     let keys = blocks.map { PassageKey(source: source, target: target, pieces: $0) }
     var found: [PassageKey: [String]] = [:]
     await withTaskGroup(of: (PassageKey, [String]?).self) { group in
       for key in Set(keys) { group.addTask { @MainActor in (key, await passage(key, owner: owner)) } }
       for await (key, parts) in group { if let parts { found[key] = parts } }
     }
-    let errors = Array(Set(failures)).sorted()
-    failures.removeAll()
-    return (keys.map { found[$0] }, errors)
-  }
-
-  private static func record(_ error: Error) {
-    let kind: String
-    if error is CancellationError {
-      kind = "cancelled"
-    } else {
-      switch error {
-      case TranslationError.nothingToTranslate: kind = "nothing_to_translate"
-      case TranslationError.unableToIdentifyLanguage: kind = "unable_to_identify_language"
-      case TranslationError.internalError: kind = "internal_error"
-      case TranslationError.alreadyCancelled: kind = "already_cancelled"
-      case TranslationError.notInstalled: kind = "not_installed"
-      case TranslationError.unsupportedSourceLanguage: kind = "unsupported_source_language"
-      case TranslationError.unsupportedTargetLanguage: kind = "unsupported_target_language"
-      case TranslationError.unsupportedLanguagePairing: kind = "unsupported_language_pairing"
-      default: kind = "other"
-      }
-    }
-    if failures.count < 20 { failures.append(kind) }
+    return keys.map { found[$0] }
   }
 
   private static var attributedAvailable: Bool {
@@ -103,24 +80,15 @@ enum TranslationSessions {
   private static func translateOnce(_ key: PassageKey, standard: Bool) async -> [String]? {
     await PassageDispatch.translate(
       key.pieces,
-      plain: { (text: String) -> String? in
-        do {
-          return try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
-        } catch {
-          record(error)
-          return nil
-        }
+      plain: { text in
+        try? await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
       },
-      linked: attributedAvailable ? { (pieces: [String]) -> [String]? in
+      linked: attributedAvailable ? { pieces in
         guard #available(macOS 26.4, *) else { return nil }
         let text = LinkedPieces.text(pieces)
-        do {
-          let translated = try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
-          return LinkedPieces.parts(of: translated, over: pieces)
-        } catch {
-          record(error)
-          return nil
-        }
+        guard let translated = try? await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
+        else { return nil }
+        return LinkedPieces.parts(of: translated, over: pieces)
       } : nil
     )
   }
