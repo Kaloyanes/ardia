@@ -1284,10 +1284,14 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   tested by `scripts/windows/engine/tests/webui_update_policy_test.cc`. `check` fetches the feed and its signature
   through Chromium's network stack (a redirect only to GitHub's release hosts over https), stages them in a fresh
   folder under `<app data>\Updates` that is never a link, and runs `ardia-update-verify.exe windows-manifest` against
-  `windows-update.pem` beside `Ardia.exe`. The verified offer stays in the browser process: the shell only says which
-  build to download, never a URL, hash or path. `update` downloads the installer to `Ardia-Setup-<sha16>.exe`, checks
-  its size and SHA-256, and runs `windows-package` on it. `restart` hashes it again while holding it open, starts it
-  with the RNW updater's silent arguments and quits; a hidden instance never starts it. The kind is `installer` beside
+  `windows-update.pem` beside `Ardia.exe`. Each staged file is created with `CREATE_NEW` and no sharing, checked
+  before a byte is written, then reopened read-only (only `FILE_SHARE_READ`) as the same file and held while the
+  verifier reads it. The verified offer stays in the browser process: the shell only says which build to download,
+  never a URL, hash or path. `update` streams the installer into an unpredictably named staging file, hashing it as it
+  is written, renames it to `Ardia-Setup-<sha16>.exe` through its handle, reopens it read-only and holds that handle
+  through `windows-package` and until `restart` starts it with the RNW updater's silent arguments and quits, so nothing
+  can change it in between. One install runs at a time: a second `restart`, from any window, answers `busy`. A hidden
+  instance never starts it. The kind is `installer` beside
   `unins000.exe`, `portable` without it, and `unsupported` without the verifier, key or `Ardia.build.json`.
 - The WebUI side in the shared UI is `apps/desktop/src/platform/win/hostUpdates.ts` (wired through `updater.win.ts`
   and `updates.win.ts`). It keeps the RNW behaviour: checks 30 s after launch and every 6 hours from one window, never

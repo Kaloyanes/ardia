@@ -182,11 +182,17 @@ void TestVerifierAnswers() {
 
 void TestStagingNames() {
   assert(InstallerFileName(kSha) == "Ardia-Setup-aaaaaaaaaaaaaaaa.exe");
-  assert(PartialFileName(kSha) == "Ardia-Setup-aaaaaaaaaaaaaaaa.exe.part");
+  assert(StagingFileName(kSha, 0x0123456789abcdefull) == "Ardia-Setup-aaaaaaaaaaaaaaaa-0123456789abcdef.part");
+  assert(StagingFileName(kSha, 1) != StagingFileName(kSha, 2));
   assert(InstallerFileName("..\\evil").empty());
-  assert(PartialFileName("").empty());
+  assert(StagingFileName("", 1).empty());
+  assert(StagingFileName("..\\evil", 1).empty());
   assert(IsInstallerLeftover("Ardia-Setup-0123456789abcdef.exe"));
-  assert(IsInstallerLeftover("Ardia-Setup-0123456789abcdef.exe.part"));
+  assert(IsInstallerLeftover(StagingFileName(kSha, 42)));
+  assert(!IsInstallerLeftover("Ardia-Setup-0123456789abcdef.exe.part"));
+  assert(!IsInstallerLeftover("Ardia-Setup-0123456789abcdef-0123456789ABCDEF.part"));
+  assert(!IsInstallerLeftover("Ardia-Setup-0123456789abcdef_0123456789abcdef.part"));
+  assert(!IsInstallerLeftover("Ardia-Setup-0123456789abcdef-0123456789abcde.part"));
   assert(!IsInstallerLeftover("Ardia-Setup-0123456789ABCDEF.exe"));
   assert(!IsInstallerLeftover("Ardia-Setup-x64.exe"));
   assert(!IsInstallerLeftover("session.json"));
@@ -272,8 +278,16 @@ void TestStateMachine() {
   assert(!ClaimOutcome(state, *run));
   assert(!ClaimOutcome(state, 0));
 
+  assert(BeginInstall(state) == InstallStart::kStarted);
+  assert(state.installing);
+  assert(BeginInstall(state) == InstallStart::kInstalling);
+  assert(BeginInstall(state) == InstallStart::kInstalling);
+  assert(!BeginCheck(state));
+  assert(!BeginDownload(state, 120));
   InstallRefused(state, *run, kChecksumReason);
   assert(state.phase == Phase::kFailed && state.reason == kChecksumReason && !ReadyToInstall(state));
+  assert(!state.installing);
+  assert(BeginInstall(state) == InstallStart::kNotReady);
   assert(ClaimOutcome(state, *run));
 
   const std::optional<int> again = BeginCheck(state);

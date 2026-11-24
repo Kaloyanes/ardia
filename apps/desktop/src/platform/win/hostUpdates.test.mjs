@@ -69,8 +69,17 @@ function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: 
     }
     return answer;
   };
-  engine.restart = () => {
+  engine.installing = false;
+  engine.launched = 0;
+  engine.restart = async () => {
     engine.restarts++;
+    if (engine.phase === "ready" && engine.installing) return "busy";
+    if (engine.phase === "ready" && launches && !engine.background) {
+      engine.installing = true;
+      await tick();
+      engine.launched++;
+      return true;
+    }
     if (!launches || engine.phase !== "ready" || engine.background) {
       if (engine.phase === "ready" && !engine.background) Object.assign(engine, { phase: "failed", reason: "checksum", claimed: false });
       return false;
@@ -160,6 +169,22 @@ test("Restart to Update claims the run, counts the restart and asks the engine t
   await settled(() => engine.restarts === 1);
   assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), { update_downloads_started: 1, update_downloads_finished: 1, update_restarts: 1 });
   assert.deepEqual(seen.told, []);
+});
+
+test("two windows restarting at once launch one installer, and the second says nothing", async () => {
+  takeUpdateCounts();
+  const engine = fakeEngine();
+  const docs = new Map();
+  const first = harness({ engine, docs });
+  await first.updater.check(true);
+  await settled(() => first.seen.ready.length === 1);
+  const second = harness({ engine, docs });
+  await Promise.all([first.updater.restartWhenReady(), second.updater.restartWhenReady(), first.updater.restartWhenReady()]);
+  assert.equal(engine.restarts, 3);
+  assert.equal(engine.launched, 1, "the engine reserves the install, so only one installer starts");
+  assert.deepEqual([...first.seen.told, ...second.seen.told], [], "a restart the engine is already handling isn't an error");
+  assert.equal(engine.claims.length, 1);
+  assert.equal(SELF_UPDATE_COUNTS(takeUpdateCounts()).update_downloads_finished, 1);
 });
 
 test("an installer that doesn't start says so, and the failed run is counted once as an install failure", async () => {
@@ -359,6 +384,13 @@ test("windows webui update replies refuse every hostile input while passing a va
   assert.deepEqual(status?.current, CURRENT);
   assert.equal(readCheckAnswer({ status: "ok", ...OFFER, build: CURRENT.build }, CURRENT), null, "an offer no newer than this build is refused");
   assert.equal(readCheckAnswer({ status: "ok", ...OFFER, bytes: 2 ** 30 + 1 }, CURRENT), null);
+  const ready = { phase: "ready", kind: "installer", run: 2, ...OFFER, current: CURRENT };
+  assert.equal(readEngineStatus({ ...ready, reason: "checksum" }).reason, "checksum");
+  for (const reason of ["notAReason", "Checksum", "toString", "__proto__", "x".repeat(20)]) assert.equal(readEngineStatus({ ...ready, reason }).reason, "other", reason);
+  assert.equal(readEngineStatus({ ...ready, reason: null }).reason, null);
+  for (const build of [CURRENT.build, CURRENT.build - 1, 1]) assert.equal(readEngineStatus({ ...ready, build }).offer, null, `an offer of build ${build} isn't newer than ${CURRENT.build}`);
+  assert.equal(readEngineStatus({ ...ready, current: null }).offer, null, "an offer can't be judged without the running build");
+  assert.deepEqual(readEngineStatus({ ...ready, build: CURRENT.build + 1 }).offer, { ...OFFER, build: CURRENT.build + 1 });
 
   for (const { id, value } of HOSTILE_VALUES) {
     assert.equal(readCheckAnswer(value, CURRENT), null, `${id} raw check answer`);
@@ -382,7 +414,7 @@ test("windows webui update replies refuse every hostile input while passing a va
     const fields = readEngineStatus({ phase: "ready", kind: value, reason: value, run: 1, version: value, build: value, bytes: value, current: value, background: value, isolated: value, testFeed: value });
     assert.ok(fields, id);
     assert.ok(["installer", "portable", "unsupported"].includes(fields.kind), `${id} kind`);
-    assert.ok(fields.reason === null || /^[A-Za-z]{1,32}$/.test(fields.reason), `${id} reason`);
+    assert.ok(fields.reason === null || ["network", "tooLarge", "disk", "version", "busy", "checksum", "signature", "manifest", "missing", "verifier", "kind", "install", "other"].includes(fields.reason), `${id} reason`);
     assert.ok(fields.offer === null || /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(fields.offer.version), `${id} offer`);
     assert.ok(fields.current === null || /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(fields.current.version), `${id} current`);
     assert.equal(fields.background || fields.isolated || fields.testFeed, value === true, `${id} flags`);

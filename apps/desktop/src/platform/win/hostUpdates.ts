@@ -87,7 +87,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 export const isVersion = (value: unknown): value is string => typeof value === "string" && /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(value);
 const isBuild = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const isBytes = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= LARGEST_INSTALLER_BYTES;
-const isReason = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 32 && /^[A-Za-z]+$/.test(value);
+const ENGINE_REASONS: ReadonlySet<string> = new Set(["network", "tooLarge", "disk", "version", "busy", "checksum", "signature", "manifest", "missing", "verifier", "kind", "install", "other"]);
+const isReason = (value: unknown): value is string => typeof value === "string" && ENGINE_REASONS.has(value);
 const plainMessage = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= LARGEST_REASON && [...value].every((character) => character.charCodeAt(0) >= 0x20 && character !== "\u007f");
 
@@ -100,14 +101,15 @@ export function readEngineStatus(answer: unknown): EngineStatus | null {
   if (!isRecord(answer)) return null;
   const { phase, kind, reason, run, version, build, bytes, current, background, isolated, testFeed } = answer;
   if (typeof phase !== "string" || !PHASES.has(phase) || typeof run !== "number" || !Number.isSafeInteger(run) || run < 0) return null;
-  const offer = isVersion(version) && isBuild(build) && isBytes(bytes) ? { version, build, bytes } : null;
+  const running = readBuild(current);
+  const offer = running && isVersion(version) && isBuild(build) && build > running.build && isBytes(bytes) ? { version, build, bytes } : null;
   return {
     phase: phase as Phase,
     kind: typeof kind === "string" && KINDS.has(kind) ? (kind as InstallKind) : "unsupported",
     reason: isReason(reason) ? reason : reason == null ? null : "other",
     run,
     offer,
-    current: readBuild(current),
+    current: running,
     background: background === true,
     isolated: isolated === true,
     testFeed: testFeed === true,
@@ -216,7 +218,7 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
     if (status.run > settledRun && (await claim(status.run))) countOutcome(status, consent);
     noteUpdateRestart(consent);
     const launched = await invokeHost<unknown>(RESTART_METHOD, { args: [] }, deps.host).catch(() => false);
-    if (launched === true) return;
+    if (launched === true || launched === "busy") return;
     const after = await engineStatus();
     if (after?.phase === "failed" && after.run === status.run && (await claim(after.run))) noteUpdateInstallFailed(after.reason ?? "install", consent);
     console.info(`[ardia windows] the installer didn't start: ${after?.reason ?? "unknown"}`);

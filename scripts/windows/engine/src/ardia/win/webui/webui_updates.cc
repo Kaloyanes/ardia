@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,11 +29,13 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/rand_util.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/sequence_bound.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/win/scoped_handle.h"
@@ -47,6 +50,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
@@ -238,37 +242,119 @@ std::optional<std::wstring> UpdatesFolder(const base::FilePath& app_data) {
   return RealChildDirectory(*root, policy::kUpdatesFolder);
 }
 
-std::optional<std::wstring> WriteNewFile(const std::wstring& folder, const std::wstring& leaf,
-                                         const std::string& bytes) {
-  const std::wstring path = folder + L"\\" + leaf;
-  base::win::ScopedHandle file(::CreateFileW(path.c_str(), GENERIC_WRITE | GENERIC_READ, 0, nullptr, CREATE_NEW,
-                                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (!file.is_valid()) {
+struct FileIdentity {
+  DWORD volume = 0;
+  DWORD high = 0;
+  DWORD low = 0;
+  bool operator==(const FileIdentity&) const = default;
+};
+
+std::optional<FileIdentity> IdentityOf(HANDLE handle) {
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(handle, &info)) {
     return std::nullopt;
   }
+  return FileIdentity{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
+}
+
+base::win::ScopedHandle HoldDirectory(const std::wstring& path, std::wstring* final_path) {
+  base::win::ScopedHandle directory(::CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                                  FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!directory.is_valid()) {
+    return {};
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(directory.get(), &info) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    return {};
+  }
+  const std::optional<std::wstring> resolved = FinalPathOf(directory.get());
+  if (!resolved) {
+    return {};
+  }
+  *final_path = *resolved;
+  return directory;
+}
+
+base::win::ScopedHandle CreateExclusive(const std::wstring& folder, const std::wstring& leaf, DWORD access,
+                                        std::wstring* final_path) {
+  const std::wstring path = folder + L"\\" + leaf;
+  base::win::ScopedHandle file(::CreateFileW(path.c_str(), access, 0, nullptr, CREATE_NEW,
+                                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!file.is_valid()) {
+    return {};
+  }
+  const std::optional<FileFacts> facts = RegularFileFacts(file.get());
+  if (!facts || facts->links != 1 || facts->size != 0 || !IsDirectChildOfWinDirectory(folder, facts->final_path)) {
+    file.Close();
+    ::DeleteFileW(path.c_str());
+    return {};
+  }
+  *final_path = facts->final_path;
+  return file;
+}
+
+bool WriteAll(HANDLE file, const char* bytes, size_t count) {
   size_t written = 0;
-  while (written < bytes.size()) {
-    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes.size() - written, 64 * 1024));
+  while (written < count) {
+    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(count - written, 64 * 1024));
     DWORD stored = 0;
-    if (!::WriteFile(file.get(), bytes.data() + written, chunk, &stored, nullptr) || stored != chunk) {
-      return std::nullopt;
+    if (!::WriteFile(file, bytes + written, chunk, &stored, nullptr) || stored != chunk) {
+      return false;
     }
     written += stored;
   }
-  if (!::FlushFileBuffers(file.get())) {
+  return true;
+}
+
+std::optional<std::string> ReadAll(HANDLE file, size_t limit) {
+  LARGE_INTEGER start{};
+  if (!::SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) {
     return std::nullopt;
+  }
+  std::string bytes;
+  char buffer[4096];
+  for (;;) {
+    DWORD read = 0;
+    if (!::ReadFile(file, buffer, sizeof(buffer), &read, nullptr)) {
+      return std::nullopt;
+    }
+    if (read == 0) {
+      return bytes;
+    }
+    if (bytes.size() + read > limit) {
+      return std::nullopt;
+    }
+    bytes.append(buffer, read);
+  }
+}
+
+base::win::ScopedHandle ReopenReadOnly(const std::wstring& path, const std::wstring& folder,
+                                       const FileIdentity& identity, uint64_t size, std::wstring* final_path) {
+  base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ, FILE_SHARE_READ);
+  if (!file.is_valid()) {
+    return {};
   }
   const std::optional<FileFacts> facts = RegularFileFacts(file.get());
-  if (!facts || facts->links != 1 || facts->size != bytes.size() ||
+  const std::optional<FileIdentity> reopened = IdentityOf(file.get());
+  if (!facts || facts->links != 1 || facts->size != size || !reopened || !(*reopened == identity) ||
       !IsDirectChildOfWinDirectory(folder, facts->final_path)) {
-    return std::nullopt;
+    return {};
   }
-  return facts->final_path;
+  *final_path = facts->final_path;
+  return file;
 }
 
 class Scratch {
  public:
   explicit Scratch(const std::wstring& updates) {
+    std::wstring updates_final;
+    updates_ = HoldDirectory(updates, &updates_final);
+    if (!updates_.is_valid() || updates_final != updates) {
+      return;
+    }
     static std::atomic<uint64_t> sequence{0};
     for (int attempt = 0; attempt < 8 && folder_.empty(); ++attempt) {
       const std::wstring leaf = base::UTF8ToWide(policy::ScratchName(::GetCurrentProcessId(), ++sequence));
@@ -279,24 +365,28 @@ class Scratch {
         }
         return;
       }
-      const std::optional<std::wstring> final_path = DirectoryFinalPath(path, false);
-      if (!final_path || !IsDirectChildOfWinDirectory(updates, *final_path)) {
+      std::wstring final_path;
+      base::win::ScopedHandle held = HoldDirectory(path, &final_path);
+      if (!held.is_valid() || !IsDirectChildOfWinDirectory(updates, final_path)) {
+        held.Close();
         ::RemoveDirectoryW(path.c_str());
         return;
       }
-      folder_ = *final_path;
+      folder_handle_ = std::move(held);
+      folder_ = final_path;
     }
   }
   Scratch(const Scratch&) = delete;
   Scratch& operator=(const Scratch&) = delete;
   ~Scratch() {
-    if (folder_.empty()) {
-      return;
-    }
+    held_.clear();
     for (const std::wstring& file : files_) {
       ::DeleteFileW(file.c_str());
     }
-    ::RemoveDirectoryW(folder_.c_str());
+    folder_handle_.Close();
+    if (!folder_.empty()) {
+      ::RemoveDirectoryW(folder_.c_str());
+    }
   }
 
   bool ok() const { return !folder_.empty(); }
@@ -305,14 +395,32 @@ class Scratch {
     if (!ok()) {
       return std::nullopt;
     }
-    std::optional<std::wstring> written = WriteNewFile(folder_, leaf, bytes);
-    files_.push_back(folder_ + L"\\" + leaf);
-    return written;
+    std::wstring created;
+    base::win::ScopedHandle file = CreateExclusive(folder_, leaf, GENERIC_WRITE | GENERIC_READ, &created);
+    if (!file.is_valid()) {
+      return std::nullopt;
+    }
+    files_.push_back(created);
+    const std::optional<FileIdentity> identity = IdentityOf(file.get());
+    if (!identity || !WriteAll(file.get(), bytes.data(), bytes.size()) || !::FlushFileBuffers(file.get())) {
+      return std::nullopt;
+    }
+    file.Close();
+    std::wstring final_path;
+    base::win::ScopedHandle held = ReopenReadOnly(created, folder_, *identity, bytes.size(), &final_path);
+    if (!held.is_valid() || ReadAll(held.get(), bytes.size()) != bytes) {
+      return std::nullopt;
+    }
+    held_.push_back(std::move(held));
+    return final_path;
   }
 
  private:
+  base::win::ScopedHandle updates_;
+  base::win::ScopedHandle folder_handle_;
   std::wstring folder_;
   std::vector<std::wstring> files_;
+  std::vector<base::win::ScopedHandle> held_;
 };
 
 struct ChildRun {
@@ -585,119 +693,197 @@ Verified VerifyManifest(Installation installation, std::string manifest, std::st
 }
 
 struct Prepared {
-  std::wstring updates;
   bool complete = false;
   std::string reason;
 };
 
-bool MatchesOffer(const std::wstring& path, const std::wstring& updates, const policy::Offer& offer,
-                  base::win::ScopedHandle* held) {
-  base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ, FILE_SHARE_READ);
-  if (!file.is_valid()) {
-    return false;
+class InstallerSink {
+ public:
+  InstallerSink() = default;
+  InstallerSink(const InstallerSink&) = delete;
+  InstallerSink& operator=(const InstallerSink&) = delete;
+  ~InstallerSink() {
+    if (staging_.is_valid()) {
+      staging_.Close();
+      ::DeleteFileW(staging_path_.c_str());
+    }
   }
-  const std::optional<FileFacts> facts = RegularFileFacts(file.get());
-  if (!facts || facts->links != 1 || facts->size != offer.bytes ||
-      !IsDirectChildOfWinDirectory(updates, facts->final_path) || HashOf(file.get()) != offer.sha256) {
-    return false;
-  }
-  if (held) {
-    *held = std::move(file);
-  }
-  return true;
-}
 
-Prepared PrepareInstallerFolder(base::FilePath app_data, policy::Offer offer) {
-  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
-  Prepared prepared;
-  const std::optional<std::wstring> updates = UpdatesFolder(app_data);
-  if (!updates) {
-    prepared.reason = std::string(policy::kDiskReason);
+  Prepared Prepare(base::FilePath app_data, policy::Offer offer) {
+    base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
+    offer_ = std::move(offer);
+    Prepared prepared;
+    const std::optional<std::wstring> updates = UpdatesFolder(app_data);
+    if (updates) {
+      updates_ = HoldDirectory(*updates, &updates_path_);
+    }
+    if (!updates || !updates_.is_valid() || updates_path_ != *updates) {
+      prepared.reason = std::string(policy::kDiskReason);
+      return prepared;
+    }
+    const std::wstring target_leaf = base::UTF8ToWide(policy::InstallerFileName(offer_.sha256));
+    RemoveLeftovers(target_leaf);
+    const std::wstring target = updates_path_ + L"\\" + target_leaf;
+    if (HoldMatchingInstaller(target, std::nullopt)) {
+      prepared.complete = true;
+      return prepared;
+    }
+    ::DeleteFileW(target.c_str());
+    const std::wstring leaf = base::UTF8ToWide(policy::StagingFileName(offer_.sha256, base::RandUint64()));
+    staging_ = CreateExclusive(updates_path_, leaf, GENERIC_READ | GENERIC_WRITE | DELETE, &staging_path_);
+    if (!staging_.is_valid()) {
+      prepared.reason = std::string(policy::kDiskReason);
+      return prepared;
+    }
+    hash_ = std::make_unique<Sha256>();
     return prepared;
   }
-  prepared.updates = *updates;
-  const std::wstring target = base::UTF8ToWide(policy::InstallerFileName(offer.sha256));
-  WIN32_FIND_DATAW found{};
-  const std::wstring pattern = *updates + L"\\*";
-  HANDLE search = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr, 0);
-  if (search != INVALID_HANDLE_VALUE) {
+
+  std::string Write(std::string chunk) {
+    base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
+    if (!staging_.is_valid() || !hash_) {
+      return std::string(policy::kDiskReason);
+    }
+    if (chunk.size() > offer_.bytes - written_) {
+      return std::string(policy::kTooLargeReason);
+    }
+    if (!WriteAll(staging_.get(), chunk.data(), chunk.size()) ||
+        !hash_->Add(reinterpret_cast<const uint8_t*>(chunk.data()), static_cast<ULONG>(chunk.size()))) {
+      return std::string(policy::kDiskReason);
+    }
+    written_ += chunk.size();
+    return std::string();
+  }
+
+  std::string Seal() {
+    base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
+    if (!staging_.is_valid() || !hash_) {
+      return std::string(policy::kDiskReason);
+    }
+    if (written_ != offer_.bytes) {
+      return std::string(policy::kNetworkReason);
+    }
+    if (hash_->Hex() != offer_.sha256) {
+      return std::string(policy::kChecksumReason);
+    }
+    const std::optional<FileIdentity> identity = IdentityOf(staging_.get());
+    if (!identity || !::FlushFileBuffers(staging_.get())) {
+      return std::string(policy::kDiskReason);
+    }
+    const std::wstring target = updates_path_ + L"\\" + base::UTF8ToWide(policy::InstallerFileName(offer_.sha256));
+    const size_t name_bytes = target.size() * sizeof(wchar_t);
+    std::vector<uint8_t> buffer(sizeof(FILE_RENAME_INFO) + name_bytes + sizeof(wchar_t), 0);
+    auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+    rename->ReplaceIfExists = TRUE;
+    rename->RootDirectory = nullptr;
+    rename->FileNameLength = static_cast<DWORD>(name_bytes);
+    std::memcpy(rename->FileName, target.data(), name_bytes);
+    if (!::SetFileInformationByHandle(staging_.get(), FileRenameInfo, rename, static_cast<DWORD>(buffer.size()))) {
+      return std::string(policy::kDiskReason);
+    }
+    staging_.Close();
+    staging_path_.clear();
+    if (!HoldMatchingInstaller(target, identity)) {
+      ::DeleteFileW(target.c_str());
+      return std::string(policy::kChecksumReason);
+    }
+    return std::string();
+  }
+
+  std::string Verify(Installation installation, std::string manifest, std::string signature) {
+    base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
+    if (!held_.is_valid() || !installation.identity) {
+      return std::string(policy::kMissingReason);
+    }
+    const policy::VerifierAnswer answer =
+        RunVerifier(installation, updates_path_, manifest, signature, installation.identity->build, held_path_);
+    if (answer.verdict == policy::Verdict::kOk && policy::SameOffer(answer.offer, offer_)) {
+      return std::string();
+    }
+    Discard();
+    return answer.reason.empty() ? std::string(policy::kChecksumReason) : answer.reason;
+  }
+
+  std::string Launch() {
+    base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
+    if (!held_.is_valid()) {
+      return std::string(policy::kMissingReason);
+    }
+    const std::optional<FileFacts> facts = RegularFileFacts(held_.get());
+    if (!facts || facts->links != 1 || facts->size != offer_.bytes ||
+        !IsDirectChildOfWinDirectory(updates_path_, facts->final_path) || HashOf(held_.get()) != offer_.sha256) {
+      return std::string(policy::kChecksumReason);
+    }
+    std::optional<std::wstring> command = policy::InstallerCommand(facts->final_path);
+    if (!command) {
+      return std::string(policy::kInstallReason);
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!::CreateProcessW(facts->final_path.c_str(), command->data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                          &startup, &process)) {
+      return std::string(policy::kInstallReason);
+    }
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return std::string();
+  }
+
+ private:
+  void RemoveLeftovers(const std::wstring& keep) {
+    WIN32_FIND_DATAW found{};
+    const std::wstring pattern = updates_path_ + L"\\*";
+    HANDLE search = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &found, FindExSearchNameMatch, nullptr, 0);
+    if (search == INVALID_HANDLE_VALUE) {
+      return;
+    }
     do {
       const std::wstring name(found.cFileName);
-      if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || name == target ||
+      if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || name == keep ||
           !policy::IsInstallerLeftover(base::WideToUTF8(name))) {
         continue;
       }
-      ::DeleteFileW((*updates + L"\\" + name).c_str());
+      ::DeleteFileW((updates_path_ + L"\\" + name).c_str());
     } while (::FindNextFileW(search, &found));
     ::FindClose(search);
   }
-  const std::wstring target_path = *updates + L"\\" + target;
-  if (MatchesOffer(target_path, *updates, offer, nullptr)) {
-    prepared.complete = true;
-    return prepared;
-  }
-  ::DeleteFileW(target_path.c_str());
-  return prepared;
-}
 
-std::string FinishInstaller(Installation installation, std::wstring updates, policy::Offer offer,
-                            std::string manifest, std::string signature, bool already_there) {
-  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
-  const std::wstring target = updates + L"\\" + base::UTF8ToWide(policy::InstallerFileName(offer.sha256));
-  if (!already_there) {
-    const std::wstring partial = updates + L"\\" + base::UTF8ToWide(policy::PartialFileName(offer.sha256));
-    const bool matches = MatchesOffer(partial, updates, offer, nullptr);
-    if (!matches) {
-      ::DeleteFileW(partial.c_str());
-      return std::string(policy::kChecksumReason);
+  bool HoldMatchingInstaller(const std::wstring& path, const std::optional<FileIdentity>& expected) {
+    base::win::ScopedHandle file = OpenWithoutFollowing(path, GENERIC_READ, FILE_SHARE_READ);
+    if (!file.is_valid()) {
+      return false;
     }
-    if (!::MoveFileExW(partial.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-      ::DeleteFileW(partial.c_str());
-      return std::string(policy::kDiskReason);
+    const std::optional<FileFacts> facts = RegularFileFacts(file.get());
+    const std::optional<FileIdentity> identity = IdentityOf(file.get());
+    if (!facts || !identity || facts->links != 1 || facts->size != offer_.bytes ||
+        (expected && !(*identity == *expected)) || !IsDirectChildOfWinDirectory(updates_path_, facts->final_path) ||
+        HashOf(file.get()) != offer_.sha256) {
+      return false;
     }
+    held_ = std::move(file);
+    held_path_ = facts->final_path;
+    return true;
   }
-  if (!installation.identity) {
-    return std::string(policy::kMissingReason);
-  }
-  const policy::VerifierAnswer answer =
-      RunVerifier(installation, updates, manifest, signature, installation.identity->build, target);
-  if (answer.verdict != policy::Verdict::kOk || !policy::SameOffer(answer.offer, offer)) {
-    ::DeleteFileW(target.c_str());
-    return answer.reason.empty() ? std::string(policy::kChecksumReason) : answer.reason;
-  }
-  return std::string();
-}
 
-std::string LaunchInstaller(base::FilePath app_data, policy::Offer offer) {
-  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::MAY_BLOCK);
-  const std::optional<std::wstring> updates = UpdatesFolder(app_data);
-  if (!updates) {
-    return std::string(policy::kMissingReason);
+  void Discard() {
+    held_.Close();
+    if (!held_path_.empty()) {
+      ::DeleteFileW(held_path_.c_str());
+    }
+    held_path_.clear();
   }
-  const std::wstring target = *updates + L"\\" + base::UTF8ToWide(policy::InstallerFileName(offer.sha256));
-  base::win::ScopedHandle held;
-  if (!MatchesOffer(target, *updates, offer, &held)) {
-    return std::string(policy::kChecksumReason);
-  }
-  const std::optional<FileFacts> facts = RegularFileFacts(held.get());
-  if (!facts) {
-    return std::string(policy::kMissingReason);
-  }
-  std::optional<std::wstring> command = policy::InstallerCommand(facts->final_path);
-  if (!command) {
-    return std::string(policy::kInstallReason);
-  }
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process{};
-  if (!::CreateProcessW(facts->final_path.c_str(), command->data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
-                        &startup, &process)) {
-    return std::string(policy::kInstallReason);
-  }
-  ::CloseHandle(process.hThread);
-  ::CloseHandle(process.hProcess);
-  return std::string();
-}
+
+  policy::Offer offer_;
+  base::win::ScopedHandle updates_;
+  std::wstring updates_path_;
+  base::win::ScopedHandle staging_;
+  std::wstring staging_path_;
+  std::unique_ptr<Sha256> hash_;
+  uint64_t written_ = 0;
+  base::win::ScopedHandle held_;
+  std::wstring held_path_;
+};
 
 scoped_refptr<network::SharedURLLoaderFactory> LoaderFactory() {
   if (!g_browser_process || g_browser_process->IsShuttingDown()) {
@@ -709,7 +895,6 @@ scoped_refptr<network::SharedURLLoaderFactory> LoaderFactory() {
 
 struct Fetched {
   std::optional<std::string> body;
-  bool saved = false;
   int status = 0;
   bool too_large = false;
   bool refused = false;
@@ -740,16 +925,6 @@ class Fetch {
     }
     loader_->SetTimeoutDuration(base::Seconds(policy::kSmallFileTimeoutSeconds));
     loader_->DownloadToString(factory.get(), base::BindOnce(&Fetch::OnString, weak_factory_.GetWeakPtr()), limit);
-  }
-
-  void ToFile(const base::FilePath& path, uint64_t limit) {
-    scoped_refptr<network::SharedURLLoaderFactory> factory = LoaderFactory();
-    if (!factory) {
-      return Finish(Fetched{});
-    }
-    loader_->SetTimeoutDuration(base::Seconds(policy::kInstallerTimeoutSeconds));
-    loader_->DownloadToFile(factory.get(), base::BindOnce(&Fetch::OnFile, weak_factory_.GetWeakPtr()), path,
-                            static_cast<int64_t>(limit));
   }
 
  private:
@@ -789,12 +964,6 @@ class Fetch {
     Finish(std::move(fetched));
   }
 
-  void OnFile(base::FilePath path) {
-    Fetched fetched = Outcome();
-    fetched.saved = !path.empty() && fetched.status == 200 && loader_ && loader_->NetError() == net::OK;
-    Finish(std::move(fetched));
-  }
-
   void Finish(Fetched fetched) {
     weak_factory_.InvalidateWeakPtrs();
     loader_.reset();
@@ -807,6 +976,85 @@ class Fetch {
   Done done_;
   std::unique_ptr<network::SimpleURLLoader> loader_;
   base::WeakPtrFactory<Fetch> weak_factory_{this};
+};
+
+class InstallerStream : public network::SimpleURLLoaderStreamConsumer {
+ public:
+  using WriteChunk = base::RepeatingCallback<void(std::string, base::OnceCallback<void(std::string)>)>;
+  using Done = base::OnceCallback<void(std::string)>;
+
+  InstallerStream(const std::string& url, bool release, WriteChunk write, Done done)
+      : release_(release), write_(std::move(write)), done_(std::move(done)) {
+    auto request = std::make_unique<network::ResourceRequest>();
+    request->url = GURL(url);
+    request->method = "GET";
+    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+    request->redirect_mode = network::mojom::RedirectMode::kFollow;
+    request->load_flags = net::LOAD_DISABLE_CACHE | net::LOAD_BYPASS_CACHE;
+    request->headers.SetHeader(net::HttpRequestHeaders::kAccept, "application/octet-stream");
+    loader_ = network::SimpleURLLoader::Create(std::move(request), kUpdateTrafficAnnotation);
+    loader_->SetTimeoutDuration(base::Seconds(policy::kInstallerTimeoutSeconds));
+    loader_->SetOnRedirectCallback(base::BindRepeating(&InstallerStream::OnRedirect, weak_factory_.GetWeakPtr()));
+  }
+  InstallerStream(const InstallerStream&) = delete;
+  InstallerStream& operator=(const InstallerStream&) = delete;
+  ~InstallerStream() override = default;
+
+  void Start() {
+    scoped_refptr<network::SharedURLLoaderFactory> factory = LoaderFactory();
+    if (!factory) {
+      return Finish(std::string(policy::kNetworkReason));
+    }
+    loader_->DownloadAsStream(factory.get(), this);
+  }
+
+  void OnDataReceived(std::string_view data, base::OnceClosure resume) override {
+    write_.Run(std::string(data), base::BindOnce(&InstallerStream::Written, weak_factory_.GetWeakPtr(), std::move(resume)));
+  }
+
+  void OnComplete(bool success) override {
+    const bool ok = success && loader_ && loader_->NetError() == net::OK;
+    Finish(ok ? std::string() : std::string(policy::kNetworkReason));
+  }
+
+  void OnRetry(base::OnceClosure start_retry) override { Finish(std::string(policy::kNetworkReason)); }
+
+ private:
+  void OnRedirect(const GURL& url_before_redirect,
+                  const net::RedirectInfo& redirect_info,
+                  const network::mojom::URLResponseHead& response_head,
+                  std::vector<std::string>* removed_headers) {
+    const GURL& target = redirect_info.new_url;
+    if (policy::AllowedRedirect(target.scheme(), target.host(), target.EffectiveIntPort(), release_)) {
+      return;
+    }
+    LOG(WARNING) << "Ardia updates: refused an installer redirect to " << target.host();
+    loader_.reset();
+    Finish(std::string(policy::kNetworkReason));
+  }
+
+  void Written(base::OnceClosure resume, std::string reason) {
+    if (!reason.empty()) {
+      loader_.reset();
+      return Finish(std::move(reason));
+    }
+    std::move(resume).Run();
+  }
+
+  void Finish(std::string reason) {
+    if (!done_) {
+      return;
+    }
+    weak_factory_.InvalidateWeakPtrs();
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                             base::BindOnce(std::move(done_), std::move(reason)));
+  }
+
+  const bool release_;
+  WriteChunk write_;
+  Done done_;
+  std::unique_ptr<network::SimpleURLLoader> loader_;
+  base::WeakPtrFactory<InstallerStream> weak_factory_{this};
 };
 
 base::Value Nullable(const std::string& text) {
@@ -854,17 +1102,28 @@ class Service {
   bool Claim(int run) { return policy::ClaimOutcome(state_, run); }
 
   void Restart(UpdateReply done, base::OnceClosure quit) {
-    if (!policy::ReadyToInstall(state_) || !installation_ || installation_->kind != policy::kInstallerKind) {
+    if (!installation_ || installation_->kind != policy::kInstallerKind) {
       return std::move(done).Run(true, base::Value(false));
     }
     if (ardiacore::BackgroundInstance()) {
       LOG(WARNING) << "Ardia updates: a background instance never runs the installer";
       return std::move(done).Run(true, base::Value(false));
     }
+    switch (policy::BeginInstall(state_)) {
+      case policy::InstallStart::kNotReady:
+        return std::move(done).Run(true, base::Value(false));
+      case policy::InstallStart::kInstalling:
+        return std::move(done).Run(true, base::Value("busy"));
+      case policy::InstallStart::kStarted:
+        break;
+    }
     const int run = state_.run;
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, kFileTraits, base::BindOnce(&LaunchInstaller, installation_->app_data, *state_.offer),
-        base::BindOnce(&Service::Launched, weak_factory_.GetWeakPtr(), run, std::move(done), std::move(quit)));
+    if (!installer_) {
+      policy::InstallRefused(state_, run, policy::kMissingReason);
+      return std::move(done).Run(true, base::Value(false));
+    }
+    installer_.AsyncCall(&InstallerSink::Launch)
+        .Then(base::BindOnce(&Service::Launched, weak_factory_.GetWeakPtr(), run, std::move(done), std::move(quit)));
   }
 
  private:
@@ -1005,48 +1264,80 @@ class Service {
     }
     const std::optional<int> run = policy::BeginDownload(state_, build);
     if (run) {
-      base::ThreadPool::PostTaskAndReplyWithResult(
-          FROM_HERE, kFileTraits, base::BindOnce(&PrepareInstallerFolder, installation.app_data, *state_.offer),
-          base::BindOnce(&Service::FolderPrepared, weak_factory_.GetWeakPtr(), *run));
+      stream_.reset();
+      installer_ = base::SequenceBound<InstallerSink>(base::ThreadPool::CreateSequencedTaskRunner(kFileTraits));
+      installer_.AsyncCall(&InstallerSink::Prepare)
+          .WithArgs(installation.app_data, *state_.offer)
+          .Then(base::BindOnce(&Service::InstallerPrepared, weak_factory_.GetWeakPtr(), *run));
     }
     AnswerStatus(std::move(done), installation);
   }
 
-  void FolderPrepared(int run, Prepared prepared) {
+  void InstallerPrepared(int run, Prepared prepared) {
     if (state_.run != run || !state_.offer) {
       return;
     }
     if (!prepared.reason.empty()) {
-      return policy::DownloadFinished(state_, run, false, prepared.reason);
+      return InstallerFailed(run, prepared.reason);
     }
     if (prepared.complete) {
-      return Downloaded(run, prepared.updates, true, Fetched{});
+      return VerifyInstaller(run);
     }
-    const base::FilePath partial(prepared.updates + L"\\" +
-                                 base::UTF8ToWide(policy::PartialFileName(state_.offer->sha256)));
-    fetch_ = std::make_unique<Fetch>(state_.offer->url, installation_->feed.release,
-                                     base::BindOnce(&Service::Downloaded, weak_factory_.GetWeakPtr(), run,
-                                                    prepared.updates, false));
-    fetch_->ToFile(partial, state_.offer->bytes);
+    stream_ = std::make_unique<InstallerStream>(
+        state_.offer->url, installation_->feed.release,
+        base::BindRepeating(&Service::WriteChunk, weak_factory_.GetWeakPtr()),
+        base::BindOnce(&Service::StreamFinished, weak_factory_.GetWeakPtr(), run));
+    stream_->Start();
   }
 
-  void Downloaded(int run, std::wstring updates, bool already_there, Fetched fetched) {
-    fetch_.reset();
-    if (state_.run != run || !state_.offer) {
+  void WriteChunk(std::string chunk, base::OnceCallback<void(std::string)> written) {
+    if (!installer_) {
+      return std::move(written).Run(std::string(policy::kDiskReason));
+    }
+    installer_.AsyncCall(&InstallerSink::Write).WithArgs(std::move(chunk)).Then(std::move(written));
+  }
+
+  void StreamFinished(int run, std::string reason) {
+    stream_.reset();
+    if (state_.run != run) {
       return;
     }
-    if (!already_there && !fetched.saved) {
-      return policy::DownloadFinished(state_, run, false, FetchFailure(fetched));
+    if (!reason.empty()) {
+      return InstallerFailed(run, reason);
     }
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, kFileTraits,
-        base::BindOnce(&FinishInstaller, *installation_, std::move(updates), *state_.offer, manifest_, signature_,
-                       already_there),
-        base::BindOnce(&Service::InstallerChecked, weak_factory_.GetWeakPtr(), run));
+    installer_.AsyncCall(&InstallerSink::Seal)
+        .Then(base::BindOnce(&Service::Sealed, weak_factory_.GetWeakPtr(), run));
+  }
+
+  void Sealed(int run, std::string reason) {
+    if (state_.run != run) {
+      return;
+    }
+    if (!reason.empty()) {
+      return InstallerFailed(run, reason);
+    }
+    VerifyInstaller(run);
+  }
+
+  void VerifyInstaller(int run) {
+    installer_.AsyncCall(&InstallerSink::Verify)
+        .WithArgs(*installation_, manifest_, signature_)
+        .Then(base::BindOnce(&Service::InstallerChecked, weak_factory_.GetWeakPtr(), run));
   }
 
   void InstallerChecked(int run, std::string reason) {
-    policy::DownloadFinished(state_, run, reason.empty(), reason);
+    if (!reason.empty()) {
+      return InstallerFailed(run, reason);
+    }
+    policy::DownloadFinished(state_, run, true, reason);
+  }
+
+  void InstallerFailed(int run, std::string_view reason) {
+    if (state_.run != run) {
+      return;
+    }
+    installer_.Reset();
+    policy::DownloadFinished(state_, run, false, reason);
   }
 
   void Launched(int run, UpdateReply done, base::OnceClosure quit, std::string reason) {
@@ -1063,6 +1354,8 @@ class Service {
   std::vector<base::OnceCallback<void(const Installation&)>> waiting_;
   policy::UpdateState state_;
   std::unique_ptr<Fetch> fetch_;
+  std::unique_ptr<InstallerStream> stream_;
+  base::SequenceBound<InstallerSink> installer_;
   UpdateReply check_reply_;
   std::string pending_manifest_;
   std::string manifest_;

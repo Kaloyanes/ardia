@@ -391,33 +391,47 @@ inline std::string InstallerFileName(std::string_view sha256) {
   return "Ardia-Setup-" + std::string(sha256.substr(0, kInstallerStemDigits)) + ".exe";
 }
 
-inline std::string PartialFileName(std::string_view sha256) {
-  const std::string name = InstallerFileName(sha256);
-  return name.empty() ? name : name + ".part";
+inline std::string HexLower(const uint8_t* bytes, size_t count);
+
+inline std::string StagingFileName(std::string_view sha256, uint64_t nonce) {
+  if (!ValidSha256(sha256)) {
+    return std::string();
+  }
+  uint8_t bytes[8] = {};
+  for (int i = 7; i >= 0; --i) {
+    bytes[i] = static_cast<uint8_t>(nonce & 0xff);
+    nonce >>= 8;
+  }
+  return "Ardia-Setup-" + std::string(sha256.substr(0, kInstallerStemDigits)) + "-" + HexLower(bytes, 8) + ".part";
 }
 
-inline bool IsInstallerLeftover(std::string_view name) {
-  constexpr std::string_view kPrefix = "Ardia-Setup-";
-  if (!name.starts_with(kPrefix)) {
+constexpr bool LowerHexOfSize(std::string_view text, size_t size) {
+  if (text.size() != size) {
     return false;
   }
-  std::string_view rest = name.substr(kPrefix.size());
-  if (rest.ends_with(".exe.part")) {
-    rest.remove_suffix(9);
-  } else if (rest.ends_with(".exe")) {
-    rest.remove_suffix(4);
-  } else {
-    return false;
-  }
-  if (rest.size() != kInstallerStemDigits) {
-    return false;
-  }
-  for (const char c : rest) {
+  for (const char c : text) {
     if (!IsLowerHex(c)) {
       return false;
     }
   }
   return true;
+}
+
+constexpr bool IsInstallerLeftover(std::string_view name) {
+  constexpr std::string_view kPrefix = "Ardia-Setup-";
+  if (!name.starts_with(kPrefix)) {
+    return false;
+  }
+  std::string_view rest = name.substr(kPrefix.size());
+  if (rest.ends_with(".exe")) {
+    return LowerHexOfSize(rest.substr(0, rest.size() - 4), kInstallerStemDigits);
+  }
+  if (!rest.ends_with(".part") || rest.size() != kInstallerStemDigits * 2 + 1 + 5) {
+    return false;
+  }
+  return LowerHexOfSize(rest.substr(0, kInstallerStemDigits), kInstallerStemDigits) &&
+         rest[kInstallerStemDigits] == '-' &&
+         LowerHexOfSize(rest.substr(kInstallerStemDigits + 1, kInstallerStemDigits), kInstallerStemDigits);
 }
 
 inline bool IsScratchName(std::string_view name) {
@@ -567,6 +581,7 @@ struct UpdateState {
   int run = 0;
   int check = 0;
   bool claimed = false;
+  bool installing = false;
 };
 
 constexpr bool Busy(const UpdateState& state) {
@@ -619,6 +634,7 @@ inline void InstallRefused(UpdateState& state, int run, std::string_view reason)
   if (state.run != run || state.phase != Phase::kReady) {
     return;
   }
+  state.installing = false;
   state.phase = Phase::kFailed;
   state.claimed = false;
   state.reason = std::string(reason.empty() ? kInstallReason : reason.substr(0, kReasonLimit));
@@ -637,6 +653,19 @@ inline bool ClaimOutcome(UpdateState& state, int run) {
 
 constexpr bool ReadyToInstall(const UpdateState& state) {
   return state.phase == Phase::kReady && state.offer.has_value() && state.run > 0;
+}
+
+enum class InstallStart { kStarted, kInstalling, kNotReady };
+
+inline InstallStart BeginInstall(UpdateState& state) {
+  if (!ReadyToInstall(state)) {
+    return InstallStart::kNotReady;
+  }
+  if (state.installing) {
+    return InstallStart::kInstalling;
+  }
+  state.installing = true;
+  return InstallStart::kStarted;
 }
 
 }
