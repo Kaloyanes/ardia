@@ -169,7 +169,8 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   pinsLanding = () => gates.get(SESSION_DOCUMENT)?.landing() ?? keepDroppedPins.landing();
   sessionGated = () => !(gates.get(SESSION_DOCUMENT)?.open() ?? true);
   const anyLanding = () => [...gates.values()].map((g) => g.landing()).find((l) => l !== null) ?? keepDroppedPins.landing();
-  saveBeforeQuit(() => {
+  const stopSavingBeforeQuit = saveBeforeQuit(async () => {
+    if (stopped) return;
     for (const gate of gates.values()) gate.tryNow();
     return landHeldPins(() => dirty.size > 0 && frozen, anyLanding, () => ((frozen = false), save(), (frozen = true)));
   });
@@ -259,7 +260,10 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   for (const [name, found] of [[SESSION_DOCUMENT, sessionFound], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
     const session = name === SESSION_DOCUMENT;
     const file = fileOf(name);
-    const gate = keepAsideGate(file, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, () => createDocument(file, DOCS.find((d) => d.name === name)!.json(useBrowser.getState())));
+    const gate = keepAsideGate(file, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, async () => {
+      if (stopped) return;
+      await createDocument(file, DOCS.find((d) => d.name === name)!.json(useBrowser.getState()));
+    });
     if (gate) gates.set(name, gate);
   }
   if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) {
@@ -288,6 +292,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const unsubscribe = useBrowser.subscribe((s) => check(s));
   return () => {
     stopped = true;
+    stopSavingBeforeQuit();
     clearTimeout(timer);
     timer = undefined;
     unsubscribe();

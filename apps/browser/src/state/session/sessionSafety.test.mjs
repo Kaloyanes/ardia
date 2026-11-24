@@ -319,6 +319,28 @@ test("a save queued by a stopped run never lands in the next run's held older-bu
   assert.equal(stub.docs.get("session.json"), primary);
 });
 
+test("quitting after a rollback run stopped never recreates its older-build file from the active run's tabs", async () => {
+  const active = realSession(["https://active-run.example/"]);
+  clean();
+  stub.docs.set("session.json", newerThanThisBuild(["https://newer-build.example/"]));
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, '{"version":');
+  stub.refusedCopies.on = true;
+  const rollback = startPersistence();
+  await settle();
+  rollback();
+  stub.refusedCopies.on = false;
+  stub.docs.delete(OLDER_BUILD_SESSION_DOCUMENT);
+  stub.docs.set("session.json", active);
+  const normal = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://active-run.example/"]);
+  await finishQuitSaves(3_000);
+  await turn();
+  normal();
+  assert.equal(stub.docs.has(OLDER_BUILD_SESSION_DOCUMENT), false, "the stopped run wrote nothing at quit");
+  assert.deepEqual(olderBuildAsides(), []);
+  assert.deepEqual(savedUrls(), ["https://active-run.example/"]);
+});
+
 test("an older build's own session is ignored once session.json is readable again", async () => {
   const current = realSession(["https://current.example/"]);
   const olderBuild = realSession(["https://older-build.example/"]);
