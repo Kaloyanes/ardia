@@ -3,6 +3,7 @@ import { test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
 const model = await import("../browser/model.ts");
 const organize = await import("../pins/tabCleanup.ts");
+const clearedTabs = await import("../pins/clearedTabs.ts");
 const { controllingSearchExtension, defaultSearchEngine, searchUrlPrefix } = await import("../settings/settings.ts");
 const media = await import("../media/media.ts");
 const { splitTabIdsOf } = await import("../splits/splits.ts");
@@ -538,7 +539,7 @@ test("Clear closes the unselected unpinned tabs into Recently Closed, keeps pinn
   S().updateGroup(g, { color: "blue" });
   S().activate(e);
   const before = hosts(w);
-  assert.deepEqual(organize.unpinnedTabIds(S(), w), [c, d, e, f]);
+  assert.deepEqual(clearedTabs.unpinnedTabIds(S(), w), [c, d, e, f]);
   const cleared = S().clearUnpinnedTabs(w);
   assert.equal(cleared.entries.length, 3);
   assert.deepEqual(hosts(w), ["a", "b", "e"]);
@@ -559,7 +560,7 @@ test("Clear closes the unselected unpinned tabs into Recently Closed, keeps pinn
   assert.deepEqual(hosts(w), ["a", "b", "e", "f"], "⇧⌘T brings the last one back");
 });
 
-test("Clear keeps the selected tab's split and tabs playing media, and does nothing with only those left", () => {
+test("Clear keeps the selected tab's split and tabs playing media, and a second click closes the split but keeps the media", () => {
   reset();
   const [w, a, b, , d] = setup("a", "b", "c", "d", "e");
   S().createSplit([a, b]);
@@ -571,9 +572,15 @@ test("Clear keeps the selected tab's split and tabs playing media, and does noth
   assert.deepEqual(hosts(w), ["a", "b", "d"]);
   assert.equal(shown(w), "a");
   assert.ok(Object.values(S().splits).some((v) => splitTabIdsOf(v).includes(a) && splitTabIdsOf(v).includes(b)), "the split stays whole");
-  assert.equal(S().clearUnpinnedTabs(w), null, "nothing left to clear");
   S().undoClearTabs(cleared);
   assert.deepEqual(hosts(w), before);
+  assert.equal(shown(w), "a");
+  S().clearUnpinnedTabs(w);
+  const second = S().clearUnpinnedTabs(w);
+  assert.deepEqual(second.entries.map((x) => short(x.tab.url)), ["a", "b"]);
+  assert.deepEqual(hosts(w), ["d"], "the playing tab keeps playing");
+  S().undoClearTabs(second);
+  assert.deepEqual(hosts(w), ["a", "b", "d"]);
   assert.equal(shown(w), "a");
 });
 
@@ -652,7 +659,7 @@ for (const [name, edit] of [
     const before = frozen(ctx.w);
     S().undoClearTabs(ctx.cleared);
     assert.equal(frozen(ctx.w), before);
-    assert.equal(organize.canUndoClear(S(), ctx.cleared), false);
+    assert.equal(clearedTabs.canUndoClear(S(), ctx.cleared), false);
   });
 }
 
@@ -660,16 +667,37 @@ test("Undo of Clear still works after changes in another window", () => {
   const ctx = nestedInAutomatic();
   const other = S().createWindow({ url: "z.com" });
   S().newTab(other, { url: "y.com" });
-  assert.equal(organize.canUndoClear(S(), ctx.cleared), true);
+  assert.equal(clearedTabs.canUndoClear(S(), ctx.cleared), true);
   S().undoClearTabs(ctx.cleared);
   assert.deepEqual(hosts(ctx.w), ["a", "b", "c"]);
 });
 
-test("Clear on a lone selected tab closes nothing and opens no New Tab page", () => {
+test("a second Clear closes the tab the first one kept, as in Arc, and undo brings it back selected (#3947)", () => {
+  reset();
+  const [w, a] = setup("a", "b", "c");
+  S().pinTabs([a], true);
+  S().activate(S().windows[w].tabIds.find((id) => short(S().tabs[id].url) === "c"));
+  S().clearUnpinnedTabs(w);
+  assert.deepEqual(hosts(w), ["a", "c"]);
+  const second = S().clearUnpinnedTabs(w);
+  assert.deepEqual(second.entries.map((x) => short(x.tab.url)), ["c"]);
+  assert.deepEqual(hosts(w), ["a"]);
+  assert.equal(S().clearUnpinnedTabs(w), null, "pinned tabs stay");
+  S().undoClearTabs(second);
+  assert.deepEqual(hosts(w), ["a", "c"]);
+  assert.equal(shown(w), "c");
+});
+
+test("Clear on a lone selected tab closes it and leaves the window open", () => {
   reset({ newTabPosition: "top" });
-  const [w, a] = setup("a");
-  assert.equal(S().clearUnpinnedTabs(w), null);
-  assert.deepEqual(S().windows[w].tabIds, [a]);
+  const [w] = setup("a");
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.equal(cleared.entries.length, 1);
+  assert.ok(S().windows[w], "the window stays");
+  assert.ok(S().windows[w].tabIds.every((id) => !S().tabs[id].url));
+  S().undoClearTabs(cleared);
+  assert.equal(shown(w), "a");
+  assert.deepEqual(S().windows[w].tabIds.map((id) => S().tabs[id].url), ["https://a.com"], "the blank tab Clear left goes with the undo");
 });
 
 test("a tab opened behind joins the ⌃Tab order only once it is shown, so ⌃Tab still returns to the tab before (#1190)", (t) => {

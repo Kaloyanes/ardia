@@ -2,8 +2,8 @@ import { closeTab } from "../browser/actions";
 import { useBrowser } from "../browser/store";
 import { plural } from "../browser/model";
 import { cleanedTabsFor } from "../pins/closedTabs";
-import { canUndoClear, clearedTabIds, type ClearedTabs } from "../pins/tabCleanup";
-import { noteCleanUp } from "../telemetry/usage";
+import { canUndoClear, clearedTabIds, type ClearedTabs } from "../pins/clearedTabs";
+import { noteCleanUp, noteClearClosedSelectedTab } from "../telemetry/usage";
 import { showUndoToast } from "./undoToast";
 import { userClose, type ByUser } from "../tabs/closeActivation";
 
@@ -11,7 +11,9 @@ const store = () => useBrowser.getState();
 
 export function closeAllTabs(windowId: string, user?: ByUser) {
   const cleared = store().clearUnpinnedTabs(windowId, user ? userClose(clearedTabIds(store(), windowId), user) : {});
-  if (cleared?.entries.length) showClearUndo(cleared, `Cleared ${plural(cleared.entries.length, "Tab")}`, "arrow.down");
+  if (!cleared?.entries.length) return;
+  if (cleared.selectedTabId) noteClearClosedSelectedTab(user?.consent);
+  showClearUndo(cleared, `Cleared ${plural(cleared.entries.length, "Tab")}`, "arrow.down");
 }
 
 export function cleanUpWithUndo(windowId: string) {
