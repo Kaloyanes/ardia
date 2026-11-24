@@ -104,6 +104,7 @@ export type WebKitCount =
   | "fallbackFind"
   | "faviconChanged"
   | "fullscreen"
+  | "autoPictureInPictureFullscreenHold"
   | "historyRestored"
   | "linkDrop"
   | "nativeFind"

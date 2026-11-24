@@ -302,6 +302,7 @@ extension WebKitTab {
   }
 
   private func fullscreenChanged(_ state: WKWebView.FullscreenState) {
+    updateSight()
     let on = state == .enteringFullscreen || state == .inFullscreen
     guard on != pageMedia.fullscreen else { return }
     pageMedia.fullscreen = on
