@@ -14,6 +14,7 @@ const browserClock: FrameClock = {
 
 export function createFieldTiming(target: InputTarget | null, clock: FrameClock): FieldTiming {
   let enabled = false;
+  let generation = 0;
   let marks: [string, string, number][] = [];
   let lastInputAt = 0;
   let lastInputKind = 0;
@@ -31,14 +32,22 @@ export function createFieldTiming(target: InputTarget | null, clock: FrameClock)
     setEnabled(on) {
       if (on === enabled) return;
       enabled = on;
+      generation++;
       for (const type of INPUT_EVENTS) {
         if (on) target?.addEventListener(type, noteInput, { capture: true, passive: true });
         else target?.removeEventListener(type, noteInput, { capture: true });
       }
-      if (!on) marks = [];
+      if (on) return;
+      marks = [];
+      lastInputAt = 0;
+      lastInputKind = 0;
     },
     markFrame(key, kind) {
-      if (enabled) clock.afterPaint(() => push(key, kind, clock.now()));
+      if (!enabled) return;
+      const asked = generation;
+      clock.afterPaint(() => {
+        if (asked === generation) push(key, kind, clock.now());
+      });
     },
     lastInput: () => [lastInputAt, lastInputKind],
     drain() {

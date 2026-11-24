@@ -9,6 +9,7 @@ enum UsageConsent {
 
   static func set(sharing: Bool) {
     lock.withLock {
+      if sharing, defaults.object(forKey: sinceKey) == nil { defaults.set(Date().timeIntervalSince1970 * 1000, forKey: sinceKey) }
       if defaults.object(forKey: generationKey) != nil, defaults.bool(forKey: sharingKey) == sharing { return }
       defaults.set(sharing, forKey: sharingKey)
       defaults.set(defaults.integer(forKey: generationKey) + 1, forKey: generationKey)
@@ -25,7 +26,9 @@ enum UsageConsent {
   }
 
   static func sharingSinceLocked() -> Double? {
-    defaults.bool(forKey: sharingKey) ? defaults.double(forKey: sinceKey) : nil
+    guard defaults.bool(forKey: sharingKey), defaults.object(forKey: sinceKey) != nil else { return nil }
+    let since = defaults.double(forKey: sinceKey)
+    return since > 0 ? since : nil
   }
 
   static func windowLocked() -> Int? {

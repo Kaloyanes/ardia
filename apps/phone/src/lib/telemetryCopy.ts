@@ -50,7 +50,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["material_colors"],
       },
       {
-        text: "With each launch, whether Ardia last closed cleanly by going to the background, was still open when it stopped (a crash or the system ending it), or there was nothing to compare, because this is the first launch or sharing was off then",
+        text: "With each launch, whether Ardia last left the screen normally, was still in front when it stopped (a crash, a forced quit or the system ending it), or there was nothing to compare, because this is the first launch or sharing was off then",
         fields: ["previous_session"],
       },
       {

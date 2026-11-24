@@ -1,5 +1,9 @@
 #import "ArdiaWebViewInternal.h"
+#import "ArdiaEvents.h"
 
+#import <QuartzCore/QuartzCore.h>
+
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -16,6 +20,20 @@ NSLock *MetricsLock() {
 NSMutableDictionary<NSString *, NSNumber *> *Metrics() {
   static NSMutableDictionary *metrics = [NSMutableDictionary dictionary];
   return metrics;
+}
+
+NSString *gEpoch;
+CFTimeInterval gEpochSeen = 0;
+
+bool SameConsentPeriodLocked(double spanMs) {
+  NSString *epoch = ArdiaEvents.consentEpoch ?: @"";
+  const CFTimeInterval now = CACurrentMediaTime();
+  if (!gEpoch || ![gEpoch isEqualToString:epoch]) {
+    gEpoch = [epoch copy];
+    gEpochSeen = now;
+    [Metrics() removeAllObjects];
+  }
+  return epoch.length && std::isfinite(spanMs) && spanMs >= 0 && spanMs <= (now - gEpochSeen) * 1000;
 }
 
 double Count(id value) {
@@ -49,7 +67,10 @@ NSString *DisplayBucket(NSWindow *window) {
   const double scrollFrames = Count(metrics[@"scrollFrames"]);
   const double scrollMs = Count(metrics[@"scrollMs"]);
   NSString *bucket = DisplayBucket(self.window);
+  double span = -1;
+  if (!ardia_web_view::Finite(metrics, @"span", &span)) return;
   [MetricsLock() lock];
+  if (!SameConsentPeriodLocked(span)) return [MetricsLock() unlock];
   for (NSUInteger i = 0; i < MIN(errors.count, kMediaErrorKinds); i++) Add(kMediaErrors[i], Count(errors[i]));
   Add([@"video_frames" stringByAppendingString:bucket], frames);
   Add([@"video_frames_dropped" stringByAppendingString:bucket], dropped);
@@ -63,6 +84,7 @@ NSString *DisplayBucket(NSWindow *window) {
 
 + (NSDictionary<NSString *, NSNumber *> *)takePageMetrics {
   [MetricsLock() lock];
+  SameConsentPeriodLocked(0);
   NSDictionary *taken = [Metrics() copy];
   [Metrics() removeAllObjects];
   [MetricsLock() unlock];

@@ -231,6 +231,11 @@ BOOL TracingPictureInPicture() {
   return @"missedOther";
 }
 
+- (BOOL)siteAskedForAutoPictureInPicture {
+  NSArray *actions = _reports.nowPlaying.selected[@"actions"];
+  return _reports.capturing || ([actions isKindOfClass:NSArray.class] && [actions containsObject:@"enterpictureinpicture"]);
+}
+
 - (void)watchAutoPictureInPictureOpens {
   if (_reports.inPictureInPicture) return;
   NSString *reason = self.autoPictureInPictureMissReason;
@@ -243,6 +248,7 @@ BOOL TracingPictureInPicture() {
     if (view->_reports.seenByUser || view->_reports.inPictureInPicture || !view.playsForAutoPictureInPicture) return;
     [view traceAutoPictureInPicture:[@"app: auto PiP didn't open, " stringByAppendingString:reason]];
     [view emit:@"autoPictureInPictureKept" payload:[stamp onto:@{@"reason" : reason}]];
+    if (view.siteAskedForAutoPictureInPicture) [view emit:@"autoPictureInPictureKept" payload:[stamp onto:@{@"reason" : @"missedSiteAsked"}]];
   });
 }
 

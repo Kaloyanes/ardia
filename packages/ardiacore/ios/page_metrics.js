@@ -12,7 +12,7 @@
   const SAMPLE_MS = 10000;
   const SCROLL_IDLE_MS = 150;
   const MOST = 1000000;
-  const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0 });
+  const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0, oldest: now() });
   let tally = fresh();
   const quality = new WeakMap();
   let burst = null;
@@ -21,8 +21,9 @@
     const t = tally;
     if (!t.errors.some(Boolean) && !t.frames && !t.scrolls) return;
     tally = fresh();
+    const { oldest, ...counts } = t;
     try {
-      post("pageMetrics", toJSON(t));
+      post("pageMetrics", toJSON({ ...counts, span: Math.max(0, Math.round(now() - oldest)) }));
     } catch (e) {}
   };
 
@@ -42,10 +43,13 @@
     for (const video of document.getElementsByTagName("video")) {
       if (video.paused || video.ended || typeof video.getVideoPlaybackQuality !== "function") continue;
       const q = video.getVideoPlaybackQuality();
-      const before = quality.get(video) || { dropped: 0, total: 0 };
+      const at = now();
+      const before = quality.get(video);
+      quality.set(video, { dropped: q.droppedVideoFrames, total: q.totalVideoFrames, at });
+      if (!before || at - before.at > 2 * SAMPLE_MS) continue;
       const total = q.totalVideoFrames - before.total;
       const dropped = q.droppedVideoFrames - before.dropped;
-      quality.set(video, { dropped: q.droppedVideoFrames, total: q.totalVideoFrames });
+      tally.oldest = Math.min(tally.oldest, before.at);
       if (total > 0 && dropped >= 0 && dropped <= total) {
         tally.frames = Math.min(MOST, tally.frames + total);
         tally.dropped = Math.min(MOST, tally.dropped + dropped);
@@ -57,6 +61,7 @@
     if (burst === b) burst = null;
     const ms = Math.round(b.frameAt - b.start);
     if (b.frames < 2 || ms <= 0) return;
+    tally.oldest = Math.min(tally.oldest, b.start);
     tally.scrolls++;
     tally.scrollFrames = Math.min(MOST, tally.scrollFrames + b.frames);
     tally.scrollMs = Math.min(MOST, tally.scrollMs + ms);

@@ -37,26 +37,27 @@ final class PhoneExits: NSObject, MXMetricManagerSubscriber {
   private var started = false
 
   func start() {
-    UsageConsent.lock.withLock {
-      guard !started else { return }
+    let first = UsageConsent.lock.withLock { () -> Bool in
+      guard !started else { return false }
       started = true
+      return true
     }
-    MXMetricManager.shared.add(self)
+    if first { MXMetricManager.shared.add(self) }
   }
 
   func didReceive(_ payloads: [MXDiagnosticPayload]) {
-    var found: [[String: Any]] = []
     for payload in payloads {
+      var found: [[String: Any]] = []
       let at = payload.timeStampEnd.timeIntervalSince1970 * 1000
       for crash in payload.crashDiagnostics ?? [] { found.append(PhoneExitRecord.crash(signal: crash.signal?.intValue, at: at)) }
       for _ in payload.hangDiagnostics ?? [] { found.append(PhoneExitRecord.hang(at: at)) }
+      Self.keep(found, windowBegan: payload.timeStampBegin.timeIntervalSince1970 * 1000)
     }
-    Self.keep(found)
   }
 
   func didReceive(_ payloads: [MXMetricPayload]) {
-    var found: [[String: Any]] = []
     for payload in payloads {
+      var found: [[String: Any]] = []
       guard let exits = payload.applicationExitMetrics else { continue }
       let at = payload.timeStampEnd.timeIntervalSince1970 * 1000
       let front = exits.foregroundExitData
@@ -65,16 +66,15 @@ final class PhoneExits: NSObject, MXMetricManagerSubscriber {
       found += PhoneExitRecord.repeated(kind: "watchdog", reason: "watchdog", foreground: true, count: front.cumulativeAppWatchdogExitCount, at: at)
       found += PhoneExitRecord.repeated(kind: "memory", reason: "memory_limit", foreground: false, count: back.cumulativeMemoryResourceLimitExitCount, at: at)
       found += PhoneExitRecord.repeated(kind: "watchdog", reason: "watchdog", foreground: false, count: back.cumulativeAppWatchdogExitCount, at: at)
+      Self.keep(found, windowBegan: payload.timeStampBegin.timeIntervalSince1970 * 1000)
     }
-    Self.keep(found)
   }
 
-  private static func keep(_ found: [[String: Any]]) {
+  private static func keep(_ found: [[String: Any]], windowBegan: Double) {
     guard !found.isEmpty else { return }
     UsageConsent.lock.withLock {
-      guard let since = UsageConsent.sharingSinceLocked() else { return }
-      let fresh = found.filter { ($0["at"] as? Double ?? 0) >= since }
-      let kept = (storedLocked() + fresh).suffix(most)
+      guard let since = UsageConsent.sharingSinceLocked(), windowBegan >= since else { return }
+      let kept = (storedLocked() + found).suffix(most)
       guard let data = try? JSONSerialization.data(withJSONObject: Array(kept)) else { return }
       defaults.set(data, forKey: key)
     }

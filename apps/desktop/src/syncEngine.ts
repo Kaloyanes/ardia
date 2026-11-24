@@ -12,6 +12,7 @@ import { consentToken } from "../../browser/src/state/telemetry/client";
 import { noteSyncOpenFailures } from "../../browser/src/state/telemetry/syncFileCounts";
 import { warnFor } from "../../browser/src/state/telemetry/logs";
 import { noteKeyringFailure } from "../../browser/src/state/telemetry/keyringCounts";
+import type { ConsentToken } from "../../browser/src/state/telemetry/choice";
 import {
   claimSyncAuthority,
   configureHeldLogins,
@@ -53,6 +54,7 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
+let keyringAskConsent: ConsentToken | null = null;
 let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
 
 function adoptHeldLogins() {
@@ -81,9 +83,12 @@ function resumeWhenKeyringOpens(host: ArdiaHost) {
       const state = engine.useSync.getState();
       return !!authority?.isAuthority() && state.enabled && state.status === "locked";
     },
-    status: () => syncKeyStoreStatus(host),
+    status: () => {
+      keyringAskConsent = consentToken();
+      return syncKeyStoreStatus(host);
+    },
     seen: (status) => {
-      if (status.keyStore === "secretService" && status.keyStoreStatus !== keyStore?.keyStoreStatus && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable")) noteKeyringFailure("sync", status.keyStoreStatus);
+      if (status.keyStore === "secretService" && status.keyStoreStatus !== keyStore?.keyStoreStatus && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable")) noteKeyringFailure("sync", status.keyStoreStatus, keyringAskConsent);
       const shown = keyringMessage(keyStore, false);
       keyStore = status;
       if (keyringMessage(status, false) !== shown) engine.useSync.setState({});

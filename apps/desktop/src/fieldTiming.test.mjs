@@ -37,5 +37,16 @@ test("Linux field timing keeps the last key press or pointer press while it is o
   timing.setEnabled(false);
   assert.equal(listeners.size, 0);
   assert.deepEqual(timing.drain(), []);
+  assert.deepEqual(timing.lastInput(), [0, 0]);
   assert.equal(timing.pageMarks, false);
+});
+
+test("a frame asked for before Linux field timing went off and on again is never marked", () => {
+  const { timing, painted } = harness();
+  timing.setEnabled(true);
+  timing.markFrame("tab-1", "frame");
+  timing.setEnabled(false);
+  timing.setEnabled(true);
+  painted.shift()();
+  assert.deepEqual(timing.drain(), []);
 });

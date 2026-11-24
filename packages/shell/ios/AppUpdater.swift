@@ -320,12 +320,12 @@ extension AppUpdater: SPUUpdaterDelegate {
 
   public func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
     downloading = true
-    ShellEvents.send(.app, ["type": "updateStep", "step": "downloadStarted"])
+    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "downloadStarted"]))
   }
 
   public func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
     downloading = false
-    ShellEvents.send(.app, ["type": "updateStep", "step": "downloadFinished"])
+    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "downloadFinished"]))
   }
 
   public func userDidCancelDownload(_ updater: SPUUpdater) {
@@ -333,7 +333,7 @@ extension AppUpdater: SPUUpdaterDelegate {
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
-    ShellEvents.send(.app, ["type": "updateStep", "step": "installing"])
+    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "installing"]))
   }
 
   public func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
@@ -342,7 +342,7 @@ extension AppUpdater: SPUUpdaterDelegate {
     downloading = false
     guard let failure else { return }
     NSLog("Ardia: update failed while \(failure.stage == .download ? "downloading" : "installing") (\(failure.reason))")
-    ShellEvents.send(.app, failure.event)
+    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(failure.event))
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {

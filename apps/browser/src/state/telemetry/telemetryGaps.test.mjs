@@ -9,7 +9,7 @@ const client = await import("./client.ts");
 const downloads = await import("./downloadWork.ts");
 const keyring = await import("./keyringCounts.ts");
 const updates = await import("./updateCounts.ts");
-const share = await import("./sharePreviewCounts.ts");
+const share = { ...(await import("./sharePreviewCounts.ts")), ...(await import("../media/sharePreviewFlatness.ts")) };
 const misses = await import("./autoPipMisses.ts");
 const { processCpuFields } = await import("./processCpu.ts");
 const { pageMetricsFields } = await import("./diagnostics.ts");
@@ -48,12 +48,12 @@ test("download speed buckets leave out downloads too small or too quick to time"
 
 test("an allowed request for several downloads counts whether any and how many downloads followed within 15 seconds", () => {
   downloads.takeDownloadWork(0);
-  downloads.noteMultipleDownloadsAsked();
-  downloads.noteMultipleDownloadsAnswered(true, 10_000);
+  const consent = client.consentNow();
+  downloads.noteMultipleDownloadsAnswered("accept", consent, 10_000);
   downloads.noteDownloadSeen({ id: "c", state: "downloading", received: 0 }, 11_000);
   const first = downloads.takeDownloadWork(30_000);
   assert.deepEqual([first.multiple_download_asks, first.multiple_download_allows, first.multiple_download_follow_ups, first.multiple_download_single_follow_ups], [1, 1, 1, 1]);
-  downloads.noteMultipleDownloadsAnswered(false, 40_000);
+  downloads.noteMultipleDownloadsAnswered("deny", client.consentNow(), 40_000);
   const second = downloads.takeDownloadWork(60_000);
   assert.deepEqual([second.multiple_download_blocks, second.multiple_download_follow_ups], [1, 0]);
 });
@@ -76,16 +76,20 @@ test("keyring checks count the protection and failures, never which profile, and
 
 test("Sparkle's update steps and failures land in the same counters as Linux's self-updates", () => {
   updates.takeUpdateCounts();
-  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadStarted" });
-  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadFinished" });
-  updates.noteSparkleUpdate({ type: "updateStep", step: "installing" });
-  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "signature" });
-  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "extract" });
-  updates.noteSparkleUpdate({ type: "updateFailed", stage: "download", reason: "a path /Users/someone" });
+  const epoch = client.consentNow();
+  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadStarted", epoch });
+  updates.noteSparkleUpdate({ type: "updateStep", step: "downloadFinished", epoch });
+  updates.noteSparkleUpdate({ type: "updateStep", step: "installing", epoch });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "signature", epoch });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "install", reason: "extract", epoch });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "download", reason: "a path /Users/someone", epoch });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "download", reason: "network", epoch: "an-earlier-period" });
+  updates.noteSparkleUpdate({ type: "updateFailed", stage: "download", reason: "network" });
   const taken = updates.takeUpdateCounts();
   assert.equal(taken.update_downloads_started, 1);
   assert.equal(taken.update_downloads_finished, 1);
-  assert.equal(taken.update_installs_sparkle, 1);
+  assert.equal(taken.update_install_starts, 1);
+  assert.equal(taken.update_download_failures_network, 0);
   assert.equal(taken.update_install_failures_signature, 1);
   assert.equal(taken.update_install_failures_extract, 1);
   assert.equal(taken.update_download_failures_other, 1);
@@ -105,22 +109,27 @@ test("automatic Picture in Picture misses count by what hid the tab", () => {
   misses.takeAutoPipMisses();
   assert.equal(misses.isAutoPipMiss("missedAppSwitch"), true);
   assert.equal(misses.isAutoPipMiss("onScreen"), false);
-  misses.noteAutoPipMiss("missedAppSwitch", "");
-  misses.noteAutoPipMiss("leftOnSpaceSwitchJoining", "");
+  misses.noteAutoPipMiss("missedAppSwitch", client.consentNow());
+  misses.noteAutoPipMiss("leftOnSpaceSwitchJoining", client.consentNow());
+  misses.noteAutoPipMiss("missedTabSwitch", "");
   const taken = misses.takeAutoPipMisses();
-  assert.equal(Object.values(taken).length, 6);
+  assert.equal(Object.values(taken).length, 7);
+  assert.equal(taken.auto_pip_missed_app_switch, 1);
+  assert.equal(taken.pip_left_on_space_switch_joining, 1);
+  assert.equal(taken.auto_pip_missed_tab_switch, 0);
 });
 
-test("process CPU sums each kind of process and keeps the busiest page process", () => {
+test("process CPU sums each kind of process once per process and keeps the busiest page process", () => {
   const fields = processCpuFields([
-    { type: "browser", cpu: 12.34 },
-    { type: "gpu", cpu: 30 },
-    { type: "renderer", cpu: 50 },
-    { type: "renderer", cpu: 7.5 },
-    { type: "utility", cpu: 1 },
-    { type: "renderer", cpu: Number.NaN },
+    { id: 1, pid: 10, type: "browser", cpu: 12.34 },
+    { id: 2, pid: 11, type: "gpu", cpu: 30 },
+    { id: 3, pid: 12, type: "renderer", cpu: 50 },
+    { id: 4, pid: 12, type: "renderer", cpu: 50 },
+    { id: 5, pid: 13, type: "renderer", cpu: 7.5 },
+    { id: 6, pid: 14, type: "utility", cpu: 1 },
+    { id: 7, type: "renderer", cpu: Number.NaN },
   ]);
-  assert.deepEqual(fields, { browser_cpu_pct: 12.3, gpu_cpu_pct: 30, renderer_cpu_pct: 57.5, renderer_cpu_max_pct: 50, helper_cpu_pct: 1 });
+  assert.deepEqual(fields, { browser_cpu_now_pct: 12.3, gpu_cpu_now_pct: 30, renderer_cpu_now_pct: 57.5, renderer_cpu_now_max_pct: 50, helper_cpu_now_pct: 1 });
 });
 
 test("page metrics from native keep only the known counters, rounded", () => {

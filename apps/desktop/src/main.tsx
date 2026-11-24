@@ -99,15 +99,20 @@ Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, em
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme, depart: (tabId) => ardiaHost && forgetDepartedPage(tabId, ardiaHost.bootstrap.windowId) });
 setWindowCloseDecider(decideLinuxWindowClose);
 
+const LAUNCH_LEAD_GRACE_MS = 1000;
+
 function FirstWindowCommitted({ typeahead, launch }: { typeahead: boolean; launch: boolean }) {
   const [renderedAt] = useState(Date.now);
   useLayoutEffect(() => {
     if (!launch) return;
     const committedAt = Date.now();
+    let contentAt: number | undefined;
+    requestAnimationFrame(() => setTimeout(() => (contentAt = Date.now()), 0));
     whenTelemetryLeads(() => {
-      launchCommitted(renderedAt, committedAt);
-      markFirstWindow(committedAt);
       if (ardiaHost) probeKeyringAfterLaunch(ardiaHost);
+      if (Date.now() - committedAt > LAUNCH_LEAD_GRACE_MS) return;
+      launchCommitted(renderedAt, committedAt, contentAt);
+      markFirstWindow(committedAt);
     });
   }, []);
   useEffect(() => {

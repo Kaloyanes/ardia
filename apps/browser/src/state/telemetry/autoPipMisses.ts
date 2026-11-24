@@ -6,6 +6,7 @@ const MISS_FIELDS = {
   missedAppSwitch: "auto_pip_missed_app_switch",
   missedSpaceSwitch: "auto_pip_missed_space_switch",
   missedOther: "auto_pip_missed_other",
+  missedSiteAsked: "auto_pip_missed_site_asked",
   leftOnSpaceSwitch: "pip_left_on_space_switch",
   leftOnSpaceSwitchJoining: "pip_left_on_space_switch_joining",
 } as const;
