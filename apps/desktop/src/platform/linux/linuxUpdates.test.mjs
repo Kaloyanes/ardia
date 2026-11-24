@@ -13,7 +13,7 @@ const STUBS = {
   "../../session.ts": stub(`export const isLinuxUtility = (id) => id === "settings";`),
   "../../shims/shellBase": stub(`export const refreshDocument = async () => {};`),
   "../../../../browser/src/platform/app": stub(`export const systemInfo = () => ({ appVersion: "0.2.45" });`),
-  "../../../../browser/src/platform/clipboard": stub(`export const copyText = (text) => void ui.copied.push(text);`),
+  "../../../../browser/src/platform/clipboard": stub(`export const copyText = (text) => void ui.copied.push(text); export const copyAddress = (url) => void ui.copied.push(url);`),
   "../../../../browser/src/platform/dialogs": stub(`export const confirm = async (options) => (ui.confirms.push(options), { confirmed: true });`),
   "../../../../browser/src/platform/documents": stub(`export const readDocument = (name) => ui.docs.get(name) ?? null; export const saveDocument = async (name, contents) => void ui.docs.set(name, contents);`),
   "../../../../browser/src/state/app/toasts": stub(`export const showToast = (windowId, title, message, options) => void ui.toasts.push({ windowId, title, message, options });`),

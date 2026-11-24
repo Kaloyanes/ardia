@@ -1,9 +1,10 @@
+import { cleanUrl } from "@ardia/core";
 import type { ArdiaHost } from "../../host";
 import { AUR_UPDATE_COMMAND, linuxUpdater, scheduleUpdateChecks, updatesAvailable, type LinuxUpdater, type UpdateLocks } from "./hostUpdates.ts";
 import { isLinuxUtility } from "../../session.ts";
 import { refreshDocument } from "../../shims/shellBase";
 import { systemInfo } from "../../../../browser/src/platform/app";
-import { copyText } from "../../../../browser/src/platform/clipboard";
+import { copyAddress } from "../../../../browser/src/platform/clipboard";
 import { confirm } from "../../../../browser/src/platform/dialogs";
 import { readDocument, saveDocument } from "../../../../browser/src/platform/documents";
 import { showToast } from "../../../../browser/src/state/app/toasts";
@@ -29,7 +30,7 @@ export function linuxUpdaterFor(host: ArdiaHost): LinuxUpdater {
       confirmTitle: "Copy Link",
       cancelTitle: "OK",
       windowId,
-    }).then((answer) => void (answer.confirmed && copyText(url)), () => {});
+    }).then((answer) => void (answer.confirmed && copyAddress(cleanUrl(url))), () => {});
   const open = (url: string) => (browserWindow ? (openUrls([url], windowId), true) : openUrlFromSettings(url) || (offerLink(url), false));
   const toast: typeof showToast = (...args) => {
     if (browserWindow) showToast(...args);
