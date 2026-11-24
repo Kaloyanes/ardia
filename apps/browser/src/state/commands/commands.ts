@@ -187,6 +187,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return arg ? s.restoreClosed(arg, windowId) : undefined;
     case "focusCommandBar": {
       const placement = commandKeyPlacement(s, windowId);
+      if (page && ui?.panel.open && !ui.panel.newTab) return closePanelToHeroBar(windowId, page.id, "commandKey");
       if (page) return s.openPanel(windowId, page.url, undefined, placement);
       if (isEmptyCardTab(s, tab) && showNewTabBar(windowId)) return;
       if (tab && addressBarInSidebar(s, windowId) && placement === "field") return s.openPanel(windowId, "", undefined, placement);

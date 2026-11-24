@@ -1,5 +1,6 @@
 import { useBrowser } from "../browser/store";
 import { activeTabId } from "../browser/model";
+import { closePanelToHeroBar } from "../omnibox/barState";
 import { closeLittleArdia, cycleLittleArdiaProfile, moveLittleArdiaToProfile, openInMainWindow, openLittleArdiaProfileMenu } from "../littleArdia/actions";
 
 export function runLittleArdiaCommand(command: string, arg: string | null | undefined, windowId: string): boolean {
@@ -12,7 +13,8 @@ export function runLittleArdiaCommand(command: string, arg: string | null | unde
       else void closeLittleArdia(windowId);
       return true;
     case "focusCommandBar":
-      s.openPanel(windowId, tab?.url ?? "");
+      if (s.windowUi[windowId]?.panel.open && tab?.url) closePanelToHeroBar(windowId, tab.id, "commandKey");
+      else s.openPanel(windowId, tab?.url ?? "");
       return true;
     case "openFile":
       openInMainWindow(windowId);

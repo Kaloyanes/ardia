@@ -112,3 +112,32 @@ test("the centred command bar centres on the window, as in Arc, and never leaves
   assert.equal(centredBarLeft({ left: 0, width: 900 }, 600, 1200), 300, "a right sidebar: the bar stays inside the card");
   assert.equal(centredBarLeft(card, 652, 0), 444.5, "no window width yet: the card's centre");
 });
+
+test("a second ⌘L closes the bar it opened over a page, in every layout and placement", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  const layouts = [
+    { commandBarPlacement: "field", addressBar: "toolbar" },
+    { commandBarPlacement: "centred", addressBar: "toolbar" },
+    { commandBarPlacement: "field", addressBar: "sidebar", tabLayout: "sidebar", autoHideTabs: false },
+    { commandBarPlacement: "field", addressBar: "sidebar", tabLayout: "sidebar", autoHideTabs: true },
+  ];
+  for (const settings of layouts) {
+    const w = pageWindow(settings);
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, true, JSON.stringify(settings));
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, false, JSON.stringify(settings));
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, true, JSON.stringify(settings));
+  }
+});
+
+test("⌘L over ⌘T's bar on a page swaps it for the address bar instead of closing it", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  const w = pageWindow({ commandBarPlacement: "field", addressBar: "toolbar" });
+  S().openPanel(w, "", { kind: "list" });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  assert.equal(S().windowUi[w].panel.open, true);
+  assert.equal(S().windowUi[w].panel.newTab, undefined);
+  assert.equal(S().windowUi[w].panel.initialText, "https://example.com/");
+});
