@@ -6,7 +6,7 @@ import { isRgbFunction, luminance, mix, over, parseColor, rgbToHsl, toHex } from
 import { CARD_INSET, DEFAULT_SIDEBAR_WIDTH } from "../../lib/windowLayout";
 import { SIDEBAR_ROW } from "../../lib/sidebarMetrics";
 import { WINDOW_CHROME } from "../../lib/windowChrome";
-import { arcSelectedFill, colorRoles, HIGH_CONTRAST_INK, ink, INCOGNITO_TINT, withAlpha, PROFILE_COLORS, radius, type ColorRoles, type ProfileColorSpec, type ShadowLevel } from "./tokens";
+import { arcSelectedFill, colorRoles, fieldInk, HIGH_CONTRAST_INK, ink, INCOGNITO_TINT, withAlpha, PROFILE_COLORS, radius, type ColorRoles, type ProfileColorSpec, type ShadowLevel } from "./tokens";
 import type { BasePalette } from "../../lib/themeFile";
 import { visibleLine, visibleSelection } from "../../lib/selectionContrast";
 
@@ -115,6 +115,10 @@ export function contrastTheme(theme: Theme): Theme {
   }
   return strong;
 }
+
+export const caretColor = (theme: Theme): string => fieldInk.caret[theme.dark ? "dark" : "light"];
+
+export const quietBarGlyph = (theme: Theme): string => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
 
 export function surfaceTheme(theme: Theme): Theme {
   return windowThemes.get(theme) ?? theme;

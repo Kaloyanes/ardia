@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Animated, Pressable, TextInput, View, type GestureResponderEvent, type Insets, type TextStyle } from "react-native";
 import { toggleMute } from "../../state/browser/actions";
-import { hex, layout, useTheme } from "../ui/theme";
+import { caretColor, hex, layout, useTheme } from "../ui/theme";
 import { useIsActiveTab, usePageProfileId, useTab, useWindow, useWindowId } from "../../state/browser/hooks";
 import { returnToPinnedUrl } from "../../state/pins/actions";
 import { useSplitRowPanes } from "../../state/sidebar/hooks";
@@ -264,6 +264,7 @@ export function RenameField({
         placeholder={placeholder}
         placeholderTextColor={theme.placeholder}
         selectionColor={theme.selection}
+        cursorColor={caretColor(theme)}
         selectTextOnFocus
         enableFocusRing={false}
         onSubmitEditing={() => finish(text)}
