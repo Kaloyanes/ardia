@@ -331,7 +331,7 @@ jobs:
     name: distro packages (${{ matrix.format }})
     needs: package
     if: ${{ !cancelled() && needs.package.result == 'success' && needs.package.outputs.full == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     strategy:
       fail-fast: false
