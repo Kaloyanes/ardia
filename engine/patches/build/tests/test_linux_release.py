@@ -173,8 +173,8 @@ class ArchPackageTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('shasum'), 'shasum')
 class PublishLinuxAssetsTests(unittest.TestCase):
     STABLE = '0.2.48'
-    NAMES = ('Ardia-{v}-linux-x64.tar.xz', 'Ardia-{v}-linux-x64.deb', 'Ardia-{v}-linux-x64.AppImage',
-             'ardia-bin-{v}.src.tar.gz', 'ardia-cli-{v}-linux-x64.tar.gz')
+    NAMES = ('Ardia-{v}-linux-x64.tar.xz', 'Ardia-{v}-linux-x64.deb', 'Ardia-{v}-linux-x64.rpm', 'Ardia-{v}-linux-x64.AppImage',
+             'Ardia-{v}-linux-x64.flatpak', 'ardia-bin-{v}.src.tar.gz', 'ardia-cli-{v}-linux-x64.tar.gz')
 
     def linux_section(self):
         script = (REPO / '.claude/skills/release/scripts/publish.sh').read_text()
@@ -230,6 +230,24 @@ class PublishLinuxAssetsTests(unittest.TestCase):
             self.assertNotIn(f'Ardia-{self.STABLE}-linux-x64.deb', self.assets(result))
             self.assertIn(f'Ardia-{self.STABLE}-linux-x64.AppImage', self.assets(result))
             self.assertIn('ships without the .deb', result.stdout)
+
+    def test_a_missing_rpm_or_flatpak_fails_unless_the_release_dropped_it(self):
+        for suffix, reason in (('rpm', 'it failed scripts/linux/rpm-install-test.sh in run 1'), ('flatpak', 'building it failed (flatpak-build.log)')):
+            with self.subTest(suffix), tempfile.TemporaryDirectory() as scratch:
+                dist, linux = self.dist(scratch)
+                name = f'Ardia-{self.STABLE}-linux-x64.{suffix}'
+                (linux / name).unlink()
+                (linux / f'{name}.sha256').unlink()
+                result = self.publish(dist)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'has no {name}', result.stderr)
+                with (linux / 'provenance.txt').open('a') as provenance:
+                    provenance.write(f'{suffix} dropped: {reason}\n')
+                result = self.publish(dist)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn(name, self.assets(result))
+                self.assertIn(f'Ardia-{self.STABLE}-linux-x64.deb', self.assets(result))
+                self.assertIn(f'ships without the .{suffix}', result.stdout)
 
     def test_a_wrong_digest_fails(self):
         with tempfile.TemporaryDirectory() as scratch:

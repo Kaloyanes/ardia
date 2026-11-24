@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CHECK_EVERY_MS, FIRST_CHECK_AFTER_MS, UPDATE_CHECK_LOCK, UPDATE_PREFERENCES, WATCH_EVERY_MS, installsUpdates, linuxUpdater, scheduleUpdateChecks } from "./hostUpdates.ts";
+import { CHECK_EVERY_MS, FIRST_CHECK_AFTER_MS, UPDATE_CHECK_LOCK, UPDATE_PREFERENCES, WATCH_EVERY_MS, installsUpdates, linuxUpdater, packageManager, scheduleUpdateChecks } from "./hostUpdates.ts";
 import { SELF_UPDATE_METHODS } from "../../hostCapabilities.ts";
 import { compareVersions, linuxReleases, newestRelease } from "./updateReleases.ts";
 import { takeUpdateCounts } from "../../../../browser/src/state/telemetry/updateCounts.ts";
@@ -114,7 +114,7 @@ function harness({ version = "0.2.45", body = JSON.stringify(LIST), status = 200
     offer: (r, failed) => void seen.offered.push(failed ? `${r.version} failed` : r.version),
     offerInstall: (r, run) => void seen.offeredInstalls.push({ version: r.version, run }),
     ready: (v, restart) => void seen.ready.push({ version: v, restart }),
-    managed: async (r, current, asked) => void seen.managed.push([r.version, current, asked]),
+    managed: async (r, current, asked, manager) => void seen.managed.push([r.version, current, asked, manager]),
     open: (url) => void seen.opened.push(url),
     showsToasts,
     locks,
@@ -402,16 +402,32 @@ test("with automatic updates off, the automatic check offers the update once, an
   assert.equal(takeUpdateCounts().update_installs_appimage, 1);
 });
 
-test("an install the package manager owns says to update there, and never opens the release page", async () => {
+test("an install the package manager owns gets the managed offer, never a self-update or the plain release prompt", async () => {
   const engine = fakeEngine({ kind: "managed" });
   const { updater, seen, host } = harness({ engine });
   await updater.methods.checkForUpdates();
   await updater.check(false);
   await updater.check(false);
-  assert.deepEqual(seen.managed, [["0.2.46", "0.2.45", true], ["0.2.46", "0.2.45", false]]);
+  assert.deepEqual(seen.managed, [["0.2.46", "0.2.45", true, "package"], ["0.2.46", "0.2.45", false, "package"]]);
   assert.deepEqual([seen.asked, seen.offered, seen.opened, engine.updates], [[], [], [], []]);
   assert.equal((await updater.methods.updaterState()).automaticDownloads, false);
   assert.equal(installsUpdates(host), false, "Settings hides Automatically update Ardia");
+});
+
+test("a Flatpak is told apart by its data folder, so the offer names Flatpak, and each offer is counted by manager", async () => {
+  takeUpdateCounts();
+  const flatpak = harness({ engine: fakeEngine({ kind: "managed" }), launch: { configDirectory: "/home/u/.var/app/dev.ardia.Ardia/config/ardia/config" } });
+  await flatpak.updater.methods.checkForUpdates();
+  await flatpak.updater.check(false);
+  await flatpak.updater.check(false);
+  assert.deepEqual(flatpak.seen.managed, [["0.2.46", "0.2.45", true, "flatpak"], ["0.2.46", "0.2.45", false, "flatpak"]]);
+  const other = harness({ engine: fakeEngine({ kind: "managed" }), launch: { configDirectory: "/home/u/.config/ardia/config" } });
+  await other.updater.check(false);
+  assert.deepEqual(other.seen.managed, [["0.2.46", "0.2.45", false, "package"]]);
+  const counts = takeUpdateCounts();
+  assert.equal(counts.update_offers_managed_flatpak, 2);
+  assert.equal(counts.update_offers_managed_package, 1);
+  assert.equal(packageManager({ bootstrap: { launchConfig: { configDirectory: "/srv/.var/app/dev.ardia.Ardia.Devel/config" } } }), "package");
 });
 
 test("an install that can't update itself, and an engine without self-update, keep the release page", async () => {

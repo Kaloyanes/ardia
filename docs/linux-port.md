@@ -526,6 +526,32 @@ a `.sha256` file beside it (`sha256sum -c <asset>.sha256` checks a download):
   (`0.2.47~nightly.3`) sorts before its stable, so `apt install` of the stable upgrades it. `sudo apt remove ardia`
   removes it and `sudo apt purge ardia` leaves nothing behind outside your home folder, where your profile
   (`~/.config/ardia`) and the `ardia` command, if you turned it on (`~/.local/share/ardia`), stay.
+- **Fedora, RHEL-family and openSUSE: the `.rpm`.**
+
+  ```bash
+  sudo dnf install ./Ardia-<version>-linux-x64.rpm
+  sudo zypper install --allow-unsigned-rpm ./Ardia-<version>-linux-x64.rpm
+  ```
+
+  dnf and zypper pull in the libraries Ardia needs, computed from its binaries. The package makes `chrome-sandbox`
+  setuid root and, where AppArmor reads the 4.0 ABI, installs the AppArmor profile. The `.rpm` isn't signed yet, which
+  is why zypper needs `--allow-unsigned-rpm`. A newer `.rpm` installs over an older one (a nightly's version,
+  `0.2.47~nightly.3`, sorts before its stable). There is no repository yet (#3644), so updates are the same command
+  with the new release's `.rpm`; Ardia says when one is out but leaves installing it to dnf or zypper. `sudo dnf remove ardia`
+  or `sudo zypper remove ardia` leaves nothing behind outside your home folder.
+- **Immutable distributions and any distribution with Flatpak: the `.flatpak`.**
+
+  ```bash
+  flatpak install --user ./Ardia-<version>-linux-x64.flatpak
+  flatpak run dev.ardia.Ardia
+  ```
+
+  It is `dev.ardia.Ardia` on Flathub's `org.freedesktop.Platform` runtime and Chromium base app, which flatpak
+  fetches from Flathub on the first install. Chromium's sandbox runs through zypak, so it needs neither user
+  namespaces nor a setuid helper. Your profile lives in `~/.var/app/dev.ardia.Ardia`. Updates are the same command
+  with the new release's `.flatpak` (`flatpak update` takes over once Ardia is on Flathub); Ardia says when one is out.
+  `flatpak uninstall --delete-data dev.ardia.Ardia` removes it and its data. What works differently in the sandbox is
+  under Packaging and installing › Flatpak.
 - **Arch: `ardia-bin`.** Once the package is on the AUR, which follows stable releases:
 
   ```bash
@@ -564,7 +590,8 @@ a `.sha256` file beside it (`sha256sum -c <asset>.sha256` checks a download):
 
 The `.deb`, a tarball installed with `install.sh` and the AppImage update themselves from each release's signed
 self-update manifest (`lib/ardia/ardia-update`, under Packaging and installing). `ardia-bin` updates with pacman like
-any AUR package.
+any AUR package, the `.rpm` with dnf or zypper and the Flatpak with flatpak: Ardia tells you about a new release and
+leaves installing it to them.
 
 ## Packaging and installing
 
@@ -579,8 +606,9 @@ python3 scripts/linux/package.py \
   --destination "$CB/artifacts/ardia-linux-$AC_TARGET_CPU.tar.xz"
 ```
 
-- **Formats.** `--deb <path>` and `--appimage <path>` build a `.deb` and an AppImage from the same tree. `release.sh`
-  builds all three and smoke-tests each.
+- **Formats.** `--deb <path>`, `--rpm <path>` and `--appimage <path>` build a `.deb`, an `.rpm` and an AppImage from
+  the same tree. The Flatpak is built from the finished tarball (`linux_formats.py from-tarball --flatpak <path>`).
+  `release.sh` builds all five and smoke-tests the tarball, the `.deb`, the `.rpm` and the AppImage.
 - **Launcher.** Every format starts through `lib/ardia/ardia-launch`, which decides the sandbox before it runs
   `chrome`: user namespaces when the kernel allows them and AppArmor doesn't restrict them (or a profile grants
   `userns` to this `chrome`), else the setuid-root `chrome-sandbox` beside it on a mount without `nosuid`. Otherwise it
@@ -591,6 +619,8 @@ python3 scripts/linux/package.py \
   the shell says so once per launch and counts `launches_without_sandbox`.
 - **`.deb`.** Installs under `/usr` (`/usr/bin/ardia` links the launcher), with `chrome-sandbox` setuid root, the
   polkit policy and the AppArmor profile; details under Debian package below.
+- **`.rpm`.** The `.deb`'s `/usr` tree with rpm's dependency generator; details under RPM package below.
+- **Flatpak.** `dev.ardia.Ardia`, whose launcher hands Chromium to cobalt and zypak; details under Flatpak below.
 - **AppImage.** AppImage's static type 2 runtime and `mksquashfs` (zstd) from a toolset pinned by SHA-256, cached in
   `~/.cache/ardia-appimage`. It carries no setuid helper and no polkit policy, so reauth falls back to the login
   password, and it needs user namespaces: where they're restricted (Ubuntu 24.04 and later) it refuses to start.
@@ -686,6 +716,70 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   `chrome-sandbox` is setuid root, the browser alternatives and `curl` are there, the profile appears only with the
   4.0 ABI, and `apt purge` leaves the file system as it was before the install. apt retries each download and each
   image pull is retried, so a network flake doesn't fail it.
+- **RPM package.** `package.py --rpm <path> --version <version>` (`linux_formats.build_rpm`) builds it with
+  `rpmbuild` from the same `/usr` tree as the `.deb` (`apt install rpm cpio` on Ubuntu, `dnf install rpm-build`):
+  - `/usr/lib/ardia`, `/usr/bin/ardia` (a link to the launcher), the desktop entry pointed at `/usr/bin/ardia`, the
+    icon, the polkit policy, the AppArmor profile at `/usr/share/ardia/apparmor/ardia` and
+    `/usr/share/licenses/ardia/copyright`, all owned by root, with `chrome-sandbox` setuid root (mode 4755 in the
+    payload, so no scriptlet has to set it). It co-owns the polkit, icon and licence folders it puts files in, so
+    removing it leaves no empty folder on a system without polkit or the hicolor theme;
+  - its version is the Ardia version with `-` turned into `~` (`0.2.47~nightly.3`), which rpm sorts before
+    `0.2.47`; release `1`, architecture `x86_64`, named `Ardia-<version>-linux-x64.rpm`;
+  - `Requires` comes from rpm's own generator over the ELF files and scripts, minus every library `lib/ardia`
+    bundles (`__requires_exclude`, built from the tree's `*.so*` names) and the Qt shims' libraries
+    (`__requires_exclude_from`); it provides none of its bundled libraries. It adds what Chromium loads at run time
+    (GTK 3 and libsecret by soname, Liberation fonts, xdg-utils, ca-certificates), `curl` for the CLI installer and
+    `openssl`, and recommends polkit and `/usr/bin/pkexec`. No build-id links, debuginfo or brp scripts, so the
+    binaries ship as built;
+  - the policy leaves out the `dev.ardia.linux.update` action: rpm owns the files, so `ardia-update kind` says
+    `managed` and Ardia never installs an update itself (Updates and kill switches);
+  - `%post` installs and loads the AppArmor profile where `/etc/apparmor.d/abi/4.0` exists and refreshes the desktop
+    and icon caches; `%postun` takes the profile away only on removal (`$1` is 0), not on an upgrade.
+
+  `scripts/linux/rpm-install-test.sh <rpm>` installs it in `fedora:43` with dnf and `opensuse/tumbleweed` with
+  zypper (Tumbleweed with AppArmor's parser and ABI files, so its run covers the profile): the dependencies resolve,
+  an older build made from this one (`--older`, by default the version before it with a file only it carries)
+  upgrades to it and its own file goes, `rpm --verify` passes, `ldd` finds every library, `ardia --version` runs,
+  `chrome-sandbox` is setuid root, the desktop entries validate, the policy has no update action, `ardia-update kind`
+  is `managed`, and removing it leaves the file system as it was (the desktop and icon caches the distribution
+  regenerates aside).
+- **Flatpak.** `linux_formats.py from-tarball --tarball <tarball> --version <version> --flatpak <path>` writes the
+  manifest (`flatpak_manifest`) and builds it with `flatpak-builder --user` and `flatpak build-bundle`, fetching the
+  runtime, SDK and base app from Flathub. It needs `flatpak` and `flatpak-builder`, and a system D-Bus where flatpak
+  checks parental controls (Ubuntu's does).
+  - **Manifest.** `dev.ardia.Ardia` on `org.freedesktop.Platform` and `org.chromium.Chromium.BaseApp`, both
+    `FLATPAK_BRANCH`. Two modules: zypak, pinned by tag and commit, and `ardia`, whose source is the release
+    tarball (an `archive` with its sha256). It copies `lib/ardia` to `/app/lib/ardia`, links `/app/bin/ardia` to the
+    launcher, installs `/app/etc/cobalt.ini` and exports the desktop entry, icon and metainfo under the app id.
+    `linux_formats.py flathub --version <version> --sha256 <tarball sha256> --out <folder>` writes the same manifest
+    with the published tarball's URL, its metainfo and `cobalt.ini`: the files a Flathub submission needs.
+  - **Sandbox.** In a Flatpak (`/.flatpak-info` and `FLATPAK_ID`), `ardia-launch` execs `cobalt`, the BaseApp's
+    launcher, which starts `/app/lib/ardia/chrome` through `zypak-wrapper.sh`: zypak stands in for the setuid
+    `chrome-sandbox` (kept, not setuid) with Flatpak's own sandbox. cobalt reads extra switches from
+    `~/.var/app/dev.ardia.Ardia/config/ardia-flags.conf`, one per line. `ExposePids` is optional, so a host without
+    Flatpak's expose-pids still starts without a dialog.
+  - **Permissions.** Network, IPC, Wayland with X11 as fallback, PulseAudio, CUPS, smart cards (FIDO keys), all
+    devices (GPU, webcams, security keys), Downloads, PipeWire, notifications, the Secret Service and KWallet,
+    the file manager, the screensaver inhibitor, UPower and Chromium's MPRIS name, and read-only access to every
+    folder Import reads (Chromium-family profiles under `xdg-config`, Firefox, LibreWolf and Zen, and their Flatpak
+    and Snap folders). A test reads the import table out of `ac_linux_import_readers.cc` and fails if a folder is
+    missing from the grants.
+  - **Updates.** `ardia-update kind` says `managed` inside a Flatpak, so Ardia only tells you about a release and
+    offers its page, saying to install the new `.flatpak` (it knows it is a Flatpak by its data folder under
+    `~/.var/app/dev.ardia.Ardia/`). It names no `flatpak update` command: the bundle has no remote, so that command
+    finds nothing.
+  - **Known limits.** Native messaging hosts (password managers' browser bridges) run outside the sandbox, so
+    Flatpak Ardia can't start them (#3642). Setting Ardia as the default browser from Settings needs `xdg-settings`,
+    which the runtime lacks: set it in the desktop's settings (#3643). The bundle has no remote, so `flatpak update`
+    doesn't see new releases until Ardia is on Flathub (#3645). The polkit reauthentication action can't be installed
+    from a Flatpak, so revealing saved passwords falls back to the login password.
+
+  `scripts/linux/flatpak-install-test.sh <bundle>` installs the bundle as an ordinary user in privileged
+  `ubuntu:24.04` and `fedora:43` containers: the runtime comes from Flathub, the ref is `app/dev.ardia.Ardia/x86_64/stable`
+  at the release's version, `ardia --version` runs, the exported desktop entry opens links in the app and has its
+  icon, `cobalt.ini` and zypak are there, the permissions hold the grants above and nothing more of the home folder,
+  `ardia-update kind` is `managed`, Ardia starts headless with renderers and no `--no-sandbox` through zypak and
+  opens a page over DevTools, and `flatpak uninstall --delete-data` leaves no app, export or data folder.
 - **Arch.** `scripts/linux/arch/PKGBUILD` is the AUR package `ardia-bin`: it downloads
   `Ardia-<version>-linux-x64.tar.xz` from the `v<version>` release, checks its pinned sha256 and installs it with the
   tarball's `install.sh`, then makes `chrome-sandbox` setuid root, as Arch's own `chromium` does, for kernels without
@@ -713,10 +807,10 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
 
 - **Self-update helper.** `lib/ardia/ardia-update` (`scripts/linux/ardia-update`, bash) installs a release the
   browser downloaded. `ardia-update kind` prints one line: `appimage` (`$APPIMAGE` names a file whose folder the user
-  can write, and when `$APPDIR` is set the helper runs from it), `managed` (pacman or rpm owns `lib/ardia/chrome`, or
-  a dpkg package other than `ardia`), `deb` (dpkg's `ardia` owns it), `tarball`, or `unsupported <reason>`: `noVerifier`
-  (no `lib/ardia/ardia-update-verify` that runs here), `noVersion`, `noKey`, and for deb and tarball `noPkexec` (no
-  setuid pkexec) and
+  can write, and when `$APPDIR` is set the helper runs from it), `managed` (inside a Flatpak, or pacman or rpm owns
+  `lib/ardia/chrome`, or a dpkg package other than `ardia`), `deb` (dpkg's `ardia` owns it), `tarball`, or
+  `unsupported <reason>`: `noVerifier` (no `lib/ardia/ardia-update-verify` that runs here), `noVersion`, `noKey`, and
+  for deb and tarball `noPkexec` (no setuid pkexec) and
   `noPolicy` (the installed policy's update action doesn't name this helper, as for a tarball run in place).
   `ardia-update install <dir>` runs as root through `pkexec` for a `.deb` or tarball and as the user for an AppImage.
   It takes a lock (`/run/ardia-update.lock`, or the AppImage's folder), refuses a folder or file that isn't a regular,
@@ -872,8 +966,11 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
   ready, and Check Now and the app menu read Restart to Update. Every update toast has Later, which only closes it:
   the same version isn't offered again, and a dismissed Restart toast isn't shown again by another window. Where it can't (an engine without the methods, or
   `unsupported`), Check Now asks before opening the release page and an automatic check offers it once as a toast, and
-  the toggle is hidden. An install pacman or rpm owns (`managed`, the AUR's `ardia-bin`) is told to update with its
-  package manager. A failed download or install falls back to the release page once and isn't retried automatically.
+  the toggle is hidden. An install a package manager owns (`managed`: the AUR's `ardia-bin`, the `.rpm`, the Flatpak)
+  is told to update there and offered the release page (Open Release Page, or the toast's View): a Flatpak to
+  install the new `.flatpak`, the others the AUR command or the new `.rpm`. No command is copied: the `.rpm` and the
+  Flatpak bundle have no repository or remote to update from, and `ardia-update kind` says only `managed`, so the
+  dialog can't tell an AUR install apart (#4078). A failed download or install falls back to the release page once and isn't retried automatically.
 - **Self-update.** `ac_linux_self_update.cc` serves `ArdiaUpdates.installKind`, `update(version)`, `status()`,
   `claimOutcome(run)` and `restart`; the rules are in `ac_linux_self_update_policy.h`. The engine owns each run, so it
   carries on whatever window started it or closes.
@@ -908,8 +1005,10 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
 - **Kill switches.** `ArdiaShell.fetchKillSwitches` fetches `ardia.dev/switches.json` (at most 16 KiB) once per
   browser process for every window, and the shared refresh runs under the Mac's rule (automatic checks on).
 - **Telemetry.** `update_checks_asked`, `update_checks_automatic`, `update_check_failures`, `update_checks_found`,
-  `update_release_page_opens`, `update_notices_dismissed`, `kill_switch_refreshes`, `kill_switch_refresh_failures`, and for self-update
-  `update_downloads_started`, `update_downloads_finished`, `update_download_failures_<reason>`,
+  `update_release_page_opens`, `update_notices_dismissed`, `update_offers_managed_flatpak` and
+  `update_offers_managed_package` (a release offered to an install Flatpak or another package manager updates),
+  `kill_switch_refreshes`, `kill_switch_refresh_failures`, and for self-update `update_downloads_started`,
+  `update_downloads_finished`, `update_download_failures_<reason>`,
   `update_installs_<deb|tarball|appimage>`, `update_install_failures_<reason>` and `update_restarts`. Watch installs
   against found updates, and the `signature`, `polkit` and `network` failures.
 
