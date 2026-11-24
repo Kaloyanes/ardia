@@ -15,9 +15,10 @@ inline constexpr wchar_t kWebUIShell[] = L"webui";
 
 inline constexpr bool WebUIShellSelected(std::wstring_view process_type,
                                          std::wstring_view shell,
+                                         bool headless,
                                          bool react_native_app_present) {
   return process_type.empty() && shell != kReactNativeShell &&
-         (shell == kWebUIShell || !react_native_app_present);
+         (shell == kWebUIShell || (!headless && !react_native_app_present));
 }
 
 inline constexpr char kMigrateFromRnwSwitch[] = "ardia-migrate-from-rnw";

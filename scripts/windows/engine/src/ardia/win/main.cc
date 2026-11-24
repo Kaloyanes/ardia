@@ -96,26 +96,6 @@ std::unique_ptr<ScopedKeepAlive>& KeepAlive() {
   return *keep_alive;
 }
 
-std::wstring AppLibraryPath() {
-  std::wstring path(MAX_PATH, L'\0');
-  DWORD length = ::GetModuleFileNameW(nullptr, path.data(),
-                                      static_cast<DWORD>(path.size()));
-  path.resize(length);
-  size_t slash = path.find_last_of(L'\\');
-  if (slash == std::wstring::npos) {
-    return std::wstring();
-  }
-  path.resize(slash + 1);
-  path.append(L"ArdiaApp.dll");
-  return path;
-}
-
-bool AppLibraryPresent() {
-  std::wstring path = AppLibraryPath();
-  return !path.empty() &&
-         ::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
-}
-
 std::wstring Environment(const wchar_t* name) {
   std::wstring value(32768, L'\0');
   DWORD length = ::GetEnvironmentVariableW(name, value.data(),
@@ -487,11 +467,12 @@ void ClaimGuardUntilOwned(int attempts_left) {
 
 bool StartApp() {
   App& app = TheApp();
-  std::wstring path = AppLibraryPath();
-  app.module =
-      ::LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+  const std::wstring path = install_static::ReactNativeAppLibraryPath();
+  app.module = path.empty() ? nullptr
+                            : ::LoadLibraryExW(path.c_str(), nullptr,
+                                               LOAD_WITH_ALTERED_SEARCH_PATH);
   if (!app.module) {
-    const DWORD error = ::GetLastError();
+    const DWORD error = path.empty() ? ERROR_MOD_NOT_FOUND : ::GetLastError();
     FailStart(error == ERROR_MOD_NOT_FOUND
                   ? L"A file Ardia needs is missing from its folder "
                     L"(Windows error 126)."
@@ -676,7 +657,7 @@ void RefuseReactNativeFolders(const std::wstring& app_data,
 }
 
 void RefuseShellModeDisagreement(bool webui) {
-  const bool early = install_static::IsWebUIShellCommandLine(::GetCommandLineW());
+  const bool early = install_static::WebUIShellSelectedForUserDataDirectory();
   const bool reparsed = WebUIShellRequested(
       base::CommandLine::FromString(::GetCommandLineW()));
   if (webui == early && reparsed == early) {
@@ -800,7 +781,7 @@ void BeforeChromeMain() {
     BeforeWebUIChromeMain(command_line);
     return;
   }
-  if (!AppLibraryPresent()) {
+  if (!install_static::ReactNativeAppLibraryBesideExe()) {
     return;
   }
   std::wstring data_dir = Environment(L"ARDIA_DATA_DIR");

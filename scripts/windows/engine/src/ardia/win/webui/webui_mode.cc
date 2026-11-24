@@ -101,9 +101,10 @@ MigratorLookup VerifyMigratorBinary(const base::FilePath& exe_dir,
 
 bool WebUIShellRequested(const base::CommandLine& command_line) {
   const std::wstring shell = command_line.GetSwitchValueNative(kShellSwitch);
+  const bool headless = command_line.HasSwitch(kHeadlessSwitch);
   return WebUIShellSelected(
-      command_line.GetSwitchValueNative(kProcessTypeSwitch), shell,
-      shell != kWebUIShell && shell != kReactNativeShell &&
+      command_line.GetSwitchValueNative(kProcessTypeSwitch), shell, headless,
+      shell != kWebUIShell && shell != kReactNativeShell && !headless &&
           install_static::ReactNativeAppLibraryBesideExe());
 }
 

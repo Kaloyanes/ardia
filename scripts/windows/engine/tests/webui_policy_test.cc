@@ -211,23 +211,31 @@ void TestDownloadCommands() {
 }
 
 void TestShellSelection() {
-  static_assert(WebUIShellSelected(L"", L"", false));
-  static_assert(WebUIShellSelected(L"", L"webui", false));
-  static_assert(WebUIShellSelected(L"", L"webui", true));
-  static_assert(!WebUIShellSelected(L"", L"rnw", false));
-  static_assert(!WebUIShellSelected(L"", L"rnw", true));
-  static_assert(!WebUIShellSelected(L"", L"", true));
-  assert(WebUIShellSelected(L"", L"RNW", false));
-  assert(!WebUIShellSelected(L"", L"RNW", true));
-  assert(WebUIShellSelected(L"", L"rnw ", false));
-  assert(WebUIShellSelected(L"", L" rnw", false));
-  assert(WebUIShellSelected(L"", L"WebUI", false));
-  assert(!WebUIShellSelected(L"", L"WebUI", true));
-  assert(WebUIShellSelected(L"", L"anything", false));
-  assert(!WebUIShellSelected(L"renderer", L"", false));
-  assert(!WebUIShellSelected(L"gpu-process", L"webui", false));
-  assert(!WebUIShellSelected(L"crashpad-handler", L"rnw", true));
-  assert(!WebUIShellSelected(L"utility", L"webui", true));
+  static_assert(WebUIShellSelected(L"", L"", false, false));
+  static_assert(WebUIShellSelected(L"", L"webui", false, false));
+  static_assert(WebUIShellSelected(L"", L"webui", false, true));
+  static_assert(!WebUIShellSelected(L"", L"rnw", false, false));
+  static_assert(!WebUIShellSelected(L"", L"rnw", false, true));
+  static_assert(!WebUIShellSelected(L"", L"", false, true));
+  static_assert(!WebUIShellSelected(L"", L"", true, false));
+  static_assert(!WebUIShellSelected(L"", L"", true, true));
+  static_assert(WebUIShellSelected(L"", L"webui", true, false));
+  static_assert(WebUIShellSelected(L"", L"webui", true, true));
+  static_assert(!WebUIShellSelected(L"", L"rnw", true, false));
+  assert(WebUIShellSelected(L"", L"RNW", false, false));
+  assert(!WebUIShellSelected(L"", L"RNW", false, true));
+  assert(!WebUIShellSelected(L"", L"RNW", true, false));
+  assert(WebUIShellSelected(L"", L"rnw ", false, false));
+  assert(WebUIShellSelected(L"", L" rnw", false, false));
+  assert(WebUIShellSelected(L"", L"WebUI", false, false));
+  assert(!WebUIShellSelected(L"", L"WebUI", false, true));
+  assert(!WebUIShellSelected(L"", L"WebUI", true, false));
+  assert(WebUIShellSelected(L"", L"anything", false, false));
+  assert(!WebUIShellSelected(L"renderer", L"", false, false));
+  assert(!WebUIShellSelected(L"gpu-process", L"webui", false, false));
+  assert(!WebUIShellSelected(L"crashpad-handler", L"rnw", false, true));
+  assert(!WebUIShellSelected(L"utility", L"webui", false, true));
+  assert(!WebUIShellSelected(L"utility", L"webui", true, false));
 }
 
 void TestStartupMigrationGate() {
