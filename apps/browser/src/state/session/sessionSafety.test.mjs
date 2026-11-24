@@ -82,7 +82,6 @@ const DAMAGED = {
   truncated: null,
   "not an object": "[1,2,3]",
   "bad version": JSON.stringify({ version: "eleven", windows: [] }),
-  newer: JSON.stringify({ version: SESSION_VERSION + 1, windows: [], tabs: [] }),
 };
 
 for (const [kind, damaged] of Object.entries(DAMAGED)) {
@@ -177,7 +176,7 @@ test("a missing session.json is a first launch: nothing is copied and nothing is
   assert.deepEqual(savedUrls(), ["https://first.example/"]);
 });
 
-test("a downgrade keeps the newer session.json aside and restores an older-version backup through the migrations", async () => {
+test("a downgrade never writes over the newer session.json and restores an older-version backup through the migrations", async () => {
   const good = JSON.parse(realSession(["https://before-upgrade.example/"]));
   const v9 = { ...good, version: 9 };
   putBackup("2026-01-05", JSON.stringify(v9), 1);
@@ -187,7 +186,39 @@ test("a downgrade keeps the newer session.json aside and restores an older-versi
   assert.deepEqual(tabUrls(), ["https://before-upgrade.example/"]);
   await settle();
   stop();
-  assert.equal(stub.docs.get(asideCopies()[0]), newer);
+  assert.equal(stub.docs.get("session.json"), newer);
+  assert.deepEqual(asideCopies(), []);
+});
+
+test("an older build keeps a newer session.json byte for byte, saves its own session beside it, and reopens that one", async () => {
+  const fromNewerBuild = JSON.stringify({ ...JSON.parse(realSession(["https://newer-build.example/"])), version: SESSION_VERSION + 1 });
+  stub.docs.set("session.json", fromNewerBuild);
+  let stop = startPersistence();
+  assert.deepEqual(tabUrls(), []);
+  S().createWindow({ url: "https://older-build.example/" });
+  await settle();
+  assert.equal(await sessionSaved(), true);
+  stop();
+  assert.equal(stub.docs.get("session.json"), fromNewerBuild, "the newer build's tabs are still there for it");
+  assert.deepEqual(asideCopies(), []);
+  assert.deepEqual(JSON.parse(stub.docs.get("session-older-build.json")).tabs.map((t) => t.url), ["https://older-build.example/"]);
+  S().hydrate({});
+  stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://older-build.example/"], "the older build's own session comes back");
+  assert.deepEqual(loadSession().windowOrder.length, 1);
+  await settle();
+  stop();
+  assert.equal(stub.docs.get("session.json"), fromNewerBuild);
+});
+
+test("an older build's own session is ignored once session.json is readable again", async () => {
+  const current = realSession(["https://current.example/"]);
+  const olderBuild = realSession(["https://older-build.example/"]);
+  stub.docs.set("session.json", current);
+  stub.docs.set("session-older-build.json", olderBuild);
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://current.example/"]);
+  stop();
 });
 
 test("a damaged downloads.json is kept aside, by the store or from its text, and not written over until a copy lands", async () => {

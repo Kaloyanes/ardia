@@ -1,5 +1,5 @@
 import { createDocument, documentSaved, writeDocument } from "../../platform/documents";
-import { SESSION_DOCUMENT } from "./sessionDocument";
+import { OLDER_BUILD_SESSION_DOCUMENT, SESSION_DOCUMENT } from "./sessionDocument";
 import { cosmeticChange, doc, field, listed, type Doc } from "./documentJson";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { isIncognitoProfile, tabsShownIn } from "../browser/model";
@@ -14,7 +14,7 @@ import { noteDownloadHistoryWrite } from "../telemetry/downloadWork";
 import { noteSessionBackup, noteSessionSetAside, noteSessionSetAsideFailure, noteSessionWrite, timeSessionSave } from "../telemetry/sessionWrites";
 import { saveBeforeQuit } from "../app/quit";
 import { landHeldPins, pinGuard, savedAfterPins } from "./pinGuard";
-import { keepAsideGate, rollingBackups, writeGate, type WriteGate } from "./sessionSafety";
+import { fromNewerBuild, keepAsideGate, rollingBackups, writeGate, type WriteGate } from "./sessionSafety";
 import { consentToken } from "../telemetry/consentPeriod";
 import { isRegularWindow } from "../windows/small";
 import { savedPage } from "./savedShapes";
@@ -89,6 +89,9 @@ const DOWNLOADS_FIELDS = {
 
 const DOCS: Doc[] = [doc(DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, DOWNLOADS_FIELDS), doc(SESSION_DOCUMENT, SESSION_VERSION, SESSION_FIELDS)];
 
+let sessionFile = SESSION_DOCUMENT;
+const fileOf = (name: string) => (name === SESSION_DOCUMENT ? sessionFile : name);
+
 function write(name: string, json: string): boolean {
   try {
     writeDocument(name, json);
@@ -121,7 +124,7 @@ export function flushPersistence({ final = false } = {}): boolean {
 export async function sessionSaved(): Promise<boolean> {
   if (!(await savedAfterPins(flushPersistence, unstaged, pinsLanding))) return false;
   try {
-    await documentSaved(SESSION_DOCUMENT);
+    await documentSaved(sessionFile);
     return !frozen;
   } catch {
     return false;
@@ -148,6 +151,8 @@ export const windowsRealignedToAutoHideTabsAtLaunch = () => realignedAtLaunch;
 export function startPersistence(overrides: LaunchOverrides = {}) {
   const launch = hydrateAtLaunch(overrides);
   const loaded = launch.loaded;
+  const newerSessionKept = fromNewerBuild(launch.session);
+  sessionFile = newerSessionKept ? OLDER_BUILD_SESSION_DOCUMENT : SESSION_DOCUMENT;
   const consent = consentToken();
   if (launch.session.state === "unusable") noteSessionSetAside(true, launch.session.reason, launch.restored?.ageDays ?? null, consent);
   if (launch.downloads.state === "unusable") noteSessionSetAside(false, launch.downloads.reason, null, consent);
@@ -212,7 +217,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
         holdFor(pins.againIn);
         continue;
       }
-      if (saved || write(doc.name, json)) {
+      if (saved || write(fileOf(doc.name), json)) {
         pins?.commit();
         if (!saved && doc.name === DOWNLOADS_DOCUMENT) noteDownloadHistoryWrite(json.length);
         if (!saved && doc.name === SESSION_DOCUMENT) {
@@ -249,6 +254,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   };
   for (const [name, found] of [[SESSION_DOCUMENT, launch.session], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
     const session = name === SESSION_DOCUMENT;
+    if (session && newerSessionKept) continue;
     const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, () => createDocument(name, DOCS.find((d) => d.name === name)!.json(useBrowser.getState())));
     if (gate) gates.set(name, gate);
   }

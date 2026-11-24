@@ -1,5 +1,5 @@
 import { removeDownloadStaging, type Download } from "../../platform/downloads";
-import { SESSION_DOCUMENT } from "./sessionDocument";
+import { OLDER_BUILD_SESSION_DOCUMENT, SESSION_DOCUMENT } from "./sessionDocument";
 import { useBrowser, type BrowserState, type HydrateData } from "../browser/store";
 import { inPinnedContainer, snapshotTab } from "../browser/model";
 import { parkWindowPins } from "../pins/parkedPins";
@@ -8,7 +8,7 @@ import type { Tab } from "../browser/types";
 import { downloadSession, withoutRepeats } from "../downloads/downloadsSlice";
 import { noteSavedTopAppsMerged } from "../telemetry/topAppsSharing";
 import { unchanged, type Migrations, type SavedObject } from "../../lib/savedDocument";
-import { findDocument, sessionBackups, usableSessionValue, wholeDownloads, wholeSession, type FoundDocument, type RestoredBackup } from "./sessionSafety";
+import { findDocument, fromNewerBuild, sessionBackups, usableSessionValue, wholeDownloads, wholeSession, type FoundDocument, type RestoredBackup } from "./sessionSafety";
 import { isString } from "../../lib/decode";
 import { droppedRows, rows, sessionFromSaved, SESSION_MIGRATIONS, SESSION_VERSION, type SavedSession } from "./savedSession";
 
@@ -117,8 +117,14 @@ function backupsOf(found: FoundDocument): Candidate[] {
   return ordered.map((backup) => ({ prepare: () => backup.value, backup }));
 }
 
+const findOlderBuildSession = () => findDocument(OLDER_BUILD_SESSION_DOCUMENT, SESSION_VERSION, SESSION_MIGRATIONS, wholeSession);
+
 function* candidates(found: FoundDocument): Generator<Candidate> {
   if (found.state === "usable") yield { prepare: () => prepared(found.doc), backup: null };
+  if (fromNewerBuild(found)) {
+    const ownSession = findOlderBuildSession();
+    if (ownSession.state === "usable") yield { prepare: () => prepared(ownSession.doc), backup: null };
+  }
   yield* backupsOf(found.state === "usable" ? { state: "unusable", reason: "shape", text: found.text } : found);
 }
 
