@@ -57,10 +57,7 @@ enum TranslationSessions {
       case TranslationError.nothingToTranslate: kind = "nothing_to_translate"
       case TranslationError.unableToIdentifyLanguage: kind = "unable_to_identify_language"
       case TranslationError.internalError: kind = "internal_error"
-      case TranslationError.alreadyCancelled: kind = "already_cancelled"
-      case TranslationError.notInstalled: kind = "not_installed"
       case TranslationError.unsupportedSourceLanguage: kind = "unsupported_source_language"
-      case TranslationError.unsupportedTargetLanguage: kind = "unsupported_target_language"
       case TranslationError.unsupportedLanguagePairing: kind = "unsupported_language_pairing"
       default: kind = "other"
       }
