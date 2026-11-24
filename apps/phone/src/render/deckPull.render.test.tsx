@@ -500,24 +500,54 @@ test("the bar is one bar throughout: its three glass shapes stay while the brows
   frame();
 });
 
-test("ending a pull on the UI thread hands the bar back to the page on JS too, so a bar-cleared report that reaches JS after the pull's JS end never leaves the page bar's glass hidden", () => {
+function deferUiWork() {
   const reanimated = require("react-native-reanimated") as typeof import("react-native-reanimated");
+  const queued: (() => void)[] = [];
+  const spy = jest.spyOn(reanimated, "runOnUI").mockImplementation(((work: (...args: unknown[]) => void) => (...args: unknown[]) => void queued.push(() => work(...args))) as never);
+  return {
+    queued,
+    release: () => spy.mockRestore(),
+    runOnUi: () => act(() => queued.splice(0).forEach((work) => work())),
+  };
+}
+
+test("a pull ended on JS keeps the bar the page's: a bar-cleared report the page sent before that end is dropped when it reaches JS, and the end on the UI thread hands the bar back even after a report sent in between", () => {
   act(() => {
     deckPull.barCleared.value = true;
     pull.setDeckOwnsBar(true);
   });
-  const onUi: (() => void)[] = [];
-  const deferred = jest.spyOn(reanimated, "runOnUI").mockImplementation(((work: (...args: unknown[]) => void) => (...args: unknown[]) => void onUi.push(() => work(...args))) as never);
+  const sentBefore = deckPull.barTurn.value;
+  const ui = deferUiWork();
   act(() => pull.endDeckPull());
-  deferred.mockRestore();
+  ui.release();
   expect(pull.usePullBar.getState().deckOwns).toBe(false);
-  act(() => pull.setDeckOwnsBar(true));
-  expect(onUi).toHaveLength(1);
-  act(() => onUi.splice(0).forEach((work) => work()));
+  act(() => pull.reportDeckOwnsBar(true, sentBefore));
+  expect(pull.usePullBar.getState().deckOwns).toBe(false);
+  act(() => pull.reportDeckOwnsBar(true, deckPull.barTurn.value));
+  expect(pull.usePullBar.getState().deckOwns).toBe(true);
+  expect(ui.queued).toHaveLength(1);
+  ui.runOnUi();
   frame();
   expect(deckPull.barCleared.value).toBe(false);
   expect(deckPull.barOwned.value).toBe(false);
   expect(pull.usePullBar.getState().deckOwns).toBe(false);
+});
+
+test("a card that grows right after a pull ended keeps the bar: the old end's hand-back, reaching JS after the grow took the bar, never gives the bar back to the page mid-grow", () => {
+  const root = app();
+  const target = deckPull.target.value!;
+  unmount(mounted.splice(mounted.indexOf(root), 1)[0]!);
+  const ui = deferUiWork();
+  act(() => pull.endDeckPull());
+  act(() => void pull.growDeckPull(target, jest.fn(), jest.fn()));
+  ui.release();
+  expect(pull.usePullBar.getState().deckOwns).toBe(true);
+  expect(ui.queued).toHaveLength(2);
+  ui.runOnUi();
+  frame();
+  expect(deckPull.stage.value).toBe(PULL_STAGE.growing);
+  expect(deckPull.barOwned.value).toBe(true);
+  expect(pull.usePullBar.getState().deckOwns).toBe(true);
 });
 
 const onAndroid = Platform.OS === "android" ? test : test.skip;

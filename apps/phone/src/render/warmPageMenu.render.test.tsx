@@ -11,6 +11,7 @@ import { usePageUi } from "../state/page/store";
 import { usePages } from "../state/pages/store";
 import { useSettingsNav } from "../state/settings/nav";
 import { useBrowse } from "../state/browse/store";
+import { useLibrary } from "../state/library/store";
 import { pressButton, renderSurface, unmount, updateSurface, withTabs } from "../../test/render/harness";
 import { useMenuModel } from "../state/page/hooks";
 import type { MenuModel } from "../state/page/pageMenu";
@@ -86,6 +87,32 @@ function ModelProbe({ live, seen }: { live: boolean; seen: (model: MenuModel) =>
   return null;
 }
 
+test("a menu armed on a quiet web page builds its page rows while hidden, and opening keeps those same rows", async () => {
+  page("https://site0.example/", false);
+  const root = host();
+  const nightShade = () => root.root.findAll((node) => typeof node.type === "string" && node.props.testID === "menuToggle:Night Shade")[0];
+  const hidden = nightShade();
+  expect(hidden).toBeDefined();
+  await open();
+  expect(nightShade()).toBe(hidden);
+  unmount(root);
+});
+
+test("a hidden menu catches up with a page that settles while it is closed, so the rows a new page needs are built before the press", async () => {
+  page("about:blank", false);
+  const root = host();
+  const nightShade = () => root.root.findAll((node) => typeof node.type === "string" && node.props.testID === "menuToggle:Night Shade")[0];
+  expect(nightShade()).toBeUndefined();
+  page("https://site0.example/", true, 3);
+  expect(nightShade()).toBeUndefined();
+  page("https://site0.example/", false, 4);
+  const built = nightShade();
+  expect(built).toBeDefined();
+  await open();
+  expect(nightShade()).toBe(built);
+  unmount(root);
+});
+
 test("a closed page menu's model holds still while its page loads and blocks requests, and reads the page afresh the moment it goes live", () => {
   page("https://site0.example/", false);
   const seen = jest.fn();
@@ -149,5 +176,28 @@ test("Site Settings rises over the leaving menu on the next frame, and Back from
   });
   expect(useSettingsNav.getState().open).toBe(false);
   expect(usePageUi.getState().menuOpen).toBe(false);
+  unmount(root);
+});
+
+test("Site Settings stays shut when the Library, a sheet or Find takes the page in the frame before it would rise", async () => {
+  page("https://site0.example/", false);
+  const root = host();
+  const takers = [
+    () => useLibrary.setState({ open: true }),
+    () => useBrowse.setState({ sheet: "archive" }),
+    () => usePageUi.setState({ findOpen: true }),
+  ];
+  for (const take of takers) {
+    await open();
+    await pressButton(root, "Site Settings");
+    act(take);
+    act(() => jest.advanceTimersByTime(FRAME_MS));
+    expect(useSettingsNav.getState().open).toBe(false);
+    act(() => {
+      useLibrary.setState({ open: false });
+      useBrowse.setState({ sheet: null });
+      usePageUi.setState({ findOpen: false });
+    });
+  }
   unmount(root);
 });

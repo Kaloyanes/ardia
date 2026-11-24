@@ -101,7 +101,7 @@ test("a catch-up with no ping window, as the bar, the deck, search and the iPhon
   unmount(root);
 });
 
-test("the page menu's sheet and the full-height sheets hand their ping window to their catch-up, and keep every change when given none", () => {
+test("the page menu's sheet hands its ping window to its catch-up, and the full-height sheets keep every change", () => {
   const pingOf = (node: ReactElement, testID: string) => {
     const root = renderSurface(node);
     const ping = root.root.findAll((child) => child.type === FabricCatchUp && child.props.testID === testID)[0]!.props.pingMs;
@@ -110,6 +110,5 @@ test("the page menu's sheet and the full-height sheets hand their ping window to
   };
   expect(pingOf(<Sheet open onDismiss={() => undefined} onHidden={() => undefined} catchUpPingMs={FABRIC_CATCH_UP_PING_MS}><Text>Menu</Text></Sheet>, "sheetFabricCatchUp")).toBe(FABRIC_CATCH_UP_PING_MS);
   expect(pingOf(<Sheet open onDismiss={() => undefined} onHidden={() => undefined}><Text>Menu</Text></Sheet>, "sheetFabricCatchUp")).toBeUndefined();
-  expect(pingOf(<FullSheet sheet="settings" progress={{ value: 0 } as never} onDismiss={() => undefined} catchUpPingMs={FABRIC_CATCH_UP_PING_MS}>{() => <Text>Settings</Text>}</FullSheet>, "fullSheetFabricCatchUp")).toBe(FABRIC_CATCH_UP_PING_MS);
   expect(pingOf(<FullSheet sheet="settings" progress={{ value: 0 } as never} onDismiss={() => undefined}>{() => <Text>Settings</Text>}</FullSheet>, "fullSheetFabricCatchUp")).toBeUndefined();
 });

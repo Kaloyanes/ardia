@@ -43,22 +43,28 @@ const NO_PAGE = { hasPage: false, url: null, canGoBack: false, canGoForward: fal
 
 type MenuPage = { hasPage: boolean; url: string | null; canGoBack: boolean; canGoForward: boolean; isLoading: boolean; pageZoom: number; isDesktopSite: boolean; blockedRequests: number };
 
+type PageNavigation = ReturnType<typeof usePages.getState>["navigation"][string];
+
+const menuPageOf = (page: PageNavigation | undefined): MenuPage =>
+  page ? { hasPage: true, url: page.url, canGoBack: page.canGoBack, canGoForward: page.canGoForward, isLoading: page.isLoading, pageZoom: page.pageZoom, isDesktopSite: page.isDesktopSite, blockedRequests: page.blockedRequests } : NO_PAGE;
+
+export function closedMenuPage(fresh: MenuPage, held: MenuPage | null): MenuPage {
+  if (held === null) return fresh;
+  if (fresh.isLoading) return held;
+  return fresh.blockedRequests === held.blockedRequests ? fresh : { ...fresh, blockedRequests: held.blockedRequests };
+}
+
 export function useMenuModel(id: string, live = true): MenuModel {
   const dark = useDarkScheme();
-  const heldPage = useRef<MenuPage>(NO_PAGE);
-  const heldUrl = useRef("");
+  const held = useRef<MenuPage | null>(null);
   const state = usePages(
     useShallow((s): MenuPage => {
-      if (!live) return heldPage.current;
-      const page = s.navigation[id];
-      return page
-        ? { hasPage: true, url: page.url, canGoBack: page.canGoBack, canGoForward: page.canGoForward, isLoading: page.isLoading, pageZoom: page.pageZoom, isDesktopSite: page.isDesktopSite, blockedRequests: page.blockedRequests }
-        : NO_PAGE;
+      const fresh = menuPageOf(s.navigation[id]);
+      return live ? fresh : closedMenuPage(fresh, held.current);
     }),
   );
-  const tabUrl = useTabs((s) => (live ? (s.open.find((t) => t.id === id)?.url ?? s.privates.find((t) => t.id === id)?.url ?? "") : heldUrl.current));
-  heldPage.current = state;
-  heldUrl.current = tabUrl;
+  held.current = state;
+  const tabUrl = useTabs((s) => s.open.find((t) => t.id === id)?.url ?? s.privates.find((t) => t.id === id)?.url ?? "");
   const isPrivate = useTabs((s) => s.privates.some((t) => t.id === id));
   const site = usePageUi((s) => s.menuSite);
   const levels = usePageUi((s) => s.zoomLevels);

@@ -29,6 +29,7 @@ export const deckPull = {
   barBack: makeMutable(0),
   barCleared: makeMutable(false),
   barOwned: makeMutable(false),
+  barTurn: makeMutable(0),
   cut: makeMutable(false),
   warm: makeMutable(false),
   steady: makeMutable(false),
@@ -315,11 +316,25 @@ export function setDeckOwnsBar(deckOwns: boolean) {
   deckPull.barOwned.value = deckOwns;
 }
 
-function endDeckPullOnUI() {
+let barTurn = 0;
+
+function handDeckBar(deckOwns: boolean): number {
+  barTurn += 1;
+  deckPull.barTurn.value = barTurn;
+  setDeckOwnsBar(deckOwns);
+  return barTurn;
+}
+
+export function reportDeckOwnsBar(deckOwns: boolean, turn: number) {
+  if (turn !== barTurn) return;
+  setDeckOwnsBar(deckOwns);
+}
+
+function endDeckPullOnUI(turn: number) {
   "worklet";
   resetDeckPull();
   deckPull.barCleared.value = false;
-  runOnJS(setDeckOwnsBar)(false);
+  runOnJS(reportDeckOwnsBar)(false, turn);
   deckPull.pageLive.value = false;
   deckPull.barBack.value = 0;
   deckPull.steady.value = false;
@@ -339,8 +354,7 @@ export function endDeckPull() {
   growSeq += 1;
   grownEnded = null;
   clearTimeout(grownCap);
-  runOnUI(endDeckPullOnUI)();
-  setDeckOwnsBar(false);
+  runOnUI(endDeckPullOnUI)(handDeckBar(false));
 }
 
 let growingId: string | null = null;
@@ -403,7 +417,7 @@ export function growDeckPull(target: PullTarget, ended: (id: string) => void, gr
   growSeq += 1;
   grownEnded = ended;
   grownLanded = grown;
-  setDeckOwnsBar(true);
+  handDeckBar(true);
   runOnUI(growDeckPullOnUI)(target, steady, growSeq, growLanded);
   return true;
 }

@@ -141,7 +141,7 @@ function DrawnPageMenu({ tabId, open, onHidden, live = true }: PageMenuProps) {
     return (
       <Sheet open={open} onDismiss={closePageMenu} onHidden={hidden} onShown={menuArrived} fill={ink.solid} onTapAway={tappedAway} grabber catchUpPingMs={MENU_CATCH_UP_PING_MS}>
         {confirmation}
-        <PageMenuWords tabId={tabId} model={model} onTranslate={translate} />
+        <PageMenuWords tabId={tabId} model={model} onTranslate={translate} showing={opening} />
       </Sheet>
     );
   }

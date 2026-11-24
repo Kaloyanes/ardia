@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, useWindowDimensions, View, type ScrollViewProps, type ViewInstance } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -54,7 +54,7 @@ export type SheetScroll = { native: ReturnType<typeof Gesture.Native>; atTop: Sh
 
 export const SheetScrollContext = createContext<SheetScroll | null>(null);
 
-export function SheetScrollView({ children, onLayout, onContentSizeChange, scrollEnabled, ...rest }: ScrollViewProps) {
+export function SheetScrollView({ children, onLayout, onContentSizeChange, scrollEnabled, topFor, ...rest }: ScrollViewProps & { topFor?: number }) {
   const sheet = useContext(SheetScrollContext);
   const [frame, setFrame] = useState({ view: 0, content: 0 });
   const listRef = useAnimatedRef<Animated.ScrollView>();
@@ -64,6 +64,11 @@ export function SheetScrollView({ children, onLayout, onContentSizeChange, scrol
     listRef.current?.scrollTo({ y: 0, animated: true });
     sheet.atTop.value = true;
   }, [locked]);
+  useLayoutEffect(() => {
+    if (topFor === undefined) return;
+    listRef.current?.scrollTo({ y: 0, animated: false });
+    if (sheet) sheet.atTop.value = true;
+  }, [topFor]);
   useEffect(() => {
     if (sheet) sheet.scrolls.value = frame.content > frame.view + AT_TOP_SLOP;
   }, [sheet, frame]);
@@ -135,7 +140,7 @@ function ClassicSheet({ open, onDismiss, onHidden, fill, onTapAway, halfOpen = f
   const { height } = useWindowDimensions();
   const shown = useSharedValue(0);
   const panel = useRef<ViewInstance>(null);
-  useCoverFocus(panel);
+  useCoverFocus(panel, open);
   const sheetHeight = useSharedValue(height);
   const drag = useSharedValue(0);
   const reduceMotion = useReduceMotion();

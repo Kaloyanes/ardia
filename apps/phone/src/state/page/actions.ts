@@ -19,7 +19,7 @@ import { blockersToast, searchQuery, translationAsks, translationUrl, type Night
 import { backLayer, downloadedToast, downloadFailedToast, downloadingToast, pressPlan, stoppedPrivateDownloadsToast, type PressAction, type Request } from "./pagePrompts";
 import { onboardingBack } from "../onboarding/store";
 import { refreshSettings } from "../settings/actions";
-import { openSettings, openSettingsPage, popSettings, type SettingsRoute } from "../settings/nav";
+import { openSettings, openSettingsPage, popSettings, settingsNav, type SettingsRoute } from "../settings/nav";
 import { pinToMac, sendTab } from "../sync/actions";
 import type { SyncedDevice } from "../../platform/sync";
 import { linkToCopy } from "./linkCopy";
@@ -387,6 +387,12 @@ export function openSiteSettingsSheet() {
   afterPageMenu(() => openSettingsPage({ page: "siteSettings" }), { sameDocument: false });
 }
 
+function somethingElseOverPage() {
+  const ui = pageUi();
+  const browse = useBrowse.getState();
+  return ui.menuOpen || ui.findOpen || ui.readerTabId !== null || ui.press !== null || browse.surface !== "browsing" || browse.sheet !== null || searchState().open || settingsNav().open || useLibrary.getState().open || useVoice.getState().presented;
+}
+
 export function openSiteSettingsOverMenu() {
   const document = currentDocument();
   markMenuPhase("siteSettingsPressed");
@@ -401,7 +407,7 @@ export function openSiteSettingsOverMenu() {
     return;
   }
   requestAnimationFrame(() => {
-    if (opening?.id !== document.opening || pageUi().menuOpen || selectedId() !== document.tabId || useBrowse.getState().surface !== "browsing") return;
+    if (opening?.id !== document.opening || selectedId() !== document.tabId || somethingElseOverPage()) return;
     open();
   });
 }

@@ -4,7 +4,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue } from "react-native-reanimated";
 import { DECK, DECK_REDESIGN } from "../../lib/deckGeometry";
 import { pullBarGhosts, pullBarGlyphs, pullBarShift, pullClearsBar, pullPagePose, pullRise } from "../../lib/deckPull";
-import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, setDeckOwnsBar } from "../../state/browse/deckPull";
+import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, reportDeckOwnsBar } from "../../state/browse/deckPull";
 import { deckLive } from "../../state/browse/deckTurn";
 import { deckPullSettled, noteDeckTapWhileLanding } from "../../state/browse/store";
 import { tabsInk, usesGlass, useTheme } from "../ui";
@@ -33,7 +33,7 @@ export function PagePull({ tabId, barTop, children }: { tabId: string; barTop: n
       const clears = rise >= 0 && pullClearsBar(rise, barTop, barHanded.value);
       if (clears === barHanded.value) return;
       barHanded.value = clears;
-      runOnJS(setDeckOwnsBar)(clears);
+      runOnJS(reportDeckOwnsBar)(clears, deckPull.barTurn.value);
     },
   );
   const pose = useDerivedValue(() => {
