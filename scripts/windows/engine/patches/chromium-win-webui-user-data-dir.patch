@@ -26,7 +26,7 @@
  void GetUserDataDirFromRegistryPolicyIfSet(const InstallConstants& mode,
                                             std::wstring* user_data_dir) {
    assert(user_data_dir);
-@@ -108,8 +120,250 @@ bool IsHeadlessMode(const std::wstring& command_line) {
+@@ -108,8 +120,270 @@ bool IsHeadlessMode(const std::wstring& command_line) {
    return GetCommandLineSwitch(command_line, L"headless").has_value();
  }
  
@@ -246,13 +246,29 @@
 +  return false;
 +}
 +
++bool ReactNativeAppLibraryBesideExe() {
++  std::wstring path(MAX_PATH, L'\0');
++  const DWORD length = ::GetModuleFileNameW(nullptr, &path[0],
++                                            static_cast<DWORD>(path.size()));
++  if (length == 0 || length >= path.size())
++    return false;
++  path.resize(length);
++  const size_t slash = path.find_last_of(L'\\');
++  if (slash == std::wstring::npos)
++    return false;
++  path.resize(slash + 1);
++  path.append(L"ArdiaApp.dll");
++  return ::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
++}
++
 +bool IsWebUIShellCommandLine(const std::wstring& command_line) {
 +  const std::wstring trimmed = TrimmedLikeBase(command_line);
 +  if (trimmed.empty())
-+    return false;
++    return !ReactNativeAppLibraryBesideExe();
 +  const std::vector<std::wstring> tokens = TokenizeCommandLineToArray(trimmed);
 +  bool parse_switches = true;
-+  std::optional<std::wstring> value;
++  std::wstring shell;
++  std::wstring process_type;
 +  for (size_t i = 1; i < tokens.size(); ++i) {
 +    const std::wstring arg = TrimmedLikeBase(tokens[i]);
 +    parse_switches = parse_switches && arg != L"--";
@@ -266,18 +282,22 @@
 +    if (switch_string.substr(prefix) == L"single-argument")
 +      break;
 +    const std::wstring key = AsciiLower(switch_string);
-+    if (key.substr(SwitchPrefixLength(key)) != L"ardia-shell")
-+      continue;
-+    value = equals == std::wstring::npos ? std::wstring()
-+                                         : arg.substr(equals + 1);
++    const std::wstring name = key.substr(SwitchPrefixLength(key));
++    const std::wstring value =
++        equals == std::wstring::npos ? std::wstring() : arg.substr(equals + 1);
++    if (name == L"ardia-shell")
++      shell = value;
++    else if (name == L"type")
++      process_type = value;
 +  }
-+  return value.has_value() && *value == L"webui";
++  return process_type.empty() && shell != L"rnw" &&
++         (shell == L"webui" || !ReactNativeAppLibraryBesideExe());
 +}
 +
  bool GetUserDataDirectoryImpl(const std::wstring& command_line,
                                const InstallConstants& mode,
                                std::wstring* result,
-@@ -135,6 +389,17 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
+@@ -135,6 +409,17 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
      }
    }
  
@@ -295,7 +315,7 @@
    // Headless Chrome instances are expected to run in parallel with the headful
    // Chrome and other headless Chrome instances. In order to do so, headless
    // Chrome needs a dedicated user data directory for each headless instance.
-@@ -157,8 +422,18 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
+@@ -157,8 +442,18 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
      user_data_dir.pop_back();
    }
  
@@ -314,7 +334,7 @@
    if (!got_valid_directory) {
      *invalid_supplied_directory = user_data_dir;
      got_valid_directory = GetDefaultUserDataDirectory(mode, &user_data_dir);
-@@ -171,6 +446,17 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
+@@ -171,6 +466,17 @@ bool GetUserDataDirectoryImpl(const std::wstring& command_line,
    if (!got_valid_directory)
      return false;
  
@@ -334,10 +354,12 @@
  }
 --- a/chrome/install_static/user_data_dir.h
 +++ b/chrome/install_static/user_data_dir.h
-@@ -49,6 +49,13 @@ bool GetUserDataDirectory(std::wstring* user_data_directory,
+@@ -49,6 +49,15 @@ bool GetUserDataDirectory(std::wstring* user_data_directory,
  // data directory specification.
  bool IsTemporaryUserDataDirectoryCreatedForHeadless();
  
++bool ReactNativeAppLibraryBesideExe();
++
 +bool IsWebUIShellCommandLine(const std::wstring& command_line);
 +
 +bool WebUITreeHasLink(const std::wstring& root,
@@ -376,7 +398,7 @@
  #include "testing/gmock/include/gmock/gmock.h"
  #include "testing/gtest/include/gtest/gtest.h"
  
-@@ -217,5 +229,169 @@ TEST(UserDataDir, HasNoHeadlessTempUserDataDirIfProvidedByPolicy) {
+@@ -217,5 +229,191 @@ TEST(UserDataDir, HasNoHeadlessTempUserDataDirIfProvidedByPolicy) {
    EXPECT_FALSE(IsTemporaryUserDataDirectoryCreatedForHeadless());
  }
  
@@ -389,54 +411,64 @@
 +};
 +
 +constexpr ShellSwitchCase kShellSwitchCases[] = {
-+    {L"chrome.exe --ardia-shell=webui", 1},
-+    {L"chrome.exe --ARDIA-SHELL=webui", 1},
-+    {L"chrome.exe --Ardia-Shell=webui", 1},
-+    {L"chrome.exe -ardia-shell=webui", 1},
-+    {L"chrome.exe /ardia-shell=webui", 1},
-+    {L"chrome.exe\t--ardia-shell=webui", 1},
-+    {L"chrome.exe --ardia-shell=WebUI", 0},
-+    {L"chrome.exe --ardia-shell", 0},
-+    {L"chrome.exe --ardia-shell=", 0},
-+    {L"chrome.exe --ardia-shell=webui --ardia-shell=rnw", 0},
-+    {L"chrome.exe --ardia-shell=rnw --ARDIA-SHELL=webui", 1},
-+    {L"chrome.exe -- --ardia-shell=webui", 0},
-+    {L"chrome.exe --ardia-shell=webui -- --ardia-shell=rnw", 1},
-+    {L"chrome.exe \" -- \" --ardia-shell=webui", 0},
-+    {L"chrome.exe \"\t--\t\" --ardia-shell=webui", 0},
-+    {L"chrome.exe \" --ardia-shell=webui \"", 1},
-+    {L"chrome.exe \"--ardia-shell=webui\"", 1},
-+    {L"chrome.exe --ardia-shell=\"webui\"", 1},
-+    {L"chrome.exe \"--ardia-shell=web ui\"", 0},
-+    {L"chrome.exe --ardia-shell=webui\x3000", 1},
-+    {L"chrome.exe --ardia-shell=webui\x00A0", 1},
-+    {L"chrome.exe \x3000--ardia-shell=webui", 1},
-+    {L"chrome.exe ---ardia-shell=webui", 0},
-+    {L"chrome.exe --ardia-shell==webui", 0},
-+    {L"chrome.exe --ardia\x2011shell=webui", 0},
-+    {L"chrome.exe --ardia-shell=w\x00E9" L"bui", 0},
-+    {L"chrome.exe --single-argument --ardia-shell=webui", 0},
-+    {L"chrome.exe --SINGLE-ARGUMENT --ardia-shell=webui", 1},
-+    {L"chrome.exe --Single-Argument --ardia-shell=webui", 1},
-+    {L"chrome.exe /single-argument --ardia-shell=webui", 0},
-+    {L"chrome.exe -single-argument=x --ardia-shell=webui", 0},
-+    {L"chrome.exe \" --single-argument\" --ardia-shell=webui", 0},
-+    {L"chrome.exe --ardia-shell=webui --single-argument --ardia-shell=rnw", 1},
-+    {L"   chrome.exe --ardia-shell=webui", 1},
-+    {L" --ardia-shell=webui", 0},
-+    {L"\"--ardia-shell=webui\" --other", 0},
-+    {L"\"C:\\Program Files\\Ardia\\chrome.exe\" --ardia-shell=webui", 1},
-+    {L"chrome.exe --user-data-dir=\"C:\\a b\" --ardia-shell=webui", 1},
-+    {L"chrome.exe --ardia-shell=webui \"\"", 1},
-+    {L"chrome.exe \"\"--ardia-shell=webui", kEither},
-+    {L"chrome.exe \"a\"\"b\" --ardia-shell=webui", kEither},
-+    {L"chrome.exe --ardia-shell=webui\\\" x", kEither},
-+    {L"chrome.exe \"--ardia-shell=webui", kEither},
-+    {L"chrome.exe -", 0},
-+    {L"chrome.exe --", 0},
-+    {L"chrome.exe --=webui", 0},
-+    {L"", 0},
-+    {L"   ", 0},
++    {L"chrome.exe --ardia-shell=rnw", 0},
++    {L"chrome.exe --ARDIA-SHELL=rnw", 0},
++    {L"chrome.exe --Ardia-Shell=rnw", 0},
++    {L"chrome.exe -ardia-shell=rnw", 0},
++    {L"chrome.exe /ardia-shell=rnw", 0},
++    {L"chrome.exe\t--ardia-shell=rnw", 0},
++    {L"chrome.exe --ardia-shell=RNW", 1},
++    {L"chrome.exe --ardia-shell", 1},
++    {L"chrome.exe --ardia-shell=", 1},
++    {L"chrome.exe --ardia-shell=rnw --ardia-shell=webui", 1},
++    {L"chrome.exe --ardia-shell=webui --ARDIA-SHELL=rnw", 0},
++    {L"chrome.exe -- --ardia-shell=rnw", 1},
++    {L"chrome.exe --ardia-shell=rnw -- --ardia-shell=webui", 0},
++    {L"chrome.exe \" -- \" --ardia-shell=rnw", 1},
++    {L"chrome.exe \"\t--\t\" --ardia-shell=rnw", 1},
++    {L"chrome.exe \" --ardia-shell=rnw \"", 0},
++    {L"chrome.exe \"--ardia-shell=rnw\"", 0},
++    {L"chrome.exe --ardia-shell=\"rnw\"", 0},
++    {L"chrome.exe \"--ardia-shell=r nw\"", 1},
++    {L"chrome.exe --ardia-shell=rnw\x3000", 0},
++    {L"chrome.exe --ardia-shell=rnw\x00A0", 0},
++    {L"chrome.exe \x3000--ardia-shell=rnw", 0},
++    {L"chrome.exe ---ardia-shell=rnw", 1},
++    {L"chrome.exe --ardia-shell==rnw", 1},
++    {L"chrome.exe --ardia\x2011shell=rnw", 1},
++    {L"chrome.exe --ardia-shell=r\x00E9" L"nw", 1},
++    {L"chrome.exe --single-argument --ardia-shell=rnw", 1},
++    {L"chrome.exe --SINGLE-ARGUMENT --ardia-shell=rnw", 0},
++    {L"chrome.exe --Single-Argument --ardia-shell=rnw", 0},
++    {L"chrome.exe /single-argument --ardia-shell=rnw", 1},
++    {L"chrome.exe -single-argument=x --ardia-shell=rnw", 1},
++    {L"chrome.exe \" --single-argument\" --ardia-shell=rnw", 1},
++    {L"chrome.exe --ardia-shell=rnw --single-argument --ardia-shell=webui", 0},
++    {L"   chrome.exe --ardia-shell=rnw", 0},
++    {L" --ardia-shell=rnw", 1},
++    {L"\"--ardia-shell=rnw\" --other", 1},
++    {L"\"C:\\Program Files\\Ardia\\chrome.exe\" --ardia-shell=rnw", 0},
++    {L"chrome.exe --user-data-dir=\"C:\\a b\" --ardia-shell=rnw", 0},
++    {L"chrome.exe --ardia-shell=rnw \"\"", 0},
++    {L"chrome.exe \"\"--ardia-shell=rnw", kEither},
++    {L"chrome.exe \"a\"\"b\" --ardia-shell=rnw", kEither},
++    {L"chrome.exe --ardia-shell=rnw\\\" x", kEither},
++    {L"chrome.exe \"--ardia-shell=rnw", kEither},
++    {L"chrome.exe -", 1},
++    {L"chrome.exe --", 1},
++    {L"chrome.exe --=rnw", 1},
++    {L"", 1},
++    {L"   ", 1},
++    {L"chrome.exe --type=renderer", 0},
++    {L"chrome.exe --type=renderer --ardia-shell=webui", 0},
++    {L"chrome.exe --TYPE=gpu-process", 0},
++    {L"chrome.exe /type=crashpad-handler --ardia-shell=rnw", 0},
++    {L"chrome.exe --type", 1},
++    {L"chrome.exe --type=", 1},
++    {L"chrome.exe --type=renderer --type=", 1},
++    {L"chrome.exe -- --type=renderer", 1},
++    {L"chrome.exe --single-argument --type=renderer", 1},
++    {L"chrome.exe --SINGLE-ARGUMENT --type=renderer", 0},
 +};
 +
 +std::vector<std::wstring> CommandLineToArgvWTokens(
@@ -465,12 +497,24 @@
 +  for (const ShellSwitchCase& c : kShellSwitchCases) {
 +    SCOPED_TRACE(base::WideToUTF8(c.command_line));
 +    const bool early = IsWebUIShellCommandLine(c.command_line);
-+    const bool late = base::CommandLine::FromString(c.command_line)
-+                          .GetSwitchValueASCII("ardia-shell") == "webui";
++    const base::CommandLine parsed =
++        base::CommandLine::FromString(c.command_line);
++    const std::wstring shell = parsed.GetSwitchValueNative("ardia-shell");
++    const bool late = parsed.GetSwitchValueNative("type").empty() &&
++                      shell != L"rnw" &&
++                      (shell == L"webui" || !ReactNativeAppLibraryBesideExe());
 +    EXPECT_EQ(early, late);
 +    if (c.webui != kEither)
 +      EXPECT_EQ(late, c.webui == 1);
 +  }
++}
++
++TEST(UserDataDir, ArdiaShellDefaultsToWebUIWithoutTheReactNativeApp) {
++  ASSERT_FALSE(ReactNativeAppLibraryBesideExe());
++  EXPECT_TRUE(IsWebUIShellCommandLine(L"chrome.exe"));
++  EXPECT_TRUE(IsWebUIShellCommandLine(L"chrome.exe --ardia-shell=webui"));
++  EXPECT_FALSE(IsWebUIShellCommandLine(L"chrome.exe --ardia-shell=rnw"));
++  EXPECT_FALSE(IsWebUIShellCommandLine(L"chrome.exe --type=renderer"));
 +}
 +
 +TEST(UserDataDir, ArdiaShellTokensMatchCommandLineToArgvW) {

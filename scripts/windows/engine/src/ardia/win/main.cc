@@ -683,8 +683,8 @@ void RefuseShellModeDisagreement(bool webui) {
     return;
   }
   LOG(ERROR) << "Ardia engine: install_static read the shell mode as "
-             << (early ? "webui" : "default") << " and Chromium as "
-             << (webui ? "webui" : "default") << "; not starting";
+             << (early ? "webui" : "rnw") << " and Chromium as "
+             << (webui ? "webui" : "rnw") << "; not starting";
   base::Process::TerminateCurrentProcessImmediately(1);
 }
 

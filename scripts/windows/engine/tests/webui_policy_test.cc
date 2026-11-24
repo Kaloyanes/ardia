@@ -210,6 +210,26 @@ void TestDownloadCommands() {
   assert(command_routes == 4);
 }
 
+void TestShellSelection() {
+  static_assert(WebUIShellSelected(L"", L"", false));
+  static_assert(WebUIShellSelected(L"", L"webui", false));
+  static_assert(WebUIShellSelected(L"", L"webui", true));
+  static_assert(!WebUIShellSelected(L"", L"rnw", false));
+  static_assert(!WebUIShellSelected(L"", L"rnw", true));
+  static_assert(!WebUIShellSelected(L"", L"", true));
+  assert(WebUIShellSelected(L"", L"RNW", false));
+  assert(!WebUIShellSelected(L"", L"RNW", true));
+  assert(WebUIShellSelected(L"", L"rnw ", false));
+  assert(WebUIShellSelected(L"", L" rnw", false));
+  assert(WebUIShellSelected(L"", L"WebUI", false));
+  assert(!WebUIShellSelected(L"", L"WebUI", true));
+  assert(WebUIShellSelected(L"", L"anything", false));
+  assert(!WebUIShellSelected(L"renderer", L"", false));
+  assert(!WebUIShellSelected(L"gpu-process", L"webui", false));
+  assert(!WebUIShellSelected(L"crashpad-handler", L"rnw", true));
+  assert(!WebUIShellSelected(L"utility", L"webui", true));
+}
+
 void TestStartupMigrationGate() {
   using Outcome = StartupMigrationOutcome;
   static_assert(kStartupMigrationTimeoutMs == 60000);
@@ -484,6 +504,7 @@ int main() {
   TestCanonicalPathContainment();
   TestStartupMigrationPolicy();
   TestStartupMigrationGate();
+  TestShellSelection();
   TestWinRenameHelpers();
   TestDesktopTelemetryPolicy();
   TestMaximizeButtonStateMachine();
