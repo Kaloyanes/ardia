@@ -3,7 +3,9 @@
 #import <AppKit/AppKit.h>
 
 #include <algorithm>
+#include <vector>
 
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -137,6 +139,25 @@ ACTabDialogHost::~ACTabDialogHost() = default;
 
 void ACTabDialogHost::ContentsDestroyed() {
   contents_ = nullptr;
+  if (!observers_.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ACTabDialogHost::CloseOrphanedDialogs,
+                                  weak_factory_.GetWeakPtr()));
+  }
+  DeleteIfOrphaned();
+}
+
+void ACTabDialogHost::CloseOrphanedDialogs() {
+  for (auto& observer : observers_) {
+    observer.OnHostDestroying();
+  }
+  std::vector<web_modal::ModalDialogHostObserver*> remaining;
+  for (auto& observer : observers_) {
+    remaining.push_back(&observer);
+  }
+  for (auto* observer : remaining) {
+    RemoveObserver(observer);
+  }
   DeleteIfOrphaned();
 }
 
