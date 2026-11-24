@@ -91,12 +91,12 @@ other than us, so it is listed here although Ardia itself contacts nothing for i
 - **What it reads.** Ardia's version and channel, `config.json`, recent crash reports on macOS, and the 7-day local
   usage log (`docs/feedback.md` › Local copy: counts, timings, enums and flags, never a URL or a title). The command
   copies these into a session folder and removes secrets, emails, home folder names and the paths and queries of URLs
-  first. A site's name stays where your settings name one (a search provider, a rule for a site). Linux crash dumps
+  first, as far as patterns can find them: it is a best effort, not a proof. A site's name stays where your settings name one (a search provider, a rule for a site). Linux crash dumps
   hold the crashed process's memory, so they are listed, never copied.
 - **What it doesn't.** Cookies, saved passwords, history, bookmarks, open tabs, page content and site storage. The
-  command collects none of them and tells the agent that Ardia's whole data folder is off limits. It starts Claude
-  Code with rules that refuse to read that folder, and for that session it refuses every `ardia` command that would
-  show pages, tabs, cookies or settings.
+  command collects none of them and tells the agent that Ardia's own folders (its data, settings and logs) are off
+  limits. It starts Claude Code with rules that refuse to read those folders, and for that session it refuses every
+  `ardia` command that would show pages, tabs, cookies or settings.
 - **Guard rails, not a lock.** The agent runs as you, with a shell. The rules above stop accidents; they can't stop an
   agent that ignores its instructions. The consent says so before anything is collected. The agent is started in its
   ask-first mode, and Claude Code is told to ask you before it runs the command that posts a report, or `gh`, even
@@ -106,7 +106,8 @@ other than us, so it is listed here although Ardia itself contacts nothing for i
 - **What the command itself contacts.** `api.github.com` and `raw.githubusercontent.com`, once, for the current
   playbook (no cookies, no account, no redirects followed), and `github.com` or `ardia.dev/api/feedback` only to
   file a report. A report sent to `ardia.dev` this way stays private: the feedback service never opens a public
-  issue for it.
+  issue for it. Like any `ardia feedback` it carries Ardia's and the command's versions, the OS and the names of the
+  last few `ardia` commands run, and the evidence files only if you say yes to those.
 
 ## Hosts named in the source that Ardia doesn't contact
 
