@@ -22,8 +22,9 @@ stays), and removing it leaves the file system as it was before the install
 The images default to fedora:43 and opensuse/tumbleweed; tumbleweed also gets
 apparmor-parser and apparmor-abstractions first, so its run
 covers the profile. dnf retries each download 5
-times, zypper each repository refresh 5 times 30 s apart (a Tumbleweed mirror can
-be caught mid-sync) and each install 3 times, and each image pull is tried 3 times,
+times, zypper each repository refresh 5 times 30 s apart, from the third try on
+from downloadcontent.opensuse.org rather than a mirror (a Tumbleweed mirror can lag
+a new snapshot), and each install 3 times, and each image pull is tried 3 times,
 so one network flake does not fail the test.'
 
 rpm_file=""
@@ -93,7 +94,15 @@ if command -v zypper >/dev/null; then
   family=zypper
   install() { local try; for try in 1 2 3; do zypper -q -n --no-gpg-checks install --allow-unsigned-rpm "$@" && return 0; [ "$try" = 3 ] || sleep 10; done; return 1; }
   remove() { zypper -q -n remove "$@"; }
-  refreshed() { local try; for try in 1 2 3 4 5; do zypper -q -n --gpg-auto-import-keys refresh --force >/dev/null && return 0; [ "$try" = 5 ] || sleep 30; done; return 1; }
+  refreshed() {
+    local try
+    for try in 1 2 3 4 5; do
+      [ "$try" != 3 ] || sed -i "s|http://download.opensuse.org/|https://downloadcontent.opensuse.org/|" /etc/zypp/repos.d/*.repo
+      zypper -q -n --gpg-auto-import-keys refresh --force >/dev/null && return 0
+      [ "$try" = 5 ] || sleep 30
+    done
+    return 1
+  }
   refreshed || fail "zypper could not refresh its repositories in 5 tries"
   install findutils diffutils desktop-file-utils which apparmor-parser apparmor-abstractions >/dev/null 2>&1
 else
