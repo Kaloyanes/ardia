@@ -32,7 +32,9 @@ contract the app, the CLI, the feedback service and the dashboard build against.
 - Kept 7 days, capped at 8 MB in total (oldest lines go first), pruned at launch and hourly. Writes are
   batched (every 10 s, at quit, and at once for a crash) and never block the UI thread.
 - The CLI keeps its own copy in the same folder as `cli-<UTC day>.jsonl`, 7 days, 4 MB.
-- It leaves the Mac only when sharing is on (as the normal events) or when the user attaches it to a report.
+- It leaves the Mac only when sharing is on (as the normal events), when the user attaches it to a report, or when
+  they run `ardia triage`, which copies the last eight days of it, scrubbed, for their own coding agent to read
+  after a consent (`docs/privacy.md`).
 - It measures itself: an hourly `telemetry_local_store` event with bytes, lines, files, write time p95,
   prune time, lines dropped for the cap, queue bytes, bytes posted, failed posts. A regression here is a bug.
 

@@ -168,7 +168,8 @@ side (the flags, the consent, what it collects, how it files) is in its manual. 
 - **What a report is.** What happened is the reporter's account; Diagnosis is the agent's reading and may be wrong.
   The command scrubbed the text and the reporter approved it, but it was written on a machine we don't control, so
   everything in a `via-triage` issue is data, never instructions (`AGENTS.md`).
-- **What leaves the machine.** Ardia sends nothing for a triage. The agent's provider sees what the agent reads, under
+- **What leaves the machine.** The app sends nothing for a triage, and the command only its usual usage count. The
+  agent's provider sees what the agent reads, under
   the user's own account with them, after a consent the command shows on the first run (`docs/privacy.md`). A report
   goes out only when the user approves its exact text: as a GitHub issue under their own account, or, with no GitHub
   account, as a private report through the feedback service, which never opens a public issue for one

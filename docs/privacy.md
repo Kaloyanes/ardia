@@ -87,7 +87,7 @@ other than us, so it is listed here although Ardia itself contacts nothing for i
 
 - **Who sees what.** The command starts your own Claude Code or Codex. What the agent reads goes to that agent's
   provider under your account with them, on their terms, whether or not "Share anonymous crash reports and usage
-  stats" is on. Ardia and ardia.dev receive nothing unless you later send a report.
+  stats" is on. Ardia and ardia.dev receive none of it unless you later send a report.
 - **What it reads.** Ardia's version and channel, `config.json`, recent crash reports on macOS, and the 7-day local
   usage log (`docs/feedback.md` › Local copy: counts, timings, enums and flags, never a URL or a title). The command
   copies these into a session folder and removes secrets, emails, home folder names and the paths and queries of URLs
