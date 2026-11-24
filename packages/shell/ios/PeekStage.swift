@@ -436,8 +436,26 @@ final class PeekStage: ExpoView {
       "topDown": page.topDown, "geometry": ["page": rect(g.page), "rest": rect(g.rest), "card": rect(g.card), "source": rect(g.source)],
       "stageInWindow": rect(topLeft(convert(bounds, to: nil))),
       "pageInWindow": rect(topLeft(page.subviews.first.map { $0.convert($0.bounds, to: nil) } ?? .zero)),
-      "trace": trace, "events": events, "freezes": freezes, "layers": devLayers(),
+      "trace": trace, "events": events, "freezes": freezes, "layers": devLayers(), "chromeTargets": devChromeTargets(),
     ]
+  }
+
+  private func devChromeTargets() -> [[String: Any]] {
+    guard let window, let root = window.contentView?.superview else { return [] }
+    let height = window.contentView?.frame.height ?? 0
+    var out: [[String: Any]] = []
+    var queue: [NSView] = [chrome]
+    while !queue.isEmpty {
+      let view = queue.removeFirst()
+      queue.append(contentsOf: view.subviews)
+      guard let label = view.accessibilityLabel(), !label.isEmpty else { continue }
+      let rest = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: self)
+      let shown = convert(lastFrame.card.apply(rest), to: nil)
+      let hit = root.hitTest(shown)
+      let reaches = hit.map { $0 === view || $0.isDescendant(of: view) } ?? false
+      out.append(["label": label, "x": shown.x, "y": height - shown.y, "reaches": reaches])
+    }
+    return out
   }
 }
 

@@ -61,7 +61,7 @@ const open = (n) => st().openPeek("a", "${base}/page.html?n=" + n, { x: 240, y: 
 const magnify = (s, phase, magnification) => { const c = s.geometry.card, o = s.stageInWindow;
   return globalThis.expo.modules.ArdiaMagnifyArea.devMagnify("w1", o.x + c.x + c.width / 2, o.y + c.y + c.height / 2, [{ phase, magnification }]); };
 const steps = (s, list) => { let total = 0; return list.reduce((p, [phase, m]) => p.then(() => { const delta = phase === "began" ? m : m - total; total = phase === "began" ? m : m; return magnify(s, phase, delta); }).then(() => settle(16)), Promise.resolve()); };
-const summary = (s) => s && ({ layerHasMesh: s.layerHasMesh, meshInspected: s.meshInspected, windowNumber: s.windowNumber, phase: s.phase, entrance: s.entrance, generation: s.generation, meshFailure: s.meshFailure, topDown: s.topDown, events: s.events, freezes: s.freezes, geometry: s.geometry, stageInWindow: s.stageInWindow, pageInWindow: s.pageInWindow, trace: s.trace });
+const summary = (s) => s && ({ layerHasMesh: s.layerHasMesh, meshInspected: s.meshInspected, windowNumber: s.windowNumber, phase: s.phase, entrance: s.entrance, generation: s.generation, meshFailure: s.meshFailure, topDown: s.topDown, events: s.events, freezes: s.freezes, chromeTargets: s.chromeTargets, geometry: s.geometry, stageInWindow: s.stageInWindow, pageInWindow: s.pageInWindow, trace: s.trace });
 const active = () => { const w = st().windows.w1; return w.activeTabIds[w.profileId] ?? null; };
 const post = (s, phase, m) => { const c = s.geometry.card, o = s.stageInWindow; return globalThis.expo.modules.ArdiaPeekStage.devPostMagnify("w1", o.x + c.x + c.width / 2, o.y + c.y + c.height / 2, phase, m); };
 const realSteps = (s, list) => list.reduce((p, [phase, m]) => p.then(() => post(s, phase, m)).then(() => settle(16)), Promise.resolve());
@@ -549,6 +549,27 @@ try {
       assert.ok(seen.down && seen.up, "the page saw the press and its release");
       assert.deepEqual([seen.up.x, seen.up.y], [seen.down.x, seen.down.y], "the release lands where the press did");
       assert.equal(seen.clicks, 1, "the page got one click");
+    });
+  }
+  if (wanted("chrome-press-mid-pinch")) {
+    await start({ peekMesh: "unavailable" });
+    await check("chrome-press-mid-pinch", async (record) => {
+      await run(`open("cp"); return 0;`);
+      const rest = await waitFor((x) => x.phase === "open");
+      const pinched = await run(`return stage().then((s) => realSteps(s, [["began", 0], ["changed", -0.1], ["changed", -0.2]])).then(() => until((x) => x.phase === "gesture" && x.trace.at(-1).card[0] < 0.95)).then(summary);`);
+      const button = (s) => s.chromeTargets?.find((t) => t.label.startsWith("Close"));
+      const atRest = button(rest), mid = button(pinched);
+      Object.assign(record, { atRest, mid, card: pinched.trace.at(-1).card, phase: pinched.phase });
+      assert.ok(atRest && mid, `the card's Close button is in its chrome: ${JSON.stringify(rest.chromeTargets)}`);
+      assert.equal(pinched.phase, "gesture", "real magnify events are pinching the card");
+      assert.ok(pinched.trace.at(-1).card[0] < 0.95, `the card is scaled mid-pinch: ${pinched.trace.at(-1).card}`);
+      assert.ok(Math.hypot(mid.x - atRest.x, mid.y - atRest.y) > 8, "the button moved with the card");
+      assert.equal(atRest.reaches, true, "at rest a press on Close reaches it");
+      assert.equal(mid.reaches, true, "mid-pinch a press where Close is shown reaches it");
+      const pressable = pinched.chromeTargets.filter((t) => rest.chromeTargets.some((r) => r.label === t.label && r.reaches));
+      record.pressable = pressable;
+      assert.deepEqual(pressable.filter((t) => !t.reaches).map((t) => t.label), [], "every bar button a press reaches at rest is reached where it is drawn mid-pinch");
+      await run(`return stage().then((s) => post(s, "cancelled", 0)).then(() => settle(300));`).catch(() => {});
     });
   }
 } finally {
