@@ -10,9 +10,12 @@ const sources = [
   "../ios/ArdiaWebView+StandIn.mm",
   "../ios/ArdiaHoverProbe.mm",
   "../ios/ArdiaHoverProbe+Refusal.mm",
+  "../ios/ArdiaHoverProbe+Cover.mm",
   "../ios/ArdiaHoverProbeInternal.h",
   "../ios/ArdiaHoverProbe+Dev.mm",
   "../../shell/ios/FocusHandoff.swift",
+  "../../shell/ios/QuitFlow.swift",
+  "../../../apps/browser/src/state/telemetry/hoverLost.ts",
 ];
 const read = (name) => (existsSync(path(name)) ? readFileSync(path(name), "utf8") : "");
 const painting = read("../ios/ArdiaWebView+Painting.mm");
@@ -23,6 +26,9 @@ const probeRefusal = read("../ios/ArdiaHoverProbe+Refusal.mm");
 const probeInternal = read("../ios/ArdiaHoverProbeInternal.h");
 const probeDev = read("../ios/ArdiaHoverProbe+Dev.mm");
 const handoff = read("../../shell/ios/FocusHandoff.swift");
+const probeCover = read("../ios/ArdiaHoverProbe+Cover.mm");
+const quitFlow = read("../../shell/ios/QuitFlow.swift");
+const hoverLostJs = read("../../../apps/browser/src/state/telemetry/hoverLost.ts");
 
 const body = (source, header, closer = "\n}\n") => {
   const start = source.indexOf(header);
@@ -182,4 +188,32 @@ test("the episode record carries the refusal, the matched window and the other-w
   assert.match(probeDev, /@"healRefusedLast" : HealRefusalName\(gEpisode\.lastRefusal\),/);
   assert.match(probeDev, /@"healRefusedWindow" : MenuWindowName\(gEpisode\.refusedWindow\),/);
   assert.match(probeDev, /@"otherWindowClicks" : @\(gEpisode\.otherWindowClicks\),/);
+});
+
+const jsSet = (name) => new Set([...(new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]`).exec(hoverLostJs)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]));
+
+test("an episode still open when Ardia quits is sent as ended by quit, before the app tells JS it is quitting", () => {
+  const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
+  const flushed = terminate.indexOf("ArdiaHost.endHoverLossForQuit()");
+  const told = terminate.indexOf('ShellEvents.send(.app, ["type": "willQuit"])');
+  assert.ok(flushed > 0 && told > flushed, "the open episode closes before willQuit, so JS records it before it saves the queue");
+  assert.match(body(probe, "void EndHoverEpisodeForQuit("), /CloseEpisode\(@"quit"\);/);
+  assert.ok(jsSet("HOVER_ENDINGS").has("quit"), "JS keeps the quit ending");
+});
+
+test("a page covered by a view reports the kind of view, the kind that made it see-through and how much it covered, as enums JS knows", () => {
+  const reason = body(probe, "HoverReason PageReason(");
+  assert.match(reason, /check\.coverView = CoverViewOf\(hit\);\s*NSView \*clear = SeeThroughView\(hit\);\s*check\.coverClear = clear != nil;\s*check\.coverClearView = CoverViewOf\(clear\);\s*check\.coverSize = CoverSizeOver\(clear \?: hit, page\);/);
+  const close = body(probe, "void CloseEpisode(");
+  assert.match(close, /@"coverView" : CoverViewName\(first\.coverView\),/);
+  assert.match(close, /@"coverClearView" : CoverViewName\(first\.coverClearView\),/);
+  assert.match(close, /@"coverSize" : CoverSizeName\(first\.coverSize\),/);
+  const names = (header) => [...body(probeCover, header).matchAll(/@"([A-Za-z]+)"/g)].map((m) => m[1]);
+  const enumOf = (name) => (new RegExp(`enum class ${name} \\{([^}]*)\\}`).exec(probeInternal)?.[1] ?? "").split(",").map((v) => v.trim());
+  assert.deepEqual(names("NSString *CoverViewName("), enumOf("CoverView"), "CoverViewName follows the enum's order");
+  assert.deepEqual(names("NSString *CoverSizeName("), enumOf("CoverSize"), "CoverSizeName follows the enum's order");
+  assert.deepEqual([...jsSet("HOVER_COVER_VIEWS")].sort(), [...enumOf("CoverView")].sort());
+  assert.deepEqual([...jsSet("HOVER_COVER_SIZES")].sort(), [...enumOf("CoverSize")].sort());
+  const kinds = body(probeCover, "CoverView CoverViewOf(");
+  assert.doesNotMatch(kinds, /return name|stringWithFormat/, "a class name is only compared, never kept");
 });

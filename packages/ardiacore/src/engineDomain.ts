@@ -87,6 +87,9 @@ export type HoverLostEpisode = {
   overPage: boolean;
   cover: "none" | "reactNative" | "chromium" | "other";
   coverClear: boolean;
+  coverView?: string;
+  coverClearView?: string;
+  coverSize?: "none" | "small" | "large" | "full";
   responder?: "none" | "window" | "otherWindow" | "page" | "control";
   coverWindow?: string;
   healed: boolean;
@@ -95,7 +98,7 @@ export type HoverLostEpisode = {
   healRefusedLast?: string;
   healRefusedWindow?: string;
   otherWindowClicks?: number;
-  endedBy: "hover" | "heal" | "appInactive" | "windowClosed";
+  endedBy: "hover" | "heal" | "appInactive" | "windowClosed" | "quit";
   seconds: number;
   episode: number;
   epoch: string;

@@ -9,6 +9,8 @@ namespace ardia_host::hover_probe {
 enum class HoverReason { fine, halfActive, staleMenu, notKeyOrMain, coveredByView, responderLost, coveredByWindow };
 enum class FocusWindowKind { none, hidden, blockerPage, internal, ardiaPanel, popup, browser, other };
 enum class PageCover { none, reactNative, chromium, other };
+enum class CoverView { none, rnView, rnText, rnImage, rnTextInput, rnScroll, rnOther, expo, pageHost, ardia, appKit, chromium, other };
+enum class CoverSize { none, small, large, full };
 enum class HoverTrigger { move, click, recheck };
 enum class FocusHolder { none, window, otherWindow, page, control };
 
@@ -55,6 +57,9 @@ struct HoverCheck {
   PageCover cover = PageCover::none;
   FocusWindowKind coverWindow = FocusWindowKind::none;
   FocusHolder holder = FocusHolder::none;
+  CoverView coverView = CoverView::none;
+  CoverView coverClearView = CoverView::none;
+  CoverSize coverSize = CoverSize::none;
   bool coverClear = false;
   bool preventKey = false;
   bool canKey = false;
@@ -99,11 +104,18 @@ bool MenuShown(NSWindow *browser, MenuWindowInfo *matched = nullptr);
 NSView *PageAt(NSWindow *window, NSPoint point);
 NSView *EnclosingPage(NSView *view);
 NSView *HitAt(NSWindow *window, NSPoint point);
+PageCover CoverOf(NSView *hit);
+NSView *SeeThroughView(NSView *hit);
 bool SeeThrough(NSView *hit);
+CoverView CoverViewOf(NSView *view);
+CoverSize CoverSizeOver(NSView *view, NSView *page);
+NSString *CoverViewName(CoverView view);
+NSString *CoverSizeName(CoverSize size);
 FocusHolder HolderOf(NSWindow *window);
 bool ResponderLost(FocusHolder holder, bool clickedPage);
 void HandleHoverCheck(NSWindow *window, NSPoint point, HoverTrigger trigger, ArdiaConsentStamp *stamp);
 void StartHoverWatch();
 void StopHoverWatch();
+void CloseEpisode(NSString *endedBy);
 
 }

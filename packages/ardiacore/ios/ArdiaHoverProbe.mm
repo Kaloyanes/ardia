@@ -132,23 +132,6 @@ NSView *HitAt(NSWindow *window, NSPoint point) {
   return [content hitTest:[content.superview convertPoint:point fromView:nil]];
 }
 
-PageCover CoverOf(NSView *hit) {
-  if (!hit) return PageCover::none;
-  NSBundle *chromium = PageClass() ? [NSBundle bundleForClass:PageClass()] : nil;
-  for (NSView *v = hit; v; v = v.superview) {
-    NSBundle *bundle = [NSBundle bundleForClass:v.class];
-    if (bundle == chromium) return PageCover::chromium;
-    if (bundle == NSBundle.mainBundle) return PageCover::reactNative;
-  }
-  return PageCover::other;
-}
-
-bool SeeThrough(NSView *hit) {
-  for (NSView *v = hit; v; v = v.superview)
-    if (v.alphaValue < 0.01 || (v.layer && v.layer.opacity < 0.01)) return true;
-  return false;
-}
-
 FocusHolder HolderOf(NSWindow *window) {
   NSResponder *responder = window.firstResponder;
   if (!responder) return FocusHolder::none;
@@ -173,7 +156,11 @@ HoverReason PageReason(HoverCheck &check, NSWindow *window, NSPoint point, NSVie
     NSView *hit = HitAt(window, point);
     if (EnclosingPage(hit)) return HoverReason::fine;
     check.cover = CoverOf(hit);
-    check.coverClear = SeeThrough(hit);
+    check.coverView = CoverViewOf(hit);
+    NSView *clear = SeeThroughView(hit);
+    check.coverClear = clear != nil;
+    check.coverClearView = CoverViewOf(clear);
+    check.coverSize = CoverSizeOver(clear ?: hit, page);
     return HoverReason::coveredByView;
   }
   if (check.windowKey && ResponderLost(check.holder, click && page)) return HoverReason::responderLost;
@@ -312,6 +299,9 @@ NSString *DescribeCheck(const HoverCheck &check, HoverTrigger trigger) {
   if (check.cover != PageCover::none) [facts addObject:[@"cover=" stringByAppendingString:CoverName(check.cover)]];
   if (check.coverWindow != FocusWindowKind::none) [facts addObject:[@"coverWindow=" stringByAppendingString:KindName(check.coverWindow)]];
   if (check.coverClear) [facts addObject:@"coverClear"];
+  if (check.coverView != CoverView::none) [facts addObject:[@"coverView=" stringByAppendingString:CoverViewName(check.coverView)]];
+  if (check.coverClearView != CoverView::none) [facts addObject:[@"coverClearView=" stringByAppendingString:CoverViewName(check.coverClearView)]];
+  if (check.coverSize != CoverSize::none) [facts addObject:[@"coverSize=" stringByAppendingString:CoverSizeName(check.coverSize)]];
   return [NSString stringWithFormat:@"%@ at %@", [facts componentsJoinedByString:@" "], [clock stringFromDate:NSDate.date]];
 }
 
@@ -334,6 +324,9 @@ void CloseEpisode(NSString *endedBy) {
     @"overPage" : @(first.overPage),
     @"cover" : CoverName(first.cover),
     @"coverClear" : @(first.coverClear),
+    @"coverView" : CoverViewName(first.coverView),
+    @"coverClearView" : CoverViewName(first.coverClearView),
+    @"coverSize" : CoverSizeName(first.coverSize),
     @"responder" : HolderName(first.holder),
     @"coverWindow" : KindName(first.coverWindow),
     @"healed" : @(gEpisode.healed),
@@ -574,6 +567,10 @@ NSString *HoverProbeLine() {
                                     a.frontmost, a.half() ? @" (half active)" : @"", gLastHoverVerdict ?: @"not checked",
                                     (unsigned long)gEpisodeCount,
                                     gEpisode.open ? [@", lost now: " stringByAppendingString:ReasonName(gEpisode.first.reason)] : @""];
+}
+
+void EndHoverEpisodeForQuit() {
+  CloseEpisode(@"quit");
 }
 
 void WatchHover() {

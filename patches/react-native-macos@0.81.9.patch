@@ -1737,7 +1737,7 @@ index 8f1094a71ed431fcecb6f760ffe8d6da643f04cb..67404c8656b69d9cf28d9eb5862e9914
  {
    view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 diff --git a/React/Base/macOS/RCTUIKit.m b/React/Base/macOS/RCTUIKit.m
-index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88eed20374cd 100644
+index a37a1c106a04752c1baeb6dd2170402ce5f34f71..a2b796b7516cd6cd3386a10ae4f2ce01b4c88b6e 100644
 --- a/React/Base/macOS/RCTUIKit.m
 +++ b/React/Base/macOS/RCTUIKit.m
 @@ -15,6 +15,7 @@
@@ -1793,7 +1793,7 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88ee
  - (BOOL)acceptsFirstMouse:(NSEvent *)event
  {
    if (self.acceptsFirstMouse || [super acceptsFirstMouse:event]) {
-@@ -284,20 +323,53 @@ - (CATransform3D)transform3D
+@@ -284,23 +323,59 @@ - (CATransform3D)transform3D
    return _transform3D;
  }
  
@@ -1834,8 +1834,8 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88ee
    _hasCustomTransform3D = !CATransform3DEqualToTransform(transform3D, CATransform3DIdentity);
 -  self.layer.transform = transform3D;
 +  self.layer.transform = RCTUIViewLayerTransform(self);
-+}
-+
+ }
+ 
 +- (void)setFrameOrigin:(NSPoint)newOrigin
 +{
 +  [super setFrameOrigin:newOrigin];
@@ -1850,12 +1850,18 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88ee
 +  if (_hasCustomTransform3D) {
 +    RCTUIViewApplyTransform3D(self);
 +  }
- }
++}
 +// Ardia]
- 
++
  - (NSView *)hitTest:(NSPoint)point
  {
-@@ -308,7 +380,11 @@ - (NSView *)hitTest:(NSPoint)point
++  if (self.alphaValue < 0.01 || self.layer.opacity < 0.01) { // [Ardia: a view under 1% opacity takes no hits, as in UIKit (#881) Ardia]
++    return nil;
++  }
+   // NSView's hitTest: receives a point in superview coordinates. Convert to local
+   // coordinates using CALayer, which correctly accounts for layer.transform.
+   // NSView's convertPoint:fromView: does NOT account for layer transforms.
+@@ -308,7 +383,11 @@ - (NSView *)hitTest:(NSPoint)point
    if (self.layer.superlayer) {
      localPoint = [self.layer convertPoint:point fromLayer:self.layer.superlayer];
    } else {
@@ -1868,7 +1874,7 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88ee
    }
    return [self hitTest:localPoint withEvent:nil];
  }
-@@ -331,8 +407,8 @@ - (void)updateLayer
+@@ -331,8 +410,8 @@ - (void)updateLayer
    // On macOS, AppKit's layer-backed view system resets layer.transform to identity
    // during its layout/display cycle because NSView has no built-in transform property
    // (unlike UIView on iOS). We must re-apply the stored transform after each cycle.
@@ -1879,7 +1885,7 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..4b0fa1207d50724979fdb0122a4a88ee
    }
  
    if (_respondsToDisplayLayer) {
-@@ -822,6 +898,13 @@ - (instancetype)initWithFrame:(CGRect)frame
+@@ -822,6 +901,13 @@ - (instancetype)initWithFrame:(CGRect)frame
    return self;
  }
  
