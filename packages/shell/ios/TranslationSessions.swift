@@ -103,26 +103,26 @@ enum TranslationSessions {
   private static func translateOnce(_ key: PassageKey, standard: Bool) async -> [String]? {
     await PassageDispatch.translate(
       key.pieces,
-      plain: { (text: String) -> String? in
-        do {
-          return try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
-        } catch {
-          await record(error)
-          return nil
-        }
+      plain: { text in
+        await attempt(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
       },
-      linked: attributedAvailable ? { (pieces: [String]) -> [String]? in
+      linked: attributedAvailable ? { pieces in
         guard #available(macOS 26.4, *) else { return nil }
         let text = LinkedPieces.text(pieces)
-        do {
-          let translated = try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
-          return LinkedPieces.parts(of: translated, over: pieces)
-        } catch {
-          await record(error)
-          return nil
-        }
+        guard let translated = await attempt(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
+        else { return nil }
+        return LinkedPieces.parts(of: translated, over: pieces)
       } : nil
     )
+  }
+
+  private static func attempt<T: Sendable>(source: String, target: String, standard: Bool, _ work: @escaping @MainActor (TranslationSession) async throws -> T) async -> T? {
+    do {
+      return try await run(source: source, target: target, standard: standard, work)
+    } catch {
+      record(error)
+      return nil
+    }
   }
 
 
