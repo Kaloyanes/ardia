@@ -43,6 +43,7 @@ const HEADER_ROOM = { marginHorizontal: LIVE_FOLDER_HEADER_MARGIN } as const;
 const BOX_ROOM = { paddingVertical: GROUP_BORDER, paddingHorizontal: LIVE_FOLDER_BOX_PAD } as const;
 const REFRESH_SLOT = { minWidth: iconButton.s.box, alignSelf: "stretch", flexDirection: "row", alignItems: "center", justifyContent: "flex-end" } as const;
 const REFRESH_OVER = { position: "absolute", top: 0, bottom: 0, right: 0, flexDirection: "row", alignItems: "center" } as const;
+const WARNING_GLYPH = { width: 18, height: 18 } as const;
 const SPINNER_BOX = { width: TAB_ROW.closeSlot, height: TAB_ROW.closeSlot, alignItems: "center", justifyContent: "center" } as const;
 const SPINNER_PIVOT = { transform: [{ translateX: REFRESH_ARROW_RING_OFFSET.x }, { translateY: REFRESH_ARROW_RING_OFFSET.y }] };
 const SPINNER_GLYPH = { width: 14, height: 14, transform: [{ translateX: -REFRESH_ARROW_RING_OFFSET.x }, { translateY: -REFRESH_ARROW_RING_OFFSET.y }] };
@@ -162,18 +163,14 @@ function FolderHeader({ folderId, windowId, collapsed }: { folderId: string; win
             <SidebarRowSurface fill={ink.clear} cornerRadius={GROUP_INNER_RADIUS}>
               <LiveFolderIcon folder={folder} open={!collapsed} />
               <FolderHeaderTitle label={folder.name} color={tokens.groupTitle} />
-              {status?.error ? (
-                <Pressable onPress={() => fixError(windowId, status.error)} tooltip={errorText(status.error.kind, status.error.source)} style={{ marginRight: space.xxs }}>
-                  <Symbol name="exclamationmark.triangle.fill" size={10} color={colors.pending} style={{ width: 18, height: 18 }} />
-                </Pressable>
-              ) : null}
               <View style={REFRESH_SLOT}>
                 {updating ? (
                   <RefreshButton spinning tooltip={statusText(folderId)} onPress={() => void manualRefresh(folderId)} />
-                ) : collapsed ? (
+                ) : collapsed || status?.error ? (
                   <Animated.View style={{ flexDirection: "row", alignItems: "center", marginRight: space.xxs, gap: space.xs, opacity: restOpacity }}>
-                    {unread ? <Dot size={7} color={theme.accent} /> : null}
-                    <Badge text={count} size="m" />
+                    {collapsed && unread ? <Dot size={7} color={theme.accent} /> : null}
+                    {collapsed ? <Badge text={count} size="m" /> : null}
+                    {status?.error ? <Symbol name="exclamationmark.triangle.fill" size={10} color={colors.pending} accessibilityLabel={errorText(status.error.kind, status.error.source)} style={WARNING_GLYPH} /> : null}
                   </Animated.View>
                 ) : null}
                 {updating ? null : (
