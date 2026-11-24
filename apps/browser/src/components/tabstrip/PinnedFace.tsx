@@ -4,13 +4,10 @@ import { useTileTheme } from "../../state/favicons/tileTheme";
 import { TabBadges } from "../media/TabBadges";
 import { TabIcon } from "../sidebar/TabIcon";
 import { TileUnread } from "../unread/UnreadBadge";
-import { DockSelection, HoverFill, Text, withAlpha } from "../ui";
+import { DockSelection, HoverFill } from "../ui";
 import { GlassFill, useGlass } from "../ui/Glass";
-import { hex, useTheme } from "../ui/theme";
+import { useTheme } from "../ui/theme";
 import { useSelectedTopApp } from "../../state/app/theme";
-import { useMinimalism } from "../../state/windows/layout";
-import { tileLetterOf } from "../../lib/tileLetter";
-import { useSidebarTokens } from "../sidebar/tokens";
 import { ITEM_HEIGHT, PINNED_CELL, PINNED_FACE_INSET, pinnedFaceRadius, PINNED_RING_STROKE } from "./tokens";
 
 export function PinnedFace({ tabId, active, hovered, pressed, frame = "cell" }: { tabId: string; active: boolean; hovered: boolean; pressed: boolean; frame?: "cell" | "face" }) {
@@ -20,8 +17,6 @@ export function PinnedFace({ tabId, active, hovered, pressed, frame = "cell" }: 
   const glass = useGlass();
   const badges = useSettings((st) => st.showTopAppBadges);
   const topApp = useSelectedTopApp();
-  const minimal = useMinimalism();
-  const quiet = useSidebarTokens();
   if (!tab) return null;
   const glassRing = active && glass;
   const compact = frame === "face";
@@ -67,13 +62,7 @@ export function PinnedFace({ tabId, active, hovered, pressed, frame = "cell" }: 
         </View>
       )}
       <View pointerEvents="none">
-        {minimal ? (
-          <Text size="small" weight="medium" color={hex(withAlpha(theme.textTab, active ? quiet.quietActiveText : quiet.quietText))}>
-            {tileLetterOf(tab.url, tab.customTitle ?? tab.title)}
-          </Text>
-        ) : (
-          <TabIcon tabId={tab.id} url={tab.url} favicon={tab.favicon} icon={tab.customIcon} />
-        )}
+        <TabIcon tabId={tab.id} url={tab.url} favicon={tab.favicon} icon={tab.customIcon} />
         <TabBadges tabId={tab.id} />
       </View>
       {badges ? <TileUnread tabId={tab.id} /> : null}
