@@ -103,7 +103,7 @@ enum TranslationSessions {
   private static func translateOnce(_ key: PassageKey, standard: Bool) async -> [String]? {
     await PassageDispatch.translate(
       key.pieces,
-      plain: { text in
+      plain: { (text: String) -> String? in
         do {
           return try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
         } catch {
@@ -111,7 +111,7 @@ enum TranslationSessions {
           return nil
         }
       },
-      linked: attributedAvailable ? { pieces in
+      linked: attributedAvailable ? { (pieces: [String]) -> [String]? in
         guard #available(macOS 26.4, *) else { return nil }
         let text = LinkedPieces.text(pieces)
         do {
