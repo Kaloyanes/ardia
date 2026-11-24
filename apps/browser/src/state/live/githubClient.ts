@@ -1,14 +1,15 @@
 import { blockedError, blockedNodes, changeKey, DETAILS_PAGE, detailNodes, GITHUB_DETAILS_QUERY, GITHUB_DIRECT_QUERY, GITHUB_SEARCH_QUERY, GITHUB_SEARCHES, GITHUB_STATE_QUERY, listingOf, prItem, sectioned, VIEWER_QUERY, withStacks, type DetailsResponse, type GithubResponse, type ListedPR, type Listing, type RateLimitInfo, type SearchResponse } from "./github";
 import { createGithubLimits, graphqlRateLimited, retryAtFromHeaders, type GithubLimits, type HeaderReader } from "./githubLimits";
 import { LiveError, type CompletionState, type LiveFolder, type LiveItem, type PullRequestSection } from "./types";
+import { consentToken, type ConsentToken } from "../telemetry/choice";
 import { noteLiveGithubBlocked, noteLiveGithubDetails, noteLiveGithubRequest } from "../telemetry/liveGithub";
 
 export const LIST_SHARED_MS = 30_000;
 export const DETAILS_FRESH_MS = 10 * 60_000;
 export const PENDING_FRESH_MS = 60_000;
 
-export type GraphqlPayload = { query: string; variables: Record<string, unknown> };
-export type GithubSend = (scope: string, payload: GraphqlPayload, onHeaders: (headers: HeaderReader) => void) => Promise<unknown>;
+type GraphqlPayload = { query: string; variables: Record<string, unknown> };
+type GithubSend = (scope: string, payload: GraphqlPayload, onHeaders: (headers: HeaderReader) => void) => Promise<unknown>;
 
 type Reply = { data?: { rateLimit?: RateLimitInfo | null } | null; errors?: { type?: string; message: string }[] };
 type Listed = Listing & { keys: Map<string, string | null>; blocked: LiveError | null };
@@ -32,13 +33,13 @@ const sameJson = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JS
 
 const unsettled = (item: LiveItem | null) => !!item?.pr?.checks.some((c) => c.state === "pending" || c.state === "queued");
 
-function toListed({ authored, review, direct }: Searches): Listed {
+function toListed({ authored, review, direct }: Searches, consent: ConsentToken | null): Listed {
   const nodes = (res: SearchResponse) => ({ nodes: res.data?.search.nodes ?? [] });
   const json: GithubResponse = { data: { authored: nodes(authored), review: nodes(review), direct: nodes(direct) } };
   const keys = new Map<string, string | null>();
   for (const n of [...json.data!.authored.nodes, ...json.data!.review.nodes]) if (n && "id" in n && n.id && !keys.has(n.id)) keys.set(n.id, changeKey(n as ListedPR));
   const blocked = blockedError([authored, review, direct].flatMap((res) => blockedNodes(res.errors)));
-  if (blocked) noteLiveGithubBlocked();
+  if (blocked) noteLiveGithubBlocked(consent);
   return { ...listingOf(json), keys, blocked };
 }
 
@@ -77,7 +78,7 @@ export function createGithubClient(send: GithubSend, clock: () => number = Date.
       if (graphqlRateLimited(json.errors, headers)) throw limited();
       limits.succeeded(scope);
       const error = json.errors?.[0];
-      if (error && !json.data) throw new LiveError("other", error.message);
+      if (error && !json.data) throw new LiveError("other", "GitHub couldn't answer that request");
       return json;
     });
   }
@@ -85,9 +86,10 @@ export function createGithubClient(send: GithubSend, clock: () => number = Date.
   function list(a: Account, interactive: boolean): Promise<Listed> {
     const shared = a.list;
     if (shared && (!shared.done || (!interactive && clock() - shared.at < LIST_SHARED_MS))) return shared.promise;
+    const consent = consentToken();
     const search = (query: string, q: string) => graphql<SearchResponse & Reply>(a.scope, interactive, query, { q });
     const searches = Promise.all([search(GITHUB_SEARCH_QUERY, GITHUB_SEARCHES.authored), search(GITHUB_SEARCH_QUERY, GITHUB_SEARCHES.review), search(GITHUB_DIRECT_QUERY, GITHUB_SEARCHES.direct)]);
-    const entry = { at: clock(), done: false, promise: searches.then(([authored, review, direct]) => toListed({ authored, review, direct })) };
+    const entry = { at: clock(), done: false, promise: searches.then(([authored, review, direct]) => toListed({ authored, review, direct }, consent)) };
     a.list = entry;
     entry.promise.then(
       (listed) => {
@@ -198,4 +200,3 @@ export function createGithubClient(send: GithubSend, clock: () => number = Date.
   return { fetchFolder, resolveGone, viewer, pausedUntil, warning };
 }
 
-export type GithubClient = ReturnType<typeof createGithubClient>;

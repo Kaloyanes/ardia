@@ -9,11 +9,12 @@ export type QuestionId =
   | "cmdl"
   | "newTab"
   | "newTabPosition"
+  | "ctrlTab"
   | "tidy"
   | "quit"
   | "windows"
   | "tabsMore"
-  | "color" | "switcher" | "appearance" | "style" | "frame" | "siteColor" | "lookMore"
+  | "color" | "appearance" | "style" | "frame" | "siteColor" | "lookMore"
   | "engine"
   | "crash"
   | "pins"
@@ -28,22 +29,22 @@ export const QUESTIONS: Record<Exclude<OnboardingStep, "intro">, Question[]> = {
   source: [{ id: "source", keys: [] }],
   layout: [
     { id: "tabs", keys: ["tabLayout"] },
+    { id: "color", keys: [] },
+    { id: "style", keys: ["interfaceStyle", "glassTintWithTheme", "glassTintAmount"], askedWithPreset: true },
     { id: "address", keys: ["addressBar"] },
     { id: "cmdl", keys: ["commandBarPlacement"] },
   ],
   tabs: [
     { id: "newTab", keys: ["newTabOpens"] },
     { id: "newTabPosition", keys: ["newTabPosition", "newTabButtonPosition"] },
+    { id: "ctrlTab", keys: ["shortcuts"], askedWithPreset: true },
     { id: "tidy", keys: ["cleanUpInactiveTabsAfterMinutes"] },
     { id: "quit", keys: ["restoreSession"] },
     { id: "windows", keys: ["shareTabsAcrossWindows"] },
     { id: "tabsMore", keys: ["balancedTopApps", "peekModifier", "undoReopensClosedTab", "cmdClickCreatesTabGroup"] },
   ],
   look: [
-    { id: "color", keys: [] },
-    { id: "switcher", keys: ["profileSwitcherIcons"], askedWithPreset: true },
     { id: "appearance", keys: ["appearance"] },
-    { id: "style", keys: ["interfaceStyle", "glassTintWithTheme", "glassTintAmount"], askedWithPreset: true },
     { id: "frame", keys: ["pageFrame", "borderlessMode"], askedWithPreset: true },
     { id: "siteColor", keys: ["extendWebsiteColor"] },
     { id: "lookMore", keys: ["hideToolbarWhileScrolling", "bookmarksBar"] },

@@ -24,7 +24,7 @@ const { DATA_TYPES, SYNCED_KINDS, typeSyncedFor, defaultTypes } = await import("
 const S = () => useBrowser.getState();
 S().hydrate({});
 const unshown = new Set(unshownSettings(S().settings, { top: false, syncOn: true, calendarAccess: true }).split("\\n"));
-const watched = ["general.sync", "automations.calendarAccess", "automations.meetingAlert", "advanced.pageEngine", "advanced.websiteEngines", "general.blockAds", "general.filterLists", "tabs.videoUpscaling"];
+const watched = ["general.sync", "automations.calendarAccess", "automations.meetingAlert", "advanced.pageEngine", "advanced.websiteEngines", "advanced.commandScrollZoom", "general.blockAds", "general.filterLists", "tabs.videoUpscaling"];
 function pageEngines() {
   const settings = S().settings;
   const withRules = { settings: { ...settings, pageEngine: "webkit", websiteEngines: { "https://rule.example": "webkit" } }, tabs: { marked: { id: "marked", url: "https://example.com/", engine: "webkit", page: { kind: "empty" } } } };
@@ -61,7 +61,7 @@ function offers(onWindows) {
 
 test("Windows offers Sync without passwords but no Calendar or WebKit rows, no blocker or upscaling row, and no Settings copy that names the Mac", () => {
   assert.deepEqual(offers(true), {
-    hidden: ["automations.calendarAccess", "automations.meetingAlert", "advanced.pageEngine", "advanced.websiteEngines", "general.blockAds", "general.filterLists", "tabs.videoUpscaling"],
+    hidden: ["automations.calendarAccess", "automations.meetingAlert", "advanced.pageEngine", "advanced.websiteEngines", "advanced.commandScrollZoom", "general.blockAds", "general.filterLists", "tabs.videoUpscaling"],
     engineCommand: true,
     hidingCommands: [true, true],
     unloadsProfiles: false,
@@ -90,7 +90,7 @@ test("the Mac keeps every row and the engine switch", () => {
 });
 
 const PANES_DIR = new URL("./panes/", import.meta.url);
-const HIDDEN_ON_WINDOWS = new Set(["CalendarSection.tsx", "WebEngineSection.tsx", "HiddenElementsSection.tsx"]);
+const HIDDEN_ON_WINDOWS = new Set(["CalendarSection.tsx", "WebEngineSection.tsx", "EngineModeRow.tsx", "HiddenElementsSection.tsx", "PasskeyAccessRow.tsx", "PasswordManagerPlugin.tsx", "WebKitLimitsSheet.tsx"]);
 const MAC_ONLY_STATES = [["General.tsx", "requiresApproval"], ["General.tsx", 'title="Content blocking"']];
 const MAC_WORDS = /macOS|Touch ID|Keychain|this Mac|their Mac|View ›|Apple silicon|System Settings/;
 

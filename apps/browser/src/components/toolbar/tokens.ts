@@ -5,7 +5,7 @@ export const GLYPH = 13;
 
 export const SYMBOL_BOX = 16;
 
-export const HISTORY_GLYPH = { size: GLYPH, weight: "medium" } as const;
+export const NAV_GLYPH = { size: GLYPH, weight: "medium" } as const;
 
 export const TOOLBAR_MOTION = { dim: duration.base, hide: duration.base, show: duration.base, settle: 0 } as const;
 
@@ -52,7 +52,6 @@ export const HISTORY_BUTTON_MOTION = {
   duration: duration.slow + 50,
   incomingDelay: 35,
   travel: 4,
-  pressTravel: 1.5,
 } as const;
 
 export const DEVELOPER_ROW = { ...TOOLBAR_ROWS.compact, height: 34, center: 17, button: 24, buttonRadius: 6, extensionButton: 24 };

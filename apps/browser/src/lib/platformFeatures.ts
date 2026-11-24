@@ -3,6 +3,9 @@ export type PlatformFeatures = {
   syncsWithPhone: boolean;
   syncsPasswords: boolean;
   unloadsIdleProfiles: boolean;
+  vetoesChromeDiscardsForCli: boolean;
+  readsCliConsole: boolean;
+  drivesTabsFromEngine: boolean;
   sleepsTabsOverBudget: boolean;
   dock: boolean;
   appIcon: boolean;
@@ -25,8 +28,11 @@ export type PlatformFeatures = {
   haptics: boolean;
   launchLoad: boolean;
   freezeWatch: boolean;
+  busyTabWatch: boolean;
   quitsWithLastWindow: boolean;
   keepsNewTabLinksInLittleArdia: boolean;
+  littleArdiaShortcutFromAnyApp: boolean;
+  mouseShortcuts: boolean;
   commandScrollZoom: boolean;
   passwordAutofillSwitch: boolean;
   blocksAutoplay: boolean;
@@ -34,11 +40,16 @@ export type PlatformFeatures = {
   tabReachesUnderOverlays: boolean;
   newTabBarFirst: boolean;
   newTabWaitsForFirstFrame: boolean;
+  keepsNewTabUntilPageLoads: boolean;
   textInputRevertsFirstChange: boolean;
   defaultCloudDrive: boolean;
+  movesSyncFolder: boolean;
   interfaceSize: boolean;
   ardiaCommand: boolean;
   devToolsPanels: boolean;
+  readsSearchEngine: boolean;
+  tintNeedsNewImage: boolean;
+  windowGeometry: boolean;
   claimsFollowFocus: boolean;
   inlineWritesEcho: boolean;
   holdsColdPagesUntilPainted: boolean;
@@ -46,7 +57,11 @@ export type PlatformFeatures = {
   snapsTextBaselines: boolean;
   nativeTabSwitch: boolean;
   plugins: boolean;
+  controlDoorbell: boolean;
+  silentFilePanels: boolean;
+  systemPasswordManagers: boolean;
   nativePeekMotion: boolean;
+  menuAlternates: boolean;
 };
 
-export const PLATFORM_FEATURES: PlatformFeatures = { dock: true, appIcon: true, menuBar: true, memoryPressure: true, escapeClosesDownloads: false, unpacksArchivesSilently: true, findsBrowsersBy: "appBundle", hiddenBrowserSources: [], splitView: true, setsDefaultBrowser: true, exportsBookmarksAndPasswords: true, sync: true, calendar: true, webKit: true, contentBlocker: true, trackpadGestures: true, videoUpscaling: true, thinScrollBars: true, haptics: true, launchLoad: true, freezeWatch: true, sharesFiles: true, syncsWithPhone: true, syncsPasswords: true, unloadsIdleProfiles: true, sleepsTabsOverBudget: true, quitsWithLastWindow: false, keepsNewTabLinksInLittleArdia: true, commandScrollZoom: true, passwordAutofillSwitch: true, blocksAutoplay: true, answersPermissionRequests: true, tabReachesUnderOverlays: false, newTabBarFirst: false, newTabWaitsForFirstFrame: true, textInputRevertsFirstChange: false, defaultCloudDrive: true, interfaceSize: true, ardiaCommand: true, claimsFollowFocus: false, inlineWritesEcho: true, holdsColdPagesUntilPainted: true, preloadPages: true, snapsTextBaselines: true, nativeTabSwitch: true, plugins: true, nativePeekMotion: true, devToolsPanels: true };
+export const PLATFORM_FEATURES: PlatformFeatures = { dock: true, appIcon: true, menuBar: true, memoryPressure: true, escapeClosesDownloads: false, unpacksArchivesSilently: true, findsBrowsersBy: "appBundle", hiddenBrowserSources: [], splitView: true, setsDefaultBrowser: true, exportsBookmarksAndPasswords: true, sync: true, calendar: true, webKit: true, contentBlocker: true, trackpadGestures: true, videoUpscaling: true, thinScrollBars: true, haptics: true, launchLoad: true, freezeWatch: true, busyTabWatch: true, sharesFiles: true, syncsWithPhone: true, syncsPasswords: true, unloadsIdleProfiles: true, vetoesChromeDiscardsForCli: true, readsCliConsole: true, drivesTabsFromEngine: true, sleepsTabsOverBudget: true, quitsWithLastWindow: false, keepsNewTabLinksInLittleArdia: true, littleArdiaShortcutFromAnyApp: true, mouseShortcuts: true, commandScrollZoom: true, passwordAutofillSwitch: true, blocksAutoplay: true, answersPermissionRequests: true, tabReachesUnderOverlays: false, newTabBarFirst: false, newTabWaitsForFirstFrame: true, keepsNewTabUntilPageLoads: true, textInputRevertsFirstChange: false, defaultCloudDrive: true, movesSyncFolder: false, interfaceSize: true, ardiaCommand: true, claimsFollowFocus: false, inlineWritesEcho: true, holdsColdPagesUntilPainted: true, preloadPages: true, snapsTextBaselines: true, nativeTabSwitch: true, plugins: true, controlDoorbell: true, silentFilePanels: true, nativePeekMotion: true, devToolsPanels: true, systemPasswordManagers: true, windowGeometry: true, readsSearchEngine: true, tintNeedsNewImage: true, menuAlternates: true };
