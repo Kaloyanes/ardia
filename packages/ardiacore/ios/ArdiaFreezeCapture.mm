@@ -10,6 +10,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <mach-o/dyld.h>
+#include <mach-o/dyld_images.h>
+#include <mach/mach.h>
 #include <mach-o/loader.h>
 #include <mach/mach_time.h>
 #include <os/lock.h>
@@ -132,19 +134,29 @@ bool TextRange(const mach_header_64 *header, uint64_t *low, uint64_t *high, char
   return *high > *low;
 }
 
+uint64_t SharedCacheBase() {
+  task_dyld_info_data_t info;
+  mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&info, &count) != KERN_SUCCESS || !info.all_image_info_addr) return 0;
+  const auto *images = (const dyld_all_image_infos *)info.all_image_info_addr;
+  return images->version >= 15 ? images->sharedCacheBaseAddress : 0;
+}
+
 void LoadImages() {
+  uint64_t cachedLow = 0;
   for (uint32_t i = 0; i < _dyld_image_count(); i++) {
     const char *path = _dyld_get_image_name(i);
     if (!path) continue;
     const auto *header = (const mach_header_64 *)_dyld_get_image_header(i);
-    if (strncmp(path, "/System/", 8) == 0 || strncmp(path, "/usr/lib/", 9) == 0) {
+    if (header && (header->flags & MH_DYLIB_IN_CACHE)) {
       uint64_t low, high;
       if (TextRange(header, &low, &high, nullptr)) {
-        gCacheLow = gCacheLow ? std::min(gCacheLow, low) : low;
+        cachedLow = cachedLow ? std::min(cachedLow, low) : low;
         gCacheHigh = std::max(gCacheHigh, high);
       }
       continue;
     }
+    if (strncmp(path, "/System/", 8) == 0 || strncmp(path, "/usr/lib/", 9) == 0) continue;
     const char *slash = strrchr(path, '/');
     const char *base = slash ? slash + 1 : path;
     if (gImageCount >= kMaxImages || std::none_of(std::begin(kOwnImages), std::end(kOwnImages), [&](const char *own) { return strcmp(own, base) == 0; })) continue;
@@ -152,6 +164,8 @@ void LoadImages() {
     strlcpy(image.name, base, sizeof image.name);
     if (TextRange(header, &image.low, &image.high, image.uuid) && image.uuid[0]) gImages[gImageCount++] = image;
   }
+  const uint64_t cacheBase = SharedCacheBase();
+  gCacheLow = cacheBase && cacheBase <= cachedLow ? cacheBase : cachedLow;
 }
 
 int ImageOf(uint64_t pc, uint64_t *offset) {
