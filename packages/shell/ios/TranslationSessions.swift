@@ -51,7 +51,22 @@ enum TranslationSessions {
   }
 
   private static func record(_ error: Error) {
-    let kind = error is CancellationError ? "cancelled" : "other"
+    let kind: String
+    if error is CancellationError {
+      kind = "cancelled"
+    } else {
+      switch error {
+      case TranslationError.nothingToTranslate: kind = "nothing_to_translate"
+      case TranslationError.unableToIdentifyLanguage: kind = "unable_to_identify_language"
+      case TranslationError.internalError: kind = "internal_error"
+      case TranslationError.alreadyCancelled: kind = "already_cancelled"
+      case TranslationError.notInstalled: kind = "not_installed"
+      case TranslationError.unsupportedSourceLanguage: kind = "unsupported_source_language"
+      case TranslationError.unsupportedTargetLanguage: kind = "unsupported_target_language"
+      case TranslationError.unsupportedLanguagePairing: kind = "unsupported_language_pairing"
+      default: kind = "other"
+      }
+    }
     if failures.count < 20 { failures.append(kind) }
   }
 
@@ -92,7 +107,7 @@ enum TranslationSessions {
         do {
           return try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
         } catch {
-          record(error)
+          await record(error)
           return nil
         }
       },
@@ -103,7 +118,7 @@ enum TranslationSessions {
           let translated = try await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
           return LinkedPieces.parts(of: translated, over: pieces)
         } catch {
-          record(error)
+          await record(error)
           return nil
         }
       } : nil
