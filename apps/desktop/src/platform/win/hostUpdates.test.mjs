@@ -27,7 +27,7 @@ windowsUpdateCounts.setConsentEpoch("windows-updates-test");
 const CURRENT = { version: "0.2.45", build: 7000 };
 const OFFER = { version: "0.2.46", build: 7100, bytes: 180 * 1024 * 1024 };
 
-function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: "ok", ...OFFER }, failWith = null, background = false, isolated = false, testFeed = false, launches = true } = {}) {
+function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: "ok", ...OFFER }, failWith = null, background = false, isolated = false, testFeed = false, launches = true, instant = false } = {}) {
   const engine = { phase: "idle", offer: null, reason: null, run: 0, claimed: false, kind, current, background, isolated, testFeed, answer, checks: 0, updates: [], restarts: 0, claims: [] };
   engine.status = () => ({
     phase: engine.phase,
@@ -54,7 +54,7 @@ function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: 
   engine.update = (build) => {
     engine.updates.push(build);
     const starts = engine.kind === "installer" && engine.phase === "available" && engine.offer?.build === build;
-    if (starts) Object.assign(engine, { phase: "downloading", run: engine.run + 1, claimed: false, reason: null });
+    if (starts) Object.assign(engine, { phase: instant ? "ready" : "downloading", run: engine.run + 1, claimed: false, reason: null });
     return { ...engine.status(), started: starts };
   };
   engine.advance = () => {
@@ -92,7 +92,18 @@ function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: 
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS, showsToasts, docs = new Map(), answers = true } = {}) {
+function lockManager() {
+  const tails = new Map();
+  return {
+    request: (name, callback) => {
+      const run = (tails.get(name) ?? Promise.resolve()).then(() => callback());
+      tails.set(name, run.catch(() => {}));
+      return run;
+    },
+  };
+}
+
+function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS, showsToasts, docs = new Map(), answers = true, locks, write } = {}) {
   const seen = { asked: [], told: [], offered: [], offeredInstalls: [], ready: [], opened: [], calls: [] };
   const host = {
     bootstrap: { windowId: "main", capabilities: [...capabilities] },
@@ -109,7 +120,7 @@ function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS,
   const updater = windowsUpdater({
     host,
     read: (name) => docs.get(name) ?? null,
-    write: async (name, contents) => void docs.set(name, contents),
+    write: write ?? (async (name, contents) => void docs.set(name, contents)),
     pointToRelease: (title, message) => {
       seen.asked.push({ title, message });
       if (answers) seen.opened.push(WINDOWS_RELEASE_PAGE);
@@ -120,6 +131,7 @@ function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS,
     ready: (update, restart) => void seen.ready.push({ build: update.build, restart }),
     open: (url) => void seen.opened.push(url),
     showsToasts,
+    locks,
     wait: async () => (engine.advance(), tick()),
     now: () => 1_000,
   });
@@ -563,4 +575,78 @@ test("an old Update toast clicked in another window never takes over a run that 
   } finally {
     setConsentPeriod(true, "windows-updates-test");
   }
+});
+
+test("an old Update toast clicked after another window prepared a newer build is declined without counting anything", async () => {
+  takeUpdateCounts();
+  const NEWER = { version: "0.2.47", build: 7200, bytes: OFFER.bytes };
+  let answer = { status: "ok", ...OFFER };
+  const engine = fakeEngine({ answer: () => answer });
+  const docs = new Map([[UPDATE_PREFERENCES, JSON.stringify({ automaticDownloads: false })]]);
+  const browser = harness({ engine, docs });
+  await browser.updater.check(false);
+  assert.equal(browser.seen.offeredInstalls.length, 1);
+  answer = { status: "ok", ...NEWER };
+  const settings = harness({ engine, docs, showsToasts: false });
+  await settings.updater.check(true);
+  await settled(() => engine.phase === "ready");
+  takeUpdateCounts();
+  browser.seen.offeredInstalls[0].install();
+  await settled(() => engine.updates.length === 2);
+  await tick();
+  await tick();
+  assert.deepEqual(engine.updates, [NEWER.build, OFFER.build]);
+  assert.deepEqual(browser.seen.offered, [], "a decline offers no release page");
+  assert.deepEqual(browser.seen.asked, []);
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), {}, "neither a download start nor a failure is counted");
+});
+
+test("a watcher in another window waits for the starter to record the run's consent before it claims the run", async () => {
+  takeUpdateCounts();
+  const locks = lockManager();
+  const engine = fakeEngine({ instant: true });
+  const docs = new Map();
+  let releaseWrite;
+  let holding = false;
+  const write = async (name, contents) => {
+    if (JSON.parse(contents).started && !holding) {
+      holding = true;
+      await new Promise((resolve) => (releaseWrite = resolve));
+    }
+    docs.set(name, contents);
+  };
+  const starter = harness({ engine, docs, showsToasts: false, locks, write });
+  const watcher = harness({ engine, docs, locks });
+  const checking = starter.updater.check(true);
+  await settled(() => typeof releaseWrite === "function");
+  assert.equal(engine.phase, "ready", "the run finished while the starter's write is still pending");
+  await watcher.updater.watch();
+  const second = watcher.updater.watch();
+  await tick();
+  await tick();
+  assert.deepEqual(engine.claims, [], "the watcher can't claim while the start is being recorded");
+  releaseWrite();
+  await second;
+  await checking;
+  assert.deepEqual(engine.claims, [1]);
+  assert.equal(watcher.seen.ready.length, 1);
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), { update_downloads_started: 1, update_downloads_finished: 1 });
+});
+
+test("after a relaunch the same build ready again shows Restart, whatever an earlier session remembered", async () => {
+  const engine = fakeEngine();
+  const docs = new Map([[UPDATE_PREFERENCES, JSON.stringify({ readyNotified: OFFER.build, notified: OFFER.build })]]);
+  const first = harness({ engine, docs });
+  await first.updater.check(true);
+  await settled(() => first.seen.ready.length === 1);
+  const relaunched = fakeEngine();
+  relaunched.check();
+  relaunched.update(OFFER.build);
+  relaunched.advance();
+  const fresh = harness({ engine: relaunched, docs });
+  await fresh.updater.watch();
+  await fresh.updater.watch();
+  assert.equal(fresh.seen.ready.length, 1, "a fresh session shows the Restart toast for its own ready run");
+  await fresh.updater.watch();
+  assert.equal(fresh.seen.ready.length, 1, "and only once for that run");
 });

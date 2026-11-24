@@ -482,9 +482,43 @@ bool ReachesCallSink(const CallCheck& checked) {
       DownloadFinished(state, *run, true, "");
       return ClaimOutcome(state, checked.request->run);
     }
-    default:
+    case UpdateCall::kRestart: {
+      const std::optional<int> run = BeginDownload(state, 120);
+      DownloadFinished(state, *run, true, "");
+      const bool started = BeginInstall(state) == InstallStart::kStarted;
+      assert(BeginInstall(state) == InstallStart::kInstalling);
+      return started;
+    }
+    case UpdateCall::kInstallKind:
+    case UpdateCall::kStatus:
+    case UpdateCall::kCheck:
       return true;
   }
+  return false;
+}
+
+bool ValidWholeArgument(const CallArgument& argument, double low, double high) {
+  return (argument.kind == ArgumentKind::kInt || argument.kind == ArgumentKind::kDouble) &&
+         std::isfinite(argument.number) && std::floor(argument.number) == argument.number && argument.number >= low &&
+         argument.number <= high;
+}
+
+bool ExpectedWholeArgs(UpdateCall call, ArgumentsShape shape, const std::vector<CallArgument>& args) {
+  if (shape == ArgumentsShape::kNotList) {
+    return false;
+  }
+  switch (call) {
+    case UpdateCall::kInstallKind:
+    case UpdateCall::kStatus:
+    case UpdateCall::kCheck:
+    case UpdateCall::kRestart:
+      return args.empty();
+    case UpdateCall::kUpdate:
+      return args.size() == 1 && ValidWholeArgument(args[0], 1, static_cast<double>(kLargestBuild));
+    case UpdateCall::kClaimOutcome:
+      return args.size() == 1 && ValidWholeArgument(args[0], 0, kLargestRun);
+  }
+  return false;
 }
 
 size_t CheckHostileCall(const CallArgument& value, ArgumentsShape shape, const std::vector<CallArgument>& as_args) {
@@ -508,11 +542,18 @@ size_t CheckHostileCall(const CallArgument& value, ArgumentsShape shape, const s
     }
     assert(!CheckUpdateCall(method, ArgumentsShape::kList, std::vector<CallArgument>{value, value}).request);
     const CallCheck whole = CheckUpdateCall(method, shape, as_args);
+    const UpdateCall call = *ParseUpdateCall(method);
+    assert(whole.request.has_value() == ExpectedWholeArgs(call, shape, as_args));
     if (shape == ArgumentsShape::kNotList) {
-      assert(!whole.request && whole.refusal == "args must be a list");
+      assert(whole.refusal == "args must be a list");
+    } else if (!whole.request) {
+      assert(!whole.refusal.empty() && whole.refusal != "Unknown update method" && whole.refusal != "args must be a list");
     }
-    if (whole.request && as_args.empty()) {
-      assert(whole.request->call != UpdateCall::kUpdate && whole.request->call != UpdateCall::kClaimOutcome);
+    if (!as_args.empty() && call != UpdateCall::kUpdate && call != UpdateCall::kClaimOutcome) {
+      assert(!whole.request && whole.refusal == "this update call takes no arguments");
+    }
+    if (as_args.size() > 1) {
+      assert(!whole.request);
     }
   }
   return reached;
@@ -531,6 +572,9 @@ int RunHostileCorpus(const char* path) {
                                          std::vector<CallArgument>{{ArgumentKind::kInt, 120}})));
   assert(ReachesCallSink(CheckUpdateCall("ArdiaUpdates.claimOutcome", ArgumentsShape::kList,
                                          std::vector<CallArgument>{{ArgumentKind::kInt, 1}})));
+  assert(ReachesCallSink(CheckUpdateCall("ArdiaUpdates.restart", ArgumentsShape::kList, std::vector<CallArgument>{})));
+  assert(ReachesCallSink(CheckUpdateCall("ArdiaUpdates.restart", ArgumentsShape::kOmitted, std::vector<CallArgument>{})));
+  assert(!CheckUpdateCall("ArdiaUpdates.restart", ArgumentsShape::kList, std::vector<CallArgument>{{ArgumentKind::kInt, 1}}).request);
   size_t values = 0;
   size_t strings = 0;
   size_t answers = 0;

@@ -28,6 +28,7 @@ const FOLLOW_RUN_EVERY_MS = 2_000;
 const FOLLOW_RUN_FOR_MS = 75 * 60 * 1000;
 export const UPDATE_CHECK_LOCK = "ardia.windows.update-checks";
 const UPDATE_PREFERENCES_LOCK = "ardia.windows.update-preferences";
+export const UPDATE_RUN_LOCK = "ardia.windows.update-runs";
 const LARGEST_INSTALLER_BYTES = 2 ** 30;
 const LARGEST_REASON = 200;
 
@@ -53,7 +54,7 @@ export type CheckAnswer =
   | { status: "busy" }
   | { status: "failed"; reason: Exclude<WindowsUpdateVerifyKey, "verified">; message: string };
 type StartedRun = { run: number; build: number; consent: string | null };
-type Preferences = { automaticChecks: boolean; automaticDownloads: boolean; lastCheck: number | null; notified: number | null; failed: number | null; readyNotified: number | null; started: StartedRun | null };
+type Preferences = { automaticChecks: boolean; automaticDownloads: boolean; lastCheck: number | null; notified: number | null; failed: number | null; started: StartedRun | null };
 type SwitchCheck = NonNullable<Extract<UpdaterState, { available: true }>["switchCheck"]>;
 type StartedFrom = "asked" | "automatic" | "accepted";
 type OwnRun = { update: WindowsUpdate; from: StartedFrom };
@@ -77,7 +78,7 @@ export type WindowsUpdateDeps = {
   now?: () => number;
 };
 
-const DEFAULTS: Preferences = { automaticChecks: true, automaticDownloads: true, lastCheck: null, notified: null, failed: null, readyNotified: null, started: null };
+const DEFAULTS: Preferences = { automaticChecks: true, automaticDownloads: true, lastCheck: null, notified: null, failed: null, started: null };
 const PHASES: ReadonlySet<string> = new Set<Phase>(["idle", "checking", "upToDate", "available", "downloading", "ready", "failed"]);
 const KINDS: ReadonlySet<string> = new Set<InstallKind>(["installer", "portable", "unsupported"]);
 const CHECK_FAILURES: ReadonlySet<string> = new Set(WINDOWS_UPDATE_VERIFY_FAILURES);
@@ -155,7 +156,6 @@ function readPreferences(read: WindowsUpdateDeps["read"]): Preferences {
       lastCheck: typeof saved.lastCheck === "number" && Number.isFinite(saved.lastCheck) ? saved.lastCheck : null,
       notified: build(saved.notified),
       failed: build(saved.failed),
-      readyNotified: build(saved.readyNotified),
       started: readStartedRun(saved.started),
     };
   } catch {
@@ -201,6 +201,7 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   }
 
   const runConsents = new Map<number, ConsentToken | null>();
+  const serialized = <T,>(work: () => Promise<T>): Promise<T> => (deps.locks ? (deps.locks.request(UPDATE_RUN_LOCK, work) as Promise<T>) : work());
 
   async function claim(run: number): Promise<EngineStatus | null> {
     const answer = await invokeHost<unknown>(CLAIM_METHOD, { args: [run] }, deps.host).then(
@@ -219,6 +220,13 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
     return started && started.run === status.run && started.build === status.offer?.build ? (started.consent as ConsentToken | null) : undefined;
   }
 
+  const claimAndCount = (run: number) =>
+    serialized(async () => {
+      const claimed = await claim(run);
+      if (claimed) await countOutcome(claimed);
+      return claimed;
+    });
+
   async function countOutcome(status: EngineStatus) {
     const consent = await startConsent(status);
     runConsents.delete(status.run);
@@ -236,10 +244,7 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   async function restart(consent: ConsentToken | null) {
     const status = await engineStatus();
     if (status?.phase !== "ready" || !installs(status)) return check(true, consent);
-    if (status.run > settledRun) {
-      const claimed = await claim(status.run);
-      if (claimed) await countOutcome(claimed);
-    }
+    if (status.run > settledRun) await claimAndCount(status.run);
     noteUpdateRestart(consent);
     const launched = await invokeHost<unknown>(RESTART_METHOD, { args: [] }, deps.host).catch(() => false);
     if (launched === true || launched === "busy") return;
@@ -252,13 +257,9 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
 
   async function noticeReady(status: EngineStatus) {
     if (!status.offer) return;
-    if (deps.showsToasts !== false) {
-      if (status.run > settledRun) {
-        const claimed = await claim(status.run);
-        if (claimed) await countOutcome(claimed);
-        if (claimed && claimed.phase !== "ready") return;
-      }
-      await remember({ readyNotified: status.offer.build }).catch(() => {});
+    if (deps.showsToasts !== false && status.run > settledRun) {
+      const claimed = await claimAndCount(status.run);
+      if (claimed && claimed.phase !== "ready") return;
     }
     deps.ready(status.offer, restartToUpdate);
   }
@@ -282,12 +283,11 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   async function settle(status: EngineStatus, own: OwnRun | null) {
     if (!finished(status) || status.run <= settledRun) return;
     if (status.phase === "ready" && deps.showsToasts === false) return;
-    const claimed = await claim(status.run);
+    const claimed = await claimAndCount(status.run);
     if (!claimed) return;
-    await countOutcome(claimed);
     const target = claimed.offer ?? own?.update;
     if (!target) return;
-    if (claimed.phase === "ready") return (await preferences()).readyNotified === target.build ? undefined : deps.ready(target, restartToUpdate);
+    if (claimed.phase === "ready") return deps.ready(target, restartToUpdate);
     console.info(`[ardia windows] the update to ${named(target)} failed: ${claimed.reason ?? "unknown"}`);
     await fallBack(target, own?.from ?? "automatic");
   }
@@ -305,16 +305,26 @@ export function windowsUpdater(deps: WindowsUpdateDeps) {
   }
 
   async function startRun(update: WindowsUpdate, from: StartedFrom, consent: ConsentToken | null) {
-    const answer = await invokeHost<unknown>(UPDATE_METHOD, { args: [update.build] }, deps.host).catch(() => null);
-    const started = readEngineStatus(answer);
-    if (!started || (started.phase !== "downloading" && started.phase !== "ready") || started.offer?.build !== update.build) {
+    const answer = await serialized(async () => {
+      const reply = await invokeHost<unknown>(UPDATE_METHOD, { args: [update.build] }, deps.host).catch(() => null);
+      const status = readEngineStatus(reply);
+      if (status && isRecord(reply) && reply.started === true && status.offer?.build === update.build) {
+        runConsents.set(status.run, consent);
+        await remember({ started: { run: status.run, build: update.build, consent } }).catch(() => {});
+      }
+      return { reply, status };
+    });
+    const started = answer.status;
+    const joins = !!started && (started.phase === "downloading" || started.phase === "ready") && started.offer?.build === update.build;
+    if (!joins && started && isRecord(answer.reply) && answer.reply.started === false) {
+      console.info(`[ardia windows] the engine declined ${named(update)}: it is ${started.phase}${started.offer ? ` with ${named(started.offer)}` : ""}`);
+      if (from === "asked" && (started.phase === "downloading" || started.phase === "ready")) await deps.tell("Ardia is already updating", "It tells you when the update is ready to install.");
+      return;
+    }
+    if (!started || !joins) {
       noteUpdateDownloadStarted(consent);
       noteUpdateDownloadFailed("other", consent);
       return fallBack(update, from);
-    }
-    if (isRecord(answer) && answer.started === true) {
-      runConsents.set(started.run, consent);
-      await remember({ started: { run: started.run, build: update.build, consent } }).catch(() => {});
     }
     void followRun(started, { update, from }).catch((error: unknown) => console.info(`[ardia windows] the update to ${named(update)} stopped: ${String(error)}`));
   }
