@@ -1,5 +1,5 @@
 import { createDocument, documentSaved, writeDocument } from "../../platform/documents";
-import { OLDER_BUILD_SESSION_DOCUMENT, SESSION_DOCUMENT } from "./sessionDocument";
+import { SESSION_DOCUMENT } from "./sessionDocument";
 import { cosmeticChange, doc, field, listed, type Doc } from "./documentJson";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { isIncognitoProfile, tabsShownIn } from "../browser/model";
@@ -19,7 +19,7 @@ import { consentToken } from "../telemetry/consentPeriod";
 import { isRegularWindow } from "../windows/small";
 import { savedPage } from "./savedShapes";
 import { SESSION_VERSION } from "./savedSession";
-import { DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, hydrateAtLaunch, wholeBackup, type LaunchOverrides } from "./launchSession";
+import { DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, hydrateAtLaunch, OLDER_BUILD_SESSION_DOCUMENT, wholeBackup, type LaunchOverrides } from "./launchSession";
 
 export { parseSession, SESSION_MIGRATIONS, SESSION_VERSION } from "./savedSession";
 
@@ -222,7 +222,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
         if (!saved && doc.name === DOWNLOADS_DOCUMENT) noteDownloadHistoryWrite(json.length);
         if (!saved && doc.name === SESSION_DOCUMENT) {
           noteSessionWrite(json.length, cosmeticOnly);
-          backups.afterSave(json);
+          if (!newerSessionKept) backups.afterSave(json);
         }
         lastJson.set(doc.name, json);
         dirty.delete(doc);
@@ -252,10 +252,11 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
     if (urgent) cosmeticOnly = false;
     if (dirty.size) schedule(urgent || !cosmeticOnly ? SAVE_DELAY_MS : COSMETIC_SAVE_DELAY_MS);
   };
-  for (const [name, found] of [[SESSION_DOCUMENT, launch.session], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
+  const sessionFound = newerSessionKept ? (launch.olderBuild ?? { state: "missing" as const }) : launch.session;
+  for (const [name, found] of [[SESSION_DOCUMENT, sessionFound], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
     const session = name === SESSION_DOCUMENT;
-    if (session && newerSessionKept) continue;
-    const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, () => createDocument(name, DOCS.find((d) => d.name === name)!.json(useBrowser.getState())));
+    const file = fileOf(name);
+    const gate = keepAsideGate(file, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, () => createDocument(file, DOCS.find((d) => d.name === name)!.json(useBrowser.getState())));
     if (gate) gates.set(name, gate);
   }
   if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) {

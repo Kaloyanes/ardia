@@ -17,6 +17,8 @@ globalThis.setTimeout = (callback, ms, ...args) => {
 const { useBrowser } = await import("../browser/store.ts");
 const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesBlocked, startPersistence, SESSION_VERSION } = await import("./persist.ts");
 const { finishQuitSaves } = await import("../app/quit.ts");
+const { OLDER_BUILD_SESSION_DOCUMENT } = await import("./launchSession.ts");
+const { olderBuildSessionDocument } = await import("./sessionDocument.ts");
 const { BACKUP_EVERY_MS, BACKUP_RETRY_MS, backupJson, DAILY_BACKUP, MIGRATION_BACKUP, rollingBackups, sessionBackups } = await import("./sessionSafety.ts");
 const { parsePinBackups, PINS_BACKUP_DOCUMENT } = await import("./pinGuard.ts");
 const { noteSessionBackup: noteBackupForTest, takeSessionWrites } = await import("../telemetry/sessionWrites.ts");
@@ -201,7 +203,7 @@ test("an older build keeps a newer session.json byte for byte, saves its own ses
   stop();
   assert.equal(stub.docs.get("session.json"), fromNewerBuild, "the newer build's tabs are still there for it");
   assert.deepEqual(asideCopies(), []);
-  assert.deepEqual(JSON.parse(stub.docs.get("session-older-build.json")).tabs.map((t) => t.url), ["https://older-build.example/"]);
+  assert.deepEqual(JSON.parse(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT)).tabs.map((t) => t.url), ["https://older-build.example/"]);
   S().hydrate({});
   stop = startPersistence();
   assert.deepEqual(tabUrls(), ["https://older-build.example/"], "the older build's own session comes back");
@@ -211,11 +213,88 @@ test("an older build keeps a newer session.json byte for byte, saves its own ses
   assert.equal(stub.docs.get("session.json"), fromNewerBuild);
 });
 
+const newerThanThisBuild = (urls, ahead = 1) => JSON.stringify({ ...JSON.parse(realSession(urls)), version: SESSION_VERSION + ahead });
+const olderBuildAsides = () => [...stub.docs.keys()].filter((name) => name.startsWith(`${OLDER_BUILD_SESSION_DOCUMENT.replace(/\.json$/, "")}-unreadable-`));
+
+test("each older build keeps its own session file, so a second rollback never writes over the first one's", async () => {
+  const primary = newerThanThisBuild(["https://two-ahead.example/"], 2);
+  const oneAheadFile = olderBuildSessionDocument(SESSION_VERSION + 1);
+  const oneAhead = newerThanThisBuild(["https://one-ahead.example/"], 1);
+  stub.docs.set("session.json", primary);
+  stub.docs.set(oneAheadFile, oneAhead);
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), []);
+  S().createWindow({ url: "https://this-build.example/" });
+  await settle();
+  stop();
+  assert.notEqual(OLDER_BUILD_SESSION_DOCUMENT, oneAheadFile);
+  assert.equal(stub.docs.get("session.json"), primary);
+  assert.equal(stub.docs.get(oneAheadFile), oneAhead, "the build one version ahead keeps its rollback session");
+  assert.deepEqual(JSON.parse(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT)).tabs.map((t) => t.url), ["https://this-build.example/"]);
+});
+
+test("a broken older-build session is copied aside byte for byte before the older build saves over it, and not while the copy fails", async () => {
+  const primary = newerThanThisBuild(["https://newer-build.example/"]);
+  const broken = '{"version":';
+  stub.docs.set("session.json", primary);
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, broken);
+  stub.refusedCopies.on = true;
+  let stop = startPersistence();
+  S().createWindow({ url: "https://older-build.example/" });
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT), broken, "held while the copy keeps failing");
+  stub.refusedCopies.on = false;
+  stop = startPersistence();
+  S().createWindow({ url: "https://older-build.example/" });
+  await settle();
+  stop();
+  const [copy] = olderBuildAsides();
+  assert.equal(stub.docs.get(copy), broken);
+  assert.deepEqual(JSON.parse(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT)).tabs.map((t) => t.url), ["https://older-build.example/"]);
+  assert.equal(stub.docs.get("session.json"), primary);
+});
+
+test("an older-build session that loads only in part is copied aside before it is replaced", async () => {
+  const primary = newerThanThisBuild(["https://newer-build.example/"]);
+  const good = JSON.parse(realSession(["https://older-build.example/"]));
+  const w = good.windows[0];
+  const partial = JSON.stringify({ ...good, groups: [{ id: "g-lost", windowId: w.id, profileId: w.profileId, name: "Lost", tabIds: ["missing-tab"], icon: null, color: null }] });
+  stub.docs.set("session.json", primary);
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, partial);
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://older-build.example/"], "what is whole still loads");
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  stop();
+  const [copy] = olderBuildAsides();
+  assert.equal(stub.docs.get(copy), partial);
+  assert.notEqual(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT), partial);
+  assert.equal(stub.docs.get("session.json"), primary);
+});
+
+test("an older build's saves stay out of the daily backups, so the newer build's own backup still comes first", async () => {
+  const own = realSession(["https://newer-build-backup.example/"]);
+  stub.docs.set("session.json", newerThanThisBuild(["https://newer-build.example/"]));
+  putBackup("2026-01-05", own, 1);
+  const before = backupsOf(DAILY_BACKUP);
+  const stop = startPersistence();
+  S().createWindow({ url: "https://older-build.example/" });
+  await settle();
+  stop();
+  assert.deepEqual(backupsOf(DAILY_BACKUP), before, "no backup of the older build's session");
+  assert.equal(newest(DAILY_BACKUP).session.tabs[0].url, "https://newer-build-backup.example/");
+  stub.docs.set("session.json", "{");
+  const after = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://newer-build-backup.example/"]);
+  after();
+});
+
 test("an older build's own session is ignored once session.json is readable again", async () => {
   const current = realSession(["https://current.example/"]);
   const olderBuild = realSession(["https://older-build.example/"]);
   stub.docs.set("session.json", current);
-  stub.docs.set("session-older-build.json", olderBuild);
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, olderBuild);
   const stop = startPersistence();
   assert.deepEqual(tabUrls(), ["https://current.example/"]);
   stop();

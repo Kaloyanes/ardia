@@ -225,9 +225,13 @@ writeDocument(DOC, versionedJson(data, VERSION));
   it from the current state with `createDocument`, so a file that reappeared at that name fails the create and is
   kept aside first. On Linux the copy never succeeds from cached text (#3872).
 - A `session.json` newer than the app came from a newer build, after a rollback. It is never copied or written: the
-  older build saves its own session to `session-older-build.json`, restores that one first on its next launch (then
-  the backups), and the newer build finds its file untouched when the user updates again (#3309). Telemetry counts
-  these launches as `session_set_aside_newer`.
+  older build saves its own session to `session-older-build-v<its session version>.json`, restores that one first on
+  its next launch (then the backups), and the newer build finds its file untouched when the user updates again
+  (#3309). Each session version has its own file, so a second rollback never writes over the first one's. That file
+  gets the same protection as `session.json`: a damaged or partly loaded one is copied aside before it is replaced.
+  The older build's saves make no daily backups, so a newer build recovering from them never gets the rollback's
+  session ahead of its own. Telemetry counts these launches as `session_set_aside_newer`. The Linux host's
+  `session.write` doesn't do this yet.
 - Until that copy lands, every write to the document waits. Quitting retries a copy that is waiting to retry and
   waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk.
 - The session then comes back from a backup. A session that reads but throws while it is prepared or hydrated

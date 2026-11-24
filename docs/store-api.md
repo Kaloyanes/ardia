@@ -54,7 +54,7 @@ store but through `storeAction` wrappers in each domain's `actions.ts` (`newTab`
   snapshots (`session-premigration-<ms>.json`, the 3 newest kept), and a damaged `session.json`
   is copied aside and the newest backup restored before anything is saved over it (`state/session/sessionSafety.ts`,
   docs/conventions.md). A `session.json` from a newer build is never written; an older build saves to
-  `session-older-build.json` instead.
+  `session-older-build-v<version>.json` instead, outside the daily backups.
 - Pins are per profile in every window (state/pins/pinMirror.ts): each regular window showing a profile holds its own copy
   (a Tab, a TabGroup) of every pinned tile and pinned group, linked by `pinKey` (unset on the first copy, whose id is
   the key; `pinKeyOf`). A store listener (`mirrorPins`) carries a change of one window's pinned section to the others

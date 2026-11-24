@@ -1,6 +1,6 @@
 import { readDocument } from "../../platform/documents";
 
 export const SESSION_DOCUMENT = "session.json";
-export const OLDER_BUILD_SESSION_DOCUMENT = "session-older-build.json";
+export const olderBuildSessionDocument = (version: number) => `session-older-build-v${version}.json`;
 
 export const hasSavedSession = () => !!readDocument(SESSION_DOCUMENT);
