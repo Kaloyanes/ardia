@@ -87,25 +87,16 @@ enum TranslationSessions {
     await PassageDispatch.translate(
       key.pieces,
       plain: { text in
-        await attempt(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
+        try? await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).targetText })
       },
       linked: attributedAvailable ? { pieces in
         guard #available(macOS 26.4, *) else { return nil }
         let text = LinkedPieces.text(pieces)
-        guard let translated = await attempt(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
+        guard let translated = try? await run(source: key.source, target: key.target, standard: standard, { try await $0.translate(text).attributedTargetText })
         else { return nil }
         return LinkedPieces.parts(of: translated, over: pieces)
       } : nil
     )
-  }
-
-  private static func attempt<T: Sendable>(source: String, target: String, standard: Bool, _ work: @escaping @MainActor (TranslationSession) async throws -> T) async -> T? {
-    do {
-      return try await run(source: source, target: target, standard: standard, work)
-    } catch {
-      record(error)
-      return nil
-    }
   }
 
 
