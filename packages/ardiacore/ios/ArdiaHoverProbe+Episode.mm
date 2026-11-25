@@ -9,7 +9,23 @@ namespace {
 
 constexpr NSUInteger kDevHoverEventsKept = 16;
 NSUInteger gReportedAtQuit = 0;
+bool gQuitWindowClosed = false;
 
+}
+
+void ClearQuitReport() {
+  gReportedAtQuit = 0;
+  gQuitWindowClosed = false;
+}
+
+bool DeferWindowCloseForQuit() {
+  if (!HoverEpisodeReportedAtQuitOpen()) return false;
+  gQuitWindowClosed = true;
+  return true;
+}
+
+bool QuitWindowClosedPending() {
+  return gQuitWindowClosed && HoverEpisodeReportedAtQuitOpen();
 }
 
 NSDictionary *EpisodePayload(NSString *endedBy) {
@@ -63,6 +79,7 @@ void ReportHoverEpisodeAtQuit() {
   if (!gEpisode.open) return;
   NoteFocusChange(@"hover episode reported for quit", nil);
   gReportedAtQuit = gEpisode.serial;
+  gQuitWindowClosed = false;
   EmitEpisode(EpisodePayload(@"quit"), gEpisode.stamp);
 }
 
@@ -77,9 +94,15 @@ NSInteger HoverEpisodeReportedAtQuitSeconds() {
 
 void MarkHoverEpisodeCommittedAtQuit() {
   if (!HoverEpisodeReportedAtQuitOpen()) return;
-  gEpisode.open = false;
-  gEpisode.owner = nil;
-  gReportedAtQuit = 0;
+  gEpisode = HoverEpisode{};
+  gPendingReason = HoverReason::fine;
+  ClearQuitReport();
+}
+
+void CancelHoverEpisodeAtQuit() {
+  const bool windowClosed = QuitWindowClosedPending();
+  ClearQuitReport();
+  if (windowClosed) CloseEpisode(@"windowClosed");
 }
 
 }

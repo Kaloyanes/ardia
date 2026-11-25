@@ -15,39 +15,31 @@ final class QuitFlow {
   private static let saveWait: TimeInterval = 5
   static let heldHoverLoss = "hover-lost-at-quit.json"
   static let committedHoverLossPrefix = "hover-lost-at-quit-committed-"
-  private static let maxHoverLostSeconds = 86_400
-  private static let maxCommittedHoverLossFiles = 20
   private static let commitsHoverLossOnTerminate = NotificationCenter.default.addObserver(
     forName: NSApplication.willTerminateNotification, object: nil, queue: nil
   ) { _ in commitHeldHoverLoss() }
+  private static let cancelsHoverLossOnQuitCancelled = NotificationCenter.default.addObserver(
+    forName: PluginProgramLinks.quitCancelledNotification, object: nil, queue: nil
+  ) { _ in cancelHeldHoverLoss() }
 
   static func commitHeldHoverLoss() {
     guard ArdiaHost.hoverLossReportedAtQuitIsOpen(), let held = DocumentStore.read(heldHoverLoss) else { return }
     let seconds = ArdiaHost.hoverLossReportedAtQuitSeconds()
-    guard let prepared = prepareCommittedHoverLoss(held: held, seconds: seconds) else { return }
-    let existing = DocumentStore.list(committedHoverLossPrefix)
-    if existing.count >= maxCommittedHoverLossFiles {
-      for old in existing.prefix(existing.count - maxCommittedHoverLossFiles + 1) {
-        DocumentStore.removeSync(old, allowWhenClosed: true)
-      }
-    }
-    guard DocumentStore.writeDurablySync("\(committedHoverLossPrefix)\(prepared.id).json", prepared.json, allowWhenClosed: true) else { return }
-    ArdiaHost.markHoverLossCommittedAtQuit()
-    DocumentStore.removeSync(heldHoverLoss, allowWhenClosed: true)
+    HoverLossQuitCommit.commit(
+      held: held,
+      seconds: seconds,
+      prefix: committedHoverLossPrefix,
+      write: { DocumentStore.writeDurablySync($0, $1, allowWhenClosed: true) },
+      list: { DocumentStore.list($0) },
+      remove: { DocumentStore.removeSync($0, allowWhenClosed: true) },
+      markCommitted: { ArdiaHost.markHoverLossCommittedAtQuit() },
+      removeHeld: { DocumentStore.removeSync(heldHoverLoss, allowWhenClosed: true) }
+    )
   }
 
-  private static func prepareCommittedHoverLoss(held: String, seconds: Int) -> (id: String, json: String)? {
-    guard let heldData = held.data(using: .utf8),
-          var record = (try? JSONSerialization.jsonObject(with: heldData)) as? [String: Any] else { return nil }
-    if seconds >= 0, var props = record["properties"] as? [String: Any] {
-      props["lost_seconds"] = min(seconds, maxHoverLostSeconds)
-      record["properties"] = props
-    }
-    let rawId = (record["uuid"] as? String) ?? ""
-    let safeId = !rawId.isEmpty && rawId.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } ? rawId : UUID().uuidString.lowercased()
-    guard let out = try? JSONSerialization.data(withJSONObject: record),
-          let json = String(data: out, encoding: .utf8) else { return nil }
-    return (safeId, json)
+  static func cancelHeldHoverLoss() {
+    ArdiaHost.cancelHoverLossAtQuit()
+    DocumentStore.removeSync(heldHoverLoss, allowWhenClosed: true)
   }
 
   private var isSaving: Bool {
@@ -86,6 +78,7 @@ final class QuitFlow {
     phase = .saving(wait: nil, lateAlert: nil)
     WindowManager.shared.flushFrameReports()
     _ = Self.commitsHoverLossOnTerminate
+    _ = Self.cancelsHoverLossOnQuitCancelled
     ArdiaHost.reportHoverLossAtQuit()
     ShellEvents.send(.app, ["type": "willQuit"])
     waitForSave()
@@ -148,6 +141,7 @@ final class QuitFlow {
       phase = .idle
       attempt += 1
       PluginProgramLinks.resumeAfterUpdates()
+      Self.cancelHeldHoverLoss()
       return NSApp.reply(toApplicationShouldTerminate: false)
     }
     guard isSaving else { return }
@@ -164,7 +158,6 @@ final class QuitFlow {
       holds -= 1
       guard holds == 0, let self, self.attempt == attempt, case .waitingForUpdater = self.phase else { return }
       self.phase = .idle
-      Self.commitHeldHoverLoss()
       NSApp.reply(toApplicationShouldTerminate: true)
     }
     PluginProgramLinks.stopAfterUpdates(done: settled)

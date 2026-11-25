@@ -310,8 +310,14 @@ void CloseEpisode(NSString *endedBy) {
   ArdiaConsentStamp *stamp = gEpisode.stamp;
   gEpisode = HoverEpisode{};
   gPendingReason = HoverReason::fine;
+  ClearQuitReport();
   NoteFocusChange([@"hover episode ended by " stringByAppendingString:endedBy], nil);
   EmitEpisode(payload, stamp);
+}
+
+void CloseOwnerWindow() {
+  if (!gEpisode.open || DeferWindowCloseForQuit()) return;
+  CloseEpisode(@"windowClosed");
 }
 
 bool Recovered(const HoverCheck &check, HoverReason healed) {
@@ -355,7 +361,7 @@ void Heal(NSWindow *window, NSPoint point, HoverReason reason) {
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kHealRecheckAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     NSWindow *healedWindow = weakWindow;
     if (!gEpisode.open || gEpisode.serial != serial) return;
-    if (!healedWindow) return CloseEpisode(@"windowClosed");
+    if (!healedWindow) return CloseOwnerWindow();
     const HoverCheck after = Probe(healedWindow, point, false);
     gLastHoverVerdict = DescribeCheck(after, HoverTrigger::recheck);
     gEpisode.healWorked = Recovered(after, reason) ? 1 : 0;
@@ -383,6 +389,7 @@ bool EndsEpisode(const HoverCheck &check) {
 
 void OpenEpisode(NSWindow *window, const HoverCheck &check, HoverTrigger trigger, ArdiaConsentStamp *stamp) {
   gEpisode = HoverEpisode{};
+  ClearQuitReport();
   gEpisode.open = true;
   gEpisode.owner = window;
   gEpisode.serial = ++gEpisodeCount;
@@ -400,7 +407,10 @@ void NoteHealRefusal(HealRefusal refusal, const MenuWindowInfo &menuWindow) {
 }
 
 void HandleHoverCheck(NSWindow *window, NSPoint point, HoverTrigger trigger, ArdiaConsentStamp *stamp) {
-  if (gEpisode.open && !gEpisode.owner) CloseEpisode(@"windowClosed");
+  if (gEpisode.open && !gEpisode.owner) {
+    CloseOwnerWindow();
+    if (QuitWindowClosedPending()) return;
+  }
   if (!window) return;
   if (gEpisode.open && gEpisode.owner != window) {
     if (trigger != HoverTrigger::click) return;
@@ -432,7 +442,10 @@ void HandleHoverCheck(NSWindow *window, NSPoint point, HoverTrigger trigger, Ard
 }
 
 void HandleCoveredClick(NSWindow *browser, NSWindow *cover, NSPoint point, ArdiaConsentStamp *stamp) {
-  if (gEpisode.open && !gEpisode.owner) CloseEpisode(@"windowClosed");
+  if (gEpisode.open && !gEpisode.owner) {
+    CloseOwnerWindow();
+    if (QuitWindowClosedPending()) return;
+  }
   if (!browser || !cover || !Invisible(cover) || !cover.isVisible) return;
   if (gEpisode.open) {
     if (gEpisode.owner != browser || gEpisode.first.reason != HoverReason::coveredByWindow || gInvisibleCover != cover) return;
@@ -519,6 +532,7 @@ void StartHoverWatch() {
 }
 
 void EndEpisodeIfInactive() {
+  if (QuitWindowClosedPending()) return;
   if (!CurrentActivation().inFront()) CloseEpisode(@"appInactive");
 }
 
@@ -540,7 +554,7 @@ void WatchHover() {
     EndEpisodeIfInactive();
   }];
   [center addObserverForName:NSWindowWillCloseNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-    if (gEpisode.open && note.object == gEpisode.owner) CloseEpisode(@"windowClosed");
+    if (gEpisode.open && note.object == gEpisode.owner) CloseOwnerWindow();
   }];
   for (NSNotificationName name in @[ NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification ])
     [center addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *note) {

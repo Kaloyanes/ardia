@@ -63,6 +63,7 @@ void ReportHoverEpisodeAtQuit();
 bool HoverEpisodeReportedAtQuitOpen();
 NSInteger HoverEpisodeReportedAtQuitSeconds();
 void MarkHoverEpisodeCommittedAtQuit();
+void CancelHoverEpisodeAtQuit();
 void WatchPageCursor();
 NSString *PageCursorDev(NSWindow *window, NSString *_Nullable argument);
 NSString *PaintProbeLine();

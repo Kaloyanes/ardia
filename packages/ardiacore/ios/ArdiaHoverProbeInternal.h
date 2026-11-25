@@ -121,6 +121,10 @@ NSString *KindName(FocusWindowKind kind);
 NSString *CoverName(PageCover cover);
 NSString *TriggerName(HoverTrigger trigger);
 double Uptime();
+void CloseEpisode(NSString *endedBy);
+void ClearQuitReport();
+bool DeferWindowCloseForQuit();
+bool QuitWindowClosedPending();
 NSDictionary *EpisodePayload(NSString *endedBy);
 void EmitEpisode(NSDictionary *payload, ArdiaConsentStamp *stamp);
 

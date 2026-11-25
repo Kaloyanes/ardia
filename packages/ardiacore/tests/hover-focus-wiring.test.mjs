@@ -16,6 +16,7 @@ const sources = [
   "../ios/ArdiaHoverProbe+Dev.mm",
   "../../shell/ios/FocusHandoff.swift",
   "../../shell/ios/QuitFlow.swift",
+  "../../shell/ios/UpdaterCore/HoverLossQuitCommit.swift",
   "../../../apps/browser/src/state/telemetry/hoverLost.ts",
 ];
 const read = (name) => (existsSync(path(name)) ? readFileSync(path(name), "utf8") : "");
@@ -30,6 +31,7 @@ const handoff = read("../../shell/ios/FocusHandoff.swift");
 const probeCover = read("../ios/ArdiaHoverProbe+Cover.mm");
 const probeEpisode = read("../ios/ArdiaHoverProbe+Episode.mm");
 const quitFlow = read("../../shell/ios/QuitFlow.swift");
+const quitCommit = read("../../shell/ios/UpdaterCore/HoverLossQuitCommit.swift");
 const hoverLostJs = read("../../../apps/browser/src/state/telemetry/hoverLost.ts");
 
 const body = (source, header, closer = "\n}\n") => {
@@ -224,19 +226,34 @@ test("a page covered by a view reports the kind of view, the kind that made it s
   assert.doesNotMatch(kinds, /return name|stringWithFormat/, "a class name is only compared, never kept");
 });
 
-test("a quit report commits only if the same episode is still open when the app really terminates", () => {
+test("a quit report commits only on real termination past cancellation points, stays open on Stay, and writes durably before pruning", () => {
   assert.match(body(probeEpisode, "NSDictionary *EpisodePayload("), /@"serial" : @\(gEpisode\.serial\),/);
-  assert.match(body(probeEpisode, "void ReportHoverEpisodeAtQuit("), /gReportedAtQuit = gEpisode\.serial;\s*EmitEpisode\(/);
+  assert.match(body(probeEpisode, "void ReportHoverEpisodeAtQuit("), /gReportedAtQuit = gEpisode\.serial;\s*gQuitWindowClosed = false;\s*EmitEpisode\(/);
   assert.match(body(probeEpisode, "bool HoverEpisodeReportedAtQuitOpen("), /return gReportedAtQuit != 0 && gEpisode\.open && gEpisode\.serial == gReportedAtQuit;/);
   assert.match(body(probeEpisode, "NSInteger HoverEpisodeReportedAtQuitSeconds("), /if \(!HoverEpisodeReportedAtQuitOpen\(\)\) return -1;\s*return MIN\(86400, lround\(MAX\(0, Uptime\(\) - gEpisode\.startedAt\)\)\);/);
-  assert.match(body(probeEpisode, "void MarkHoverEpisodeCommittedAtQuit("), /gEpisode\.open = false;\s*gEpisode\.owner = nil;\s*gReportedAtQuit = 0;/);
+  assert.match(body(probeEpisode, "void MarkHoverEpisodeCommittedAtQuit("), /gEpisode = HoverEpisode\{\};\s*gPendingReason = HoverReason::fine;\s*ClearQuitReport\(\);/);
+  assert.match(body(probeEpisode, "void CancelHoverEpisodeAtQuit("), /const bool windowClosed = QuitWindowClosedPending\(\);\s*ClearQuitReport\(\);\s*if \(windowClosed\) CloseEpisode\(@"windowClosed"\);/);
+  assert.match(body(probe, "void CloseOwnerWindow("), /if \(!gEpisode\.open \|\| DeferWindowCloseForQuit\(\)\) return;\s*CloseEpisode\(@"windowClosed"\);/);
+  assert.match(body(probe, "void WatchHover("), /if \(gEpisode\.open && note\.object == gEpisode\.owner\) CloseOwnerWindow\(\);/);
   assert.match(quitFlow, /forName: NSApplication\.willTerminateNotification, object: nil, queue: nil\s*\) \{ _ in commitHeldHoverLoss\(\) \}/);
+  assert.match(quitFlow, /forName: PluginProgramLinks\.quitCancelledNotification, object: nil, queue: nil\s*\) \{ _ in cancelHeldHoverLoss\(\) \}/);
   const commit = body(quitFlow, "static func commitHeldHoverLoss()", "\n  }\n");
   assert.match(commit, /guard ArdiaHost\.hoverLossReportedAtQuitIsOpen\(\), let held = DocumentStore\.read\(heldHoverLoss\) else \{ return \}/);
   assert.match(commit, /ArdiaHost\.hoverLossReportedAtQuitSeconds\(\)/);
-  assert.match(commit, /DocumentStore\.writeDurablySync\("\\\(committedHoverLossPrefix\)\\\(prepared\.id\)\.json", prepared\.json, allowWhenClosed: true\) else \{ return \}\s*ArdiaHost\.markHoverLossCommittedAtQuit\(\)\s*DocumentStore\.removeSync\(heldHoverLoss, allowWhenClosed: true\)/);
+  assert.match(commit, /HoverLossQuitCommit\.commit\(/);
+  assert.match(commit, /DocumentStore\.writeDurablySync\(\$0, \$1, allowWhenClosed: true\)/);
+  assert.match(commit, /ArdiaHost\.markHoverLossCommittedAtQuit\(\)/);
+  assert.match(commit, /DocumentStore\.removeSync\(heldHoverLoss, allowWhenClosed: true\)/);
+  const cancel = body(quitFlow, "static func cancelHeldHoverLoss()", "\n  }\n");
+  assert.match(cancel, /ArdiaHost\.cancelHoverLossAtQuit\(\)\s*DocumentStore\.removeSync\(heldHoverLoss, allowWhenClosed: true\)/);
   const settled = body(quitFlow, "private func quitAfterUpdaterSettles()", "\n  }\n");
-  assert.ok(settled.indexOf("Self.commitHeldHoverLoss()") > 0 && settled.indexOf("Self.commitHeldHoverLoss()") < settled.indexOf("NSApp.reply(toApplicationShouldTerminate: true)"), "commits before AppKit tears down windows");
+  assert.doesNotMatch(settled, /commitHeldHoverLoss/, "does not commit before Chromium's beforeunload prompt can cancel quit");
+  const reply = body(quitFlow, "func replyToTerminate(", "\n  }\n");
+  assert.match(reply, /Self\.cancelHeldHoverLoss\(\)\s*return NSApp\.reply\(toApplicationShouldTerminate: false\)/);
   const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
   assert.ok(terminate.indexOf("_ = Self.commitsHoverLossOnTerminate") < terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()"), "the commit watch is in place before the report");
+  assert.ok(terminate.indexOf("_ = Self.cancelsHoverLossOnQuitCancelled") < terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()"), "the cancel watch is in place before the report");
+  const helper = body(quitCommit, "static func commit(", "\n  }\n");
+  assert.ok(helper.indexOf("guard write(target, prepared.json) else { return false }") > 0);
+  assert.ok(helper.indexOf("guard write(target, prepared.json) else { return false }") < helper.indexOf("list(prefix)"), "writes durably before listing or pruning committed records");
 });
