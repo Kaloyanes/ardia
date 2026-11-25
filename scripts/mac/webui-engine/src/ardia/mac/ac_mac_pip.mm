@@ -1,5 +1,8 @@
 #include "ardia/mac/ac_mac_pip.h"
 
+#import <AppKit/AppKit.h>
+#import <QuartzCore/QuartzCore.h>
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -18,7 +21,15 @@
 #include "content/public/browser/web_contents.h"
 #include "media/base/video_util.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
+#include "content/public/browser/context_factory.h"
+#include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
+#include "ui/accelerated_widget_mac/display_ca_layer_tree.h"
+#include "ui/compositor/recyclable_compositor_mac.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
+#include "ui/gfx/geometry/dip_util.h"
+#include "ui/gfx/geometry/size_conversions.h"
+#include "ui/views/controls/native/native_view_host.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_element.h"
@@ -29,6 +40,18 @@
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/widget/widget.h"
+
+@interface ArdiaPipPlaneView : NSView
+@end
+
+@implementation ArdiaPipPlaneView
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
+}
+- (BOOL)isOpaque {
+  return NO;
+}
+@end
 
 extern std::unique_ptr<content::VideoOverlayWindow> (*g_ardia_mac_video_overlay)(
     content::VideoPictureInPictureWindowController* controller);
@@ -63,6 +86,17 @@ pip::Intent IntentFor(content::WebContents* contents) {
 
 base::TimeDelta Milliseconds(double ms) {
   return base::Milliseconds(ms);
+}
+
+gfx::Rect FitToWorkArea(const gfx::Rect& rect) {
+  display::Screen* screen = display::Screen::Get();
+  if (!screen) {
+    return rect;
+  }
+  const gfx::Rect area = screen->GetDisplayMatching(rect).work_area();
+  const pip::Box fitted = pip::FitInWorkArea(pip::Box{rect.x(), rect.y(), rect.width(), rect.height()},
+                                             pip::Box{area.x(), area.y(), area.width(), area.height()});
+  return gfx::Rect(fitted.x, fitted.y, fitted.width, fitted.height);
 }
 
 }
@@ -503,128 +537,137 @@ void PipPlayer::EndSession(uint64_t generation) {
   }
 }
 
-PipPlayerView::PipPlayerView() {
-  SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-  layer()->AsSolidColor()->SetColor(SkColors::kBlack);
-  layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kCornerRadius));
-  layer()->SetIsFastRoundedCorner(true);
-  layer()->SetMasksToBounds(true);
-  auto video = std::make_unique<views::View>();
-  video->SetPaintToLayer(ui::LAYER_SURFACE);
-  video->layer()->AsSurface()->SetFallbackBackgroundColor(SkColors::kBlack);
-  video_ = AddChildView(std::move(video));
-}
+class PipPlane final : public ui::AcceleratedWidgetMacNSView {
+ public:
+  static constexpr float kCornerRadius = 6;
 
-PipPlayerView::~PipPlayerView() {
-  Unregister();
-}
-
-void PipPlayerView::SetSurface(const viz::SurfaceId& surface_id) {
-  if (!surface_id.is_valid()) {
-    return;
+  PipPlane() {
+    view_ = [[ArdiaPipPlaneView alloc] initWithFrame:NSZeroRect];
+    CALayer* background = [CALayer layer];
+    background.backgroundColor = NSColor.clearColor.CGColor;
+    view_.layer = background;
+    view_.wantsLayer = YES;
+    tree_ = std::make_unique<ui::DisplayCALayerTree>(background);
+    compositor_ = std::make_unique<ui::RecyclableCompositorMac>(content::GetContextFactory());
+    root_ = std::make_unique<ui::LayerSolidColor>();
+    root_->SetColor(SkColors::kBlack);
+    root_->SetRoundedCornerRadius(gfx::RoundedCornersF(kCornerRadius));
+    root_->SetIsFastRoundedCorner(true);
+    root_->SetMasksToBounds(true);
+    video_ = std::make_unique<ui::LayerSurface>();
+    video_->SetFallbackBackgroundColor(SkColors::kBlack);
+    root_->Add(video_.get());
+    compositor_->compositor()->SetRootLayer(root_.get());
+    compositor_->compositor()->SetBackgroundColor(SK_ColorTRANSPARENT);
+    compositor_->widget()->SetNSView(this);
+    compositor_->Unsuspend();
   }
-  surface_id_ = surface_id;
-  Register();
-  LayoutVideo();
-  video_->layer()->AsSurface()->SetShowSurface(surface_id_, video_->size(),
-                                               cc::DeadlinePolicy::UseDefaultDeadline(), true);
-}
-
-void PipPlayerView::SetNaturalSize(const gfx::Size& natural_size) {
-  if (natural_size_ == natural_size) {
-    return;
-  }
-  natural_size_ = natural_size;
-  LayoutVideo();
-}
-
-void PipPlayerView::Reveal() {
-  fade_timer_.Stop();
-  layer()->GetAnimator()->StopAnimatingProperty(ui::LayerAnimationElement::OPACITY);
-  layer()->SetOpacity(1.0f);
-}
-
-void PipPlayerView::FadeOut(base::TimeDelta fade, base::OnceClosure done) {
-  if (!fade.is_positive()) {
+  PipPlane(const PipPlane&) = delete;
+  PipPlane& operator=(const PipPlane&) = delete;
+  ~PipPlane() {
     fade_timer_.Stop();
-    return std::move(done).Run();
+    UnregisterSurface();
+    compositor_->widget()->ResetNSView();
+    compositor_->compositor()->SetRootLayer(nullptr);
+    root_->Remove(video_.get());
+    [view_ removeFromSuperview];
   }
-  ui::ScopedLayerAnimationSettings animation(layer()->GetAnimator());
-  animation.SetTransitionDuration(fade);
-  animation.SetTweenType(gfx::Tween::EASE_OUT);
-  animation.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
-  layer()->SetOpacity(0.0f);
-  fade_timer_.Start(FROM_HERE, fade, std::move(done));
-}
 
-void PipPlayerView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  LayoutVideo();
-}
+  NSView* view() const { return view_; }
 
-void PipPlayerView::AddedToWidget() {
-  Register();
-}
-
-void PipPlayerView::RemovedFromWidget() {
-  Unregister();
-}
-
-bool PipPlayerView::GetCanProcessEventsWithinSubtree() const {
-  return false;
-}
-
-void PipPlayerView::Register() {
-  if (!surface_id_.is_valid() || !GetWidget()) {
-    return;
+  void Resize(const gfx::Size& dip_size, const display::Display& display) {
+    if (dip_size.IsEmpty()) {
+      return;
+    }
+    const float scale = display.device_scale_factor() > 0 ? display.device_scale_factor() : 1.0f;
+    const gfx::Size pixels = gfx::ToRoundedSize(gfx::ConvertSizeToPixels(dip_size, scale));
+    if (pixels != compositor_->pixel_size() || scale != compositor_->scale_factor()) {
+      compositor_->UpdateSurface(pixels, scale, display.GetColorSpaces(), display.id(),
+                                 display.display_frequency());
+    }
+    size_ = dip_size;
+    root_->SetBounds(gfx::Rect(dip_size));
+    LayoutVideo();
   }
-  ui::Compositor* compositor = GetWidget()->GetCompositor();
-  if (!compositor) {
-    return;
-  }
-  if (compositor_ == compositor && registered_ && *registered_ == surface_id_.frame_sink_id()) {
-    return;
-  }
-  Unregister();
-  compositor->AddChildFrameSink(surface_id_.frame_sink_id());
-  compositor->AddObserver(this);
-  compositor_ = compositor;
-  registered_ = surface_id_.frame_sink_id();
-}
 
-void PipPlayerView::Unregister() {
-  if (!compositor_) {
-    return;
+  void SetSurface(const viz::SurfaceId& surface_id) {
+    if (!surface_id.is_valid()) {
+      return;
+    }
+    if (registered_ != surface_id.frame_sink_id()) {
+      UnregisterSurface();
+      compositor_->compositor()->AddChildFrameSink(surface_id.frame_sink_id());
+      registered_ = surface_id.frame_sink_id();
+    }
+    surface_id_ = surface_id;
+    LayoutVideo();
+    video_->SetShowSurface(surface_id_, video_->bounds().size(), cc::DeadlinePolicy::UseDefaultDeadline(), true);
   }
-  ui::Compositor* compositor = std::exchange(compositor_, nullptr);
-  compositor->RemoveObserver(this);
-  if (registered_) {
-    compositor->RemoveChildFrameSink(*registered_);
-    registered_.reset();
-  }
-}
 
-void PipPlayerView::OnCompositingShuttingDown(ui::Compositor* compositor) {
-  if (compositor == compositor_) {
-    Unregister();
+  void SetNaturalSize(const gfx::Size& natural_size) {
+    if (natural_size_ == natural_size) {
+      return;
+    }
+    natural_size_ = natural_size;
+    LayoutVideo();
   }
-}
 
-void PipPlayerView::LayoutVideo() {
-  gfx::Rect video = GetLocalBounds();
-  if (!natural_size_.IsEmpty() && !video.IsEmpty()) {
-    const gfx::Rect letterbox = media::ComputeLetterboxRegion(video, natural_size_);
-    if (!letterbox.IsEmpty()) {
-      video = letterbox;
+  void Reveal() {
+    fade_timer_.Stop();
+    root_->GetAnimator()->StopAnimatingProperty(ui::LayerAnimationElement::OPACITY);
+    root_->SetOpacity(1.0f);
+  }
+
+  void FadeOut(base::TimeDelta fade, base::OnceClosure done) {
+    if (!fade.is_positive()) {
+      fade_timer_.Stop();
+      return std::move(done).Run();
+    }
+    ui::ScopedLayerAnimationSettings animation(root_->GetAnimator());
+    animation.SetTransitionDuration(fade);
+    animation.SetTweenType(gfx::Tween::EASE_OUT);
+    animation.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+    root_->SetOpacity(0.0f);
+    fade_timer_.Start(FROM_HERE, fade, std::move(done));
+  }
+
+  void AcceleratedWidgetCALayerParamsUpdated(gfx::CALayerParams params) override {
+    tree_->UpdateCALayerTree(std::move(params));
+  }
+
+ private:
+  void UnregisterSurface() {
+    if (registered_) {
+      compositor_->compositor()->RemoveChildFrameSink(*registered_);
+      registered_.reset();
     }
   }
-  video_->SetBoundsRect(video);
-  if (surface_id_.is_valid()) {
-    video_->layer()->AsSurface()->SetSurfaceSize(video.size());
-  }
-}
 
-BEGIN_METADATA(PipPlayerView)
-END_METADATA
+  void LayoutVideo() {
+    gfx::Rect video(size_);
+    if (!natural_size_.IsEmpty() && !video.IsEmpty()) {
+      const gfx::Rect letterbox = media::ComputeLetterboxRegion(video, natural_size_);
+      if (!letterbox.IsEmpty()) {
+        video = letterbox;
+      }
+    }
+    video_->SetBounds(video);
+    if (surface_id_.is_valid()) {
+      video_->SetSurfaceSize(video.size());
+    }
+  }
+
+  ArdiaPipPlaneView* __strong view_;
+  std::unique_ptr<ui::DisplayCALayerTree> tree_;
+  std::unique_ptr<ui::RecyclableCompositorMac> compositor_;
+  std::unique_ptr<ui::LayerSolidColor> root_;
+  std::unique_ptr<ui::LayerSurface> video_;
+  viz::SurfaceId surface_id_;
+  std::optional<viz::FrameSinkId> registered_;
+  gfx::Size size_;
+  gfx::Size natural_size_;
+  base::OneShotTimer fade_timer_;
+};
 
 PipPresenter::PipPresenter(ShellHostView* host) : host_(host) {
   if (!g_ardia_mac_video_overlay) {
@@ -723,6 +766,7 @@ void PipPresenter::Viewport(const base::DictValue& args, Done done) {
   const bool visible = args.FindBool("visible").value_or(true) && !bounds.IsEmpty();
   player_view_->SetBoundsRect(bounds);
   player_view_->SetVisible(visible);
+  SizePlane();
   if (visible) {
     gfx::Rect screen = bounds;
     views::View::ConvertRectToScreen(host_, &screen);
@@ -778,7 +822,7 @@ void PipPresenter::Command(const base::DictValue& args, Done done) {
         if (x && y) {
           rect.set_origin(gfx::Point(*x, *y));
         }
-        screen = rect;
+        screen = FitToWorkArea(rect);
       }
       player->PopOut(screen);
       break;
@@ -795,13 +839,17 @@ void PipPresenter::ShowPlayer(PipPlayer* player) {
   }
   player_ = player->GetWeakPtr();
   if (!player_view_) {
-    player_view_ = host_->AddChildViewAt(std::make_unique<PipPlayerView>(), 0);
+    plane_ = std::make_unique<PipPlane>();
+    player_view_ = host_->AddChildView(std::make_unique<views::NativeViewHost>());
+    player_view_->SetVisible(false);
+    host_->Restack();
+    player_view_->Attach(gfx::NativeView(plane_->view()));
   }
   player_view_owner_ = player->presented_generation();
   player_view_->SetVisible(false);
-  player_view_->Reveal();
-  player_view_->SetNaturalSize(player->natural_size());
-  player_view_->SetSurface(player->surface_id());
+  plane_->Reveal();
+  plane_->SetNaturalSize(player->natural_size());
+  plane_->SetSurface(player->surface_id());
   host_->Restack();
   SendPlayerEvent(*player);
 }
@@ -810,15 +858,15 @@ void PipPresenter::PlayerChanged(PipPlayer* player) {
   if (player_.get() != player) {
     return;
   }
-  if (player_view_) {
-    player_view_->SetNaturalSize(player->natural_size());
+  if (plane_) {
+    plane_->SetNaturalSize(player->natural_size());
   }
   SendPlayerEvent(*player);
 }
 
 void PipPresenter::PlayerSurfaceChanged(PipPlayer* player) {
-  if (player_.get() == player && player_view_) {
-    player_view_->SetSurface(player->surface_id());
+  if (player_.get() == player && plane_) {
+    plane_->SetSurface(player->surface_id());
   }
 }
 
@@ -837,10 +885,10 @@ void PipPresenter::HidePlayer(PipPlayer* player, base::TimeDelta fade) {
   player_.reset();
   const uint64_t owner = player->presented_generation();
   SendLeaving(owner, fade);
-  if (!player_view_ || player_view_owner_ != owner) {
+  if (!plane_ || player_view_owner_ != owner) {
     return;
   }
-  player_view_->FadeOut(fade, base::BindOnce(
+  plane_->FadeOut(fade, base::BindOnce(
                                   [](base::WeakPtr<PipPresenter> presenter, uint64_t owner) {
                                     if (!presenter) {
                                       return;
@@ -856,7 +904,26 @@ void PipPresenter::DropPlayerView(uint64_t owner) {
   if (!player_view_ || player_ || player_view_owner_ != owner) {
     return;
   }
-  host_->RemoveChildViewT(std::exchange(player_view_, nullptr).get());
+  RemovePlane();
+}
+
+void PipPresenter::RemovePlane() {
+  if (player_view_) {
+    player_view_->Detach();
+    host_->RemoveChildViewT(std::exchange(player_view_, nullptr).get());
+  }
+  plane_.reset();
+}
+
+void PipPresenter::SizePlane() {
+  if (!player_view_ || !plane_ || player_view_->bounds().IsEmpty()) {
+    return;
+  }
+  display::Screen* screen = display::Screen::Get();
+  if (!screen || !host_->GetWidget()) {
+    return;
+  }
+  plane_->Resize(player_view_->size(), screen->GetDisplayNearestView(host_->GetWidget()->GetNativeView()));
 }
 
 gfx::Rect PipPresenter::DefaultPlayerScreenBounds(const gfx::Size& natural_size) const {
@@ -874,9 +941,7 @@ void PipPresenter::ReleasePlayer() {
     SendLeaving(player->presented_generation(), base::TimeDelta());
   }
   player_view_owner_ = 0;
-  if (player_view_) {
-    host_->RemoveChildViewT(std::exchange(player_view_, nullptr).get());
-  }
+  RemovePlane();
   if (player) {
     player->PresenterGone(this);
   }

@@ -1,5 +1,6 @@
 #include "ardia/mac/ac_mac_system_policy.h"
 
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
@@ -141,6 +142,64 @@ TEST(download_progress_is_throttled_but_state_changes_are_not) {
   CHECK(policy::EmitsChange(mark, true, true, false, 60));
   CHECK(policy::EmitsChange(mark, true, true, false, 200));
   CHECK(policy::EmitsChange(mark, false, false, false, 210));
+}
+
+TEST(a_running_download_seen_first_in_the_snapshot_still_reports_its_end) {
+  policy::ProgressMark unseeded;
+  CHECK(!policy::EmitsChange(unseeded, false, false, false, 10));
+  policy::ProgressMark seeded = policy::SeededMark(true, false, false, 0);
+  CHECK(policy::EmitsChange(seeded, false, false, false, 10));
+  policy::ProgressMark finished = policy::SeededMark(false, false, false, 0);
+  CHECK(!policy::EmitsChange(finished, false, false, false, 10));
+  policy::ProgressMark throttled = policy::SeededMark(true, false, false, 0);
+  CHECK(!policy::EmitsChange(throttled, true, false, false, 50));
+}
+
+namespace {
+
+struct InitializedManagerWatch {
+  struct Notifier {
+    explicit Notifier(InitializedManagerWatch* watch) {
+      for (auto& ready : watch->ready.Release()) ready();
+      watch->initialized_in_constructor = true;
+    }
+  };
+  int ran = 0;
+  policy::ReadyQueue<std::function<void()>> ready;
+  bool initialized_in_constructor = false;
+  Notifier notifier{this};
+};
+
+}
+
+TEST(a_manager_initialized_during_construction_opens_the_queue_safely) {
+  InitializedManagerWatch watch;
+  CHECK(watch.initialized_in_constructor);
+  CHECK(watch.ready.ready());
+  auto now = watch.ready.Hold(false, [&watch] { ++watch.ran; });
+  CHECK(now.has_value());
+  (*now)();
+  CHECK(watch.ran == 1);
+  CHECK(watch.ready.waiting() == 0);
+}
+
+TEST(waiters_run_once_when_the_manager_initializes_later) {
+  policy::ReadyQueue<std::function<void()>> queue;
+  int ran = 0;
+  CHECK(!queue.Hold(false, [&ran] { ++ran; }).has_value());
+  CHECK(!queue.Hold(false, [&ran] { ++ran; }).has_value());
+  CHECK(queue.waiting() == 2);
+  for (auto& ready : queue.Release()) ready();
+  CHECK(ran == 2);
+  CHECK(queue.Release().empty());
+  CHECK(queue.Hold(false, [] {}).has_value());
+}
+
+TEST(links_are_captured_before_the_first_window_and_while_windows_live) {
+  CHECK(policy::CapturesOpenUrls(true, false, false));
+  CHECK(policy::CapturesOpenUrls(true, true, true));
+  CHECK(!policy::CapturesOpenUrls(true, false, true));
+  CHECK(!policy::CapturesOpenUrls(false, true, true));
 }
 
 TEST(every_method_is_advertised_once) {

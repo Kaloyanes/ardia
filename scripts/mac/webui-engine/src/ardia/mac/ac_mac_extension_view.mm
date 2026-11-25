@@ -373,7 +373,11 @@ bool InstallPromptHook(Profile* profile,
   }
   std::string key;
   ShellHostView* host = HostForProfile(profile, parent, &key);
-  if (!host || !host->extension_views()) {
+  if (!host || !host->extension_views() || !host->extension_views()->ShellLive()) {
+    return false;
+  }
+  if (Prompts().full()) {
+    Trace("extension install prompt left to Chrome: too many pending prompts");
     return false;
   }
   base::ListValue permissions;
@@ -897,12 +901,20 @@ ExtensionViews::ExtensionViews(ShellHostView* host) : host_(host) {
 
 ExtensionViews::~ExtensionViews() {
   weak_factory_.InvalidateWeakPtrs();
+  AbortPrompts();
+  CloseAll();
+}
+
+bool ExtensionViews::ShellLive() const {
+  return host_->handler_ != nullptr;
+}
+
+void ExtensionViews::AbortPrompts() {
   for (const std::string& request : Prompts().OfWindow(host_->window_id())) {
     if (std::optional<PendingInstall> pending = Prompts().Take(request)) {
       Answer(std::move(*pending), InstallResult::ABORTED);
     }
   }
-  CloseAll();
 }
 
 bool ExtensionViews::Handles(std::string_view method) {
@@ -1142,6 +1154,7 @@ void ExtensionViews::SurfaceEvent(int id, base::DictValue event) {
 }
 
 void ExtensionViews::RetireOlderThan(uint64_t generation) {
+  AbortPrompts();
   for (const int id : book_.CloseOlderThan(generation)) {
     const auto found = surfaces_.find(id);
     if (found == surfaces_.end()) {

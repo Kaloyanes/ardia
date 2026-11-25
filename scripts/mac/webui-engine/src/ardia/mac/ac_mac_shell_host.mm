@@ -563,6 +563,9 @@ BrowserWindowInterface* ShellHostView::EnsureMember(Profile* profile) {
   }
   companions_.push_back(created->GetWeakPtr());
   created->GetTabStripModel()->AddObserver(this);
+  if (system_) {
+    system_->SyncWatches();
+  }
   Note("companion window joined " + window_id_);
   return created;
 }
@@ -1480,6 +1483,9 @@ void ShellHostView::OnTabStripModelChanged(
     }
   }
   ReattachViewports();
+  if (system_ && change.type() == TabStripModelChange::kRemoved) {
+    system_->SyncWatchesSoon();
+  }
 }
 
 bool ShellHostView::BindsContents(const content::WebContents* contents) const {

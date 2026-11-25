@@ -47,6 +47,7 @@ class ExtensionViews {
   void SurfaceClosed(int id, bool report);
   void SurfaceEvent(int id, base::DictValue event);
   void DeliverExtensionEvent(std::string_view name, base::DictValue data);
+  bool ShellLive() const;
   ShellHostView* host() const { return host_; }
   base::WeakPtr<ExtensionViews> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
@@ -61,6 +62,7 @@ class ExtensionViews {
   void Command(const base::DictValue& args, uint64_t generation, Done done);
   void Release(const base::DictValue& args, uint64_t generation, Done done);
   Surface* Owned(const base::DictValue& args, uint64_t generation);
+  void AbortPrompts();
   void Destroy(int id);
   void ActionStates(Profile* profile, const base::DictValue& input, Done done);
   void SidePanelUrl(Profile* profile, const base::DictValue& input, Done done);

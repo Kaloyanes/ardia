@@ -135,7 +135,9 @@ TEST(install_prompts_resolve_only_in_their_window_and_profile) {
   CHECK(ledger.OfWindow("window-1").size() == 1);
   CHECK(ledger.Take(*id) == 7);
   CHECK(!ledger.Take(*id));
+  CHECK(!ledger.full());
   for (size_t index = 0; index < ext::kMaxPendingPrompts; ++index) CHECK(ledger.Add("default", "w", 1));
+  CHECK(ledger.full());
   CHECK(!ledger.Add("default", "w", 1));
   CHECK(ext::ValidRequestId("install1"));
   CHECK(!ext::ValidRequestId(""));

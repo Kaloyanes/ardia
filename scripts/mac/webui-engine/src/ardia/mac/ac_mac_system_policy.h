@@ -250,6 +250,45 @@ inline bool EmitsChange(ProgressMark& mark, bool in_progress, bool paused, bool 
   return true;
 }
 
+inline ProgressMark SeededMark(bool in_progress, bool paused, bool dangerous, double now_ms) {
+  ProgressMark mark;
+  mark.live = in_progress;
+  mark.emitted = in_progress;
+  mark.paused = paused;
+  mark.dangerous = dangerous;
+  mark.last_ms = now_ms;
+  return mark;
+}
+
+template <typename Callback>
+class ReadyQueue {
+ public:
+  std::optional<Callback> Hold(bool initialized, Callback callback) {
+    if (ready_ || initialized) {
+      ready_ = true;
+      return std::optional<Callback>(std::move(callback));
+    }
+    waiting_.push_back(std::move(callback));
+    return std::nullopt;
+  }
+
+  std::vector<Callback> Release() {
+    ready_ = true;
+    return std::exchange(waiting_, {});
+  }
+
+  bool ready() const { return ready_; }
+  std::size_t waiting() const { return waiting_.size(); }
+
+ private:
+  bool ready_ = false;
+  std::vector<Callback> waiting_;
+};
+
+inline bool CapturesOpenUrls(bool hook_installed, bool host_alive, bool host_seen) {
+  return hook_installed && (host_alive || !host_seen);
+}
+
 enum class PickerAdmission { kOpen, kAlreadyOpen };
 
 inline PickerAdmission AdmitPicker(bool showing) {

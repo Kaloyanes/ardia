@@ -225,11 +225,12 @@ policy::OpenUrlInbox& OpenUrls() {
 
 using OpenUrlsImp = void (*)(id, SEL, NSApplication*, NSArray<NSURL*>*);
 OpenUrlsImp g_original_open_urls = nullptr;
+bool g_open_urls_host_seen = false;
 
 void ArdiaOpenUrls(id self, SEL command, NSApplication* application, NSArray<NSURL*>* urls) {
   NSMutableArray<NSURL*>* rest = [NSMutableArray array];
   std::vector<std::string> shell;
-  const bool hosted = !Hosts().empty();
+  const bool hosted = policy::CapturesOpenUrls(true, !Hosts().empty(), g_open_urls_host_seen);
   for (NSURL* url in urls) {
     const std::string spec = base::SysNSStringToUTF8(url.absoluteString ?: @"");
     if (hosted && policy::SchemeGoesToShell(spec)) {
@@ -248,6 +249,8 @@ void ArdiaOpenUrls(id self, SEL command, NSApplication* application, NSArray<NSU
   }
 }
 
+}
+
 void InstallOpenUrlsHook() {
   static bool installed = false;
   if (installed) {
@@ -262,6 +265,8 @@ void InstallOpenUrlsHook() {
       method_setImplementation(method, reinterpret_cast<IMP>(&ArdiaOpenUrls)));
   installed = true;
 }
+
+namespace {
 
 bool g_thin_scroll_bars = false;
 using PreferredStyleImp = NSScrollerStyle (*)(id, SEL);
@@ -330,7 +335,9 @@ std::optional<std::string> PathArgument(const base::ListValue& values) {
 class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
  public:
   DownloadWatch(SystemServices* owner, Profile* profile)
-      : owner_(owner), profile_(profile), notifier_(profile->GetDownloadManager(), this) {}
+      : owner_(owner), profile_(profile), notifier_(profile->GetDownloadManager(), this) {
+    SeedRunning();
+  }
   DownloadWatch(const DownloadWatch&) = delete;
   DownloadWatch& operator=(const DownloadWatch&) = delete;
   ~DownloadWatch() override = default;
@@ -339,10 +346,20 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
 
   void WhenReady(base::OnceClosure ready) {
     content::DownloadManager* downloads = manager();
-    if (!downloads || downloads->IsManagerInitialized()) {
-      return std::move(ready).Run();
+    if (std::optional<base::OnceClosure> now =
+            ready_.Hold(!downloads || downloads->IsManagerInitialized(), std::move(ready))) {
+      std::move(*now).Run();
     }
-    waiting_.push_back(std::move(ready));
+  }
+
+  void SeedRunning() {
+    const double now = NowMs();
+    for (DownloadItem* item : All()) {
+      if (item->GetState() == DownloadItem::IN_PROGRESS && !marks_.contains(item->GetGuid())) {
+        marks_[item->GetGuid()] =
+            policy::SeededMark(true, item->IsPaused(), item->IsDangerous() || item->IsInsecure(), now);
+      }
+    }
   }
 
   std::vector<DownloadItem*> All() const {
@@ -365,17 +382,14 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
 
  private:
   void OnManagerInitialized(content::DownloadManager*) override {
-    std::vector<base::OnceClosure> waiting = std::move(waiting_);
-    waiting_.clear();
-    for (base::OnceClosure& ready : waiting) {
+    SeedRunning();
+    for (base::OnceClosure& ready : ready_.Release()) {
       std::move(ready).Run();
     }
   }
 
   void OnManagerGoingDown(content::DownloadManager*) override {
-    std::vector<base::OnceClosure> waiting = std::move(waiting_);
-    waiting_.clear();
-    for (base::OnceClosure& ready : waiting) {
+    for (base::OnceClosure& ready : ready_.Release()) {
       std::move(ready).Run();
     }
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -419,16 +433,15 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
 
   raw_ptr<SystemServices> owner_;
   raw_ptr<Profile> profile_;
-  download::AllDownloadItemNotifier notifier_;
   std::map<std::string, policy::ProgressMark> marks_;
-  std::vector<base::OnceClosure> waiting_;
+  policy::ReadyQueue<base::OnceClosure> ready_;
+  download::AllDownloadItemNotifier notifier_;
 };
 
 SystemServices::SystemServices(ShellHostView* host) : host_(host) {
   InstallOpenUrlsHook();
-  if (Profile* profile = host_->app_profile()) {
-    WatchDownloads(profile);
-  }
+  g_open_urls_host_seen = true;
+  SyncWatches();
 }
 
 SystemServices::~SystemServices() {
@@ -462,6 +475,30 @@ void SystemServices::WatchDownloads(Profile* profile) {
   watches_[profile] = std::make_unique<DownloadWatch>(this, profile);
 }
 
+std::set<Profile*> SystemServices::MemberProfiles() const {
+  std::set<Profile*> profiles;
+  for (BrowserWindowInterface* member : host_->Members()) {
+    Profile* profile = member ? member->GetProfile() : nullptr;
+    if (profile && !profile->IsOffTheRecord() && !profile->ShutdownStarted()) {
+      profiles.insert(profile);
+    }
+  }
+  return profiles;
+}
+
+void SystemServices::SyncWatches() {
+  const std::set<Profile*> members = MemberProfiles();
+  std::erase_if(watches_, [&members](const auto& entry) { return !members.contains(entry.first); });
+  for (Profile* profile : members) {
+    WatchDownloads(profile);
+  }
+}
+
+void SystemServices::SyncWatchesSoon() {
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&SystemServices::SyncWatches, GetWeakPtr()));
+}
+
 void SystemServices::WatchGone(uintptr_t profile) {
   std::erase_if(watches_, [profile](const auto& entry) { return reinterpret_cast<uintptr_t>(entry.first) == profile; });
 }
@@ -483,6 +520,9 @@ std::vector<std::string> SystemServices::DownloadTargets(bool finished_only) con
 }
 
 void SystemServices::DownloadChanged(Profile* profile, DownloadItem* item) {
+  if (!MemberProfiles().contains(profile)) {
+    return SyncWatchesSoon();
+  }
   base::DictValue data = Describe(item);
   data.Set("profile", ProfileName(profile));
   host_->Emit("ArdiaDownloads", "downloads",
@@ -490,6 +530,9 @@ void SystemServices::DownloadChanged(Profile* profile, DownloadItem* item) {
 }
 
 void SystemServices::DownloadRemoved(Profile* profile, const std::string& id) {
+  if (!MemberProfiles().contains(profile)) {
+    return SyncWatchesSoon();
+  }
   host_->Emit("ArdiaDownloads", "downloads",
               base::Value(base::DictValue()
                               .Set("name", "downloads.removed")
@@ -507,7 +550,10 @@ void SystemServices::EngineCall(const std::string& name, Profile* profile, const
   if (!profile || profile->IsOffTheRecord() || profile->ShutdownStarted()) {
     return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's downloads are unavailable");
   }
-  WatchDownloads(profile);
+  SyncWatches();
+  if (!watches_.contains(profile)) {
+    return Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile has no tabs in this window");
+  }
   DownloadsCall(name, profile, std::move(*input), std::move(done));
 }
 
@@ -537,6 +583,7 @@ void SystemServices::DownloadsCall(const std::string& name, Profile* profile, ba
         }
         const auto found = self->watches_.find(profile);
         if (name == "downloads.list") {
+          found->second->SeedRunning();
           base::ListValue listed;
           for (DownloadItem* item : found->second->All()) {
             base::DictValue described = Describe(item);
@@ -605,6 +652,7 @@ void SystemServices::RendererRetired() {
 }
 
 void SystemServices::Invoke(const std::string& method, const base::ListValue* given, Done done) {
+  SyncWatches();
   const base::ListValue empty;
   const base::ListValue& values = given ? *given : empty;
   if (method == policy::kOpenUrlsListen) {

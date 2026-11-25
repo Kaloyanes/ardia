@@ -449,6 +449,30 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_download_watch_state_exists_before_its_notifier_calls_back(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        watch = source.split('class DownloadWatch', 1)[1].split('\n};', 1)[0]
+        notifier = watch.index('download::AllDownloadItemNotifier notifier_;')
+        for member in ('std::map<std::string, policy::ProgressMark> marks_;',
+                       'policy::ReadyQueue<base::OnceClosure> ready_;', 'raw_ptr<SystemServices> owner_;'):
+            self.assertLess(watch.index(member), notifier, member)
+
+    def test_in_window_pip_is_a_native_plane_between_pages_and_the_shell(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('std::make_unique<views::NativeViewHost>()', source)
+        self.assertIn('ui::RecyclableCompositorMac', source)
+        self.assertNotIn('SetPaintToLayer', source)
+        self.assertNotIn('AddChildViewAt(std::make_unique<views::NativeViewHost>', source)
+
+    def test_links_are_captured_from_webui_start(self):
+        start = (MAC / 'ac_mac_webui.mm').read_text().split('void StartWebUIShell() {', 1)[1]
+        self.assertLess(start.index('InstallOpenUrlsHook();'), start.index('WithProfile("", base::BindOnce(&OpenWindow));'))
+
+    def test_companion_profiles_are_watched(self):
+        host = (MAC / 'ac_mac_shell_host.mm').read_text()
+        member = host.split('BrowserWindowInterface* ShellHostView::EnsureMember(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('system_->SyncWatches();', member)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)

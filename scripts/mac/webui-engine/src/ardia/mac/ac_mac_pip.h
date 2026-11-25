@@ -18,21 +18,18 @@
 #include "components/viz/common/surfaces/surface_id.h"
 #include "content/public/browser/overlay_window.h"
 #include "services/media_session/public/cpp/media_position.h"
-#include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/compositor/compositor_observer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/views/view.h"
+
+namespace views {
+class NativeViewHost;
+}
 
 class VideoOverlayWindowViews;
 
 namespace content {
 class VideoPictureInPictureWindowController;
 class WebContents;
-}
-
-namespace ui {
-class Compositor;
 }
 
 namespace ardia_mac {
@@ -142,40 +139,7 @@ class PipPlayer : public content::VideoOverlayWindow {
   base::WeakPtrFactory<PipPlayer> weak_factory_{this};
 };
 
-class PipPlayerView : public views::View, public ui::CompositorObserver {
-  METADATA_HEADER(PipPlayerView, views::View)
-
- public:
-  static constexpr float kCornerRadius = 6;
-
-  PipPlayerView();
-  PipPlayerView(const PipPlayerView&) = delete;
-  PipPlayerView& operator=(const PipPlayerView&) = delete;
-  ~PipPlayerView() override;
-
-  void SetSurface(const viz::SurfaceId& surface_id);
-  void SetNaturalSize(const gfx::Size& natural_size);
-  void Reveal();
-  void FadeOut(base::TimeDelta fade, base::OnceClosure done);
-
-  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
-  void AddedToWidget() override;
-  void RemovedFromWidget() override;
-  bool GetCanProcessEventsWithinSubtree() const override;
-
- private:
-  void Register();
-  void Unregister();
-  void LayoutVideo();
-  void OnCompositingShuttingDown(ui::Compositor* compositor) override;
-
-  raw_ptr<views::View> video_ = nullptr;
-  viz::SurfaceId surface_id_;
-  gfx::Size natural_size_;
-  raw_ptr<ui::Compositor> compositor_ = nullptr;
-  std::optional<viz::FrameSinkId> registered_;
-  base::OneShotTimer fade_timer_;
-};
+class PipPlane;
 
 class PipPresenter {
  public:
@@ -211,10 +175,13 @@ class PipPresenter {
   void SendLeaving(uint64_t owner, base::TimeDelta fade);
   void DropPlayerView(uint64_t owner);
   void ReleasePlayer();
+  void RemovePlane();
+  void SizePlane();
 
   raw_ptr<ShellHostView> host_;
   base::WeakPtr<PipPlayer> player_;
-  raw_ptr<PipPlayerView> player_view_ = nullptr;
+  raw_ptr<views::NativeViewHost> player_view_ = nullptr;
+  std::unique_ptr<PipPlane> plane_;
   uint64_t player_view_owner_ = 0;
   std::optional<uint64_t> attached_generation_;
   base::WeakPtrFactory<PipPresenter> weak_factory_{this};

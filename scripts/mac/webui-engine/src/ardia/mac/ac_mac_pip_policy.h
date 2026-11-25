@@ -94,6 +94,16 @@ inline Box DefaultPlayerBox(int room_width, int room_height, int natural_width, 
              player_width, player_height};
 }
 
+inline Box FitInWorkArea(Box rect, Box area) {
+  if (area.empty()) return rect;
+  Box fitted = rect;
+  fitted.width = std::clamp(rect.width, 1, area.width);
+  fitted.height = std::clamp(rect.height, 1, area.height);
+  fitted.x = std::clamp(rect.x, area.x, area.x + area.width - fitted.width);
+  fitted.y = std::clamp(rect.y, area.y, area.y + area.height - fitted.height);
+  return fitted;
+}
+
 enum class Intent { kExplicit, kAutomatic };
 
 enum class Presentation { kInWindow, kWindow, kDeclined };

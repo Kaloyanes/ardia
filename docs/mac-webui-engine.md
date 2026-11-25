@@ -78,9 +78,11 @@ that branch). It is a development tool and never runs in a release. Like Windows
     and `setThinScrollBars` (overlay scrollers) match the native modules; a background instance changes none of them.
   - `ArdiaShell.pickFiles` and `pickFolder` open an `NSOpenPanel` sheet, one per window; a background instance logs the
     request and answers cancelled. `ArdiaApp.openExternalURL` refuses local, script and browser-internal schemes.
-  - Links from other apps: the host replaces `AppController`'s `application:openURLs:` while a WebUI window exists, keeps
+  - Links from other apps: the host replaces `AppController`'s `application:openURLs:` when the shell starts, keeps
     http, https and file URLs for the shell and passes the rest on, and sends them as `ArdiaShell` `onOpenURLs` to the key
-    window that called `ArdiaShell.listenForOpenURLs`.
+    window that called `ArdiaShell.listenForOpenURLs`; links from a cold launch wait for the first window.
+  - Download watches follow the window's members: a companion profile is watched when it joins and dropped when it
+    leaves.
 - **Extension popups and side panels** (`ac_mac_extension_view`, rules in `ac_mac_extension_view_policy.h`).
   `extensionView.create | viewport | place | command | release` host an extension's `ExtensionViewHost` in the window,
   a side panel under the shell like a page and a popup above it, with Linux's placement, reveal and `frame` handshake.
@@ -89,8 +91,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
   side panel hooks with `ArdiaExtensions` `extensions.installPrompt` and `extensions.sidePanel`.
 - **Picture in picture** (`ac_mac_pip`, rules in `ac_mac_pip_policy.h`). `apply.sh` adds `g_ardia_mac_video_overlay` to
   `CreateVideoOverlayWindow`, so the host makes the player: automatic picture in picture plays inside the window that
-  shows its tab (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
-  Chrome's own window. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
+  shows its tab, on a native plane (an `NSView` with its own compositor, hosted by a `NativeViewHost`) ordered above
+  the pages and below the shell (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
+  Chrome's own window, kept inside the destination display's work area. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

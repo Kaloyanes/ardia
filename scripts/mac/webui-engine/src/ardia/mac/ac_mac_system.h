@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +26,8 @@ namespace ardia_mac {
 class ShellHostView;
 class DownloadWatch;
 
+void InstallOpenUrlsHook();
+
 class SystemServices {
  public:
   using Done = base::OnceCallback<void(bool, base::Value)>;
@@ -42,7 +45,8 @@ class SystemServices {
   void Invoke(const std::string& method, const base::ListValue* values, Done done);
   void EngineCall(const std::string& name, Profile* profile, const base::Value* args, Done done);
   void RendererRetired();
-  void WatchDownloads(Profile* profile);
+  void SyncWatches();
+  void SyncWatchesSoon();
 
   bool ListeningForOpenUrls() const;
   void SendOpenUrls(base::ListValue urls);
@@ -53,6 +57,8 @@ class SystemServices {
   base::WeakPtr<SystemServices> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
  private:
+  void WatchDownloads(Profile* profile);
+  std::set<Profile*> MemberProfiles() const;
   void FileCall(const std::string& method, const base::ListValue& values, Done done);
   void PickFiles(const base::ListValue& values, Done done);
   void PickFolder(const base::ListValue& values, Done done);

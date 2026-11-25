@@ -363,8 +363,10 @@ class PromptLedger {
     Pending pending;
   };
 
+  bool full() const { return entries_.size() >= kMaxPendingPrompts; }
+
   std::optional<std::string> Add(std::string profile, std::string window, Pending pending) {
-    if (entries_.size() >= kMaxPendingPrompts) return std::nullopt;
+    if (full()) return std::nullopt;
     std::string id = "install" + std::to_string(++next_);
     entries_.emplace(id, Entry{std::move(profile), std::move(window), std::move(pending)});
     return id;

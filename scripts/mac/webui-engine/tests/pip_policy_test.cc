@@ -63,6 +63,17 @@ TEST(pop_out_points_are_finite_and_scaled) {
   CHECK(!pip::PopOutCoordinate(0, 0, 0));
 }
 
+TEST(popped_out_players_stay_inside_the_display_work_area) {
+  const pip::Box area{0, 25, 1440, 875};
+  CHECK(pip::FitInWorkArea({100, 100, 320, 180}, area) == (pip::Box{100, 100, 320, 180}));
+  CHECK(pip::FitInWorkArea({1400, 880, 320, 180}, area) == (pip::Box{1120, 720, 320, 180}));
+  CHECK(pip::FitInWorkArea({-500, -500, 320, 180}, area) == (pip::Box{0, 25, 320, 180}));
+  CHECK(pip::FitInWorkArea({0, 0, 3000, 2000}, area) == area);
+  const pip::Box second{1440, -200, 1920, 1080};
+  CHECK(pip::FitInWorkArea({3300, 800, 320, 180}, second) == (pip::Box{3040, 700, 320, 180}));
+  CHECK(pip::FitInWorkArea({5, 5, 10, 10}, pip::Box{}) == (pip::Box{5, 5, 10, 10}));
+}
+
 TEST(default_player_sits_bottom_right_with_the_video_aspect) {
   const pip::Box wide = pip::DefaultPlayerBox(1600, 1000, 1920, 1080);
   CHECK(wide.width == 448 && wide.height == 252 && wide.x == 1600 - 448 - 10 && wide.y == 1000 - 252 - 10);
