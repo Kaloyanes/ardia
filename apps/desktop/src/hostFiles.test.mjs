@@ -279,3 +279,22 @@ test("reopening Downloads after a file is deleted and its status expires shows i
   const panel = (await import("node:fs")).readFileSync(new URL("./DownloadsPopover.tsx", import.meta.url), "utf8");
   assert.match(panel, /\[list, dark, statusVersion, open\]/, "the rows are read again whenever the panel opens");
 });
+
+test("a refresh that answers a cached missing file with a non-boolean makes it unknown again and says so", async () => {
+  const f = fixture();
+  let answer = false;
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => paths.map(() => answer));
+  const files = createHostFiles(f.host, f.clock);
+  let changes = 0;
+  files.onChange(() => changes++);
+  files.fileStatus("/d/a.zip");
+  await f.flush();
+  assert.equal(files.fileStatus("/d/a.zip"), "missing");
+  assert.equal(changes, 1);
+  answer = null;
+  f.advance(FILE_STATUS_FRESH_MS + 1);
+  assert.equal(files.fileStatus("/d/a.zip"), "missing");
+  await f.flush();
+  assert.equal(files.fileStatus("/d/a.zip"), "unknown");
+  assert.equal(changes, 2);
+});

@@ -67,8 +67,7 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notic
         let changed = false;
         paths.forEach((path, index) => {
           const answer: unknown = reply[index];
-          if (typeof answer === "boolean") changed = remember(path, answer) || changed;
-          else remember(path, cache.get(path)?.exists ?? false, cache.get(path)?.confirmed ?? false);
+          changed = remember(path, typeof answer === "boolean" ? answer : cache.get(path)?.exists ?? false, typeof answer === "boolean") || changed;
         });
         if (changed) notify();
       })
