@@ -6,7 +6,6 @@ import { claimFocusTag, heroBarFocus } from "../../state/focus/focusClaims";
 import { navigate } from "../../state/tabs/actions";
 import { closeEmptySplitPaneOnEscape, replaceSplitPane } from "../../state/splits/actions";
 import { useSplitSuggestions } from "../../state/splits/hooks";
-import { EMPTY_PANE_ESCAPE_RELEASED, emptyPaneEscapeDown } from "../../state/splits/emptyPaneEscape";
 import { tabLabel } from "../../state/browser/model";
 import { noteSplit } from "../../state/telemetry/usage";
 import { Panel, SearchField, shadow, space, Symbol, Text, useHover } from "../ui";
@@ -22,7 +21,6 @@ export function SplitEmptyState({ tabId, focused }: { tabId: string; focused: bo
   const windowId = useWindowId();
   const input = useRef<TextInput>(null);
   const wasFocused = useRef(focused);
-  const escape = useRef(EMPTY_PANE_ESCAPE_RELEASED);
   useEffect(() => {
     const activated = focused && !wasFocused.current;
     wasFocused.current = focused;
@@ -64,25 +62,17 @@ export function SplitEmptyState({ tabId, focused }: { tabId: string; focused: bo
               inputRef={input}
               value={text}
               onChangeText={(next) => {
-                escape.current = EMPTY_PANE_ESCAPE_RELEASED;
                 setText(next);
                 setSelected(null);
               }}
               placeholder="Search or Ask a Question"
               onSubmit={go}
-              onArrow={(step) => {
-                escape.current = EMPTY_PANE_ESCAPE_RELEASED;
-                move(step);
-              }}
-              onBlur={() => void (escape.current = EMPTY_PANE_ESCAPE_RELEASED)}
-              onEscapeUp={() => void (escape.current = EMPTY_PANE_ESCAPE_RELEASED)}
+              onArrow={move}
               onEscape={() => {
-                const next = emptyPaneEscapeDown(escape.current, !!text || !!selectedId);
-                escape.current = next.state;
-                if (next.action === "clear") {
+                if (text || selectedId) {
                   setText("");
                   setSelected(null);
-                } else if (next.action === "close" && !closeEmptySplitPaneOnEscape(tabId)) setTyping(false);
+                } else if (!closeEmptySplitPaneOnEscape(tabId)) setTyping(false);
               }}
             />
           </View>
