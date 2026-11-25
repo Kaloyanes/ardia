@@ -171,6 +171,8 @@ test("the Downloads button carries the test id both outside-press listeners look
   const { readFileSync } = await import("node:fs");
   const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
   assert.match(read("./DownloadsPopover.tsx"), /opensItsOwnMenu: pressOpensDownloadsMenu/);
+  assert.match(read("./DownloadsPopover.tsx"), /OutsidePressIgnoreContext\.Provider value=\{pressOpensDownloadsMenu\}/);
+  assert.match(read("./shims/web/chrome.tsx"), /useContext\(OutsidePressIgnoreContext\)/);
   assert.match(read("./shims/web/chrome.tsx"), /watchOutsidePresses\(/);
   assert.match(read("./downloadsButtonPress.ts"), /data-testid="\$\{DOWNLOADS_BUTTON_TEST_ID\}"/);
   assert.match(read("../../browser/src/components/downloads/DownloadsButton.tsx"), /<ContextMenuArea testID=\{DOWNLOADS_BUTTON_TEST_ID\} onContextMenu=/);

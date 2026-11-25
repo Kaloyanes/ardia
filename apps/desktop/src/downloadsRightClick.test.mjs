@@ -27,7 +27,13 @@ function openPanel() {
     activeElement: () => null,
     now: () => 0,
   });
-  const stopOutside = watchOutsidePresses({ target, inside: (node) => node === panel, menuShown: () => false, onOutsidePress: close("outside press area") });
+  const stopOutside = watchOutsidePresses({
+    target,
+    inside: (node) => node === panel,
+    menuShown: () => false,
+    ignorePress: pressOpensDownloadsMenu,
+    onOutsidePress: close("outside press area"),
+  });
   const press = (type, on, button) => {
     const event = new Event(type, { cancelable: true, bubbles: true });
     Object.defineProperty(event, "target", { value: on });
@@ -71,4 +77,22 @@ test("only a secondary press on the Downloads button or something inside it open
   assert.equal(pressOpensDownloadsMenu({ target: button, button: 0 }), false);
   assert.equal(pressOpensDownloadsMenu({ target: element("ardia-sidebar"), button: 2 }), false);
   assert.equal(pressOpensDownloadsMenu({ target: null, button: 2 }), false);
+});
+
+test("another outside-press panel (such as a sidebar folder) still dismisses on a right-click on the Downloads button", () => {
+  const target = new EventTarget();
+  const folder = element("ardia-folder-panel");
+  let dismissed = 0;
+  const stop = watchOutsidePresses({
+    target,
+    inside: (node) => node === folder,
+    menuShown: () => false,
+    onOutsidePress: () => void (dismissed += 1),
+  });
+  const event = new Event("pointerdown", { cancelable: true, bubbles: true });
+  Object.defineProperty(event, "target", { value: element("ardia-downloads-button") });
+  Object.assign(event, { button: 2, pointerId: 1 });
+  target.dispatchEvent(event);
+  assert.equal(dismissed, 1);
+  stop();
 });

@@ -8,6 +8,7 @@ import { setDownloadsOpen } from "../../browser/src/state/windows/actions";
 import { useWindowUiOf } from "../../browser/src/state/windows/hooks";
 import { startDownloadsDismissal } from "./downloadsDismissal";
 import { menuShown } from "./menus";
+import { OutsidePressIgnoreContext } from "./outsidePressScope";
 import { PageOverlayRegion } from "./PageOverlayRegion";
 import { watchPageFocus } from "./pageFocus";
 
@@ -32,7 +33,9 @@ export function DownloadsPopover() {
   }, [open, windowId]);
   return (
     <PageOverlayRegion ref={region} testID="ardia-downloads-popover" dataSet={{ open: open ? "true" : "false" }}>
-      <BrowserDownloadsPopover />
+      <OutsidePressIgnoreContext.Provider value={pressOpensDownloadsMenu}>
+        <BrowserDownloadsPopover />
+      </OutsidePressIgnoreContext.Provider>
     </PageOverlayRegion>
   );
 }
