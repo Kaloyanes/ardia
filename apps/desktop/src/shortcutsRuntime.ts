@@ -1,5 +1,6 @@
 import type { ShortcutModifier } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
+import { consentEpoch } from "../../browser/src/state/telemetry/client";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
 import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
@@ -104,7 +105,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
     event.preventDefault();
     event.stopImmediatePropagation();
     if (binding.command === "tabSwitcher") hold(binding);
-    emitNativeEvent("ArdiaShell", "onCommand", { command: binding.command, arg: binding.arg, windowId: host.bootstrap.windowId });
+    emitNativeEvent("ArdiaShell", "onCommand", { command: binding.command, arg: binding.arg, windowId: host.bootstrap.windowId, epoch: consentEpoch() });
   }, true);
   window.addEventListener("keyup", (event) => {
     const flag = event.key === "Control" ? 4 : event.key === "Meta" ? 16 : event.key === "Alt" ? 8 : event.key === "Shift" ? 2 : 0;
