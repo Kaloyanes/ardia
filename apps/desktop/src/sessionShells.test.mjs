@@ -391,3 +391,36 @@ test("launch hints survive the WebUI adopting the Mac window as main, and go whe
   assert.equal(switched.launchBackdrop, undefined);
   assert.equal(switched.linkProfile, undefined);
 });
+
+test("a correctly filed row wins over a misfiled copy of it in both shells, wherever the copy sits", async () => {
+  const tables = JSON.parse(await tableFile());
+  const copy = { ...tables.tabs.a, url: "https://wrong.test/" };
+  const { a, ...rest } = tables.tabs;
+  for (const tabs of [{ ...tables.tabs, zz: copy }, { aa: copy, a, ...rest }]) {
+    const json = JSON.stringify({ ...tables, tabs });
+    macLaunch(json, { damaged: true });
+    assert.equal(S().tabs.a.url, "https://a.test/");
+    const webui = await webuiLaunch(json);
+    assert.equal(webui.live.tabs.a.url, "https://a.test/");
+    assert.equal(linuxSessionShape(JSON.parse(json)).tabs.a.url, "https://a.test/");
+  }
+});
+
+test("profiles filed under prototype names are dropped by both shells alike", async () => {
+  for (const json of [JSON.stringify(macSession()), await tableFile()]) {
+    const saved = JSON.parse(json);
+    saved.profiles = { ...saved.profiles, constructor: { id: "constructor", name: "Ctor", color: "blue", icon: null, createdAt: 3 }, toString: { id: "toString", name: "Str", color: "blue", icon: null, createdAt: 4 } };
+    saved.profileOrder = ["constructor", "toString", "__proto__", ...saved.profileOrder];
+    const hostile = JSON.stringify(saved).replace('"profiles":{', '"profiles":{"__proto__":{"id":"__proto__","name":"Proto","color":"blue","icon":null,"createdAt":5},');
+    assert.ok(Object.hasOwn(JSON.parse(hostile).profiles, "__proto__"));
+    const webui = await webuiLaunch(hostile);
+    macLaunch(hostile, { damaged: true });
+    const mac = S();
+    for (const live of [webui.live, mac]) {
+      assert.deepEqual(live.profileOrder, ["default", "p-two"]);
+      assert.deepEqual(Object.keys(live.profiles).sort(), ["default", "p-two"]);
+      assert.equal(Object.getPrototypeOf(live.profiles), Object.prototype);
+    }
+    assert.deepEqual(Object.keys(linuxSessionShape(JSON.parse(hostile)).profiles).sort(), ["default", "p-two"]);
+  }
+});

@@ -104,8 +104,8 @@ test("telemetry counts a launch on the other shell's table session, and not one 
   }
 });
 
-test("a table session whose only damage is a row filed under another key is copied aside before the Mac app rewrites it", async () => {
-  const saved = webuiTables();
+for (const version of [SESSION_VERSION, 10, 4]) test(`a v${version} table session whose only damage is a row filed under another key is copied aside before the Mac app rewrites it`, async () => {
+  const saved = webuiTables(version);
   const { a, ...rest } = saved.tabs;
   saved.tabs = { ...rest, misfiled: a };
   const stop = await launchOn(saved);

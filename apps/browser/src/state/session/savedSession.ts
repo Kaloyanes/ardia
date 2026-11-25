@@ -6,7 +6,7 @@ import { parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSett
 import { sessionWithOwnTabMutes } from "../tabs/mute";
 import { pinChoicesFromDisk, sessionWithPinChoiceStamps } from "../pins/pinChoices";
 import { isFields, isString, isStringList } from "../../lib/decode";
-import { isOwnId, pageFromDisk, pinFromDisk, SESSION_ROWS, splitsChecked, sessionWithListedRows, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
+import { isOwnId, pageFromDisk, pinFromDisk, sessionRowsMisfiled, splitsChecked, sessionWithListedRows, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
 import { profilesKeepingLegacyDots } from "../profiles/switcherMark";
 import { profilesWithOwnLooks } from "../../lib/presetLook";
 import { layoutDrops } from "../browser/hydratedLayout";
@@ -22,6 +22,7 @@ const ownIds = (o: SavedObject, keys: readonly string[]) => keys.every((k) => is
 export const rows = <T,>(v: unknown, ok: (o: SavedObject) => boolean): T[] => (Array.isArray(v) ? v.filter((o): o is SavedObject => isFields(o) && ok(o)) : []) as T[];
 const byProfile = <T,>(v: unknown, ok: (o: SavedObject) => boolean = () => true): Record<string, T> =>
   (isFields(v) ? Object.fromEntries(Object.entries(v).filter(([key, o]) => isOwnId(key) && isFields(o) && ok(o))) : {}) as Record<string, T>;
+export const savedProfileRows = (v: unknown) => byProfile<Profile>(v, profileOk);
 const byId = <T extends { id: string }>(list: T[]) => Object.fromEntries(list.map((x) => [x.id, x]));
 
 const windowOk = (o: SavedObject) => ownIds(o, ["id", "profileId"]) && isStringList(o.tabIds) && isFields(o.activeTabIds) && Object.values(o.activeTabIds).every(isString);
@@ -99,11 +100,8 @@ const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 const keyed = (value: unknown) => (isFields(value) ? Object.keys(value).length : 0);
 const CLOSED_LISTS = ["closedTabs", "closedWindows", "closedGroups", "deletedGroups", "cleanedTabs"] as const;
 
-const misfiledRows = (saved: SavedObject) =>
-  SESSION_ROWS.some((key) => isFields(saved[key]) && Object.entries(saved[key] as SavedObject).some(([id, row]) => isFields(row) && row.id !== id));
-
 export const droppedRows = (saved: SavedObject, session: SavedSession, raw = sessionWithListedRows(saved)) =>
-  misfiledRows(saved) ||
+  sessionRowsMisfiled(saved) ||
   layoutDrops(session) ||
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||

@@ -20,7 +20,8 @@ import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
 import { noteSessionFromOtherShell } from "../../browser/src/state/telemetry/sessionWrites";
-import { isOwnId, pageFromDisk, SESSION_ROWS, sessionRowLists, sessionWithListedRows } from "../../browser/src/state/session/savedShapes";
+import { isOwnId, pageFromDisk, SESSION_ROWS, sessionRowLists, sessionWithListedRows, tableRows } from "../../browser/src/state/session/savedShapes";
+import { savedProfileRows } from "../../browser/src/state/session/savedSession";
 import { isFields } from "../../browser/src/lib/decode";
 
 type StoredWindow = Partial<BrowserWindow> & { incognito?: unknown; originalProfileId?: unknown; sidebarOpen?: unknown };
@@ -119,9 +120,12 @@ const withoutWindowTabsShown = (session: HydrateData): HydrateData => {
 };
 
 const withRowsKeyed = (saved: HydrateData): HydrateData => {
-  const rowsOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : isFields(value) ? Object.values(value) : []);
+  const rowsOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : isFields(value) ? tableRows(value) : []);
   const reshaped = SESSION_ROWS.filter((key) => saved[key] !== undefined && !(isFields(saved[key]) && keyedTable(saved[key])));
-  return reshaped.length ? { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key])) ?? {}])) } : saved;
+  const profiles = saved.profiles === undefined ? undefined : savedProfileRows(saved.profiles);
+  const profilesChanged = !!profiles && (!isFields(saved.profiles) || Object.keys(profiles).length !== Object.keys(saved.profiles).length);
+  if (!reshaped.length && !profilesChanged) return saved;
+  return { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key])) ?? {}])), ...(profilesChanged ? { profiles } : {}) };
 };
 
 const sniffedSessionShape = (saved: HydrateData): HydrateData => {
