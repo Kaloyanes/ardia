@@ -1,5 +1,14 @@
 import { nativeModule } from "./nativeModules";
 
+export type NativeMessagingHostReport = {
+  host: string;
+  found?: boolean;
+  parsed?: boolean;
+  executable?: boolean;
+  writeErrorDomain?: string;
+  writeErrorCode?: number;
+};
+
 export type EngineInfo = {
   pid: number;
   dataDirectory: string;
@@ -11,6 +20,7 @@ export type EngineInfo = {
   focus?: string;
   pictureInPictureCloses?: string;
   pictureInPictureGestures?: string;
+  nativeMessagingHosts?: NativeMessagingHostReport[];
 };
 
 export type EngineComponent = {

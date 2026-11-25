@@ -2,6 +2,7 @@
 #import "ArdiaLaunchConfig.h"
 #import "ArdiaEarlyWindow.h"
 #import "ArdiaServices.h"
+#import "ArdiaNativeMessaging.h"
 #import "ArdiaNavigationDownloads.h"
 #import "ArdiaPiPGestureLog.h"
 #import "ArdiaStartup.h"
@@ -513,6 +514,7 @@ static NSDictionary<NSString *, id> *OffscreenRefusal(NSString *reason) {
     @"keepAlive" : engine.keepAliveState ?: @"",
     @"pictureInPictureCloses" : engine.pictureInPictureCloses ?: @"",
     @"pictureInPictureGestures" : ardia_pip::GestureLog(),
+    @"nativeMessagingHosts" : ardia_native_messaging::HostReports(),
     @"lastUsedProfile" : engine.defaultProfile.name ?: @"",
     @"focus" : ardia_host::FocusState(),
   };

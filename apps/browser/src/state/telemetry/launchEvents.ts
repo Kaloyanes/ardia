@@ -5,6 +5,7 @@ import { topAppsSharingAtLaunch } from "./topAppsSharing";
 import { appInfo } from "./transport";
 import { engineMatchProperties } from "./engineMatch";
 import { noteLaunchConsent, reportShellMigrationAtLaunch } from "./shellMigrationLaunch";
+import { reportNativeMessagingHosts } from "./nativeMessagingHosts";
 
 const rebootedSince = (lastLaunchAt: number | null) => {
   const boot = appInfo().bootTime;
@@ -20,4 +21,5 @@ export async function launchEvents(session: ReturnType<typeof startClient>, cons
   if (session.updatedFrom) capture("app_updated", { from_version: session.updatedFrom }, consent);
   capture("top_apps_sharing", topApps, consent);
   await reportShellMigrationAtLaunch(consent);
+  await reportNativeMessagingHosts(consent);
 }

@@ -1,8 +1,34 @@
 #import "ArdiaNativeMessaging.h"
 
+#import <os/lock.h>
+
 namespace ardia_native_messaging {
 
 namespace {
+
+os_unfair_lock gReportLock = OS_UNFAIR_LOCK_INIT;
+
+NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, id> *> *Report() {
+  static NSMutableDictionary *report = [NSMutableDictionary dictionary];
+  return report;
+}
+
+void BeginReport() {
+  os_unfair_lock_lock(&gReportLock);
+  [Report() removeAllObjects];
+  os_unfair_lock_unlock(&gReportLock);
+}
+
+void NoteReport(NSString *name, NSDictionary<NSString *, id> *fields) {
+  os_unfair_lock_lock(&gReportLock);
+  NSMutableDictionary<NSString *, id> *entry = Report()[name];
+  if (!entry) {
+    entry = [NSMutableDictionary dictionaryWithObject:name forKey:@"host"];
+    Report()[name] = entry;
+  }
+  [entry addEntriesFromDictionary:fields];
+  os_unfair_lock_unlock(&gReportLock);
+}
 
 NSString *const kChromeSystemDir = @"/Library/Google/Chrome/NativeMessagingHosts";
 NSString *const kManagedList = @".ardia-managed.json";
@@ -67,12 +93,17 @@ NSString *ManifestPath(NSString *dir, NSString *name) {
   return [dir stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"json"]];
 }
 
-bool IsUsable(NSDictionary *manifest, NSString *name) {
+bool HasExecutableTarget(NSDictionary *manifest) {
   if (![manifest isKindOfClass:NSDictionary.class]) return false;
   NSString *path = manifest[@"path"];
+  return [path isKindOfClass:NSString.class] && path.isAbsolutePath &&
+         [NSFileManager.defaultManager isExecutableFileAtPath:path];
+}
+
+bool IsUsable(NSDictionary *manifest, NSString *name) {
+  if (![manifest isKindOfClass:NSDictionary.class]) return false;
   return [manifest[@"name"] isEqual:name] && [manifest[@"type"] isEqual:@"stdio"] &&
-         [manifest[@"allowed_origins"] isKindOfClass:NSArray.class] && [path isKindOfClass:NSString.class] &&
-         path.isAbsolutePath && [NSFileManager.defaultManager isExecutableFileAtPath:path];
+         [manifest[@"allowed_origins"] isKindOfClass:NSArray.class] && HasExecutableTarget(manifest);
 }
 
 NSDictionary<NSString *, NSData *> *InstalledHosts() {
@@ -89,14 +120,29 @@ NSDictionary<NSString *, NSData *> *InstalledHosts() {
   }
   for (NSString *name in SystemRegisteredHosts()) {
     NSData *system = [NSData dataWithContentsOfFile:ManifestPath(kChromeSystemDir, name)];
-    if (system && IsUsable([NSJSONSerialization JSONObjectWithData:system options:0 error:nil], name)) hosts[name] = system;
+    id parsed = system ? [NSJSONSerialization JSONObjectWithData:system options:0 error:nil] : nil;
+    NoteReport(name, @{
+      @"found" : @(system != nil),
+      @"parsed" : @([parsed isKindOfClass:NSDictionary.class]),
+      @"executable" : @(HasExecutableTarget(parsed)),
+    });
+    if (system && IsUsable(parsed, name)) hosts[name] = system;
   }
   return hosts;
 }
 
 }
 
+NSArray<NSDictionary<NSString *, id> *> *HostReports() {
+  os_unfair_lock_lock(&gReportLock);
+  NSMutableArray<NSDictionary<NSString *, id> *> *reports = [NSMutableArray array];
+  for (NSString *name in [Report().allKeys sortedArrayUsingSelector:@selector(compare:)]) [reports addObject:[Report()[name] copy]];
+  os_unfair_lock_unlock(&gReportLock);
+  return reports;
+}
+
 void SyncHosts(NSString *userDataDir) {
+  BeginReport();
   NSFileManager *fm = NSFileManager.defaultManager;
   NSString *dir = [userDataDir stringByAppendingPathComponent:@"NativeMessagingHosts"];
   [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
@@ -111,9 +157,12 @@ void SyncHosts(NSString *userDataDir) {
     NSString *path = ManifestPath(dir, name);
     bool ours = [managed containsObject:name];
     if (!ours && [fm fileExistsAtPath:path]) continue;
+    NSError *writeError = nil;
     if (![[NSData dataWithContentsOfFile:path] isEqualToData:hosts[name]] &&
-        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:nil])
+        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:&writeError]) {
+      NoteReport(name, @{ @"writeErrorDomain" : writeError.domain ?: @"", @"writeErrorCode" : @(writeError.code) });
       continue;
+    }
     [nowManaged addObject:name];
   }
   for (NSString *name in managed)
