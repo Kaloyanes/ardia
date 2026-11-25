@@ -283,7 +283,10 @@ class ContractTests(unittest.TestCase):
         clear = glass.split('void GlassRegions::Clear() {', 1)[1].split('\n}\n', 1)[0]
         for step in ('gate_.Invalidate();', 'weak_factory_.InvalidateWeakPtrs();', 'regions_.clear();', 'backdrops_.clear();'):
             self.assertIn(step, clear)
-        self.assertIn('glass::AcceptedGlass(mounted, backdrops_)', glass)
+        self.assertIn('glass::MountedGlass(mounted.placements)', glass)
+        relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1]
+        self.assertRegex(relayout, r'if \(!content \|\| !frame\) \{\n\s+return glass::Layout\{\};')
+        self.assertIn('region.source = glass::Source::kBackdrop;', glass)
         self.assertIn('glass_->Clear();', self.read('ac_mac_shell_host.mm'))
 
     def test_queued_context_menu_binds_no_view(self):
@@ -298,6 +301,10 @@ class ContractTests(unittest.TestCase):
         workflow = (REPO / '.github/workflows/mac.yml').read_text()
         self.assertIn('python3 scripts/mac/webui-engine/tests/test_mac_layer.py', workflow)
         self.assertIn('"scripts/mac/webui-engine/**"', workflow)
+        trigger = workflow.split('paths: &native', 1)[1].split('push:', 1)[0]
+        webui_filter = workflow.split('            webui:', 1)[1].split('\n\n', 1)[0]
+        for path in re.findall(r'- "([^"]+)"', webui_filter):
+            self.assertIn(f'- "{path}"', trigger, path)
         self.assertIn('runs-on: blacksmith-6vcpu-macos-27', workflow.split('webui-engine:', 1)[1].split('\n\n', 1)[0])
 
     def test_no_unbounded_integer_narrowing(self):

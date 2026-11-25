@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace ardia_mac::glass {
@@ -62,6 +63,8 @@ enum class Plane { kBehindWindow, kOverPage };
 
 enum class Effect { kLiquidGlass, kVibrancy };
 
+enum class Source { kGlass, kBackdrop };
+
 struct Region {
   std::string id;
   Rect rect;
@@ -70,6 +73,7 @@ struct Region {
   double blur = 24;
   Layer layer = Layer::kAuto;
   Material material = Material::kLiquid;
+  Source source = Source::kGlass;
 };
 
 struct Page {
@@ -88,6 +92,7 @@ struct Placement {
   double opacity = 1;
   Material material = Material::kLiquid;
   std::size_t order = 0;
+  Source source = Source::kGlass;
   bool operator==(const Placement&) const = default;
 };
 
@@ -105,6 +110,7 @@ struct Layout {
 struct SlotKey {
   Plane plane = Plane::kBehindWindow;
   int page = 0;
+  Source source = Source::kGlass;
   std::string id;
   auto operator<=>(const SlotKey&) const = default;
 };
@@ -227,7 +233,7 @@ inline Layout Lay(const std::vector<Region>& regions,
                   double shell_scale) {
   Layout layout;
   const double scale = SanitizedScale(shell_scale);
-  std::set<std::string> seen;
+  std::set<std::pair<Source, std::string>> seen;
   std::size_t behind_order = 0;
   std::vector<std::size_t> page_order(pages.size(), 0);
   for (const Region& region : regions) {
@@ -236,7 +242,7 @@ inline Layout Lay(const std::vector<Region>& regions,
       reject("id");
       continue;
     }
-    if (seen.contains(region.id)) {
+    if (seen.contains({region.source, region.id})) {
       reject("duplicate");
       continue;
     }
@@ -258,7 +264,7 @@ inline Layout Lay(const std::vector<Region>& regions,
       reject("radii");
       continue;
     }
-    seen.insert(region.id);
+    seen.insert({region.source, region.id});
     layout.accepted.push_back(region.id);
     const double opacity = std::clamp(region.opacity, 0.0, 1.0);
     if (opacity <= 0) continue;
@@ -267,7 +273,8 @@ inline Layout Lay(const std::vector<Region>& regions,
       if (visible.empty()) return false;
       layout.placements.push_back(Placement{region.id, plane, page, Offset(rect, origin.x, origin.y),
                                             Offset(visible, origin.x, origin.y), UniformRadius(*radii),
-                                            CornerMask(*radii), opacity, region.material, order});
+                                            CornerMask(*radii), opacity, region.material, order,
+                                            region.source});
       return true;
     };
     bool on_page = false;
@@ -299,19 +306,26 @@ inline int ClampToInt(double value, double limit = kMaxCoordinate) {
 }
 
 inline std::vector<Region> Mounted(const std::vector<Region>& backdrops, const std::vector<Region>& glass) {
-  std::vector<Region> all = backdrops;
-  all.insert(all.end(), glass.begin(), glass.end());
+  std::vector<Region> all;
+  all.reserve(backdrops.size() + glass.size());
+  for (Region backdrop : backdrops) {
+    backdrop.source = Source::kBackdrop;
+    all.push_back(std::move(backdrop));
+  }
+  for (Region region : glass) {
+    region.source = Source::kGlass;
+    all.push_back(std::move(region));
+  }
   return all;
 }
 
-inline std::vector<std::string> AcceptedGlass(const Layout& mounted, const std::vector<Region>& backdrops) {
-  std::set<std::string> backdrop_ids;
-  for (const Region& backdrop : backdrops) backdrop_ids.insert(backdrop.id);
-  std::vector<std::string> accepted;
-  for (const std::string& id : mounted.accepted) {
-    if (!backdrop_ids.contains(id)) accepted.push_back(id);
+inline std::vector<std::string> MountedGlass(const std::vector<Placement>& placements) {
+  std::vector<std::string> mounted;
+  std::set<std::string> seen;
+  for (const Placement& placement : placements) {
+    if (placement.source == Source::kGlass && seen.insert(placement.id).second) mounted.push_back(placement.id);
   }
-  return accepted;
+  return mounted;
 }
 
 class PresentedGate {
@@ -330,7 +344,7 @@ class PresentedGate {
 };
 
 inline SlotKey KeyOf(const Placement& placement) {
-  return SlotKey{placement.plane, placement.page, placement.id};
+  return SlotKey{placement.plane, placement.page, placement.source, placement.id};
 }
 
 inline Diff DiffPlacements(const std::vector<Placement>& before,

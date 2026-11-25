@@ -329,7 +329,7 @@ TEST(hostile_sinks) {
   CHECK(control.placements.size() == 1);
 }
 
-TEST(accepted_reflects_what_was_mounted_under_the_shared_cap) {
+TEST(accepted_is_what_mounted_under_the_shared_cap) {
   std::vector<Region> backdrops;
   for (int index = 0; index < 60; ++index) {
     backdrops.push_back(Make("backdrop:" + std::to_string(index), {static_cast<double>(index), 0, 4, 4}, Layer::kBehind));
@@ -339,16 +339,40 @@ TEST(accepted_reflects_what_was_mounted_under_the_shared_cap) {
     regions.push_back(Make("g" + std::to_string(index), {static_cast<double>(index), 10, 4, 4}));
   }
   const auto mounted = glass::Lay(glass::Mounted(backdrops, regions), {}, kWindow, 1);
-  const auto accepted = glass::AcceptedGlass(mounted, backdrops);
-  CHECK(accepted == (std::vector<std::string>{"g0", "g1", "g2", "g3"}));
-  for (const Placement& placement : mounted.placements) {
-    CHECK(placement.id.rfind("backdrop:", 0) == 0 || placement.id < "g4");
-  }
-  Region impostor = Make("backdrop:0", {0, 0, 4, 4});
-  const auto clash = glass::Lay(glass::Mounted({backdrops[0]}, {impostor}), {}, kWindow, 1);
-  CHECK(glass::AcceptedGlass(clash, {backdrops[0]}).empty());
+  CHECK(glass::MountedGlass(mounted.placements) == (std::vector<std::string>{"g0", "g1", "g2", "g3"}));
   const auto roomy = glass::Lay(glass::Mounted({backdrops[0]}, regions), {}, kWindow, 1);
-  CHECK(glass::AcceptedGlass(roomy, {backdrops[0]}).size() == 10);
+  CHECK(glass::MountedGlass(roomy.placements).size() == 10);
+}
+
+TEST(glass_sharing_an_id_with_a_zero_width_backdrop_is_accepted) {
+  const Region backdrop = Make("backdrop:0", {0, 0, 0, 40}, Layer::kBehind);
+  const Region shared = Make("backdrop:0", {10, 10, 40, 40});
+  const auto mounted = glass::Lay(glass::Mounted({backdrop}, {shared}), {}, kWindow, 1);
+  CHECK(mounted.placements.size() == 1);
+  CHECK(mounted.placements[0].source == glass::Source::kGlass);
+  CHECK(glass::MountedGlass(mounted.placements) == (std::vector<std::string>{"backdrop:0"}));
+  const Region live_backdrop = Make("backdrop:0", {0, 0, 40, 40}, Layer::kBehind);
+  const auto both = glass::Lay(glass::Mounted({live_backdrop}, {shared}), {}, kWindow, 1);
+  CHECK(both.placements.size() == 2);
+  CHECK(glass::MountedGlass(both.placements) == (std::vector<std::string>{"backdrop:0"}));
+  CHECK(glass::KeyOf(both.placements[0]) != glass::KeyOf(both.placements[1]));
+}
+
+TEST(nothing_is_accepted_without_a_native_surface) {
+  const auto unmounted = glass::Layout{};
+  CHECK(glass::MountedGlass(unmounted.placements).empty());
+  const auto empty_surface = glass::Lay(glass::Mounted({}, {Make("g", {10, 10, 40, 40})}), {}, glass::Rect{}, 1);
+  CHECK(empty_surface.placements.empty());
+  CHECK(glass::MountedGlass(empty_surface.placements).empty());
+  const auto offscreen = glass::Lay(glass::Mounted({}, {Make("g", {5000, 5000, 40, 40})}), {}, kWindow, 1);
+  CHECK(glass::MountedGlass(offscreen.placements).empty());
+}
+
+TEST(mounted_glass_names_a_region_on_two_pages_once) {
+  const std::vector<Page> pages{{1, {0, 0, 600, 800}}, {2, {610, 0, 670, 800}}};
+  const auto split = glass::Lay(glass::Mounted({}, {Make("peek", {500, 100, 300, 200}, Layer::kOverPage)}), pages, kWindow, 1);
+  CHECK(split.placements.size() == 2);
+  CHECK(glass::MountedGlass(split.placements) == (std::vector<std::string>{"peek"}));
 }
 
 TEST(clear_cancels_pending_presented) {

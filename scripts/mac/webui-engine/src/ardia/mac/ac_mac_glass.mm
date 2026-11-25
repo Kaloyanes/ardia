@@ -241,7 +241,7 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
                                   weak_factory_.GetWeakPtr(),
                                   gate_.Issue(*presentable)));
   }
-  for (const std::string& id : glass::AcceptedGlass(mounted, backdrops_)) {
+  for (const std::string& id : glass::MountedGlass(mounted.placements)) {
     accepted.Append(id);
   }
   reply.Set("accepted", std::move(accepted));
@@ -268,6 +268,7 @@ base::Value GlassRegions::ApplyBackdrops(const base::DictValue& args, double she
     region.id = "backdrop:" + std::to_string(index);
     region.rect = *rect;
     region.layer = glass::Layer::kBehind;
+    region.source = glass::Source::kBackdrop;
     region.material = *parsed;
     backdrops.push_back(std::move(region));
   }
@@ -290,7 +291,7 @@ glass::Layout GlassRegions::Relayout() {
   NSView* content = window.contentView;
   NSView* frame = content.superview;
   if (!content || !frame) {
-    return glass::Lay(glass::Mounted(backdrops_, regions_), {}, glass::Rect{}, zoom_);
+    return glass::Layout{};
   }
   std::vector<glass::Page> pages;
   pages.reserve(pages_.size());

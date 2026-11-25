@@ -42,6 +42,7 @@ on:
       - "apps/desktop/src/glassRegions.ts"
       - "apps/desktop/src/shellGlass.ts"
       - "apps/browser/src/boundaries.json"
+      - "engine/patches/series"
   push:
     branches: [main]
     paths: *native
