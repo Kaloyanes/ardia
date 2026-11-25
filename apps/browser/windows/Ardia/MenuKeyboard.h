@@ -263,10 +263,13 @@ struct MenuKeyboard {
     }
   }
 
-  bool Dispatch(KeyPress const &press) noexcept {
+  static bool IgnoresKeyRepeat(std::string const &command) noexcept { return command == "focusCommandBar"; }
+
+  bool Dispatch(KeyPress const &press, bool repeat = false) noexcept {
     MenuStore &store = MenuStore::Shared();
     CommandEntry const *entry = store.Match(press);
     if (!entry) return false;
+    if (repeat && !entry->Native() && IgnoresKeyRepeat(entry->command)) return true;
     ActiveWindow window = ActiveArdiaWindow();
     if (entry->Native()) {
       if (!NativeActionAvailable(entry->id, window)) return false;
@@ -581,7 +584,7 @@ struct MenuKeyboard {
       if (switcherCaptured) handled = CaptureSwitcherKey(press, (flags & (1u << 30)) != 0);
       else if (escapeCaptured && BareEscape(press)) handled = CaptureEscape();
       else if (UndoReopensClosedTab(press, window)) handled = ReopenClosedTab(window);
-      else handled = Dispatch(press);
+      else handled = Dispatch(press, (flags & (1u << 30)) != 0);
     }
     if (handled) {
       swallowedKeyUps.insert(virtualKey);

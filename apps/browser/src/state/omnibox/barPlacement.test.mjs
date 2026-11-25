@@ -4,6 +4,9 @@ const { keyBarPlacement, isCentred, commandKeyPlacement, addressFieldShown, clic
 const { openBarFromAddress, openEmptySidebarField } = await import("./barState.ts");
 const { commandBarPlacementLabel } = await import("../telemetry/track.ts");
 const { useBrowser } = await import("../browser/store.ts");
+const { webviews } = await import("../../platform/webviews.ts");
+const { activeTabId } = await import("../browser/model.ts");
+globalThis.fetch ??= async () => ({ status: 503 });
 
 test("⌘L opens at the field when one is on screen, as a click does", () => {
   assert.equal(keyBarPlacement({ setting: "field", small: false, fieldShown: true }), "field");
@@ -140,4 +143,69 @@ test("⌘L over ⌘T's bar on a page swaps it for the address bar instead of clo
   assert.equal(S().windowUi[w].panel.open, true);
   assert.equal(S().windowUi[w].panel.newTab, undefined);
   assert.equal(S().windowUi[w].panel.initialText, "https://example.com/");
+});
+
+const focusLog = (ids) => {
+  const focused = [];
+  for (const id of ids) webviews.set(id, { focus: async () => void focused.push(id), focusIfUnfocused: async () => (focused.push(id), true) });
+  return focused;
+};
+
+test("the second ⌘L gives the keyboard back to the page, in a main window and in Little Ardia", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  for (const kind of ["main", "small"]) {
+    S().hydrate({});
+    S().updateSettings({ commandBarPlacement: "field", addressBar: "toolbar" });
+    const w = S().createWindow(kind === "small" ? { kind: "small", url: "https://example.com/" } : { url: "https://example.com/" });
+    const page = activeTabId(S(), w);
+    const focused = focusLog([page]);
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, true, kind);
+    assert.deepEqual(focused, [], `${kind}: opening the bar leaves the page alone`);
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, false, kind);
+    assert.deepEqual(focused, [page], `${kind}: the page has the keyboard again`);
+  }
+});
+
+test("on a blank New Tab page with the address in the sidebar, and in a blank Little Ardia, the second ⌘L closes the bar too", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  S().hydrate({});
+  S().updateSettings({ commandBarPlacement: "field", addressBar: "sidebar", tabLayout: "sidebar", autoHideTabs: false, newTabOpens: "page" });
+  const w = S().createWindow({});
+  const blank = activeTabId(S(), w);
+  assert.equal(S().tabs[blank].url, "");
+  const focused = focusLog([blank]);
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  assert.equal(S().windowUi[w].panel.open, true, "the first ⌘L opens the sidebar dropdown");
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  assert.equal(S().windowUi[w].panel.open, false, "the second closes it");
+  assert.deepEqual(focused, [], "a blank tab has no page to hand the keyboard to");
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  assert.equal(S().windowUi[w].panel.open, true, "and the third opens it again");
+
+  S().hydrate({});
+  const little = S().createWindow({ kind: "small" });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: little });
+  assert.equal(S().windowUi[little].panel.open, true);
+  runCommand({ command: "focusCommandBar", arg: null, windowId: little });
+  assert.equal(S().windowUi[little].panel.open, false, "a blank Little Ardia closes its bar instead of reopening it");
+  assert.ok(S().windows[little], "and keeps its window");
+});
+
+test("each ⌘L dismissal is counted once, under the consent of the key press", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  const client = await import("../telemetry/client.ts");
+  const { takeInlineCompletionCounts } = await import("../telemetry/inlineCompletionCounts.ts");
+  client.loadChoice();
+  client.setSharing(true, "onboarding");
+  takeInlineCompletionCounts();
+  const w = pageWindow({ commandBarPlacement: "field", addressBar: "toolbar" });
+  const user = { consent: client.consentToken() };
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
+  assert.equal(takeInlineCompletionCounts().command_bar_key_dismissals, 1, "an open is not a dismissal, and a press without consent isn't counted");
+  client.setSharing(false, "settings");
 });

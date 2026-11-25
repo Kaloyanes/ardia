@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings, recordableShortcut, utilityBindings } from "./shortcuts.ts";
+import { dispatchesKeyPress, keyboardCombo, linuxBindings, linuxMenuShortcuts, linuxNativeBindings, recordableShortcut, utilityBindings } from "./shortcuts.ts";
 
 const commandAt = (bindings, keyCode, modifiers) => bindings.find((binding) => binding.keyCode === keyCode && binding.modifiers === modifiers);
 const event = (code, modifiers = {}) => ({ code, key: "", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
@@ -165,4 +165,13 @@ test("Email Page Location has no default shortcut, since Ctrl+Shift+I opens the 
   assert.deepEqual(linuxMenuShortcuts().filter((item) => item.id === "emailPageLocation").map((item) => item.key), [""]);
   assert.equal(linuxBindings().some((binding) => binding.command === "emailPageLocation"), false);
   assert.equal(linuxBindings({ emailPageLocation: ["e", "command"] }).some((binding) => binding.command === "emailPageLocation"), true);
+});
+
+test("a held Ctrl+L runs Open Command Bar once: its repeats are swallowed, and a release then a fresh press toggles again", () => {
+  const binding = commandAt(linuxBindings(), keyboardCombo(event("KeyL", { ctrlKey: true })).keyCode, 4);
+  assert.equal(binding?.command, "focusCommandBar");
+  const presses = [{ repeat: false }, { repeat: true }, { repeat: true }, { repeat: false }];
+  assert.deepEqual(presses.map((press) => dispatchesKeyPress(binding, press)), [true, false, false, true]);
+  const nextTab = commandAt(linuxBindings(), 34, 4);
+  assert.equal(dispatchesKeyPress(nextTab, { repeat: true }), true, "other commands still repeat");
 });

@@ -28,7 +28,7 @@ import { showHistory } from "../history/showHistory";
 import { openInternalPage } from "../pages/urls";
 import { openImport, openSettings } from "../settings/settingsWindows";
 import { focusSettingsSearch } from "../settings/searchState";
-import { closePanelToHeroBar, focusHeroBar } from "../omnibox/barState";
+import { closePanelToHeroBar, dismissBarByCommandKey, focusHeroBar } from "../omnibox/barState";
 import { closeNewTabBar, isEmptyCardTab, showNewTabBar, toggleNewTabBar } from "../omnibox/newTabBar";
 import { NEW_TAB_BAR_POLICY } from "../omnibox/newTabBarPolicy";
 import { addressBarInSidebar } from "../windows/layout";
@@ -100,7 +100,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       if (command === "closeTab") return requestWindowClose(target.windowId);
       return focusSettingsSearch();
     case "little":
-      return void runLittleArdiaCommand(command, arg, target.windowId);
+      return void runLittleArdiaCommand(command, arg, target.windowId, user?.consent ?? null);
     case "peek":
       return void runPeekCommand(command, target.windowId);
   }
@@ -187,7 +187,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return arg ? s.restoreClosed(arg, windowId) : undefined;
     case "focusCommandBar": {
       const placement = commandKeyPlacement(s, windowId);
-      if (page && ui?.panel.open && !ui.panel.newTab) return closePanelToHeroBar(windowId, page.id, "commandKey");
+      if (tabId && ui?.panel.open && !ui.panel.newTab) return dismissBarByCommandKey(windowId, tabId, user?.consent ?? null);
       if (page) return s.openPanel(windowId, page.url, undefined, placement);
       if (isEmptyCardTab(s, tab) && showNewTabBar(windowId)) return;
       if (tab && addressBarInSidebar(s, windowId) && placement === "field") return s.openPanel(windowId, "", undefined, placement);

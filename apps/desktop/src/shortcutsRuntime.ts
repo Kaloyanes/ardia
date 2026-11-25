@@ -2,7 +2,7 @@ import type { ShortcutModifier } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
-import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
+import { dispatchesKeyPress, keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
 
 let capturing = false;
 let holding = 0;
@@ -103,6 +103,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
     if (binding.notInText && document.activeElement?.matches("input,textarea,[contenteditable]:not([contenteditable=false])")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (!dispatchesKeyPress(binding, event)) return;
     if (binding.command === "tabSwitcher") hold(binding);
     emitNativeEvent("ArdiaShell", "onCommand", { command: binding.command, arg: binding.arg, windowId: host.bootstrap.windowId });
   }, true);
