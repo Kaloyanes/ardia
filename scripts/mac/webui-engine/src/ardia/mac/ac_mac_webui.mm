@@ -16,6 +16,7 @@
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
+#include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/host_bootstrap.h"
@@ -380,6 +381,7 @@ void StartWebUIShell() {
       std::make_unique<ShellConfig>());
   InstallDefaultMainMenu(MainMenuHandler());
   SetMenuWindowResolver(ShellMenuWindows());
+  InstallOpenUrlsHook();
   WithProfile("", base::BindOnce(&OpenWindow));
 }
 
