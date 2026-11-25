@@ -22,19 +22,31 @@ extension PluginPrograms {
     BinFolder.open(places.binDir, creating: creating)
   }
 
-  static func isLauncherPath(_ path: String, in store: String, plugin: String? = nil) -> Bool {
-    let base = Array(store.utf8) + (store.utf8.last == 0x2F ? [] : [0x2F])
-    let bytes = Array(path.utf8)
-    guard bytes.starts(with: base), let parts = BinFolder.components(Array(bytes.dropFirst(base.count))) else { return false }
-    guard parts.count >= 3, !parts.contains(where: { $0 == [0x2E] || $0 == [0x2E, 0x2E] }), parts[1] == Array(currentName.utf8) else { return false }
-    let owner = String(decoding: parts[0], as: UTF8.self)
-    guard isName(owner), plugin.map({ Array($0.utf8) == parts[0] }) ?? true else { return false }
-    return !path.utf8.split(separator: 0x2F, omittingEmptySubsequences: false).dropFirst().contains { $0.isEmpty }
+  static func storeBase(_ store: String) -> [UInt8] {
+    Array(store.utf8) + (store.utf8.last == 0x2F ? [] : [0x2F])
   }
 
-  static func isArdiaLink(_ name: String, existing: String, target: String, in bin: BinFolder, places: ProgramPlaces, deadLegacyLauncher: String?) -> Bool {
+  static func launcherOwner(_ bytes: [UInt8], in store: String) -> String? {
+    let base = storeBase(store)
+    guard bytes.starts(with: base), !bytes.contains(0), String(bytes: bytes, encoding: .utf8) != nil else { return nil }
+    let parts = bytes.dropFirst(base.count).split(separator: 0x2F, omittingEmptySubsequences: false).map(Array.init)
+    guard parts.count >= 3, !parts.contains(where: { $0.isEmpty || $0 == [0x2E] || $0 == [0x2E, 0x2E] }), parts[1] == Array(currentName.utf8) else { return nil }
+    let owner = String(decoding: parts[0], as: UTF8.self)
+    return isName(owner) && Array(owner.utf8) == parts[0] ? owner : nil
+  }
+
+  static func isLauncherPath(_ bytes: [UInt8], in store: String, plugin: String? = nil) -> Bool {
+    guard let owner = launcherOwner(bytes, in: store) else { return false }
+    return plugin.map { $0 == owner } ?? true
+  }
+
+  static func isLauncherPath(_ path: String, in store: String, plugin: String? = nil) -> Bool {
+    isLauncherPath(Array(path.utf8), in: store, plugin: plugin)
+  }
+
+  static func isArdiaLink(_ name: String, existing: [UInt8], target: String, in bin: BinFolder, places: ProgramPlaces, deadLegacyLauncher: String?) -> Bool {
     if bin.leadsNowhere(name) {
-      if let deadLegacyLauncher, existing == deadLegacyLauncher { return true }
+      if let deadLegacyLauncher, existing == Array(deadLegacyLauncher.utf8) { return true }
       if isLauncherPath(existing, in: places.store) { return true }
     }
     return bin.isSameFile(name, as: target)
@@ -57,10 +69,10 @@ extension PluginPrograms {
     guard let present = bin.exists(program.name) else { return LinkRefusal(reason: "\(path) couldn't be checked", cause: .io) }
     guard present else { return nil }
     let taken = LinkRefusal(reason: "\(path) is someone else's; remove it to use this one", cause: .taken)
-    guard let existing = bin.target(program.name) else { return taken }
-    if existing == target || isLauncherPath(existing, in: places.store, plugin: plugin) || (adoptTarget != nil && existing == adoptTarget) { return nil }
+    guard let existing = bin.targetBytes(program.name) else { return taken }
+    if existing == Array(target.utf8) || isLauncherPath(existing, in: places.store, plugin: plugin) || adoptTarget.map({ existing == Array($0.utf8) }) == true { return nil }
     if isArdiaLink(program.name, existing: existing, target: target, in: bin, places: places, deadLegacyLauncher: deadLegacyLauncher) { return nil }
-    if isInside(existing, places.store), let other = owner(of: existing, store: places.store) {
+    if let other = launcherOwner(existing, in: places.store) {
       return LinkRefusal(reason: "\(program.name) comes from the \(other) plugin; turn that one off to use this one", cause: .otherPlugin)
     }
     return taken
@@ -80,7 +92,7 @@ extension PluginPrograms {
     let failed = LinkRefusal(reason: "\(path) couldn't be linked", cause: .io)
     guard let present = bin.exists(program.name) else { return failed }
     if !present { return bin.create(program.name, to: target) ? nil : failed }
-    if bin.target(program.name) == target { return nil }
+    if bin.targetBytes(program.name) == Array(target.utf8) { return nil }
     return bin.swap(program.name, to: target) ? nil : failed
   }
 
@@ -144,9 +156,9 @@ extension PluginPrograms {
     if let binHeld = binLock(places) {
       if case .success(let bin) = openBin(places) {
         unlinkOthers(plugin: plugin, keeping: [], places: places, in: bin)
-        for program in programs where linksIntoPlugin(program.name, pluginStore: pluginStore, in: bin) { bin.remove(program.name) }
-        offPath = bin.names() != nil && !linksIntoStore(places, in: bin).contains { isInside($0.1, pluginStore) }
-          && !programs.contains { linksIntoPlugin($0.name, pluginStore: pluginStore, in: bin) }
+        for program in programs where launchesFrom(program.name, plugin: plugin, places: places, in: bin) { bin.remove(program.name) }
+        let reachesStore = { (name: String) in touchesPluginStore(name, pluginStore: pluginStore, in: bin) }
+        offPath = (bin.names().map { !$0.contains(where: reachesStore) } ?? false) && !programs.contains { reachesStore($0.name) }
       }
       close(binHeld)
     }
@@ -155,10 +167,14 @@ extension PluginPrograms {
     return offPath || severed ? .dropped : .stuck
   }
 
-  private static func linksIntoPlugin(_ name: String, pluginStore: String, in bin: BinFolder) -> Bool {
+  private static func launchesFrom(_ name: String, plugin: String, places: ProgramPlaces, in bin: BinFolder) -> Bool {
+    bin.targetBytes(name).map { isLauncherPath($0, in: places.store, plugin: plugin) } ?? false
+  }
+
+  private static func touchesPluginStore(_ name: String, pluginStore: String, in bin: BinFolder) -> Bool {
     guard let present = bin.exists(name) else { return true }
     guard present else { return false }
-    return bin.target(name).map { isInside($0, pluginStore) } ?? false
+    return bin.targetBytes(name).map { $0.starts(with: storeBase(pluginStore)) } ?? false
   }
 
   static func currentIsTrusted(

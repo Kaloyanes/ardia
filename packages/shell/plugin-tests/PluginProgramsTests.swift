@@ -322,7 +322,9 @@ final class PluginProgramsTests: XCTestCase {
   func testTheBinFolderDescriptorIsClosedOnExec() throws {
     try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
     let bin = try BinFolder.open(places.binDir, creating: false).get()
-    XCTAssertNotEqual(fcntl(bin.fd, F_GETFD) & FD_CLOEXEC, 0, "a program Ardia starts never inherits it")
+    let flags = fcntl(bin.fd, F_GETFD)
+    XCTAssertGreaterThanOrEqual(flags, 0, "the descriptor is open")
+    XCTAssertNotEqual(flags & FD_CLOEXEC, 0, "a program Ardia starts never inherits it")
   }
 
   func testADeadLinkThatEscapesTheStoreIsntTakenForArdias() throws {
@@ -337,6 +339,52 @@ final class PluginProgramsTests: XCTestCase {
     XCTAssertFalse(PluginPrograms.isLauncherPath("\(places.store)/../outside", in: places.store))
     XCTAssertTrue(PluginPrograms.isLauncherPath("\(places.store)/gone/current/bin/hello", in: places.store))
     XCTAssertFalse(PluginPrograms.isLauncherPath("\(places.store)/gone/1.0.0-abc/bin/hello", in: places.store))
+  }
+
+  func rawLink(_ target: [UInt8], at path: String) -> Int32 {
+    (target.map { CChar(bitPattern: $0) } + [0]).withUnsafeBufferPointer { symlink($0.baseAddress!, path) }
+  }
+
+  func rawTarget(_ path: String) -> [UInt8] {
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = readlink(path, &buffer, Int(PATH_MAX))
+    return count > 0 ? buffer[0..<count].map { UInt8(bitPattern: $0) } : []
+  }
+
+  func testOnlyAnExactPluginIdInValidUTF8MakesALinkArdias() throws {
+    XCTAssertFalse(PluginPrograms.isName("greeter\n"), "a trailing newline isn't part of a name")
+    XCTAssertTrue(PluginPrograms.isName("greeter"))
+    let store = Array("\(places.store)/".utf8)
+    let newline = store + Array("gone\n/current/bin/hello".utf8)
+    let invalid = store + [0x67, 0xFF, 0x6F] + Array("/current/bin/hello".utf8)
+    let overlong = store + [0x67, 0xC0, 0xAF] + Array("/current/bin/hello".utf8)
+    for bytes in [newline, invalid, overlong] { XCTAssertNil(PluginPrograms.launcherOwner(bytes, in: places.store)) }
+    XCTAssertEqual(PluginPrograms.launcherOwner(store + Array("gone/current/bin/hello".utf8), in: places.store), "gone")
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    for bytes in [newline, invalid] {
+      unlink(binPath)
+      XCTAssertEqual(rawLink(bytes, at: binPath), 0)
+      XCTAssertEqual(try install(folder, version: "1.0.0").linked, [])
+      XCTAssertEqual(rawTarget(binPath), bytes, "the link is left byte for byte")
+    }
+  }
+
+  func testCleanupRemovesOnlyThisPluginsExactLaunchers() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    XCTAssertEqual(try install(folder, version: "1.0.0").linked, ["hello-tool"])
+    let left = [
+      "escape-up": "\(pluginStore)/../../outside",
+      "escape-in": "\(pluginStore)/current/../../../outside",
+      "prefix": "\(places.store)/greeterx/current/bin/hello",
+      "doubled": "\(places.store)//greeter/current/bin/hello",
+    ]
+    for (name, target) in left { XCTAssertEqual(symlink(target, "\(places.binDir)/\(name)"), 0) }
+    XCTAssertEqual(rawLink(Array("\(pluginStore)\n/current/bin/hello".utf8), at: "\(places.binDir)/newline"), 0)
+    PluginPrograms.withdraw(plugin: "greeter", programs: ["hello-tool"], places: places)
+    XCTAssertNil(PluginPrograms.linkTarget(binPath), "its own launcher goes")
+    for (name, target) in left { XCTAssertEqual(PluginPrograms.linkTarget("\(places.binDir)/\(name)"), target, name) }
+    XCTAssertEqual(rawTarget("\(places.binDir)/newline"), Array("\(pluginStore)\n/current/bin/hello".utf8))
   }
 
   func testADeadLinkIntoArdiasOwnStoreIsReplaced() throws {

@@ -116,10 +116,6 @@ final class BinFolder {
     return buffer[0..<count].map { UInt8(bitPattern: $0) }
   }
 
-  private static func readLink(_ dir: Int32, _ name: String) -> String? {
-    readLinkBytes(dir, Array(name.utf8)).map { String(decoding: $0, as: UTF8.self) }
-  }
-
   func entryPath(_ name: String) -> String { (path as NSString).appendingPathComponent(name) }
 
   func exists(_ name: String) -> Bool? {
@@ -133,8 +129,8 @@ final class BinFolder {
     return fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
   }
 
-  func target(_ name: String) -> String? {
-    isLink(name) ? Self.readLink(fd, name) : nil
+  func targetBytes(_ name: String) -> [UInt8]? {
+    isLink(name) ? Self.readLinkBytes(fd, Array(name.utf8)) : nil
   }
 
   func leadsNowhere(_ name: String) -> Bool {
@@ -171,8 +167,13 @@ final class BinFolder {
   }
 
   func swap(_ name: String, to target: String) -> Bool {
+    swap(name, toBytes: Array(target.utf8))
+  }
+
+  func swap(_ name: String, toBytes target: [UInt8]) -> Bool {
+    guard !target.contains(0) else { return false }
     let temporary = ".\(name).ardia-\(getpid())-\(UInt32.random(in: 0...UInt32.max))"
-    guard symlinkat(target, fd, temporary) == 0 else { return false }
+    guard Self.withName(target, { symlinkat($0, fd, temporary) }) == 0 else { return false }
     guard renameat(fd, temporary, fd, name) == 0 else {
       unlinkat(fd, temporary, 0)
       return false
@@ -193,7 +194,7 @@ extension PluginPrograms {
   }
 
   static func unlinkOthers(plugin: String, keeping: Set<String>, places: ProgramPlaces, in bin: BinFolder) {
-    for (name, target) in linksIntoStore(places, in: bin) where !keeping.contains(name) && isInside(target, places.pluginStore(plugin)) {
+    for (name, target) in linksIntoStore(places, in: bin) where !keeping.contains(name) && isLauncherPath(Array(target.utf8), in: places.store, plugin: plugin) {
       bin.remove(name)
     }
   }
@@ -205,8 +206,8 @@ extension PluginPrograms {
 
   static func linksIntoStore(_ places: ProgramPlaces, in bin: BinFolder) -> [(String, String)] {
     (bin.names() ?? []).compactMap { name in
-      guard isName(name), let target = bin.target(name), isInside(target, places.store) else { return nil }
-      return (name, target)
+      guard isName(name), let target = bin.targetBytes(name), isLauncherPath(target, in: places.store) else { return nil }
+      return (name, String(decoding: target, as: UTF8.self))
     }
   }
 }

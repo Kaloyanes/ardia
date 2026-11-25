@@ -40,7 +40,7 @@ enum PluginPrograms {
   static let afterUpdateClaim = ".after-update-claim"
   static let caches = "__pycache__"
   private static let reserved: Set<String> = [leasesName, afterUpdateMarker, afterUpdateClaim]
-  private static let namePattern = try! NSRegularExpression(pattern: "^[a-z0-9][a-z0-9-]{0,39}$")
+  private static let namePattern = try! NSRegularExpression(pattern: "\\A[a-z0-9][a-z0-9-]{0,39}\\z")
   private static let versionCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
 
   static func folded(_ name: String) -> String {
@@ -122,7 +122,7 @@ enum PluginPrograms {
       }
       if !held.isEmpty { return .success(ProgramsLinked(version: name, fresh: fresh, linked: [], refusals: held, kept: before)) }
     }
-    let snapshot = Dictionary(uniqueKeysWithValues: programs.map { ($0.name, openedBin?.target($0.name)) })
+    let snapshot = Dictionary(uniqueKeysWithValues: programs.map { ($0.name, openedBin?.targetBytes($0.name)) })
     guard swapLink(in: pluginStore, named: currentName, to: name) else {
       return .failure(FolderRefusal(reason: "its programs couldn't be switched to the new version"))
     }
@@ -141,7 +141,7 @@ enum PluginPrograms {
           continue
         }
         if let target = snapshot[name] ?? nil {
-          if openedBin.target(name) != target && !openedBin.swap(name, to: target) { restored = false }
+          if openedBin.targetBytes(name) != target && !openedBin.swap(name, toBytes: target) { restored = false }
         } else if !openedBin.remove(name) {
           restored = false
         }
