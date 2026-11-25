@@ -17,19 +17,20 @@ const SHARED_TESTS = [
   "hostPagePrompts.test.mjs", "hostTabPage.test.mjs", "hostCredentials.test.mjs", "hostExtensions.test.mjs",
   "hostSiteControls.test.mjs", "hostImport.test.mjs", "importUnlock.test.mjs", "hostPageStatus.test.mjs",
   "hostMedia.test.mjs", "windowSweep.test.mjs", "typeahead.test.mjs", "mountLayout.test.mjs", "webShims.test.mjs", "fieldKeys.test.mjs",
-  "profilePaging.test.mjs", "shellMethods.test.mjs", "hostFolders.test.mjs", "extensionPrompts.test.mjs",
+  "profilePaging.test.mjs", "pagerMotion.test.mjs", "shellMethods.test.mjs", "hostFolders.test.mjs", "extensionPrompts.test.mjs",
   "hostSync.test.mjs", "syncToggles.test.mjs", "pageOperations.test.mjs", "hostPolicies.test.mjs", "quit.test.mjs", "hostLive.test.mjs",
   "hostExtensionScripts.test.mjs", "installRequestSheet.test.mjs", "utilityExtensions.test.mjs",
   "windowDrag.test.mjs", "hostHistoryImports.test.mjs", "popoverEscape.test.mjs", "entryOrder.test.mjs",
   "unclaimedTabs.test.mjs", "appMenu.test.mjs", "inputRegions.test.mjs", "downloadsDismissal.test.mjs",
-  "menus.test.mjs", "tileLetters.test.mjs", "shortcutsComposing.test.mjs", "downloadsRightClick.test.mjs", "shellAbove.test.mjs", "pipPlayer.test.mjs", "glassRegions.test.mjs", "telemetryLeader.test.mjs",
+  "menus.test.mjs", "tileLetters.test.mjs", "shortcutsComposing.test.mjs", "downloadsRightClick.test.mjs", "shellAbove.test.mjs", "pipPlayer.test.mjs", "glassRegions.test.mjs", "behindWindowGlass.test.mjs", "telemetryLeader.test.mjs",
   "linkShare.test.mjs", "hostTelemetryLocal.test.mjs", "hostTelemetryChoice.test.mjs", "shellMigrationLaunch.test.mjs",
   "inWindowPlayerConsent.test.mjs", "settingsViewData.test.mjs", "sessionMigrations.test.mjs",
   "bookmarksHtml.test.mjs", "hostBookmarksExport.test.mjs", "openUrls.test.mjs", "pageSwipe.test.mjs",
   "hostReport.test.mjs", "engineCapabilities.test.mjs", "hostAppearance.test.mjs", "tabSwitchAhead.test.mjs",
   "shellPainted.test.mjs", "introMusic.test.mjs", "hostCrashReports.test.mjs", "windowControls.test.mjs",
   "readerService.test.mjs", "hostKillSwitches.test.mjs", "fieldTiming.test.mjs", "launchMeasure.test.mjs",
-  "keyringTelemetry.test.mjs", "textInputCaret.test.mjs"
+  "keyringTelemetry.test.mjs", "textInputCaret.test.mjs", "peekStageMotion.test.mjs", "popoverPlacement.test.mjs",
+  "popoverHost.test.mjs"
 ];
 
 const root = fileURLToPath(new URL("../", import.meta.url));
