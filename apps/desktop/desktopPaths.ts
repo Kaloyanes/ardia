@@ -23,13 +23,22 @@ export function hostServesPath(path: string): boolean {
   return path.split("/").every((part) => part !== "." && part.length <= HOST_COMPONENT_LIMIT && HOST_COMPONENT.test(part));
 }
 
+export const SANITIZED_PATH_LIMIT = HOST_PATH_LIMIT - 64;
+
+const collapseDots = (text: string) => text.replace(/\.{2,}/g, ".");
+
 function safeComponent(part: string): string {
-  const cleaned = part.replace(/[^A-Za-z0-9._-]/g, "-").replace(/\.{2,}/g, ".");
+  const cleaned = collapseDots(part.replace(/[^A-Za-z0-9._-]/g, "-"));
   const component = cleaned === "" || cleaned === "." ? "-" : cleaned;
   if (component.length <= SANITIZED_NAME_LIMIT) return component;
   const dot = component.lastIndexOf(".");
   const extension = dot > 0 && component.length - dot <= EXTENSION_LIMIT ? component.slice(dot) : "";
-  return component.slice(0, SANITIZED_NAME_LIMIT - extension.length) + extension;
+  const stem = component.slice(0, SANITIZED_NAME_LIMIT - extension.length).replace(/\.+$/, "") || "-";
+  return collapseDots(stem + extension);
 }
 
-export const hostSafeFileName = (name: string): string => name.split("/").map(safeComponent).join("/");
+export function hostSafeFileName(name: string): string {
+  const parts = name.split("/").map(safeComponent);
+  while (parts.length > 1 && parts.join("/").length > SANITIZED_PATH_LIMIT) parts.shift();
+  return parts.join("/");
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { animationMovesBackdrop, BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops, measureBackdrop, WINDOW_TREATMENT_CAPABILITY, windowBackdropMaterial } from "./macGlass.ts";
+import { animationMovesBackdrop, fadesOnly, BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops, measureBackdrop, WINDOW_TREATMENT_CAPABILITY, windowBackdropMaterial } from "./macGlass.ts";
 
 function harness({ fail = () => false } = {}) {
   const sent = [];
@@ -228,4 +228,32 @@ test("profile pages stacked over the same window rect ask the host for one backd
   backdrops.add(sidebar, "windowTreatment");
   await runFrames();
   assert.deepEqual(sent, [[{ rect: { x: 0, y: 0, width: 1280, height: 800 }, material: "windowTreatment" }, { rect: { x: 0, y: 0, width: 240, height: 800 }, material: "windowTreatment" }]]);
+});
+
+test("a fade on a backdrop's ancestor moves nothing, so an idle window with one profile drains its frame queue", async () => {
+  const backdrop = fakeElement({ x: 0, y: 0, width: 1280, height: 800 });
+  const tintLayer = fakeElement({ x: 0, y: 0, width: 1280, height: 800 }, { children: [backdrop] });
+  const fade = { playState: "running", effect: { target: tintLayer, getKeyframes: () => [{ offset: 0, computedOffset: 0, easing: "linear", composite: "auto", opacity: "1" }, { offset: 1, computedOffset: 1, easing: "linear", composite: "auto", opacity: "1" }] } };
+  const slide = { playState: "running", effect: { target: tintLayer, getKeyframes: () => [{ offset: 0, transform: "translateX(0px)" }, { offset: 1, transform: "translateX(40px)" }] } };
+  assert.equal(fadesOnly(fade), true);
+  assert.equal(fadesOnly(slide), false);
+  assert.equal(fadesOnly({ playState: "running", effect: { target: tintLayer } }), false, "without keyframes an animation still counts as motion");
+  assert.equal(animationMovesBackdrop([fade], [backdrop]), false);
+  assert.equal(animationMovesBackdrop([fade, slide], [backdrop]), true);
+  const frames = [];
+  let measured = 0;
+  const backdrops = createMacBackdrops({
+    send: async () => {},
+    measure: () => (measured++, { x: 0, y: 0, width: 1280, height: 800 }),
+    frame: (run) => frames.push(run),
+    timeout: () => 0,
+    clearTimeout: () => {},
+    watch: () => () => {},
+    watchMotion: () => () => {},
+    animating: (layers) => animationMovesBackdrop([fade], layers),
+  });
+  backdrops.add(backdrop, "windowTreatment");
+  for (let i = 0; i < 5 && frames.length; i++) frames.splice(0).forEach((run) => run());
+  assert.equal(frames.length, 0, "no frame is queued once the backdrop is sent");
+  assert.equal(measured, 1);
 });

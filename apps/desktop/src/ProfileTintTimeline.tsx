@@ -12,13 +12,16 @@ import { scrollTimelineConstructor, seededPosition, supportsScrollTimeline, tint
 
 export const PAGER_POSITION_VARIABLE = "--ardia-pager-position";
 
+export const ISOLATED = { isolation: "isolate" } as const;
+export const ADDITIVE = { mixBlendMode: "plus-lighter" } as const;
+
 function TintLayer({ windowId, slot, crossfade, last, children }: { windowId: string; slot: number; crossfade: boolean; last: number; children: ReactNode }) {
   const layer = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const element = layer.current;
     if (!element) return;
     const blend: TintBlend = { crossfade, last };
-    if (!crossfade && slot <= 0) {
+    if (last <= 0 || (!crossfade && slot <= 0)) {
       element.style.opacity = "1";
       return;
     }
@@ -41,7 +44,7 @@ function TintLayer({ windowId, slot, crossfade, last, children }: { windowId: st
     };
   }, [windowId, slot, crossfade, last]);
   return (
-    <View ref={(view) => void (layer.current = view as unknown as HTMLElement | null)} pointerEvents="none" style={[StyleSheet.absoluteFill, { willChange: "opacity" } as object]}>
+    <View ref={(view) => void (layer.current = view as unknown as HTMLElement | null)} pointerEvents="none" style={[StyleSheet.absoluteFill, { willChange: "opacity" } as object, crossfade ? (ADDITIVE as object) : null]}>
       {children}
     </View>
   );
@@ -90,7 +93,7 @@ export function ProfileTint() {
   const last = trackSpan(pages) - 1;
   if (!paging) return null;
   return (
-    <View ref={(view) => void (host.current = view as unknown as HTMLElement | null)} pointerEvents="none" style={StyleSheet.absoluteFill}>
+    <View ref={(view) => void (host.current = view as unknown as HTMLElement | null)} pointerEvents="none" style={[StyleSheet.absoluteFill, crossfade ? (ISOLATED as object) : null]}>
       {pages.map((page, k) => {
         const theme = themes[k]!;
         return (

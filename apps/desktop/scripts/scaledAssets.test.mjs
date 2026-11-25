@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { scaledAsset, scaledAssetModule, scaledAssets } from "../scaledAssets.ts";
-import { HOST_COMPONENT_LIMIT, hostSafeFileName, hostServesPath, SANITIZED_NAME_LIMIT } from "../desktopPaths.ts";
+import { HOST_COMPONENT_LIMIT, HOST_PATH_LIMIT, hostSafeFileName, hostServesPath, SANITIZED_NAME_LIMIT, SANITIZED_PATH_LIMIT } from "../desktopPaths.ts";
 import { normalizePath } from "vite";
 import { alphaDrift, BROWSER_ASSETS, bundledImages, hiDpiBrowserPngs, PIXEL_SCALES, pngSize, scaledBrowserAssets } from "./scaledAssetsBundle.mjs";
 
@@ -113,6 +113,13 @@ test("emitted names follow the strictest WebUI host rules, so mark@2x ships as m
   assert.equal(hostServesPath("/assets/x.png"), false);
   assert.equal(hostServesPath(`${"a/".repeat(300)}x`), false, "the whole path stays within the Mac host's 512 bytes");
   assert.ok(hostServesPath("assets/ntp-mark-front-2x-Ab_9.png"));
+  const dotted = hostSafeFileName(`${"n".repeat(91)}.${"n".repeat(20)}.png`);
+  assert.equal(dotted, `${"n".repeat(91)}.png`, "a cut that ends on a dot never meets the extension as '..'");
+  assert.ok(hostServesPath(dotted));
+  const nested = hostSafeFileName(Array.from({ length: 6 }, (_, i) => `${i}${"d".repeat(95)}`).concat("mark.png").join("/"));
+  assert.ok(nested.length <= SANITIZED_PATH_LIMIT, "deep names keep room for the prefix and hash");
+  assert.ok(nested.endsWith("/mark.png"));
+  assert.ok(hostServesPath(`assets/${nested}-Ab_9xyz1.png`) && `assets/${nested}-Ab_9xyz1.png`.length <= HOST_PATH_LIMIT);
 });
 for (const mode of ["mac", "linux", "win"]) {
   test(`the ${mode} build bundles the Retina siblings instead of the 1x PNGs`, { timeout: 120_000 }, async () => {

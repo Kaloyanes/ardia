@@ -652,7 +652,8 @@ test("over behind-window glass a settled profile draws only its own translucent 
       const blend = { crossfade: true, last: span - 1 };
       const visible = Array.from({ length: span }, (_, slot) => track.tintOpacity(position, slot, blend)).filter((value) => value > 1e-9);
       assert.ok(visible.length <= 2, `only the two neighbours show at ${position}`);
-      assert.ok(shown(position, span) <= alpha + 1e-9, `a swipe never stacks past one tint at ${position}`);
+      const total = Array.from({ length: span }, (_, slot) => track.tintOpacity(position, slot, blend)).reduce((a, b) => a + b, 0);
+      assert.ok(Math.abs(total - 1) < 1e-9, `the neighbours' weights sum to one at ${position}, so the additive blend never dips or stacks`);
     }
   }
   const ladder = (position) => 1 - [0, 1, 2].map((slot) => 1 - alpha * track.tintOpacity(position, slot)).reduce((a, b) => a * b, 1);
@@ -675,6 +676,41 @@ test("over behind-window glass a settled profile draws only its own translucent 
   assert.equal(track.tintFallbackOpacity(0, "--p", { crossfade: true, last: 2 }), "clamp(0, calc(1 - var(--p) + 0), 1)");
   assert.equal(track.tintFallbackOpacity(2, "--p", { crossfade: true, last: 2 }), "clamp(0, calc(1 + var(--p) - 2), 1)");
   assert.equal(track.tintFallbackOpacity(0, "--p", { crossfade: true, last: 0 }), "1");
+});
+
+test("swiping between two identical profiles over glass keeps the tint's exact colour and alpha at every fraction", () => {
+  const blend = { crossfade: true, last: 1 };
+  const additive = (position, tints) => {
+    const sum = [0, 0, 0, 0];
+    tints.forEach(([r, g, b, a], slot) => {
+      const weight = track.tintOpacity(position, slot, blend);
+      [r * a, g * a, b * a, a].forEach((value, i) => (sum[i] += weight * value));
+    });
+    const alpha = Math.min(1, sum[3]);
+    return [sum[0] / alpha, sum[1] / alpha, sum[2] / alpha, alpha];
+  };
+  for (const alpha of [0.854, 0.508]) {
+    const tint = [0.36, 0.7, 0.57, alpha];
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const [r, g, b, a] = additive(t, [tint, tint]);
+      assert.ok(Math.abs(a - alpha) < 1e-12, `alpha ${alpha} holds at ${t}`);
+      assert.ok([r, g, b].every((value, i) => Math.abs(value - tint[i]) < 1e-12), `colour holds at ${t}`);
+    }
+    const sourceOver = 1 - (1 - 0.5 * alpha) ** 2;
+    assert.ok(sourceOver < alpha - 0.05, "plain stacking would dip mid-swipe");
+  }
+  const half = additive(0.5, [[1, 0, 0, 0.5], [0, 0, 1, 0.5]]);
+  assert.deepEqual(half.map((v) => +v.toFixed(6)), [0.5, 0, 0.5, 0.5], "different neighbours blend linearly");
+});
+
+test("over glass the tint layers add inside one isolated group, and a window with one profile runs no timeline", async () => {
+  const { readFileSync } = await import("node:fs");
+  const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
+  assert.match(tint, /export const ISOLATED = \{ isolation: "isolate" \} as const;/);
+  assert.match(tint, /export const ADDITIVE = \{ mixBlendMode: "plus-lighter" \} as const;/);
+  assert.match(tint, /style=\{\[StyleSheet\.absoluteFill, crossfade \? \(ISOLATED as object\) : null\]\}/);
+  assert.match(tint, /\{ willChange: "opacity" \} as object, crossfade \? \(ADDITIVE as object\) : null\]/);
+  assert.match(tint, /if \(last <= 0 \|\| \(!crossfade && slot <= 0\)\) \{\n\s*element\.style\.opacity = "1";\n\s*return;/);
 });
 
 test("the window tint cross-fades only where native glass sits behind it, and keeps the opaque ladder elsewhere", async () => {
@@ -1054,5 +1090,5 @@ test("a JS hold followed by a native settle doesn't count the hold as a frame ga
 test("a tint layer that moves to the first slot is made fully opaque", async () => {
   const { readFileSync } = await import("node:fs");
   const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
-  assert.match(tint, /if \(!crossfade && slot <= 0\) \{\n\s*element\.style\.opacity = "1";\n\s*return;\n\s*\}/);
+  assert.match(tint, /if \(last <= 0 \|\| \(!crossfade && slot <= 0\)\) \{\n\s*element\.style\.opacity = "1";\n\s*return;\n\s*\}/);
 });

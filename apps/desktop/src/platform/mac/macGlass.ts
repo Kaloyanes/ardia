@@ -18,12 +18,19 @@ type BackdropDeps = {
   animating: (layers: readonly Element[]) => boolean;
 };
 
-export type AnimationLike = { playState: string; effect: { target?: Element | null } | null };
+export type AnimationLike = { playState: string; effect: { target?: Element | null; getKeyframes?: () => readonly Record<string, unknown>[] } | null };
+
+const TIMING_KEYS = new Set(["offset", "computedOffset", "easing", "composite"]);
+
+export const fadesOnly = (animation: AnimationLike): boolean => {
+  const frames = animation.effect?.getKeyframes?.();
+  return !!frames?.length && frames.every((frame) => Object.keys(frame).every((key) => key === "opacity" || TIMING_KEYS.has(key)));
+};
 
 export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[]): boolean =>
   animations.some((animation) => {
     const target = animation.playState === "running" ? animation.effect?.target : null;
-    return !!target && layers.some((layer) => target === layer || target.contains(layer));
+    return !!target && !fadesOnly(animation) && layers.some((layer) => target === layer || target.contains(layer));
   });
 
 const HIDDEN_VISIBILITY = new Set(["hidden", "collapse"]);
