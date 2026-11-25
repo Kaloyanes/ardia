@@ -53,6 +53,7 @@ final class PeekStage: ExpoView {
     wantsLayer = true
     addSubview(scrim)
     addSubview(card)
+    chrome.hitsOnlyWhenShown = true
     card.addSubview(chrome)
     card.addSubview(page)
     page.layer?.mask = pageMask

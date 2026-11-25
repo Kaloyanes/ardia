@@ -23,6 +23,7 @@ import { SMALL_BAR_HEIGHT } from "../../state/windows/small";
 import { switchOn } from "../../state/app/switches";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { endPeekToolbarPreview, previewPeekToolbar } from "../../state/peek/toolbarPreview";
+import { notePeekStagePhase, pressPeekChrome } from "../../state/peek/gesturePresses";
 
 const SIDE_GAP = space.m;
 const BEGIN_RETRIES = 30;
@@ -35,9 +36,9 @@ const sideRoomFor = (buttons: PeekButtons) => ({ left: buttons === "left" ? SIDE
 
 function peekButtonList(windowId: string, splitFull: boolean): SmallBarButton[] {
   return [
-    ...(splitViewAvailable ? [{ icon: "rectangle.split.2x1", disabled: splitFull, tooltip: "Open in Split View", onPress: () => openPeekInSplit(windowId) }] : []),
-    { icon: "arrow.up.left.and.arrow.down.right", tooltip: `Open as Tab (${keyText("⌘O")})`, onPress: () => openPeekAsTab(windowId) },
-    { icon: "xmark", tooltip: "Close (Esc)", onPress: () => dismissPeek(windowId) },
+    ...(splitViewAvailable ? [{ icon: "rectangle.split.2x1", disabled: splitFull, tooltip: "Open in Split View", onPress: () => pressPeekChrome(windowId, () => openPeekInSplit(windowId)) }] : []),
+    { icon: "arrow.up.left.and.arrow.down.right", tooltip: `Open as Tab (${keyText("⌘O")})`, onPress: () => pressPeekChrome(windowId, () => openPeekAsTab(windowId)) },
+    { icon: "xmark", tooltip: "Close (Esc)", onPress: () => pressPeekChrome(windowId, () => dismissPeek(windowId)) },
   ];
 }
 
@@ -179,6 +180,7 @@ function PeekCard({
 
   const onState = (state: PeekStageState) => {
     if (state.generation !== generation) return;
+    notePeekStagePhase(windowId, state.phase);
     if (state.phase === "entering" && !seen.current.entered) {
       seen.current.entered = true;
       notePeekEntrance(state.entrance, !!state.fallback && state.entrance !== "fade", state.readyTimedOut);
