@@ -159,6 +159,7 @@ if (is_official_build) {
       "//ui/base",
       "//ui/compositor",
       "//ui/display",
+      "//ui/events:events_base",
       "//ui/gfx",
       "//ui/views",
       "//url",

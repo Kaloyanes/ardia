@@ -8,7 +8,7 @@
 
 namespace sp = ardia_mac::swipe_policy;
 
-sp::AckEvent At(sp::Ack ack, double time = 1, bool main = true) {
+sp::AckEvent At(sp::Ack ack, std::int64_t time = 1, bool main = true) {
   return sp::AckEvent{ack, time, main};
 }
 
@@ -236,23 +236,22 @@ TEST(claimed_gesture_ids_are_whole_positive_and_bounded) {
 
 TEST(late_acks_from_an_earlier_gesture_never_authorize_the_next_one) {
   sp::PageSwipe swipe;
-  swipe.Begin(true, 2, 10);
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kWheelBegan, 10)));
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollBegin, 9.4)));
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed, 9.5)));
+  swipe.Begin(true, 2, 10'000'000);
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kWheelBegan, 10'000'000)));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollBegin, 9'999'600)));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed, 9'999'800)));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed, 9'999'999)));
   CHECK(!swipe.Scroll(12, 0));
   CHECK(swipe.pending());
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 9.6)));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 9'999'999)));
   CHECK(swipe.pending());
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollBegin, 10)));
-  const std::optional<sp::Step> began = swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed, 10.01));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollBegin, 10'000'000)));
+  const std::optional<sp::Step> began = swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed, 10'000'000));
   CHECK(began && began->phase == sp::Phase::kBegan && began->dx == 12);
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 9.7)));
-  CHECK(swipe.tracking());
-  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollConsumed, std::numeric_limits<double>::quiet_NaN())));
+  CHECK(!swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 9'999'999)));
   CHECK(swipe.tracking());
   sp::PageSwipe unstarted;
-  unstarted.Begin(true, 3, std::numeric_limits<double>::infinity());
+  unstarted.Begin(true, 3, 0);
   CHECK(!unstarted.pending());
 }
 
@@ -274,7 +273,7 @@ TEST(a_consumed_update_cancels_a_swipe_the_shell_has_not_claimed_yet) {
   Opened(swipe, 5);
   swipe.Scroll(10, 0);
   CHECK(swipe.Acknowledge(At(sp::Ack::kScrollUnconsumed)));
-  const std::optional<sp::Step> cancelled = swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 1.02));
+  const std::optional<sp::Step> cancelled = swipe.Acknowledge(At(sp::Ack::kScrollConsumed, 2));
   CHECK(cancelled && cancelled->phase == sp::Phase::kCancelled);
   CHECK(swipe.page_owned());
   CHECK(!swipe.Claim(5, true));
@@ -287,7 +286,7 @@ TEST(a_consumed_update_cancels_a_swipe_the_shell_has_not_claimed_yet) {
   claimed.Scroll(10, 0);
   claimed.Acknowledge(At(sp::Ack::kScrollUnconsumed));
   CHECK(claimed.Claim(6, true));
-  CHECK(!claimed.Acknowledge(At(sp::Ack::kScrollConsumed, 1.02)));
+  CHECK(!claimed.Acknowledge(At(sp::Ack::kScrollConsumed, 2)));
   CHECK(claimed.tracking());
 }
 

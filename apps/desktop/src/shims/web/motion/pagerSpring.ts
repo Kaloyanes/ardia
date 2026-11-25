@@ -404,16 +404,19 @@ export class PagerSpring {
       const lo = Math.max(0, home - 1);
       const hi = Math.max(lo, Math.min(this.countValue - 1, home + 1));
       target = clampToIndex(aim, lo, hi);
+      if (target !== home && !this.ownProgress(x, home)) target = home;
     }
     this.settle(target, this.towards(target, v));
+  }
+
+  private ownProgress(x: number, home: number) {
+    return Math.abs(this.drag.start - home) < 0.5 || Math.abs(x - this.drag.start) >= OWN_TRAVEL;
   }
 
   private slowAim(x: number, home: number) {
     const fromHome = x - home;
     const travelled = x - this.drag.start;
-    const startedNearHome = Math.abs(this.drag.start - home) < 0.5;
-    const ownProgress = startedNearHome || Math.abs(travelled) >= OWN_TRAVEL;
-    const leftHome = ownProgress && Math.abs(fromHome) >= 0.5 && travelled !== 0 && fromHome > 0 === travelled > 0;
+    const leftHome = Math.abs(fromHome) >= 0.5 && travelled !== 0 && fromHome > 0 === travelled > 0;
     return leftHome ? Math.round(x) : home;
   }
 

@@ -214,9 +214,10 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
     timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
     non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. Acks are matched to
-    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, so a late ack from an earlier gesture
-    is dropped, and every frame widget of the tab is watched, so a wheel aimed at a non-scrolling cross-site iframe
-    still opens the gesture. A page that
+    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, converted with `EventTimeStampFromSeconds` and compared
+    to the microsecond, so a late ack from an earlier gesture is dropped. Every frame widget of the tab is watched as
+    frames come and go, so a wheel aimed at a non-scrolling cross-site iframe still opens the gesture, and a new
+    primary page cancels it. A page that
     scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
     vertical start (latched on the first deltas). A consumed update before the shell claims the swipe cancels it.
     The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as

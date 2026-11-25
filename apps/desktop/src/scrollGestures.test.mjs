@@ -500,3 +500,30 @@ test("a deliberate reverse drag on the same unfinished settle goes back to the f
   spring.input("ended", 140, 1, WIDTH, 1.7);
   assert.equal(spring.selected, 0);
 });
+
+test("a quick reverse flick on a settle that hasn't crossed halfway keeps the committed profile", () => {
+  const { spring, at } = interruptedAt(0.447);
+  assert.ok(Math.abs(at - 0.44724) < 0.001 && at < 0.5, `interrupted at ${at}`);
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 4, 1, WIDTH, 1);
+  spring.input("changed", 10, 1, WIDTH, 1.01);
+  spring.input("ended", 10, 1, WIDTH, 1.01);
+  assert.equal(spring.selected, 1, "a 10 px reverse flick undid the switch");
+});
+
+test("a short flick from rest still pages, and a long reverse flick on an unfinished settle still goes back", () => {
+  const rest = new PagerSpring();
+  rest.configure(3, 0, 0, ["a", "b", "c"]);
+  rest.drain();
+  rest.input("began", 0, -1, WIDTH, 0);
+  rest.input("changed", 4, -1, WIDTH, 0);
+  rest.input("changed", 10, -1, WIDTH, 0.01);
+  rest.input("ended", 10, -1, WIDTH, 0.01);
+  assert.equal(rest.selected, 1);
+  const { spring } = interruptedAt(0.447);
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 60, 1, WIDTH, 1);
+  spring.input("changed", 130, 1, WIDTH, 1.01);
+  spring.input("ended", 130, 1, WIDTH, 1.01);
+  assert.equal(spring.selected, 0);
+});

@@ -154,11 +154,9 @@ constexpr bool VerticalIntent(double dx, double dy) {
 
 enum class Ack { kWheelBegan, kWheelConsumed, kScrollBegin, kScrollConsumed, kScrollUnconsumed };
 
-inline constexpr double kAckSlack = 0.0005;
-
 struct AckEvent {
   Ack ack = Ack::kWheelBegan;
-  double time = 0;
+  std::int64_t time = 0;
   bool main = true;
 };
 
@@ -170,9 +168,9 @@ struct Step {
 
 class PageSwipe {
  public:
-  void Begin(bool enabled, std::uint64_t gesture, double start) {
+  void Begin(bool enabled, std::uint64_t gesture, std::int64_t start) {
     *this = PageSwipe();
-    state_ = enabled && std::isfinite(start) ? State::kPending : State::kIdle;
+    state_ = enabled && start > 0 ? State::kPending : State::kIdle;
     gesture_ = gesture;
     start_ = start;
   }
@@ -194,7 +192,7 @@ class PageSwipe {
   }
 
   std::optional<Step> Acknowledge(const AckEvent& event) {
-    if (!std::isfinite(event.time) || event.time < start_ - kAckSlack) {
+    if (event.time < start_) {
       return std::nullopt;
     }
     if (state_ == State::kTracking && !claimed_ && scrolling_ && event.ack == Ack::kScrollConsumed) {
@@ -280,7 +278,7 @@ class PageSwipe {
 
   State state_ = State::kIdle;
   std::uint64_t gesture_ = 0;
-  double start_ = 0;
+  std::int64_t start_ = 0;
   bool wheel_began_ = false;
   bool scrolling_ = false;
   bool unconsumed_ = false;
