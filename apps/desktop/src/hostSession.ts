@@ -19,7 +19,7 @@ import { SESSION_MIGRATIONS, SESSION_VERSION } from "../../browser/src/state/ses
 import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
-import { isOwnId, pageFromDisk, SESSION_ROWS, sessionWithListedRows, tableRows } from "../../browser/src/state/session/savedShapes";
+import { isOwnId, pageFromDisk, SESSION_ROWS, sessionWithListedRows, slotsFromDisk, tableRows } from "../../browser/src/state/session/savedShapes";
 import { savedProfileRows } from "../../browser/src/state/session/savedSession";
 import { isFields, isString } from "../../browser/src/lib/decode";
 
@@ -36,7 +36,7 @@ const ROW_SHAPES: Record<SessionRows, (row: Record<string, unknown>) => boolean>
   windows: (w) => isOwnId(w.profileId) && tabIdList(w.tabIds) && isFields(w.activeTabIds) && Object.values(w.activeTabIds).every(isString),
   tabs: (t) => isOwnId(t.windowId) && isOwnId(t.profileId) && isString(t.url),
   groups: (g) => isOwnId(g.windowId) && isOwnId(g.profileId) && tabIdList(g.tabIds),
-  splits: (v) => isOwnId(v.windowId),
+  splits: (v) => isOwnId(v.windowId) && (!("slots" in v) || slotsFromDisk(v.slots) !== null),
 };
 const rowOf = (rows?: SessionRows) => (v: unknown): v is Record<string, unknown> & { id: string } => savedRow(v) && (!rows || ROW_SHAPES[rows](v));
 const keyedById = <T,>(list: unknown, rows?: SessionRows): Record<string, T> | undefined =>
@@ -263,13 +263,13 @@ function launchHintsHold(snapshot: HydrateData, canonical: HydrateData): boolean
 
 const UNLOADED_PAGES: ReadonlySet<Tab["page"]["kind"]> = new Set(["idle", "asleep", "frozen"]);
 
-export function withSavedOnlyFields(snapshot: HydrateData, canonical: HydrateData, live?: Record<string, Tab>): HydrateData {
+export function withSavedOnlyFields(snapshot: HydrateData, canonical: HydrateData, live?: Record<string, Tab>, loaded: ReadonlySet<string> = new Set()): HydrateData {
   let tabs = snapshot.tabs;
   for (const [id, tab] of Object.entries(snapshot.tabs ?? {})) {
     const saved = ownRow(canonical.tabs, id);
     const wake = saved && saved.url === tab.url && saved.profileId === tab.profileId ? pageFromDisk(saved.page).wake : undefined;
     const runtime = ownRow(live, id)?.page ?? tab.page;
-    if (!wake || !UNLOADED_PAGES.has(runtime.kind) || (tab.page.kind !== "idle" && tab.page.kind !== "asleep")) continue;
+    if (!wake || loaded.has(id) || !UNLOADED_PAGES.has(runtime.kind) || (tab.page.kind !== "idle" && tab.page.kind !== "asleep")) continue;
     if (tabs === snapshot.tabs) tabs = { ...snapshot.tabs };
     tabs![id] = { ...tab, page: { kind: tab.page.kind, wake } };
   }
@@ -509,7 +509,18 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   const initial = linuxSessionShape(stored);
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
-  const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical, state.tabs);
+  const loadedTabs = new Set<string>();
+  let trackedTabs: BrowserState["tabs"] | undefined;
+  const trackLoaded = (state: BrowserState) => {
+    if (state.tabs === trackedTabs) return;
+    trackedTabs = state.tabs;
+    for (const id of loadedTabs) if (!Object.hasOwn(state.tabs, id)) loadedTabs.delete(id);
+    for (const [id, tab] of Object.entries(state.tabs)) if (!UNLOADED_PAGES.has(tab.page.kind)) loadedTabs.add(id);
+  };
+  const snapshotOf = (state: BrowserState) => {
+    trackLoaded(state);
+    return withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical, state.tabs, loadedTabs);
+  };
   const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : stored, stored);
   const writer = createSessionWriter(host, written, (base, session) => receive(base, session), stored);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -583,6 +594,8 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     },
   });
   queue(store.getState());
+  trackLoaded(store.getState());
+  const stopTracking = store.subscribe(trackLoaded);
   const stop = store.subscribe(queue);
   const stopEvents = host.onEvent((module, event, payload) => {
     if (closing || module !== "ArdiaHost" || event !== "session" || !sessionObject(payload)) return;
@@ -618,6 +631,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   const dispose = () => {
     stopCloseHooks();
     stop();
+    stopTracking();
     stopEvents();
     if (!closing) flush();
     stopClosing?.();

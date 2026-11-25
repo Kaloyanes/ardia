@@ -616,3 +616,67 @@ test("a session event arriving before the reply to a list-form first write keeps
   assert.ok(pairs[1].base.tabs.some((t) => t.id === "remote"), "the remote row survives in the base");
   assert.equal(pairs[1].base.tabs.find((t) => t.id === "a").title, "Local");
 });
+
+test("a restored tab that loads and sleeps again before any write is acknowledged never gets its old restore handle back", async () => {
+  const saved = macSession();
+  saved.tabs.find((t) => t.id === "right").page = { kind: "asleep", wake: "restore:right" };
+  saved.tabs.find((t) => t.id === "left").page = { kind: "idle", wake: "restore:left" };
+  const json = macLaunch(JSON.stringify(saved)).written;
+  let disk = JSON.parse(json);
+  const writes = [];
+  const host = {
+    bootstrap: launch("w1").bootstrap,
+    invoke: async (method, pair) => {
+      if (method !== "session.write") return {};
+      writes.push(structuredClone(pair));
+      disk = JSON.parse(JSON.stringify(mergeSession(pair.base, pair.session, disk)));
+      return structuredClone(disk);
+    },
+    onEvent: () => () => {},
+  };
+  hydrateFresh(initialLinuxSession(host, JSON.parse(json)));
+  let state = S();
+  const listeners = new Set();
+  const store = {
+    getState: () => state,
+    setState: (patch) => { state = { ...state, ...patch }; for (const listener of listeners) listener(state); },
+    subscribe: (listener) => (listeners.add(listener), () => listeners.delete(listener)),
+  };
+  const persistence = startHostPersistence(host, store, JSON.parse(json));
+  const pageOf = (page) => store.setState({ tabs: { ...state.tabs, right: { ...state.tabs.right, page } } });
+  pageOf({ kind: "loaded", nav: { url: state.tabs.right.url, title: "", canGoBack: false, canGoForward: false, seq: 1 } });
+  pageOf({ kind: "asleep" });
+  assert.equal(writes.length, 0);
+  await persistence.flush();
+  pageOf({ kind: "frozen", holderId: "left" });
+  await persistence.flush();
+  persistence();
+  const shaped = linuxSessionShape(disk);
+  assert.deepEqual(shaped.tabs.right.page, { kind: "asleep" });
+  assert.deepEqual(shaped.tabs.left.page, { kind: "idle", wake: "restore:left" });
+  assert.ok(writes.every((pair) => !JSON.stringify(pair.session).includes("restore:right")));
+});
+
+test("split rows with malformed slots are dropped by the WebUI, while valid splits and legacy rows without slots stay", async () => {
+  const tables = JSON.parse(await tableFile());
+  tables.splits = {
+    ...tables.splits,
+    nullSlots: { id: "nullSlots", windowId: "w1", orientation: "vertical", slots: null },
+    numberSlots: { id: "numberSlots", windowId: "w1", orientation: "vertical", slots: 3 },
+    badSlot: { id: "badSlot", windowId: "w1", orientation: "vertical", slots: [{ size: 1 }] },
+  };
+  const lists = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+  lists.splits = [...lists.splits, ...Object.values(tables.splits).filter((v) => v.id !== "sv")];
+  for (const saved of [tables, lists]) {
+    const json = JSON.stringify(saved);
+    const shaped = linuxSessionShape(JSON.parse(json));
+    assert.deepEqual(Object.keys(shaped.splits), ["sv"]);
+    const webui = await webuiLaunch(json);
+    assert.deepEqual(webui.seen.splits["w1|horizontal"], [{ size: 0.4, tab: T("left") }, { size: 0.6, tab: T("right") }]);
+    macLaunch(json, { damaged: true });
+    assert.deepEqual(Object.keys(S().splits), ["sv"]);
+  }
+  const legacy = olderMacSession();
+  const shaped = linuxSessionShape(structuredClone(legacy));
+  assert.deepEqual(shaped.splits.sv.slots, [{ size: 0.4, tabId: "left" }, { size: 0.6, tabId: "right" }]);
+});

@@ -250,12 +250,13 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   file back as lists at launch, edited or not. A Mac app write that changes a collection's form while a WebUI window is
   running is the one case still replaced whole; the two shells don't run on one profile at once.
 - **What the WebUI keeps for the Mac app.** A sleeping tab's `page.wake` restore handle (left out of the WebUI's live
-  tab, written back while the tab keeps its address and the WebUI hasn't loaded it) and the early launch hints (`launchTab`, `launchBackdrop`,
+  tab, written back while the tab keeps its address and the WebUI hasn't loaded it since launch) and the early launch hints (`launchTab`, `launchBackdrop`,
   `linkProfile`), kept while the focused window's profile, tabs and active tabs, the profiles, Restore Session and the
   engine mode are unchanged.
 - **Rows the readers drop.** Rows that aren't objects, ids the object prototype holds (`__proto__`, `constructor`,
   `toString`), tabs without a string `windowId`, `profileId` and `url`, windows without a `profileId`, a `tabIds` list
-  and `activeTabIds`, and groups without a `windowId`, `profileId` and `tabIds` list are dropped by both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy exists
+  and `activeTabIds`, groups without a `windowId`, `profileId` and `tabIds` list, and splits whose `slots` don't
+  read as slots are dropped by both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy exists
   (the correctly keyed row wins), and the Mac app keeps any file with dropped or misfiled rows aside first.
 - **Startup prewarm.** Native prewarm reads only its own form. `ArdiaSavedSession.mm` on the Mac needs every row
   collection as a list; `ac_linux_startup_tab.cc` on Linux needs `windows` and `tabs` as tables (list-shaped `groups`
