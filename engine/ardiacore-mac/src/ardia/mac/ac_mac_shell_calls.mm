@@ -65,8 +65,11 @@ scoped_refptr<base::SequencedTaskRunner> FileRunner() {
 }
 
 base::FilePath DocumentDirectory() {
-  return DataDirectory().Append("webui-documents");
+  return DataDirectory();
 }
+
+constexpr size_t kBootstrapDocumentLimit = 1024 * 1024;
+constexpr size_t kBootstrapBudget = 8 * 1024 * 1024;
 
 bool ValidDocumentName(const std::string& name) {
   if (name.empty() || name.size() > 200 || name[0] == '.') {
@@ -105,11 +108,17 @@ base::DictValue ReadDocuments() {
   base::DictValue documents;
   base::FileEnumerator files(DocumentDirectory(), false,
                              base::FileEnumerator::FILES);
+  size_t budget = kBootstrapBudget;
   for (base::FilePath path = files.Next(); !path.empty(); path = files.Next()) {
     std::string text;
-    if (ValidDocumentName(path.BaseName().value()) &&
-        base::ReadFileToStringWithMaxSize(path, &text, kDocumentLimit)) {
-      documents.Set(path.BaseName().value(), std::move(text));
+    const std::string name = path.BaseName().value();
+    if (ValidDocumentName(name) && name.ends_with(".json") &&
+        !name.starts_with("session-backup") &&
+        files.GetInfo().GetSize() <= static_cast<int64_t>(kBootstrapDocumentLimit) &&
+        static_cast<size_t>(files.GetInfo().GetSize()) <= budget &&
+        base::ReadFileToStringWithMaxSize(path, &text, kBootstrapDocumentLimit)) {
+      budget -= text.size();
+      documents.Set(name, std::move(text));
     }
   }
   return documents;
@@ -424,6 +433,11 @@ void ShellHostView::Invoke(const std::string& method,
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&chrome::AttemptExit));
     return;
+  }
+  if (method.starts_with("ArdiaTelemetry.") || method.starts_with("ArdiaUpdates.") ||
+      method == "ArdiaShell.fetchBangList") {
+    return std::move(done).Run(
+        false, Failure("ERR_UNAVAILABLE", "The Mac WebUI spike sends nothing"));
   }
   if (method == "engine.info") {
     return Reply(std::move(done),

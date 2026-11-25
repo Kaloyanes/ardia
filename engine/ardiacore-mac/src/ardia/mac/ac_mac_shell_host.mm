@@ -63,7 +63,7 @@ namespace {
 
 constexpr char kShellUrl[] = "chrome://ardia/";
 constexpr size_t kUnhandledLimit = 400;
-constexpr char kDirectoryPrefix[] = "Ardia ";
+constexpr char kDirectoryPrefix[] = "Profile ";
 
 bool KeptAsIs(char c) {
   return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
@@ -181,6 +181,9 @@ base::FilePath DataDirectory() {
   if (command->HasSwitch("ardia-data-dir")) {
     return command->GetSwitchValuePath("ardia-data-dir");
   }
+  if (const char* data = getenv("ARDIA_DATA_DIR"); data && *data) {
+    return base::FilePath(data);
+  }
   return g_browser_process->profile_manager()->user_data_dir().DirName();
 }
 
@@ -202,27 +205,28 @@ void Trace(const std::string& line) {
   LOG(WARNING) << "Ardia Mac WebUI: " << line;
 }
 
+bool ValidProfileId(std::string_view name) {
+  if (name.empty() || name.size() > 128 || !base::IsAsciiAlpha(name[0])) {
+    return false;
+  }
+  return std::ranges::all_of(name, [](char c) {
+    return base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '_' || c == '-';
+  });
+}
+
 void WithProfile(std::string_view name,
                  base::OnceCallback<void(Profile*)> callback) {
   ProfileManager* manager = g_browser_process->profile_manager();
-  base::FilePath path;
-  if (name.empty() || name == "default") {
-    path = manager->user_data_dir().Append(ProfileManager::GetInitialProfileDir());
-  } else {
-    std::string directory = kDirectoryPrefix;
-    for (char c : name) {
-      if (KeptAsIs(c)) {
-        directory.push_back(c);
-      } else {
-        constexpr char kHex[] = "0123456789abcdef";
-        const unsigned char byte = static_cast<unsigned char>(c);
-        directory.push_back('_');
-        directory.push_back(kHex[byte >> 4]);
-        directory.push_back(kHex[byte & 0xf]);
-      }
-    }
-    path = manager->user_data_dir().Append(directory);
+  const bool app_profile = name.empty() || name == "default";
+  if (!app_profile && !ValidProfileId(name)) {
+    std::move(callback).Run(nullptr);
+    return;
   }
+  const base::FilePath path =
+      app_profile
+          ? manager->user_data_dir().Append(ProfileManager::GetInitialProfileDir())
+          : manager->user_data_dir().Append(std::string(kDirectoryPrefix) +
+                                             std::string(name));
   if (Profile* loaded = manager->GetProfileByPath(path)) {
     std::move(callback).Run(loaded);
     return;
@@ -242,27 +246,15 @@ void WithProfile(std::string_view name,
                   }
                   std::move(callback).Run(profile);
                 },
-                std::string(name.empty() ? "default" : name), std::move(callback)));
+                std::string(app_profile ? "default" : name), std::move(callback)));
 }
 
 std::string ProfileName(const Profile* profile) {
-  const std::string directory = profile->GetOriginalProfile()->GetPath().BaseName().value();
-  if (!directory.starts_with(kDirectoryPrefix)) {
-    return "default";
-  }
-  std::string name;
-  const std::string escaped = directory.substr(sizeof(kDirectoryPrefix) - 1);
-  for (size_t i = 0; i < escaped.size(); ++i) {
-    if (escaped[i] == '_' && i + 2 < escaped.size()) {
-      int value = 0;
-      base::HexStringToInt(escaped.substr(i + 1, 2), &value);
-      name.push_back(static_cast<char>(value));
-      i += 2;
-    } else {
-      name.push_back(escaped[i]);
-    }
-  }
-  return name;
+  const std::string directory =
+      profile->GetOriginalProfile()->GetPath().BaseName().value();
+  return directory.starts_with(kDirectoryPrefix)
+             ? directory.substr(sizeof(kDirectoryPrefix) - 1)
+             : "default";
 }
 
 std::vector<ShellHostView*>& Hosts() {
