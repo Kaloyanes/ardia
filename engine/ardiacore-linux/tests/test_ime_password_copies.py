@@ -234,8 +234,7 @@ class ImePasswordCopiesTests(unittest.TestCase):
         if not sys.platform.startswith('linux'):
             self.skipTest('the scenario watches frees with glibc\'s malloc_usable_size')
         compiler = shutil.which('clang++') or shutil.which('c++')
-        if compiler is None:
-            self.skipTest('C++ compiler is unavailable')
+        self.assertIsNotNone(compiler, 'a C++ compiler (clang++ or c++) is required on Linux')
         with tempfile.TemporaryDirectory(prefix='ardia-wipe-text-') as scratch:
             scratch = pathlib.Path(scratch)
             ime = scratch / 'ui' / 'base' / 'ime'
