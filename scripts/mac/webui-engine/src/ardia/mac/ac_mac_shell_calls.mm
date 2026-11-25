@@ -10,11 +10,14 @@
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
+#include "ardia/mac/generated/ac_desktop_window_commands.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -29,7 +32,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -74,6 +76,7 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    ardia::desktop_commands::kEditCapability,
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
@@ -171,6 +174,11 @@ void ServiceCall(base::WeakPtr<ShellHostView> host,
 
 }
 
+void WriteSessionInBackground(base::DictValue session, base::OnceCallback<void(bool)> done) {
+  FileRunner()->PostTaskAndReplyWithResult(FROM_HERE, base::BindOnce(&WriteSessionFile, std::move(session)),
+                                           std::move(done));
+}
+
 std::string ShellHostView::BootstrapJson() const {
   base::DictValue info;
   info.Set("appName", "Ardia");
@@ -199,8 +207,14 @@ std::string ShellHostView::BootstrapJson() const {
       capabilities.Append(capability);
     }
   }
+  for (std::string_view capability : LifecycleCapabilities()) {
+    capabilities.Append(capability);
+  }
   for (const auto& route : ardia::desktop_routes::kRoutes) {
     capabilities.Append(route.name);
+  }
+  for (std::string_view route : page_policy::kZoomRoutes) {
+    capabilities.Append(route);
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
@@ -241,6 +255,9 @@ std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
 void ShellHostView::Invoke(const std::string& method,
                            const base::DictValue& args,
                            Done done) {
+  if (HandlesLifecycleCall(method)) {
+    return LifecycleCall(method, args, std::move(done));
+  }
   const base::ListValue* values = Arguments(args);
   const auto first_string = [values]() -> std::string {
     return values && !values->empty() && (*values)[0].is_string()
@@ -426,14 +443,6 @@ void ShellHostView::Invoke(const std::string& method,
                                                   .Append(bounds.width())
                                                   .Append(bounds.height())));
   }
-  if (method == "ArdiaShell.windowState") {
-    return Reply(std::move(done),
-                 base::Value(base::DictValue()
-                                 .Set("windowId", window_id_)
-                                 .Set("maximized", false)
-                                 .Set("tiled", false)
-                                 .Set("fullScreen", false)));
-  }
   if (method == "ArdiaShell.windowButtonLayout") {
     return Reply(std::move(done),
                  base::Value(base::DictValue()
@@ -498,12 +507,6 @@ void ShellHostView::Invoke(const std::string& method,
                     GetWeakPtr(), std::move(done)));
     return;
   }
-  if (method == "ArdiaShell.quit" || method == "ArdiaShell.closeWindow") {
-    Reply(std::move(done), base::Value());
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&chrome::AttemptExit));
-    return;
-  }
   if (method.starts_with("ArdiaTelemetry.") || method.starts_with("ArdiaUpdates.") ||
       method == "ArdiaShell.fetchBangList") {
     return std::move(done).Run(
@@ -544,6 +547,18 @@ void ShellHostView::EngineCall(const std::string& name,
   }
   if (pip_ && PipPresenter::HandlesEngineCall(name)) {
     return pip_->EngineCall(name, args, std::move(done));
+  }
+  if (page_policy::IsZoomRoute(name)) {
+    return WithProfile(profile,
+                       base::BindOnce(
+                           [](std::string name, std::optional<base::Value> args,
+                              Done done, Profile* resolved) {
+                             SiteZoomCall(name, resolved, args ? &*args : nullptr,
+                                          std::move(done));
+                           },
+                           name, args ? std::optional<base::Value>(args->Clone())
+                                      : std::nullopt,
+                           std::move(done)));
   }
   const auto* route = ardia::desktop_routes::FindRoute(name);
   EngineFunction call =

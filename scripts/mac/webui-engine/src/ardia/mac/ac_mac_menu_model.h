@@ -294,7 +294,7 @@ inline Item DefaultMainMenu(std::string_view app_name) {
                role("Hide " + app, Role::kHide, "h", kCommand),
                role("Hide Others", Role::kHideOthers, "h", kCommand | kOption),
                role("Show All", Role::kShowAll), separator(),
-               role("Quit " + app, Role::kQuit, "q", kCommand)}),
+               command("Quit " + app, "quit", "q", kCommand)}),
       submenu("File",
               {command("New Tab", "newTab", "t", kCommand), command("New Window", "newWindow", "n", kCommand),
                separator(), command("Close Tab", "closeTab", "w", kCommand)}),
