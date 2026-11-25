@@ -118,8 +118,9 @@ export class WaylandInputMethod {
 
   async until(test, timeout, what) {
     const deadline = Date.now() + timeout;
-    while (!test()) {
+    for (;;) {
       if (this.failure) throw this.failure;
+      if (test()) return;
       const left = deadline - Date.now();
       if (left <= 0) throw new Error(`timed out waiting for ${what}`);
       await new Promise((resolve) => {
