@@ -275,7 +275,12 @@ class ShellHostView : public views::View,
       const base::DictValue* request,
       std::size_t fields) const;
   bool EndsSession() const;
-  void FinishClose();
+  void CommitClose();
+  void UnloadAnswered(const shell_policy::CloseIdentity& identity, bool proceed);
+  void AbandonCommit(const shell_policy::CloseIdentity& identity);
+  void DiscardPages();
+  void FinishClose(shell_policy::CloseIdentity identity);
+  static void ReconsiderFinalCloses();
   void CloseCancelled(BrowserWindowInterface::ClosingStatus status);
   void EmitCloseCancelled(const shell_policy::CloseIdentity& identity);
   void StartWindowMove(Done done);
@@ -307,7 +312,13 @@ class ShellHostView : public views::View,
   bool utility_ready_ = false;
   bool shortcut_recording_ = false;
   bool ends_session_ = false;
+  bool waiting_final_ = false;
   shell_policy::CloseLedger close_;
+  struct PendingCommit;
+  std::unique_ptr<PendingCommit> pending_commit_;
+  class UnloadAnswer;
+  std::vector<std::unique_ptr<UnloadAnswer>> unload_answers_;
+  std::unique_ptr<shell_policy::UnloadRound> unload_round_;
   base::CallbackListSubscription close_cancelled_;
   struct RecordingKeys;
   std::unique_ptr<RecordingKeys> recording_keys_;

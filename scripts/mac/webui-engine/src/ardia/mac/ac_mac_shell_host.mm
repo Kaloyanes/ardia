@@ -50,6 +50,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/javascript_dialogs/app_modal_dialog_manager.h"
+#include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -97,6 +98,30 @@ class ShellTransparency : public content::WebContentsObserver {
       view->SetBackgroundColor(SK_ColorTRANSPARENT);
     }
   }
+};
+
+class BackgroundDialogs : public content::JavaScriptDialogManager {
+ public:
+  void RunJavaScriptDialog(content::WebContents* web_contents,
+                           content::RenderFrameHost* render_frame_host,
+                           content::JavaScriptDialogType dialog_type,
+                           const std::u16string& message_text,
+                           const std::u16string& default_prompt_text,
+                           DialogClosedCallback callback,
+                           bool* did_suppress_message) override {
+    LOG(WARNING) << "Ardia Mac WebUI: dialog (background, not shown, cancelled): "
+                 << base::UTF16ToUTF8(message_text);
+    std::move(callback).Run(false, std::u16string());
+  }
+
+  void RunBeforeUnloadDialog(content::WebContents* web_contents,
+                             content::RenderFrameHost* render_frame_host,
+                             bool is_reload,
+                             DialogClosedCallback callback) override {
+    std::move(callback).Run(true, std::u16string());
+  }
+
+  void CancelDialogs(content::WebContents* web_contents, bool reset_state) override {}
 };
 
 std::map<content::WebContents*, std::unique_ptr<ShellTransparency>>&
@@ -407,6 +432,49 @@ struct ShellHostView::WindowDrag {
   NSMutableArray* observers = [NSMutableArray array];
 };
 
+struct ShellHostView::PendingCommit {
+  shell_policy::CloseIdentity identity;
+  std::optional<base::DictValue> base;
+  std::optional<base::DictValue> session;
+  Done done;
+};
+
+class ShellHostView::UnloadAnswer : public content::WebContentsObserver {
+ public:
+  UnloadAnswer(content::WebContents* contents,
+               base::WeakPtr<ShellHostView> host,
+               shell_policy::CloseIdentity identity)
+      : content::WebContentsObserver(contents),
+        host_(std::move(host)),
+        identity_(identity) {}
+
+  void BeforeUnloadFired(bool proceed) override { Answer(proceed); }
+  void BeforeUnloadDialogCancelled() override { Answer(false); }
+  void WebContentsDestroyed() override { Answer(true); }
+
+ private:
+  void Answer(bool proceed) {
+    if (answered_) {
+      return;
+    }
+    answered_ = true;
+    Observe(nullptr);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<ShellHostView> host,
+                          shell_policy::CloseIdentity identity, bool proceed) {
+                         if (host) {
+                           host->UnloadAnswered(identity, proceed);
+                         }
+                       },
+                       host_, identity_, proceed));
+  }
+
+  base::WeakPtr<ShellHostView> host_;
+  shell_policy::CloseIdentity identity_;
+  bool answered_ = false;
+};
+
 struct ShellHostView::RecordingKeys {
   id monitor = nil;
   ~RecordingKeys() {
@@ -435,6 +503,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser,
 ShellHostView::~ShellHostView() {
   DetachBrowser();
   std::erase(Hosts(), this);
+  ReconsiderFinalCloses();
 }
 
 void ShellHostView::Initialize() {
@@ -505,6 +574,10 @@ void ShellHostView::DetachBrowser() {
   closing_ = true;
   close_cancelled_ = base::CallbackListSubscription();
   recording_keys_.reset();
+  unload_answers_.clear();
+  unload_round_.reset();
+  pending_commit_.reset();
+  waiting_final_ = false;
   RetireRenderer();
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
@@ -1492,10 +1565,9 @@ void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
 }
 
 base::DictValue ShellHostView::RequestWindowClose() {
-  if (!browser_ || !handler_ || closing_) {
+  if (!browser_ || !handler_ || !handler_->Live() || closing_) {
     return base::DictValue();
   }
-  const shell_policy::CloseLedger::Phase before = close_.phase();
   const std::optional<shell_policy::CloseIdentity> identity =
       close_.Request(renderer_generation_);
   if (!identity) {
@@ -1505,7 +1577,7 @@ base::DictValue ShellHostView::RequestWindowClose() {
   request.Set("windowId", window_id_);
   request.Set("rendererGeneration", base::NumberToString(identity->renderer));
   request.Set("closeGeneration", base::NumberToString(identity->close));
-  if (before == shell_policy::CloseLedger::Phase::kIdle) {
+  if (close_.phase() == shell_policy::CloseLedger::Phase::kRequested) {
     Emit("ArdiaShell", "shell",
          base::Value(base::DictValue()
                          .Set("name", "shell.closeRequested")
@@ -1548,8 +1620,11 @@ void ShellHostView::CloseFromNativeButton() {
   if (!RequestWindowClose().empty()) {
     return;
   }
-  ends_session_ = EndsSession();
-  FinishClose();
+  if (EndsSession()) {
+    chrome::AttemptExit();
+    return;
+  }
+  CloseWindow();
 }
 
 void ShellHostView::EmitCloseCancelled(const shell_policy::CloseIdentity& identity) {
@@ -1572,9 +1647,23 @@ void ShellHostView::CloseCancelled(BrowserWindowInterface::ClosingStatus status)
     return;
   }
   if (const std::optional<shell_policy::CloseIdentity> identity = close_.Unseal()) {
-    ends_session_ = false;
-    EmitCloseCancelled(*identity);
+    AbandonCommit(*identity);
   }
+}
+
+void ShellHostView::AbandonCommit(const shell_policy::CloseIdentity& identity) {
+  ends_session_ = false;
+  waiting_final_ = false;
+  unload_answers_.clear();
+  unload_round_.reset();
+  if (pending_commit_) {
+    Done done = std::move(pending_commit_->done);
+    pending_commit_.reset();
+    std::move(done).Run(false, Failure("ERR_WINDOW_CLOSE_CANCELLED",
+                                       "A page asked to stay open"));
+  }
+  EmitCloseCancelled(identity);
+  ReconsiderFinalCloses();
 }
 
 void ShellHostView::SetShortcutRecording(bool recording) {
@@ -1641,11 +1730,16 @@ void ShellHostView::RejectWindowClose(const base::DictValue* request,
                                       Done done) {
   const std::optional<shell_policy::CloseIdentity> identity =
       OwnCloseIdentity(request, 3);
+  if (identity && close_.AlreadyCancelled(*identity)) {
+    return std::move(done).Run(true, base::Value());
+  }
   if (!identity || !close_.Cancel(*identity, renderer_generation_)) {
     return std::move(done).Run(
         false, Failure("ERR_WINDOW_CLOSE_STALE", "Close request is not current"));
   }
+  ends_session_ = false;
   std::move(done).Run(true, base::Value());
+  ReconsiderFinalCloses();
 }
 
 void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
@@ -1672,12 +1766,66 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
     return std::move(done).Run(
         false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close acknowledgment"));
   }
-  std::optional<base::DictValue> base;
-  std::optional<base::DictValue> session;
+  pending_commit_ = std::make_unique<PendingCommit>();
+  pending_commit_->identity = *identity;
+  pending_commit_->done = std::move(done);
   if (departure) {
-    base = departure->FindDict("base")->Clone();
-    session = departure->FindDict("session")->Clone();
+    pending_commit_->base = departure->FindDict("base")->Clone();
+    pending_commit_->session = departure->FindDict("session")->Clone();
   }
+  std::vector<content::WebContents*> asking;
+  for (BrowserWindowInterface* member : Members()) {
+    TabStripModel* model = member->GetTabStripModel();
+    for (int index = 0; index < model->count(); ++index) {
+      content::WebContents* contents = model->GetWebContentsAt(index);
+      if (contents && contents->NeedToFireBeforeUnload()) {
+        asking.push_back(contents);
+      }
+    }
+  }
+  if (asking.empty()) {
+    return CommitClose();
+  }
+  unload_round_ = std::make_unique<shell_policy::UnloadRound>(asking.size());
+  for (content::WebContents* contents : asking) {
+    unload_answers_.push_back(
+        std::make_unique<UnloadAnswer>(contents, GetWeakPtr(), *identity));
+  }
+  for (content::WebContents* contents : asking) {
+    contents->DispatchBeforeUnload(false);
+  }
+}
+
+void ShellHostView::UnloadAnswered(const shell_policy::CloseIdentity& identity,
+                                   bool proceed) {
+  if (!unload_round_ || !pending_commit_ ||
+      !(pending_commit_->identity == identity) || !close_.Commits(identity)) {
+    return;
+  }
+  switch (unload_round_->Answer(proceed)) {
+    case shell_policy::UnloadRound::Outcome::kWaiting:
+      return;
+    case shell_policy::UnloadRound::Outcome::kStay:
+      if (close_.Unseal()) {
+        AbandonCommit(identity);
+      }
+      return;
+    case shell_policy::UnloadRound::Outcome::kProceed:
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&ShellHostView::CommitClose, GetWeakPtr()));
+      return;
+  }
+}
+
+void ShellHostView::CommitClose() {
+  if (!pending_commit_ || !close_.Commits(pending_commit_->identity)) {
+    return;
+  }
+  unload_answers_.clear();
+  unload_round_.reset();
+  std::unique_ptr<PendingCommit> commit = std::move(pending_commit_);
+  const shell_policy::CloseIdentity identity = commit->identity;
+  const bool departing = commit->base.has_value();
   SessionFiles()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(
@@ -1688,14 +1836,14 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
             }
             return MergeAndWriteSession(std::move(*base), std::move(*session));
           },
-          std::move(base), std::move(session)),
+          std::move(commit->base), std::move(commit->session)),
       base::BindOnce(
           [](base::WeakPtr<ShellHostView> host, std::string window,
              shell_policy::CloseIdentity identity, bool departing, Done done,
              std::optional<MergedSession> merged) {
             if (departing && (!merged || !merged->ok)) {
-              if (host) {
-                host->close_.Reopen(identity, host->renderer_generation_);
+              if (host && host->close_.Reopen(identity, host->renderer_generation_)) {
+                host->ReconsiderFinalCloses();
               }
               return std::move(done).Run(
                   false, Failure("ERR_WINDOW_DEPARTURE",
@@ -1707,25 +1855,82 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
             std::move(done).Run(true, base::Value());
             if (host) {
               base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-                  FROM_HERE, base::BindOnce(&ShellHostView::FinishClose, host));
+                  FROM_HERE,
+                  base::BindOnce(&ShellHostView::FinishClose, host, identity));
             }
           },
-          GetWeakPtr(), window_id_, *identity, departure != nullptr,
-          std::move(done)));
+          GetWeakPtr(), window_id_, identity, departing, std::move(commit->done)));
 }
 
-void ShellHostView::FinishClose() {
-  const std::size_t staying = static_cast<std::size_t>(
-      std::ranges::count_if(Hosts(), [this](ShellHostView* host) {
-        return host != this && host->browser() && !host->is_utility() &&
-               !host->LeavingSession();
-      }));
-  if (shell_policy::FinalCloseFor(is_utility(), ends_session_, staying) ==
-      shell_policy::FinalClose::kQuit) {
-    chrome::AttemptExit();
+void ShellHostView::DiscardPages() {
+  for (BrowserWindowInterface* member : Members()) {
+    TabStripModel* model = member->GetTabStripModel();
+    while (model->count() > 0) {
+      model->DetachAndDeleteWebContentsAt(model->count() - 1);
+    }
+  }
+}
+
+void ShellHostView::FinishClose(shell_policy::CloseIdentity identity) {
+  if (!close_.Commits(identity)) {
     return;
   }
-  CloseWindow();
+  waiting_final_ = false;
+  std::size_t staying = 0;
+  std::size_t leaving = 0;
+  for (ShellHostView* host : Hosts()) {
+    if (host == this || !host->browser() || host->is_utility()) {
+      continue;
+    }
+    if (!host->LeavingSession()) {
+      ++staying;
+    } else if (!host->waiting_final_) {
+      ++leaving;
+    }
+  }
+  switch (shell_policy::FinalStepFor(is_utility(), ends_session_, staying, leaving)) {
+    case shell_policy::FinalStep::kWaitForPeers:
+      waiting_final_ = true;
+      return;
+    case shell_policy::FinalStep::kCloseAgainWithDeparture:
+      if (close_.Unseal()) {
+        AbandonCommit(identity);
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(
+                           [](base::WeakPtr<ShellHostView> host) {
+                             if (host) {
+                               host->RequestWindowClose();
+                             }
+                           },
+                           GetWeakPtr()));
+      }
+      return;
+    case shell_policy::FinalStep::kQuit:
+      DiscardPages();
+      chrome::AttemptExit();
+      return;
+    case shell_policy::FinalStep::kCloseWindow:
+      DiscardPages();
+      CloseWindow();
+      return;
+  }
+}
+
+void ShellHostView::ReconsiderFinalCloses() {
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce([] {
+        std::vector<base::WeakPtr<ShellHostView>> waiting;
+        for (ShellHostView* host : Hosts()) {
+          if (host->waiting_final_) {
+            waiting.push_back(host->GetWeakPtr());
+          }
+        }
+        for (const base::WeakPtr<ShellHostView>& host : waiting) {
+          if (host && host->waiting_final_) {
+            host->FinishClose(host->close_.identity());
+          }
+        }
+      }));
 }
 
 void ShellHostView::WriteSession(const base::DictValue& args, Done done) {
@@ -2015,9 +2220,14 @@ bool ShellHostView::HandleKeyboardEvent(
 
 content::JavaScriptDialogManager* ShellHostView::GetJavaScriptDialogManager(
     content::WebContents* source) {
-  return source && source == shell_contents()
-             ? javascript_dialogs::AppModalDialogManager::GetInstance()
-             : nullptr;
+  if (!source || source != shell_contents()) {
+    return nullptr;
+  }
+  if (BackgroundInstance()) {
+    static base::NoDestructor<BackgroundDialogs> background;
+    return background.get();
+  }
+  return javascript_dialogs::AppModalDialogManager::GetInstance();
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {

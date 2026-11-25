@@ -2,6 +2,8 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,6 +26,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/time/time.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -100,18 +103,32 @@ bool ValidDocumentName(const std::string& name) {
 }
 
 std::optional<base::DictValue> ReadSessionFile() {
+  const base::FilePath path = DataDirectory().Append("session.json");
+  const std::optional<int64_t> size = base::GetFileSize(path);
+  if (!size) {
+    return std::nullopt;
+  }
+  const std::size_t bytes = static_cast<std::size_t>(std::max<int64_t>(0, *size));
   std::string text;
-  if (!base::ReadFileToStringWithMaxSize(
-          DataDirectory().Append("session.json"), &text,
-          shell_policy::kSessionLimit)) {
-    return std::nullopt;
+  std::optional<base::Value> parsed;
+  if (bytes <= shell_policy::kMergeableSessionBytes &&
+      base::ReadFileToStringWithMaxSize(path, &text, shell_policy::kMergeableSessionBytes)) {
+    parsed = base::JSONReader::Read(text, base::JSON_PARSE_RFC);
   }
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(text, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return std::nullopt;
+  const bool object = parsed && parsed->is_dict();
+  switch (shell_policy::SessionFileFor(true, bytes, object,
+                                       object && ardia::ValidLinuxSession(parsed->GetDict()))) {
+    case shell_policy::SessionFile::kAbsent:
+      return std::nullopt;
+    case shell_policy::SessionFile::kSetAside:
+      base::Move(path, DataDirectory().Append(shell_policy::SetAsideSessionName(
+                           static_cast<std::uint64_t>(std::max<int64_t>(
+                               0, base::Time::Now().InMillisecondsSinceUnixEpoch())))));
+      return std::nullopt;
+    case shell_policy::SessionFile::kUse:
+      return std::move(parsed->GetDict());
   }
-  return std::move(parsed->GetDict());
+  return std::nullopt;
 }
 
 bool WriteSessionFile(const base::DictValue& session) {
@@ -172,15 +189,6 @@ MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local) 
   MergedSession result;
   if (std::optional<base::DictValue> previous = ReadSessionFile()) {
     result.previous = std::move(*previous);
-  }
-  if (shell_policy::SetsAsideSessionOnDisk(result.previous.empty(),
-                                          ardia::ValidLinuxSession(result.previous))) {
-    const base::FilePath session = DataDirectory().Append("session.json");
-    if (!base::CopyFile(session, DataDirectory().Append(
-                                     std::string(shell_policy::kOversizedSessionBackup)))) {
-      return result;
-    }
-    result.previous = base::DictValue();
   }
   std::optional<base::DictValue> merged =
       ardia::MergeLinuxSession(base, local, result.previous);

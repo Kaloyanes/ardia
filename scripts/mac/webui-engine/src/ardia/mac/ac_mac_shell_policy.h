@@ -39,10 +39,19 @@ inline bool SessionFits(std::size_t serialized_bytes) {
   return serialized_bytes <= kSessionLimit;
 }
 
-inline constexpr std::string_view kOversizedSessionBackup = "session-backup-oversized.json";
+inline constexpr std::size_t kMergeableSessionBytes = 8 * 1024 * 1024;
+inline constexpr std::string_view kSetAsideSessionPrefix = "session-backup-oversized-";
 
-inline bool SetsAsideSessionOnDisk(bool empty_on_disk, bool mergeable_on_disk) {
-  return !empty_on_disk && !mergeable_on_disk;
+enum class SessionFile { kAbsent, kUse, kSetAside };
+
+inline SessionFile SessionFileFor(bool exists, std::size_t bytes, bool parsed_object, bool mergeable) {
+  if (!exists) return SessionFile::kAbsent;
+  if (bytes > kMergeableSessionBytes || !parsed_object || !mergeable) return SessionFile::kSetAside;
+  return SessionFile::kUse;
+}
+
+inline std::string SetAsideSessionName(std::uint64_t unix_ms) {
+  return std::string(kSetAsideSessionPrefix) + std::to_string(unix_ms) + ".json";
 }
 
 inline std::optional<int> ParseAdoptId(std::string_view adopt) {
@@ -243,9 +252,15 @@ class CloseLedger {
   }
 
   bool Reopen(const CloseIdentity& identity, std::uint64_t renderer) {
-    if (!Matches(identity, renderer) || phase_ != Phase::kSealed) return false;
-    phase_ = Phase::kDraining;
+    if (!Commits(identity)) return false;
+    phase_ = identity.renderer == renderer ? Phase::kDraining : Phase::kIdle;
     return true;
+  }
+
+  bool Commits(const CloseIdentity& identity) const { return phase_ == Phase::kSealed && identity_ == identity; }
+
+  bool AlreadyCancelled(const CloseIdentity& identity) const {
+    return phase_ == Phase::kIdle && identity_ == identity && identity.close != 0;
   }
 
   std::optional<CloseIdentity> Unseal() {
@@ -254,7 +269,9 @@ class CloseLedger {
     return identity_;
   }
 
-  void RendererRetired() { phase_ = Phase::kIdle; }
+  void RendererRetired() {
+    if (phase_ != Phase::kSealed) phase_ = Phase::kIdle;
+  }
 
   bool Leaving() const { return phase_ == Phase::kDraining || phase_ == Phase::kSealed; }
 
@@ -276,11 +293,35 @@ inline bool EndsSessionFor(bool utility, std::size_t staying_browser_windows) {
   return !utility && staying_browser_windows == 0;
 }
 
-enum class FinalClose { kCloseWindow, kQuit };
+enum class FinalStep { kCloseWindow, kQuit, kWaitForPeers, kCloseAgainWithDeparture };
 
-inline FinalClose FinalCloseFor(bool utility, bool ends_session, std::size_t staying_browser_windows) {
-  return !utility && ends_session && staying_browser_windows == 0 ? FinalClose::kQuit : FinalClose::kCloseWindow;
+inline FinalStep FinalStepFor(bool utility, bool ends_session, std::size_t staying_peers, std::size_t leaving_peers) {
+  if (utility || !ends_session) return FinalStep::kCloseWindow;
+  if (staying_peers > 0) return FinalStep::kCloseAgainWithDeparture;
+  if (leaving_peers > 0) return FinalStep::kWaitForPeers;
+  return FinalStep::kQuit;
 }
+
+class UnloadRound {
+ public:
+  enum class Outcome { kWaiting, kProceed, kStay };
+
+  explicit UnloadRound(std::size_t pages) : waiting_(pages) {}
+
+  Outcome Answer(bool proceed) {
+    if (outcome_ != Outcome::kWaiting) return outcome_;
+    if (!proceed) return outcome_ = Outcome::kStay;
+    if (waiting_ > 0) --waiting_;
+    if (waiting_ == 0) outcome_ = Outcome::kProceed;
+    return outcome_;
+  }
+
+  Outcome outcome() const { return outcome_; }
+
+ private:
+  std::size_t waiting_;
+  Outcome outcome_ = Outcome::kWaiting;
+};
 
 inline bool CloseCancelledFor(bool denied_by_user, bool denied_by_policy, bool unload_handlers_need_time) {
   return !unload_handlers_need_time && (denied_by_user || denied_by_policy);

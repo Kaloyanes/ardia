@@ -526,10 +526,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn('close_.Request(renderer_generation_)', request)
         self.assertIn('.Set("name", "shell.closeRequested")', request)
         ack = host.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(ack.index('close_.Seal(*identity, renderer_generation_)'), ack.index('SessionFiles()->PostTaskAndReplyWithResult('))
-        self.assertLess(ack.index('SessionFiles()->PostTaskAndReplyWithResult('), ack.index('&ShellHostView::FinishClose'))
-        finish = host.split('void ShellHostView::FinishClose() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('shell_policy::FinalCloseFor(is_utility(), ends_session_, staying)', finish)
+        self.assertLess(ack.index('close_.Seal(*identity, renderer_generation_)'), ack.index('return CommitClose();'))
+        commit = host.split('void ShellHostView::CommitClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(commit.index('close_.Commits(pending_commit_->identity)'), commit.index('SessionFiles()->PostTaskAndReplyWithResult('))
+        self.assertLess(commit.index('SessionFiles()->PostTaskAndReplyWithResult('), commit.index('&ShellHostView::FinishClose, host, identity'))
+        finish = host.split('void ShellHostView::FinishClose(shell_policy::CloseIdentity identity) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::FinalStepFor(is_utility(), ends_session_, staying, leaving)', finish)
         desktop = (REPO / 'apps/desktop/src/shims/shell.tsx').read_text()
         self.assertIn('hostModuleMethod("ArdiaShell", "requestWindowClose")', desktop)
         self.assertIn('envelope?.name === "shell.closeRequested"', desktop)
@@ -594,28 +596,72 @@ class ContractTests(unittest.TestCase):
         host = self.read('ac_mac_shell_host.mm')
         self.assertIn('host->CloseFromNativeButton();', host)
         native = host.split('void ShellHostView::CloseFromNativeButton() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(native.index('RequestWindowClose()'), native.index('FinishClose();'))
+        self.assertLess(native.index('if (close_.Leaving()) {'), native.index('RequestWindowClose()'))
+        self.assertLess(native.index('RequestWindowClose()'), native.index('CloseWindow();'))
         self.assertIn('browser_->RegisterBrowserCloseCancelled(', host)
         cancelled = host.split('void ShellHostView::CloseCancelled(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('close_.Unseal()', cancelled)
-        self.assertIn('EmitCloseCancelled(*identity);', cancelled)
+        self.assertIn('AbandonCommit(*identity);', cancelled)
+        abandon = host.split('void ShellHostView::AbandonCommit(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('EmitCloseCancelled(identity);', abandon)
+        self.assertIn('ReconsiderFinalCloses();', abandon)
         self.assertIn('.Set("name", "shell.closeCancelled")', host)
 
     def test_departures_that_fail_keep_the_window_and_the_last_window_alone_quits(self):
         host = self.read('ac_mac_shell_host.mm')
-        ack = host.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(ack.index('host->close_.Reopen(identity, host->renderer_generation_);'), ack.index('"ERR_WINDOW_DEPARTURE"'))
-        self.assertLess(ack.index('"ERR_WINDOW_DEPARTURE"'), ack.index('&ShellHostView::FinishClose'))
+        commit = host.split('void ShellHostView::CommitClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(commit.index('host->close_.Reopen(identity, host->renderer_generation_)'), commit.index('"ERR_WINDOW_DEPARTURE"'))
+        self.assertLess(commit.index('"ERR_WINDOW_DEPARTURE"'), commit.index('&ShellHostView::FinishClose, host, identity'))
         drain = host.split('void ShellHostView::BeginWindowCloseDrain(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('ends_session_ = EndsSession();', drain)
         ends = host.split('bool ShellHostView::EndsSession() const {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('!host->LeavingSession()', ends)
-        finish = host.split('void ShellHostView::FinishClose() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('shell_policy::FinalCloseFor(is_utility(), ends_session_, staying)', finish)
+        finish = host.split('void ShellHostView::FinishClose(shell_policy::CloseIdentity identity) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('if (!close_.Commits(identity)) {'), finish.index('shell_policy::FinalStepFor('))
+        self.assertIn('case shell_policy::FinalStep::kWaitForPeers:', finish)
+        self.assertIn('host->RequestWindowClose();', finish)
+        self.assertIn('!host->waiting_final_', finish)
+        self.assertIn('ReconsiderFinalCloses();', host.split('ShellHostView::~ShellHostView() {', 1)[1].split('\n}\n', 1)[0])
         calls = self.read('ac_mac_shell_calls.mm')
-        merge = calls.split('MergedSession MergeAndWriteSession(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(merge.index('shell_policy::SetsAsideSessionOnDisk('), merge.index('ardia::MergeLinuxSession('))
-        self.assertLess(merge.index('base::CopyFile('), merge.index('result.previous = base::DictValue();'))
+        reader = calls.split('std::optional<base::DictValue> ReadSessionFile() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(reader.index('base::GetFileSize(path)'), reader.index('ReadFileToStringWithMaxSize'))
+        self.assertIn('ardia::ValidLinuxSession(parsed->GetDict())', reader)
+        self.assertIn('base::Move(path, DataDirectory().Append(shell_policy::SetAsideSessionName(', reader)
+        self.assertNotIn('CopyFile', calls)
+
+    def test_pages_answer_beforeunload_before_anything_commits(self):
+        host = self.read('ac_mac_shell_host.mm')
+        ack = host.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('contents->NeedToFireBeforeUnload()', ack)
+        self.assertLess(ack.index('contents->NeedToFireBeforeUnload()'), ack.index('contents->DispatchBeforeUnload(false);'))
+        self.assertIn('return CommitClose();', ack)
+        self.assertNotIn('SessionFiles()', ack)
+        answer = host.split('class ShellHostView::UnloadAnswer', 1)[1].split('\n};\n', 1)[0]
+        for hook in ('void BeforeUnloadFired(bool proceed) override { Answer(proceed); }',
+                     'void BeforeUnloadDialogCancelled() override { Answer(false); }',
+                     'void WebContentsDestroyed() override { Answer(true); }'):
+            self.assertIn(hook, answer)
+        answered = host.split('void ShellHostView::UnloadAnswered(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('case shell_policy::UnloadRound::Outcome::kStay:', answered)
+        self.assertIn('AbandonCommit(identity);', answered)
+        finish = host.split('void ShellHostView::FinishClose(shell_policy::CloseIdentity identity) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('DiscardPages();'), finish.index('CloseWindow();'))
+
+    def test_close_requests_need_a_live_bridge_and_repeat_while_pending(self):
+        host = self.read('ac_mac_shell_host.mm')
+        request = host.split('base::DictValue ShellHostView::RequestWindowClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('!handler_->Live()', request)
+        self.assertIn('if (close_.phase() == shell_policy::CloseLedger::Phase::kRequested) {', request)
+        reject = host.split('void ShellHostView::RejectWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(reject.index('close_.AlreadyCancelled(*identity)'), reject.index('close_.Cancel('))
+
+    def test_background_instances_never_show_a_dialog(self):
+        host = self.read('ac_mac_shell_host.mm')
+        manager = host.split('content::JavaScriptDialogManager* ShellHostView::GetJavaScriptDialogManager(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(manager.index('if (BackgroundInstance()) {'), manager.index('AppModalDialogManager::GetInstance()'))
+        background = host.split('class BackgroundDialogs : public content::JavaScriptDialogManager {', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('std::move(callback).Run(false, std::u16string());', background)
+        self.assertIn('(background, not shown, cancelled)', background)
 
     def test_recording_hands_key_equivalents_to_the_shell(self):
         host = self.read('ac_mac_shell_host.mm')

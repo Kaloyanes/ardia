@@ -243,8 +243,11 @@ TEST(a_close_request_drains_seals_and_only_its_own_identity_moves_it) {
   CHECK(!ledger.Cancel(*first, 4));
   CHECK(!ledger.Request(4));
   ledger.RendererRetired();
-  CHECK(!ledger.BlocksWrites());
+  CHECK(ledger.BlocksWrites());
+  CHECK(ledger.Commits(*first));
+  CHECK(ledger.Reopen(*first, 5));
   CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
+  CHECK(!ledger.Commits(*first));
 }
 
 TEST(a_rejected_close_frees_the_window_and_the_next_request_is_new) {
@@ -292,10 +295,65 @@ TEST(only_the_last_staying_browser_window_ends_the_session) {
   CHECK(second.BeginDrain(b, 1));
   const bool second_ends = policy::EndsSessionFor(false, first.Leaving() ? 0 : 1);
   CHECK(!first_ends && second_ends);
-  CHECK(policy::FinalCloseFor(false, first_ends, 0) == policy::FinalClose::kCloseWindow);
-  CHECK(policy::FinalCloseFor(false, second_ends, 0) == policy::FinalClose::kQuit);
-  CHECK(policy::FinalCloseFor(false, true, 1) == policy::FinalClose::kCloseWindow);
-  CHECK(policy::FinalCloseFor(true, true, 0) == policy::FinalClose::kCloseWindow);
+}
+
+TEST(the_final_window_waits_for_a_draining_peer_and_never_quits_ahead_of_it) {
+  using policy::FinalStep;
+  CHECK(policy::FinalStepFor(false, true, 0, 1) == FinalStep::kWaitForPeers);
+  CHECK(policy::FinalStepFor(false, true, 0, 0) == FinalStep::kQuit);
+  CHECK(policy::FinalStepFor(false, false, 0, 1) == FinalStep::kCloseWindow);
+  CHECK(policy::FinalStepFor(true, true, 0, 0) == FinalStep::kCloseWindow);
+}
+
+TEST(when_a_peer_stays_after_all_the_final_window_closes_again_with_its_departure) {
+  using policy::FinalStep;
+  CHECK(policy::FinalStepFor(false, true, 1, 0) == FinalStep::kCloseAgainWithDeparture);
+  CHECK(policy::FinalStepFor(false, true, 1, 1) == FinalStep::kCloseAgainWithDeparture);
+  policy::CloseLedger a;
+  policy::CloseLedger b;
+  const auto first = *a.Request(1);
+  const auto second = *b.Request(1);
+  CHECK(a.BeginDrain(first, 1));
+  CHECK(b.BeginDrain(second, 1) && b.Seal(second, 1));
+  CHECK(policy::FinalStepFor(false, true, a.Leaving() ? 0 : 1, a.Leaving() ? 1 : 0) == FinalStep::kWaitForPeers);
+  CHECK(a.Cancel(first, 1));
+  CHECK(policy::FinalStepFor(false, true, a.Leaving() ? 0 : 1, a.Leaving() ? 1 : 0) == FinalStep::kCloseAgainWithDeparture);
+  CHECK(b.Unseal() == second);
+  const auto again = *b.Request(1);
+  CHECK(again.close == second.close + 1);
+  CHECK(!policy::EndsSessionFor(false, a.Leaving() ? 0 : 1));
+}
+
+TEST(when_the_peer_finishes_first_the_final_window_then_quits) {
+  policy::CloseLedger b;
+  const auto second = *b.Request(1);
+  CHECK(b.BeginDrain(second, 1) && b.Seal(second, 1));
+  CHECK(policy::FinalStepFor(false, true, 0, 1) == policy::FinalStep::kWaitForPeers);
+  CHECK(b.Commits(second));
+  CHECK(policy::FinalStepFor(false, true, 0, 0) == policy::FinalStep::kQuit);
+}
+
+TEST(every_page_must_agree_before_a_close_commits) {
+  using Outcome = policy::UnloadRound::Outcome;
+  policy::UnloadRound round(2);
+  CHECK(round.Answer(true) == Outcome::kWaiting);
+  CHECK(round.Answer(true) == Outcome::kProceed);
+  CHECK(round.Answer(false) == Outcome::kProceed);
+  policy::UnloadRound stay(3);
+  CHECK(stay.Answer(true) == Outcome::kWaiting);
+  CHECK(stay.Answer(false) == Outcome::kStay);
+  CHECK(stay.Answer(true) == Outcome::kStay);
+}
+
+TEST(an_already_cancelled_close_rejects_cleanly) {
+  policy::CloseLedger ledger;
+  const auto identity = *ledger.Request(2);
+  CHECK(!ledger.AlreadyCancelled(identity));
+  CHECK(ledger.BeginDrain(identity, 2) && ledger.Seal(identity, 2));
+  CHECK(ledger.Unseal() == identity);
+  CHECK(ledger.AlreadyCancelled(identity));
+  CHECK(!ledger.AlreadyCancelled(policy::CloseIdentity{2, identity.close + 1}));
+  CHECK(!policy::CloseLedger().AlreadyCancelled(policy::CloseIdentity{}));
 }
 
 TEST(only_a_refused_teardown_counts_as_cancelled) {
@@ -315,11 +373,18 @@ TEST(recording_sends_this_windows_key_equivalents_to_the_shell) {
 }
 
 TEST(a_session_on_disk_the_merge_cannot_take_is_set_aside_not_wedged) {
-  CHECK(policy::SetsAsideSessionOnDisk(false, false));
-  CHECK(!policy::SetsAsideSessionOnDisk(false, true));
-  CHECK(!policy::SetsAsideSessionOnDisk(true, false));
-  CHECK(policy::kOversizedSessionBackup.starts_with("session-backup"));
-  CHECK(policy::ValidDocumentName(policy::kOversizedSessionBackup));
+  using policy::SessionFile;
+  CHECK(policy::SessionFileFor(false, 0, false, false) == SessionFile::kAbsent);
+  CHECK(policy::SessionFileFor(true, 1024, true, true) == SessionFile::kUse);
+  CHECK(policy::SessionFileFor(true, policy::kMergeableSessionBytes, true, true) == SessionFile::kUse);
+  CHECK(policy::SessionFileFor(true, policy::kMergeableSessionBytes + 1, false, false) == SessionFile::kSetAside);
+  CHECK(policy::SessionFileFor(true, 64u * 1024u * 1024u + 1, false, false) == SessionFile::kSetAside);
+  CHECK(policy::SessionFileFor(true, 4096, true, false) == SessionFile::kSetAside);
+  CHECK(policy::SessionFileFor(true, 4096, false, false) == SessionFile::kSetAside);
+  const std::string name = policy::SetAsideSessionName(1795642159057u);
+  CHECK(name == "session-backup-oversized-1795642159057.json");
+  CHECK(policy::ValidDocumentName(name));
+  CHECK(name.starts_with("session-backup"));
 }
 
 int main(int argc, char** argv) {
