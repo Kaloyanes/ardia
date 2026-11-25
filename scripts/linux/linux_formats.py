@@ -416,7 +416,7 @@ def rpmbuild(tree, destination, version, payload=RPM_PAYLOAD):
     if shutil.which('rpmbuild') is None:
         raise ValueError('rpmbuild is required to build the .rpm (apt install rpm, dnf install rpm-build)')
     usr = tree / 'usr'
-    for required in ('lib/ardia/chrome', 'share/applications/ardia.desktop', 'share/icons/hicolor/256x256/apps/ardia.png',
+    for required in ('lib/ardia/chrome', *(f'share/applications/{name}' for name in desktop_entries()), 'share/icons/hicolor/256x256/apps/ardia.png',
                      'share/polkit-1/actions/dev.ardia.linux.policy', 'share/licenses/ardia/copyright'):
         if not (usr / required).exists():
             raise ValueError(f'the .rpm tree has no usr/{required}')

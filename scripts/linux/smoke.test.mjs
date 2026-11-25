@@ -164,9 +164,10 @@ test("an .rpm is root-owned with a setuid root helper, the launcher link, the po
   ];
   const fields = { name: "ardia", arch: "x86_64", scripts: "postinstall scriptlet (using /bin/sh):\n  install -m 0644 /usr/share/ardia/apparmor/ardia /etc/apparmor.d/ardia\n" };
   assert.deepEqual(rpmLayoutProblems(good.join("\n"), fields), []);
-  const broken = good.filter((entry) => !entry.endsWith("/copyright")).map((entry) => entry.replace("-rwsr-xr-x", "-rwxr-xr-x"));
+  const broken = good.filter((entry) => !entry.endsWith("/copyright") && !entry.endsWith("/ardia-little.desktop")).map((entry) => entry.replace("-rwsr-xr-x", "-rwxr-xr-x"));
   const problems = rpmLayoutProblems(`${broken.join("\n")}\n${line("-rw-r--r--", "/usr/x", "", "user     user")}`, { name: "ardia", arch: "aarch64", scripts: "" });
-  assert.equal(problems.length, 5, problems.join("\n"));
+  assert.equal(problems.length, 6, problems.join("\n"));
+  assert.ok(problems.some((p) => p.includes("ardia-little.desktop is missing")));
   assert.ok(problems.some((p) => p.includes("chrome-sandbox is not setuid root")));
   assert.ok(problems.some((p) => p.includes("copyright is missing")));
   assert.ok(problems.some((p) => p.includes("owned by user/user")));

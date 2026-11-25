@@ -132,6 +132,9 @@ test -d "$HOME/.var/app/$app" || fail "no data folder under ~/.var/app/$app afte
 flatpak uninstall --user -y --noninteractive --delete-data "$app" >/tmp/uninstall.log 2>&1 || { cat /tmp/uninstall.log; fail "flatpak uninstall"; }
 test ! -e "$HOME/.local/share/flatpak/app/$app" || fail "the app folder is left behind"
 test ! -e "$desktop" || fail "the desktop entry is left behind"
+for window in little settings import; do
+  test ! -e "$exports/applications/$app.$window.desktop" || fail "$app.$window.desktop is left behind"
+done
 test ! -e "$exports/icons/hicolor/256x256/apps/$app.png" || fail "the icon is left behind"
 test ! -e "$HOME/.var/app/$app" || fail "the data folder is left behind after --delete-data"
 echo "ok   flatpak uninstall --delete-data leaves nothing behind"
