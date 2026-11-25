@@ -89,10 +89,13 @@ export const validReps = (reps) => Number.isSafeInteger(reps) && reps >= 1 && re
 const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
 export const validFixture = (f) => isObject(f) && isCount(f.profiles) && isCount(f.tabs) && isCount(f.windows);
 
-export function fixtureProblem(fixture) {
-  if (fixture == null) return null;
+export function fixtureProblem(fixture, { completed = false } = {}) {
+  if (fixture == null) return completed ? "is completed but has no fixture" : null;
   if (!isObject(fixture)) return "fixture is not an object";
-  for (const side of ["expected", "restored"]) if (fixture[side] != null && !validFixture(fixture[side])) return `fixture.${side} needs integer profiles, tabs and windows ≥ 0`;
+  for (const side of ["expected", "restored"]) {
+    if (fixture[side] == null && !completed) continue;
+    if (!validFixture(fixture[side])) return `fixture.${side} needs integer profiles, tabs and windows ≥ 0`;
+  }
   return null;
 }
 
@@ -112,7 +115,7 @@ export function validateReport(report, name = "report") {
       else {
         if (!["rn", "webui"].includes(r.side) || typeof r.phase !== "string" || !Number.isSafeInteger(r.rep) || r.rep < 1) problems.push(`${name} runs[${i}] needs side rn|webui, a phase and a rep ≥ 1`);
         if (r.launchClock != null && !LAUNCH_CLOCKS.includes(r.launchClock)) problems.push(`${name} runs[${i}] launchClock is not ${LAUNCH_CLOCKS.join(" or ")}`);
-        const bad = fixtureProblem(r.fixture);
+        const bad = fixtureProblem(r.fixture, { completed: r.status === "ok" });
         if (bad) problems.push(`${name} runs[${i}] ${bad}`);
       }
     });

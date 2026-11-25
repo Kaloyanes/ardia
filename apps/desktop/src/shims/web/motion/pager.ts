@@ -25,6 +25,13 @@ type Drag = { start: number; raw: number; lo: number; hi: number; home: number; 
 type Spring = { from: number; target: number; velocity: number; start: number };
 
 const now = () => performance.now() / 1000;
+
+export const PAGER_MOVING_MARK = "ardia-pager-moving";
+export const PAGER_REST_MARK = "ardia-pager-rest";
+
+const mark = (name: string) => {
+  if (typeof globalThis.performance?.mark === "function") performance.mark(name);
+};
 const clamp = (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi);
 
 let counter = 0;
@@ -51,6 +58,7 @@ export class Pager {
   private history: { time: number; position: number }[] = [];
   private spring: Spring | null = null;
   private frameId = 0;
+  private moving = false;
 
   static named(key: string) {
     let pager = pagers.get(key);
@@ -78,6 +86,7 @@ export class Pager {
     if (this.drag.area === area) this.drag.area = null;
     if (this.areas.size || pagers.get(this.key) !== this) return;
     this.stopSpring();
+    this.stopMoving();
     pagers.delete(this.key);
   }
 
@@ -168,6 +177,7 @@ export class Pager {
     this.history = [];
     this.velocity = 0;
     this.phase = "tracking";
+    this.startMoving();
     this.sequence = next();
     this.emitState("began");
   }
@@ -266,6 +276,7 @@ export class Pager {
     }
     this.stopSpring();
     this.phase = "settling";
+    this.startMoving();
     this.velocity = v;
     this.spring = { from: this.position, target, velocity: v, start: now() };
     const frame = () => {
@@ -293,6 +304,7 @@ export class Pager {
       this.phase = "idle";
       this.sequence = next();
       this.emitPosition();
+      this.stopMoving();
       this.emitState("settled");
       this.reconcile();
       return;
@@ -313,6 +325,19 @@ export class Pager {
     this.drag.area = null;
     this.phase = "idle";
     this.velocity = 0;
+    this.stopMoving();
+  }
+
+  private startMoving() {
+    if (this.moving) return;
+    this.moving = true;
+    mark(PAGER_MOVING_MARK);
+  }
+
+  private stopMoving() {
+    if (!this.moving) return;
+    this.moving = false;
+    mark(PAGER_REST_MARK);
   }
 
   private emitPosition() {

@@ -47,6 +47,34 @@ test("a short swipe springs back to the current profile", async () => {
   assert.equal(named.snapshot().selected, 0);
 });
 
+const pagerMarks = () => performance.getEntriesByType("mark").filter((m) => m.name.startsWith("ardia-pager-")).map((m) => m.name);
+
+test("a swipe marks pager motion once when it starts and once at rest", async () => {
+  performance.clearMarks();
+  const { named, area } = pager();
+  named.input(area, "began", 0, -1, 0);
+  named.input(area, "changed", 300, -1, 0.05);
+  assert.deepEqual(pagerMarks(), ["ardia-pager-moving"]);
+  named.input(area, "ended", 300, -1, 0.3);
+  assert.deepEqual(pagerMarks(), ["ardia-pager-moving"]);
+  await settled(named);
+  assert.deepEqual(pagerMarks(), ["ardia-pager-moving", "ardia-pager-rest"]);
+  const [moving, rest] = performance.getEntriesByType("mark").filter((m) => m.name.startsWith("ardia-pager-"));
+  assert.ok(rest.startTime >= moving.startTime);
+});
+
+test("a menu switch and an interrupted motion each close their motion with a rest mark", async () => {
+  performance.clearMarks();
+  const { named, area } = pager();
+  assert.equal(named.switchTo(1, ORDER), true);
+  await settled(named);
+  assert.deepEqual(pagerMarks(), ["ardia-pager-moving", "ardia-pager-rest"]);
+  performance.clearMarks();
+  named.input(area, "began", 0, -1, 0);
+  named.select("default", ORDER);
+  assert.deepEqual(pagerMarks(), ["ardia-pager-moving", "ardia-pager-rest"]);
+});
+
 test("menu and keyboard switches page to any profile", async () => {
   const { named } = pager();
   assert.equal(named.switchTo(1, ORDER), true);

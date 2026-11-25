@@ -10,7 +10,7 @@ import { connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs"
 import { analyze, decode, restFromFrames, settleMs } from "./frames.mjs";
 import {
   ACFRAMES, ACSWIPE, OPEN_TIMEOUT_MS, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, cleanupRegistry, fileProbe, hiddenOpenArgs,
-  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, stopOwned, trackOwned,
+  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, startTracker, stopOwned, trackOwned,
 } from "./hidden.mjs";
 import { SESSIONS, expectedFixture, selectedUrl, validateSession } from "./seed.mjs";
 import { percentile, summarize } from "./stats.mjs";
@@ -337,6 +337,7 @@ class Bench {
     const forget = this.cleanup.instance(identity);
     const port = await freePort();
     let inst;
+    const stopTracking = startTracker(identity);
     try {
       inst = await launch(this.rnApp, {
         data, session, onboarded: true, port, js: "none", files: { "perf-probe": "" }, args: [`${OWNER_SWITCH}=${owner}`], startTimeout: 60000,
@@ -351,6 +352,8 @@ class Bench {
       });
     } catch (e) {
       await teardownAfter(e, () => this.finish({ identity, forget, data, forgetDir }));
+    } finally {
+      stopTracking();
     }
     mkdirSync(join(data, "selfrec"), { recursive: true });
     this.track({ identity });
@@ -368,6 +371,7 @@ class Bench {
     const identity = processIdentity({ owner, app: this.o.webui, binary: binaryOf(this.o.webui) });
     const forget = this.cleanup.instance(identity);
     const side = { kind: "webui", data, identity, forget, forgetDir };
+    const stopTracking = startTracker(identity);
     try {
       mkdirSync(join(data, "Chromium"));
       writeFileSync(join(data, "session.json"), JSON.stringify(session));
@@ -391,6 +395,8 @@ class Bench {
     } catch (e) {
       side.cdp?.close();
       await teardownAfter(e, () => this.finish(side));
+    } finally {
+      stopTracking();
     }
     this.track(side);
     const unclose = this.cleanup.closer(() => side.cdp.close());

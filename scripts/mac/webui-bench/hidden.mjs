@@ -168,6 +168,26 @@ export function trackOwned(identity, rows) {
   return [...identity.seen.values()].filter((s) => live.has(keyOf(s)));
 }
 
+export const TRACK_EVERY_MS = 50;
+
+export function startTracker(identity, { everyMs = TRACK_EVERY_MS, read = readProcessRows } = {}) {
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    try {
+      trackOwned(identity, read());
+    } catch {}
+  };
+  tick();
+  const timer = setInterval(tick, everyMs);
+  return () => {
+    if (stopped) return;
+    tick();
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
 export function parseFootprint(text) {
   const toMb = (value, unit) => Number(value) * (unit === "GB" ? 1024 : unit === "KB" ? 1 / 1024 : unit === "B" ? 1 / 1048576 : 1);
   const totals = [...text.matchAll(/^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)\s+TOTAL\b/gm)];

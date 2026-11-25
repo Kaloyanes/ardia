@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 import { blockScript, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
 import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { analyze, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
-import { RULES, evaluate, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
+import { RULES, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
 import {
-  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
+  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, startTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
   makeOwnedDir, makeOwnedRoot, ownedTree, parseFootprint, parseProcessRows, parseRss, processIdentity, readProcessRows, removeOwnedDir, sameProcess, stopOwned,
 } from "./hidden.mjs";
 import { PROFILES, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
@@ -820,4 +820,46 @@ test("round 3: launch clocks, huge rep counts and empty fixtures are rejected", 
   assert.equal(node("gate.mjs", file("reps.json", { ...good, meta: { ...good.meta, reps: 4294967296 } })).status, 64);
   assert.equal(node("gate.mjs", file("fixture.json", withRun({ fixture: { expected: {}, restored: {} } }))).status, 64);
   assert.equal(node("gate.mjs", file("ok.json", good)).status, 0);
+});
+
+test("round 4: the startup tracker keeps polling, so a helper spawned between discovery and readiness is owned", async () => {
+  const identity = processIdentity({ owner: "tok-r4", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const T = "Tue Nov 24 05:06:18 2026";
+  const root = `2147482100 1 ${T} /tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-r4`;
+  const helper = (ppid) => `2147482101 ${ppid} ${T} /tmp/b/W.app/Contents/Frameworks/Helper --type=renderer`;
+  const frames = [[root], [root], [root, helper(2147482100)], [helper(1)]];
+  let reads = 0;
+  const stop = startTracker(identity, { everyMs: 5, read: () => parseProcessRows(frames[Math.min(reads++, frames.length - 1)].join("\n")) });
+  assert.ok(await waitFor(() => reads >= frames.length, 2000));
+  stop();
+  const after = reads;
+  assert.ok(await waitFor(() => reads > after, 40) === false);
+  assert.deepEqual([...identity.seen.values()].map((r) => r.pid).sort(), [2147482100, 2147482101]);
+  assert.deepEqual(trackOwned(identity, parseProcessRows(helper(1))).map((r) => r.pid), [2147482101]);
+  const signals = [];
+  let left = 3;
+  assert.equal(await stopOwned(identity, { graceMs: 300, killMs: 300, read: () => parseProcessRows(left-- > 0 ? helper(1) : ""), kill: (pid, sig) => signals.push([pid, sig]) }), true);
+  assert.deepEqual(signals, [[2147482101, "SIGTERM"]]);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.equal(source.match(/const stopTracking = startTracker\(identity\);/g)?.length, 2);
+  assert.equal(source.match(/\} finally \{\s*stopTracking\(\);\s*\}/g)?.length, 2);
+});
+
+test("round 4: a completed run needs both expected and restored fixture counts", () => {
+  const counts = { profiles: 3, tabs: 3, windows: 1 };
+  assert.equal(fixtureProblem({}, { completed: true }), "fixture.expected needs integer profiles, tabs and windows ≥ 0");
+  assert.equal(fixtureProblem({ expected: counts }, { completed: true }), "fixture.restored needs integer profiles, tabs and windows ≥ 0");
+  assert.equal(fixtureProblem(undefined, { completed: true }), "is completed but has no fixture");
+  assert.equal(fixtureProblem({ expected: counts, restored: counts }, { completed: true }), null);
+  assert.equal(fixtureProblem({ expected: counts }), null);
+  const good = report();
+  const withFirst = (patch) => ({ ...good, runs: [{ ...good.runs[0], ...patch }, ...good.runs.slice(1)] });
+  assert.ok(validateReport(withFirst({ fixture: {} })).some((p) => p.includes("fixture.expected")));
+  assert.ok(validateReport(withFirst({ fixture: { expected: counts } })).some((p) => p.includes("fixture.restored")));
+  assert.deepEqual(validateReport(withFirst({ status: "error", error: "x", fixture: { expected: counts } })), []);
+  const dir = scratch();
+  const file = (name, value) => (writeFileSync(join(dir, name), JSON.stringify(value)), join(dir, name));
+  assert.equal(node("gate.mjs", file("empty-fixture.json", withFirst({ fixture: {} }))).status, 64);
+  assert.equal(node("gate.mjs", file("half-fixture.json", withFirst({ fixture: { expected: counts } }))).status, 64);
+  assert.equal(node("gate.mjs", file("no-fixture.json", withFirst({ fixture: undefined }))).status, 64);
 });
