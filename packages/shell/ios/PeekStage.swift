@@ -347,14 +347,16 @@ final class PeekStage: ExpoView {
   }
 
   private func announce() {
-    let chromeShown = lastFrame.chromeAlpha >= Double(PeekContainer.leastShownOpacity)
-    let key = "\(motion.generation):\(motion.phase.rawValue):\(motion.entrance.rawValue):\(chromeShown)"
+    let least = Double(PeekContainer.leastShownOpacity)
+    let chromeShown = lastFrame.cardAlpha * lastFrame.chromeAlpha >= least
+    let scrimShown = lastFrame.scrimAlpha >= least
+    let key = "\(motion.generation):\(motion.phase.rawValue):\(motion.entrance.rawValue):\(chromeShown):\(scrimShown)"
     guard key != announced else { return }
     announced = key
     note("state", ["entrance": motion.entrance.rawValue, "canWarp": motion.canWarp, "valid": motion.geometry.valid, "interrupted": motion.interrupted])
     var payload: [String: Any] = [
       "generation": motion.generation, "phase": motion.phase.rawValue, "entrance": motion.entrance.rawValue,
-      "interrupted": motion.interrupted, "readyTimedOut": motion.readyTimedOut, "chromeShown": chromeShown,
+      "interrupted": motion.interrupted, "readyTimedOut": motion.readyTimedOut, "chromeShown": chromeShown, "scrimShown": scrimShown,
     ]
     if let fallback = unavailable { payload["fallback"] = fallback }
     onPeekState(payload)

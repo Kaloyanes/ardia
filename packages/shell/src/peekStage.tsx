@@ -30,6 +30,7 @@ export type PeekStageState = {
   readyTimedOut: boolean;
   fallback?: PeekMeshFallback;
   chromeShown?: boolean;
+  scrimShown?: boolean;
 };
 type PeekStageDone = { generation: number; outcome: "closed" | "promoted" };
 type PeekStagePinch = { generation: number; outcome: "open" | "close" | "stay" };

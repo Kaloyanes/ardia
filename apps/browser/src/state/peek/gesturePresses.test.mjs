@@ -40,24 +40,34 @@ test("a bar button pressed while the shown card is pinched or settling runs and 
   notePeekStageState(shown, "gesture");
   notePeekStageState(hidden, "settling");
   notePeekStageState(hidden, "open");
-  pressPeekChrome(w, () => ran++);
+  pressPeekChrome(w, "bar", () => ran++);
   notePeekStageState(shown, "settling");
-  pressPeekChrome(w, () => ran++);
+  pressPeekChrome(w, "bar", () => ran++);
   assert.equal(ran, 2);
   assert.equal((await sentPresses()) - before, 2);
 });
 
-test("a press released while the bar has faded out during a spread doesn't run, and runs again once the bar is back", async () => {
+test("spread to +0.25: the top bar has faded out and takes no press, while the side buttons on the still-visible dim keep working", async () => {
   client.setSharing(true, "onboarding");
   const { w, shown } = windowWithTwoPeeks();
-  let ran = 0;
-  notePeekStageState(shown, "gesture", true);
-  notePeekStageState(shown, "gesture", false);
-  pressPeekChrome(w, () => ran++);
-  assert.equal(ran, 0, "an invisible Close closes nothing");
-  notePeekStageState(shown, "settling", true);
-  pressPeekChrome(w, () => ran++);
-  assert.equal(ran, 1);
+  const ran = { bar: 0, side: 0 };
+  notePeekStageState(shown, "gesture", { chromeShown: false, scrimShown: true });
+  pressPeekChrome(w, "bar", () => ran.bar++);
+  pressPeekChrome(w, "side", () => ran.side++);
+  assert.deepEqual(ran, { bar: 0, side: 1 });
+  notePeekStageState(shown, "settling", { chromeShown: true, scrimShown: true });
+  pressPeekChrome(w, "bar", () => ran.bar++);
+  assert.equal(ran.bar, 1, "the bar works again once it is back");
+});
+
+test("pinch in to -0.70: the card and its bar are invisible, so a held Close released then does nothing, and the faded dim's side buttons don't either", async () => {
+  client.setSharing(true, "onboarding");
+  const { w, shown } = windowWithTwoPeeks();
+  const ran = { bar: 0, side: 0 };
+  notePeekStageState(shown, "gesture", { chromeShown: false, scrimShown: false });
+  pressPeekChrome(w, "bar", () => ran.bar++);
+  pressPeekChrome(w, "side", () => ran.side++);
+  assert.deepEqual(ran, { bar: 0, side: 0 });
 });
 
 test("a press on a card at rest, after its stage is forgotten, or with sharing off isn't counted, and still runs", async () => {
@@ -66,14 +76,14 @@ test("a press on a card at rest, after its stage is forgotten, or with sharing o
   const { w, shown } = windowWithTwoPeeks();
   let ran = 0;
   notePeekStageState(shown, "open");
-  pressPeekChrome(w, () => ran++);
+  pressPeekChrome(w, "bar", () => ran++);
   notePeekStageState(shown, "gesture");
   forgetPeekStage(shown);
-  pressPeekChrome(w, () => ran++);
+  pressPeekChrome(w, "bar", () => ran++);
   assert.equal((await sentPresses()) - before, 0);
   client.setSharing(false, "settings");
   notePeekStageState(shown, "gesture");
-  pressPeekChrome(w, () => ran++);
+  pressPeekChrome(w, "bar", () => ran++);
   assert.equal(ran, 3);
   client.setSharing(true, "onboarding");
   assert.equal(await sentPresses(), 0, "the press made while sharing was off never reaches the queue");
