@@ -1,0 +1,173 @@
+#include <cmath>
+#include <limits>
+#include <string>
+
+#include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_window_layout.h"
+#include "check.h"
+
+namespace menu = ardia_mac::menu;
+namespace window = ardia_mac::window;
+
+TEST(default_menu_is_valid_and_has_standard_roles) {
+  const menu::Item root = menu::DefaultMainMenu("Ardia");
+  CHECK(menu::Validate(root).empty());
+  CHECK(root.children.size() == 6);
+  CHECK(root.children[0].title == "Ardia");
+  CHECK(root.children[4].role == menu::Role::kWindowMenu);
+  bool quit = false;
+  for (const menu::Item& item : root.children[0].children) quit |= item.role == menu::Role::kQuit && item.key == "q";
+  CHECK(quit);
+}
+
+TEST(validation_finds_problems) {
+  menu::Item root;
+  menu::Item bad;
+  bad.title = "Bad\nTitle";
+  bad.command = "rm -rf";
+  bad.key = "Hyper";
+  bad.modifiers = 64;
+  root.children.push_back(bad);
+  menu::Item separator;
+  separator.role = menu::Role::kSeparator;
+  separator.command = "x";
+  root.children.push_back(separator);
+  menu::Item untitled;
+  untitled.command = "go";
+  root.children.push_back(untitled);
+  menu::Item both;
+  both.title = "Both";
+  both.command = "go";
+  both.children.push_back(untitled);
+  root.children.push_back(both);
+  const auto problems = menu::Validate(root);
+  int title = 0, command = 0, key = 0, modifiers = 0, sep = 0, nameless = 0, mixed = 0;
+  for (const auto& problem : problems) {
+    title += problem.reason == "title";
+    command += problem.reason == "command";
+    key += problem.reason == "key";
+    modifiers += problem.reason == "modifiers";
+    sep += problem.reason == "separator";
+    nameless += problem.reason == "untitled";
+    mixed += problem.reason == "submenu with command";
+  }
+  CHECK(title == 1 && command == 1 && key == 1 && modifiers == 1 && sep == 1 && nameless == 2 && mixed == 1);
+}
+
+TEST(validation_caps_depth_and_size) {
+  menu::Item root;
+  menu::Item* cursor = &root;
+  for (int depth = 0; depth < 8; ++depth) {
+    cursor->children.push_back(menu::Item{});
+    cursor = &cursor->children.back();
+    cursor->title = "level";
+  }
+  bool deep = false;
+  for (const auto& problem : menu::Validate(root)) deep |= problem.reason == "too deep";
+  CHECK(deep);
+  menu::Item wide;
+  for (int index = 0; index < 500; ++index) {
+    menu::Item child;
+    child.title = "x";
+    wide.children.push_back(child);
+  }
+  bool many = false;
+  for (const auto& problem : menu::Validate(wide)) many |= problem.reason == "too many items";
+  CHECK(many);
+}
+
+TEST(keys) {
+  CHECK(menu::ValidKey(""));
+  CHECK(menu::ValidKey("t"));
+  CHECK(menu::ValidKey(","));
+  CHECK(menu::ValidKey("F12"));
+  CHECK(menu::ValidKey("Escape"));
+  CHECK(!menu::ValidKey("F0"));
+  CHECK(!menu::ValidKey("F21"));
+  CHECK(!menu::ValidKey("Fx"));
+  CHECK(!menu::ValidKey("\x01"));
+  CHECK(!menu::ValidKey("ab"));
+}
+
+TEST(roles_and_selectors) {
+  CHECK(menu::RoleNamed("copy") == menu::Role::kCopy);
+  CHECK(menu::RoleNamed("") == menu::Role::kNone);
+  CHECK(!menu::RoleNamed("format_disk"));
+  CHECK(menu::SelectorFor(menu::Role::kQuit) == "terminate:");
+  CHECK(menu::SelectorFor(menu::Role::kWindowMenu).empty());
+  for (const auto& entry : menu::kRoles) CHECK(menu::RoleNamed(entry.name) == entry.role);
+}
+
+TEST(selectable_items) {
+  menu::Item item;
+  item.title = "Go";
+  CHECK(!menu::Selectable(item));
+  item.command = "go";
+  CHECK(menu::Selectable(item));
+  item.enabled = false;
+  CHECK(!menu::Selectable(item));
+  menu::Item copy;
+  copy.title = "Copy";
+  copy.role = menu::Role::kCopy;
+  CHECK(menu::Selectable(copy));
+}
+
+TEST(describe_for_background_logs) {
+  menu::Item root;
+  menu::Item open;
+  open.title = "Open Link";
+  open.command = "openLink";
+  root.children.push_back(open);
+  menu::Item separator;
+  separator.role = menu::Role::kSeparator;
+  root.children.push_back(separator);
+  menu::Item off;
+  off.title = "Off";
+  off.command = "off";
+  off.enabled = false;
+  off.checked = true;
+  root.children.push_back(off);
+  const auto lines = menu::Describe(root);
+  CHECK(lines.size() == 3);
+  CHECK(lines[0] == "Open Link [openLink]");
+  CHECK(lines[1] == "---");
+  CHECK(lines[2] == "Off [off] (disabled) (checked)");
+}
+
+TEST(traffic_lights_default_to_ardia_geometry) {
+  const auto lights = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
+  CHECK(lights && lights->center == (window::Point{25, 20}));
+  const window::Point close = window::CloseButtonOrigin(*lights, {14, 14}, 800);
+  CHECK(close == (window::Point{18, 773}));
+  const window::Point zoom = window::ButtonOrigin(*lights, {14, 14}, 800, 2);
+  CHECK(zoom == (window::Point{58, 773}));
+}
+
+TEST(titlebar_metrics_center_the_lights_where_ardia_puts_them) {
+  const auto lights = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
+  CHECK(window::TitlebarFor(*lights, {14, 14}) == (window::TitlebarMetrics{18, 40}));
+  const auto moved = window::LightsFrom(40, 30, false, {1280, 800});
+  CHECK(window::TitlebarFor(*moved, {16, 16}) == (window::TitlebarMetrics{32, 60}));
+  CHECK(window::TitlebarFor(*moved, {0, 0}) == (window::TitlebarMetrics{33, 60}));
+}
+
+TEST(traffic_lights_clamp_and_refuse_nan) {
+  const auto far = window::LightsFrom(5000, -40, false, {1280, 800});
+  CHECK(far && far->center == (window::Point{1266, 7}));
+  CHECK(!window::LightsFrom(std::nan(""), 10, false, {1280, 800}));
+  const auto inf = std::numeric_limits<double>::infinity();
+  CHECK(!window::LightsFrom(10, inf, false, {1280, 800}));
+  const auto hidden = window::LightsFrom(std::nullopt, std::nullopt, true, {1280, 800});
+  CHECK(hidden && hidden->hidden);
+}
+
+TEST(translucency_only_for_the_webui_shell) {
+  const auto off = window::TranslucencyFor(false);
+  CHECK(off.opaque && !off.clear_background && !off.full_size_content);
+  const auto on = window::TranslucencyFor(true);
+  CHECK(!on.opaque && on.clear_background && on.full_size_content && on.transparent_titlebar && on.hide_title);
+}
+
+int main(int argc, char** argv) {
+  return ardia_mac_test::RunAll(argc, argv);
+}

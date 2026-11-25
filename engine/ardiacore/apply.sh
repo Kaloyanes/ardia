@@ -54,10 +54,10 @@ hook() {
 }
 
 if [[ $mode == check ]]; then
-  diff -r "$here/src/ardia" "$src/ardia" >/dev/null || { echo "apply.sh --check: $src/ardia differs from the repo" >&2; drift=1; }
+  diff -r -x mac "$here/src/ardia" "$src/ardia" >/dev/null || { echo "apply.sh --check: $src/ardia differs from the repo" >&2; drift=1; }
 else
   mkdir -p "$src/ardia"
-  rsync -r --delete --checksum "$here/src/ardia/" "$src/ardia/"
+  rsync -r --delete --checksum --exclude=/mac/ "$here/src/ardia/" "$src/ardia/"
 fi
 
 hook "$src/chrome/BUILD.gn" "//chrome:chrome_dll" <<'PY'
