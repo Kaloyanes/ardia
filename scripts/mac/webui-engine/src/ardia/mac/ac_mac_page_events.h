@@ -52,7 +52,7 @@ class PageEvents : public content::WebContentsObserver,
   bool Responsive(content::RenderWidgetHost* host);
   bool ResolveUnresponsive(bool terminate);
   bool OpenBlockedPopup(int32_t id, bool always);
-  bool playing() const { return !players_.empty(); }
+  bool playing() const;
   void Reset();
 
  private:

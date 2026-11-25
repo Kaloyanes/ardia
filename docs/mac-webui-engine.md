@@ -77,6 +77,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - `evaluate` runs only the page operations on Linux's allowlist (`ac_linux_page_operations.h`, a dev copy),
     re-encodes their arguments and runs them in an isolated world. The element picker's `apply` and `unhide`
     settle in a promise, so the host waits for their result: it polls with a token it chose, for at most 5 s.
+    An evaluation belongs to the binding that asked, and ends when that binding is released or rebound.
   - `sites.setZoom` and `sites.zoomLevels` go straight to the profile's `HostZoomMap`.
 - **Page events.** `ac_mac_page_events.mm` sends these `ArdiaWebView` page events in Linux's shapes, and includes
   them in the `tab.create` snapshot: `favicon`, `media`, `fullscreen`, `status`, `crashed`, `loadError`, `security`,

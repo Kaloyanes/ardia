@@ -618,11 +618,65 @@ class ContractTests(unittest.TestCase):
     def test_promise_operations_are_polled_with_a_host_token(self):
         commands = self.read('ac_mac_page_commands.mm')
         self.assertIn('page_policy::AwaitsResult(*match->operation)', commands)
-        self.assertIn('page_policy::TakeEvaluation(*token)', commands)
+        self.assertIn('SendEvaluation(id, page_policy::TakeEvaluation(id));', commands)
         self.assertIn('base::Milliseconds(page_policy::kEvaluationPollMilliseconds)', commands)
-        self.assertIn('page_policy::kEvaluationPollAttempts', commands)
-        answered = commands.split('void EvaluationAnswered(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(answered.index('CurrentFrame(contents, document)'), answered.index('PostDelayedTask'))
+        self.assertNotIn('kEvaluationPollAttempts', commands)
+        answered = commands.split('void PageCommands::EvaluationAnswered(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(answered.index('evaluations_.find(id)'), answered.index('page_policy::NextEvaluationStep('))
+
+    def test_evaluations_have_a_wall_clock_deadline_and_settle_once(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        evaluate = commands.split('void PageCommands::Evaluate(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('pending->deadline.Start(', evaluate)
+        self.assertIn('base::Milliseconds(page_policy::kEvaluationDeadlineMilliseconds)', evaluate)
+        self.assertLess(evaluate.index('pending->deadline.Start('), evaluate.index('SendEvaluation(id'))
+        settle = commands.split('void PageCommands::SettleEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(settle.index('evaluations_.erase(found);'), settle.index('std::move(pending->done).Run('))
+        self.assertIn('page_policy::ForgetEvaluation(id)', settle)
+        send = commands.split('void PageCommands::SendEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('weak_factory_.GetWeakPtr()', send)
+        policy = self.read('ac_mac_page_policy.h')
+        self.assertIn('kEvaluationSlotTtlMilliseconds = 6000', policy)
+        self.assertIn('setTimeout(() => ardiaSlots.delete(', policy)
+
+    def test_evaluations_belong_to_the_binding_that_asked(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        frame = commands.split('content::RenderFrameHost* PageCommands::EvaluationFrame(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('binding_->contents() == pending.contents.get()', frame)
+        reset = commands.split('void PageCommands::Reset() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('CancelEvaluations();', reset)
+        host = self.read('ac_mac_shell_host.mm')
+        release = host.split('void ShellHostView::ReleaseTab(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('binding->commands()->CancelEvaluations();', release)
+        retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('binding->commands()->CancelEvaluations();', retire)
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('existing->commands()->CancelEvaluations();'), create.index('existing->claim = claim;'))
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('commands_->Reset();', rebind)
+
+    def test_discard_reads_the_outcome_through_the_surviving_binding(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        discard = commands.split('void PageCommands::Discard(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('alive_factory_.GetWeakPtr()', discard)
+        self.assertIn('alive->binding_->contents()', discard)
+        self.assertIn('page_policy::DiscardSucceeded(', discard)
+        self.assertNotIn('contents->GetWeakPtr()', discard)
+        host = self.read('ac_mac_shell_host.mm')
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('commands_.reset()', rebind)
+        self.assertNotIn('commands_ = ', rebind)
+        self.assertIn('base::WeakPtrFactory<PageCommands> alive_factory_{this};', self.read('ac_mac_page_commands.h'))
+
+    def test_playback_protection_reads_the_live_media_session(self):
+        events = self.read('ac_mac_page_events.mm')
+        playing = events.split('bool PageEvents::playing() const {', 1)[1].split('\n}\n', 1)[0]
+        for check in ('content::MediaSession::GetIfExists(contents)', 'GetMediaSessionInfoSync()',
+                      'GetCurrentlyPlayingVideoCount() > 0', 'page_policy::SessionPlaying(',
+                      'MediaPlaybackState::kPlaying', 'SessionState::kInactive'):
+            self.assertIn(check, playing)
+        linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_page_media.cc').read_text()
+        self.assertIn('info->playback_state == media_session::mojom::MediaPlaybackState::kPlaying', linux)
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

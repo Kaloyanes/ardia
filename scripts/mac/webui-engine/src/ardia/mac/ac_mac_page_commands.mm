@@ -220,67 +220,6 @@ std::optional<Evaluation> EvaluationScript(std::string_view code) {
   return Evaluation{page_policy::WrapAwaitedEvaluation(body, token), token};
 }
 
-content::RenderFrameHost* CurrentFrame(const base::WeakPtr<content::WebContents>& contents,
-                                       const content::WeakDocumentPtr& document) {
-  content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
-  return contents && frame && frame == contents->GetPrimaryMainFrame() &&
-                 frame->IsRenderFrameLive()
-             ? frame
-             : nullptr;
-}
-
-void RunEvaluation(base::WeakPtr<content::WebContents> contents,
-                   content::WeakDocumentPtr document,
-                   std::string script,
-                   std::optional<uint64_t> token,
-                   int attempts_left,
-                   ShellHostView::Done done);
-
-void EvaluationAnswered(base::WeakPtr<content::WebContents> contents,
-                        content::WeakDocumentPtr document,
-                        std::optional<uint64_t> token,
-                        int attempts_left,
-                        ShellHostView::Done done,
-                        base::Value value) {
-  if (!CurrentFrame(contents, document)) {
-    return std::move(done).Run(true, base::Value());
-  }
-  if (value.is_string()) {
-    if (!page_policy::EvaluationResultFits(value.GetString().size())) {
-      return std::move(done).Run(true, base::Value());
-    }
-    return std::move(done).Run(true, std::move(value));
-  }
-  if (!token || attempts_left <= 0) {
-    return std::move(done).Run(true, base::Value());
-  }
-  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&RunEvaluation, std::move(contents), std::move(document),
-                     page_policy::TakeEvaluation(*token), token, attempts_left - 1,
-                     std::move(done)),
-      base::Milliseconds(page_policy::kEvaluationPollMilliseconds));
-}
-
-void RunEvaluation(base::WeakPtr<content::WebContents> contents,
-                   content::WeakDocumentPtr document,
-                   std::string script,
-                   std::optional<uint64_t> token,
-                   int attempts_left,
-                   ShellHostView::Done done) {
-  content::RenderFrameHost* frame = CurrentFrame(contents, document);
-  if (!frame || !frame->IsActive()) {
-    return std::move(done).Run(true, base::Value());
-  }
-  frame->ExecuteJavaScriptInIsolatedWorld(
-      base::UTF8ToUTF16(script),
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-          base::BindOnce(&EvaluationAnswered, contents, document, token, attempts_left,
-                         std::move(done)),
-          base::Value()),
-      ISOLATED_WORLD_ID_CHROME_INTERNAL);
-}
-
 base::Value ImageReply(const SkBitmap& source, int pixels) {
   if (source.drawsNothing()) {
     return base::Value();
@@ -398,6 +337,7 @@ bool PageCommands::Handles(std::string_view command) {
 
 void PageCommands::Reset() {
   weak_factory_.InvalidateWeakPtrs();
+  CancelEvaluations();
   if (observed_) {
     find_in_page::FindTabHelper* helper = observed_;
     observed_ = nullptr;
@@ -785,9 +725,113 @@ void PageCommands::Evaluate(const base::ListValue& args, Done done) {
       !page_policy::ScriptableScheme(frame->GetLastCommittedURL().scheme())) {
     return std::move(done).Run(true, base::Value());
   }
-  RunEvaluation(contents->GetWeakPtr(), frame->GetWeakDocumentPtr(),
-                std::move(evaluation->script), evaluation->token,
-                page_policy::kEvaluationPollAttempts, std::move(done));
+  const uint64_t id = evaluation->token.value_or(NextEvaluationToken());
+  auto pending = std::make_unique<PendingEvaluation>();
+  pending->awaited = evaluation->token.has_value();
+  pending->contents = contents->GetWeakPtr();
+  pending->document = frame->GetWeakDocumentPtr();
+  pending->done = std::move(done);
+  pending->deadline.Start(
+      FROM_HERE, base::Milliseconds(page_policy::kEvaluationDeadlineMilliseconds),
+      base::BindOnce(&PageCommands::SettleEvaluation, base::Unretained(this), id,
+                     base::Value()));
+  evaluations_[id] = std::move(pending);
+  SendEvaluation(id, std::move(evaluation->script));
+}
+
+content::RenderFrameHost* PageCommands::EvaluationFrame(
+    const PendingEvaluation& pending) const {
+  content::RenderFrameHost* frame = pending.document.AsRenderFrameHostIfValid();
+  return pending.contents && frame && frame == pending.contents->GetPrimaryMainFrame() &&
+                 frame->IsRenderFrameLive() && frame->IsActive() &&
+                 binding_ && binding_->contents() == pending.contents.get()
+             ? frame
+             : nullptr;
+}
+
+void PageCommands::SendEvaluation(uint64_t id, std::string script) {
+  const auto found = evaluations_.find(id);
+  if (found == evaluations_.end()) {
+    return;
+  }
+  content::RenderFrameHost* frame = EvaluationFrame(*found->second);
+  if (!frame) {
+    return SettleEvaluation(id, base::Value());
+  }
+  frame->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16(script),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(&PageCommands::EvaluationAnswered, weak_factory_.GetWeakPtr(),
+                         id),
+          base::Value()),
+      ISOLATED_WORLD_ID_CHROME_INTERNAL);
+}
+
+void PageCommands::EvaluationAnswered(uint64_t id, base::Value value) {
+  const auto found = evaluations_.find(id);
+  if (found == evaluations_.end()) {
+    return;
+  }
+  PendingEvaluation& pending = *found->second;
+  const bool has_result = value.is_string();
+  switch (page_policy::NextEvaluationStep(
+      false, EvaluationFrame(pending) != nullptr, has_result,
+      has_result && page_policy::EvaluationResultFits(value.GetString().size()),
+      pending.awaited)) {
+    case page_policy::EvaluationStep::kReply:
+      return SettleEvaluation(id, std::move(value));
+    case page_policy::EvaluationStep::kReplyNull:
+      return SettleEvaluation(id, base::Value());
+    case page_policy::EvaluationStep::kPoll:
+      pending.poll.Start(
+          FROM_HERE, base::Milliseconds(page_policy::kEvaluationPollMilliseconds),
+          base::BindOnce(&PageCommands::PollEvaluation, base::Unretained(this), id));
+      return;
+  }
+}
+
+void PageCommands::PollEvaluation(uint64_t id) {
+  SendEvaluation(id, page_policy::TakeEvaluation(id));
+}
+
+void PageCommands::SettleEvaluation(uint64_t id, base::Value value) {
+  const auto found = evaluations_.find(id);
+  if (found == evaluations_.end()) {
+    return;
+  }
+  std::unique_ptr<PendingEvaluation> pending = std::move(found->second);
+  evaluations_.erase(found);
+  if (pending->awaited && value.is_none()) {
+    if (content::RenderFrameHost* frame = EvaluationFrame(*pending)) {
+      frame->ExecuteJavaScriptInIsolatedWorld(
+          base::UTF8ToUTF16(page_policy::ForgetEvaluation(id)),
+          content::RenderFrameHost::JavaScriptResultCallback(),
+          ISOLATED_WORLD_ID_CHROME_INTERNAL);
+    }
+  }
+  std::move(pending->done).Run(true, std::move(value));
+}
+
+void PageCommands::CancelEvaluations() {
+  std::map<uint64_t, std::unique_ptr<PendingEvaluation>> cancelled =
+      std::move(evaluations_);
+  evaluations_.clear();
+  for (auto& [id, pending] : cancelled) {
+    pending->deadline.Stop();
+    pending->poll.Stop();
+    if (pending->awaited) {
+      content::RenderFrameHost* frame = pending->document.AsRenderFrameHostIfValid();
+      if (pending->contents && frame && frame == pending->contents->GetPrimaryMainFrame() &&
+          frame->IsRenderFrameLive()) {
+        frame->ExecuteJavaScriptInIsolatedWorld(
+            base::UTF8ToUTF16(page_policy::ForgetEvaluation(id)),
+            content::RenderFrameHost::JavaScriptResultCallback(),
+            ISOLATED_WORLD_ID_CHROME_INTERNAL);
+      }
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(pending->done), true, base::Value()));
+  }
 }
 
 void PageCommands::Edit(const base::ListValue& args, Done done) {
@@ -887,12 +931,15 @@ void PageCommands::Discard(const base::ListValue& args, Done done) {
       true, contents->WasDiscarded(), unload, CurrentProtection());
   bool discarded = false;
   if (decision == page_policy::DiscardDecision::kDiscard) {
-    base::WeakPtr<content::WebContents> alive = contents->GetWeakPtr();
+    base::WeakPtr<PageCommands> alive = alive_factory_.GetWeakPtr();
     resource_coordinator::TabLifecycleUnitExternal* unit =
         resource_coordinator::TabLifecycleUnitExternal::FromWebContents(contents);
     const bool accepted =
         unit && unit->DiscardTab(::mojom::LifecycleUnitDiscardReason::EXTERNAL);
-    discarded = accepted && alive && alive->WasDiscarded();
+    content::WebContents* bound =
+        alive && alive->binding_ ? alive->binding_->contents() : nullptr;
+    discarded = page_policy::DiscardSucceeded(accepted, bound != nullptr,
+                                              bound && bound->WasDiscarded());
   }
   std::move(done).Run(true, base::Value(page_policy::DiscardOutcome(decision, discarded)));
 }

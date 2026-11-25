@@ -93,6 +93,7 @@ if (is_official_build) {
       "//mojo/public/cpp/bindings",
       "//net",
       "//printing/buildflags",
+      "//services/media_session/public/mojom",
       "//services/network/public/mojom",
       "//skia",
       "//third_party/blink/public/common",

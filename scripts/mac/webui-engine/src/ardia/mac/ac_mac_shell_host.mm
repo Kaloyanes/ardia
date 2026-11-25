@@ -375,13 +375,12 @@ base::DictValue PageBinding::CreationState() {
 }
 
 void PageBinding::Rebind(content::WebContents* contents) {
-  commands_.reset();
+  commands_->Reset();
   events_.reset();
   Observe(contents);
   id_ = TabId(contents);
   events_ = std::make_unique<PageEvents>(
       contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
-  commands_ = std::make_unique<PageCommands>(this);
 }
 
 void PageBinding::ReportNavigation() {
@@ -866,6 +865,7 @@ void ShellHostView::RetireRenderer() {
   }
   for (auto& [id, binding] : bindings_) {
     binding->claim.clear();
+    binding->commands()->CancelEvaluations();
     binding->renderer_generation = 0;
     binding->visible = false;
     if (binding->viewport) {
@@ -1054,6 +1054,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
                                : "This tab can't be adopted"));
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
+    existing->commands()->CancelEvaluations();
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1242,6 +1243,7 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   binding->claim.clear();
+  binding->commands()->CancelEvaluations();
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {

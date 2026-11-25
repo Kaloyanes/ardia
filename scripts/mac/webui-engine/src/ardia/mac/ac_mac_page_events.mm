@@ -14,6 +14,7 @@
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/result_codes.h"
 #include "net/base/net_errors.h"
+#include "services/media_session/public/mojom/media_session.mojom.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -231,6 +233,23 @@ PageEvents::PageEvents(content::WebContents* contents, Report report)
   }
   media_ = std::make_pair(contents->IsCurrentlyAudible(),
                           contents->IsAudioMuted());
+}
+
+bool PageEvents::playing() const {
+  content::WebContents* contents = web_contents();
+  if (!contents) {
+    return false;
+  }
+  if (!players_.empty() || contents->GetCurrentlyPlayingVideoCount() > 0) {
+    return true;
+  }
+  content::MediaSession* session = content::MediaSession::GetIfExists(contents);
+  media_session::mojom::MediaSessionInfoPtr info =
+      session ? session->GetMediaSessionInfoSync() : nullptr;
+  return info &&
+         page_policy::SessionPlaying(
+             info->state != media_session::mojom::MediaSessionInfo::SessionState::kInactive,
+             info->playback_state == media_session::mojom::MediaPlaybackState::kPlaying);
 }
 
 PageEvents::~PageEvents() {

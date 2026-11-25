@@ -211,6 +211,16 @@ constexpr std::string_view DiscardOutcome(DiscardDecision decision,
   return "refused";
 }
 
+constexpr bool DiscardSucceeded(bool accepted,
+                                bool binding_alive,
+                                bool bound_contents_discarded) {
+  return accepted && binding_alive && bound_contents_discarded;
+}
+
+constexpr bool SessionPlaying(bool active, bool playing) {
+  return active && playing;
+}
+
 inline bool MayFreeze(const Protection& protection) {
   return !ProtectionReason(protection);
 }
@@ -507,7 +517,8 @@ inline std::string WrapEvaluation(std::string_view body) {
 }
 
 inline constexpr int kEvaluationPollMilliseconds = 20;
-inline constexpr int kEvaluationPollAttempts = 250;
+inline constexpr int kEvaluationDeadlineMilliseconds = 5000;
+inline constexpr int kEvaluationSlotTtlMilliseconds = 6000;
 inline constexpr size_t kEvaluationSlotsMax = 64;
 
 constexpr bool AwaitsResult(const Operation& operation) {
@@ -532,7 +543,9 @@ inline std::string WrapAwaitedEvaluation(std::string_view body, uint64_t token) 
          "!== \"string\" || ardiaResult !== null) return; ardiaResult = value; "
          "ardiaSlots.set(" +
          key +
-         ", value); while (ardiaSlots.size > " + std::to_string(kEvaluationSlotsMax) +
+         ", value); setTimeout(() => ardiaSlots.delete(" +
+         key + "), " + std::to_string(kEvaluationSlotTtlMilliseconds) +
+         "); while (ardiaSlots.size > " + std::to_string(kEvaluationSlotsMax) +
          ") ardiaSlots.delete(ardiaSlots.keys().next().value); };\n"
          "try {\n" +
          std::string(body) +
@@ -561,6 +574,27 @@ inline std::string TakeEvaluation(uint64_t token) {
          ");\n"
          "return ardiaResult;\n"
          "})()";
+}
+
+inline std::string ForgetEvaluation(uint64_t token) {
+  return "(() => { " + EvaluationSlots() + ".delete(" + std::to_string(token) +
+         "); return null; })()";
+}
+
+enum class EvaluationStep { kReply, kReplyNull, kPoll };
+
+constexpr EvaluationStep NextEvaluationStep(bool settled,
+                                            bool current_document,
+                                            bool has_result,
+                                            bool result_fits,
+                                            bool awaited) {
+  if (settled || !current_document) {
+    return EvaluationStep::kReplyNull;
+  }
+  if (has_result) {
+    return result_fits ? EvaluationStep::kReply : EvaluationStep::kReplyNull;
+  }
+  return awaited ? EvaluationStep::kPoll : EvaluationStep::kReplyNull;
 }
 
 constexpr bool EvaluationResultFits(size_t bytes) {

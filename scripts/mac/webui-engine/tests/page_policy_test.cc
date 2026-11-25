@@ -267,7 +267,10 @@ TEST(promise_operations_are_awaited_by_token) {
   CHECK(awaited.find("ardiaSlots.set(7, value)") != std::string::npos);
   CHECK(awaited.find("ardiaSlots.delete(7)") != std::string::npos);
   CHECK(policy::TakeEvaluation(7).find("ardiaSlots.get(7)") != std::string::npos);
-  CHECK(policy::kEvaluationPollMilliseconds * policy::kEvaluationPollAttempts == 5000);
+  CHECK(policy::kEvaluationDeadlineMilliseconds == 5000);
+  CHECK(policy::kEvaluationSlotTtlMilliseconds > policy::kEvaluationDeadlineMilliseconds);
+  CHECK(awaited.find("setTimeout(() => ardiaSlots.delete(7), 6000)") != std::string::npos);
+  CHECK(policy::ForgetEvaluation(7).find(".delete(7)") != std::string::npos);
   if (const char* out = std::getenv("ARDIA_EVALUATION_SCRIPTS")) {
     std::ofstream file(out);
     file << policy::WrapAwaitedEvaluation(
@@ -278,8 +281,43 @@ TEST(promise_operations_are_awaited_by_token) {
          << "\n--ardia-split--\n"
          << policy::TakeEvaluation(41) << "\n--ardia-split--\n"
          << policy::TakeEvaluation(42) << "\n--ardia-split--\n"
-         << policy::WrapEvaluation("post(\"result\", \"sync\")");
+         << policy::WrapEvaluation("post(\"result\", \"sync\")") << "\n--ardia-split--\n"
+         << policy::WrapAwaitedEvaluation(
+                "Promise.resolve(1).then((v) => post(\"result\", JSON.stringify(v)), () => post(\"result\", \"null\"));",
+                43)
+         << "\n--ardia-split--\n"
+         << policy::TakeEvaluation(43) << "\n--ardia-split--\n"
+         << policy::ForgetEvaluation(43);
   }
+}
+
+TEST(evaluations_settle_once_and_follow_the_document) {
+  using Step = policy::EvaluationStep;
+  CHECK(policy::NextEvaluationStep(false, true, true, true, false) == Step::kReply);
+  CHECK(policy::NextEvaluationStep(false, true, true, true, true) == Step::kReply);
+  CHECK(policy::NextEvaluationStep(false, true, true, false, true) == Step::kReplyNull);
+  CHECK(policy::NextEvaluationStep(false, true, false, false, true) == Step::kPoll);
+  CHECK(policy::NextEvaluationStep(false, true, false, false, false) == Step::kReplyNull);
+  CHECK(policy::NextEvaluationStep(false, false, true, true, true) == Step::kReplyNull);
+  CHECK(policy::NextEvaluationStep(true, true, false, false, true) == Step::kReplyNull);
+}
+
+TEST(discard_succeeds_through_the_surviving_binding) {
+  CHECK(policy::DiscardSucceeded(true, true, true));
+  CHECK(!policy::DiscardSucceeded(true, false, false));
+  CHECK(!policy::DiscardSucceeded(true, true, false));
+  CHECK(!policy::DiscardSucceeded(false, true, true));
+  CHECK(policy::DiscardOutcome(policy::DiscardDecision::kDiscard,
+                               policy::DiscardSucceeded(true, true, true)) == "discarded");
+}
+
+TEST(media_sessions_that_play_protect_the_tab) {
+  CHECK(policy::SessionPlaying(true, true));
+  CHECK(!policy::SessionPlaying(false, true));
+  CHECK(!policy::SessionPlaying(true, false));
+  policy::Protection playing{false, false, policy::SessionPlaying(true, true), false, false, false, false};
+  CHECK(policy::ProtectionReason(playing) == "playing media");
+  CHECK(!policy::MayFreeze(playing));
 }
 
 int main(int argc, char** argv) {
