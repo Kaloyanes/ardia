@@ -146,7 +146,9 @@ echo "ok   chrome-sandbox is setuid root"
 version=$(/usr/bin/ardia --version) || fail "ardia --version exited $?"
 echo "ok   $version"
 for class in ardia-little ardia-settings ardia-import; do
-  grep -q "^StartupWMClass=$class$" "/usr/share/applications/$class.desktop" || fail "no hidden $class.desktop"
+  grep -q "^StartupWMClass=$class$" "/usr/share/applications/$class.desktop" || fail "no $class.desktop for the $class windows"
+  grep -q "^NoDisplay=true$" "/usr/share/applications/$class.desktop" || fail "$class.desktop is not hidden"
+  grep -q "^Icon=ardia$" "/usr/share/applications/$class.desktop" || fail "$class.desktop has no ardia icon"
 done
 for entry in /usr/share/applications/ardia*.desktop; do
   desktop-file-validate "$entry" || fail "$entry does not validate"

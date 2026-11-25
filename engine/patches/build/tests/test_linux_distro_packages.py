@@ -204,7 +204,8 @@ class RpmTests(unittest.TestCase):
                 (runtime / name).chmod(0o755)
             (runtime / 'ardia-launch').write_text('#!/usr/bin/env bash\n')
             (root / 'share/applications').mkdir(parents=True)
-            (root / 'share/applications/ardia.desktop').write_text('[Desktop Entry]\nType=Application\nName=Ardia\nExec=ardia %U\n')
+            for name, entry in formats.desktop_entries().items():
+                (root / 'share/applications' / name).write_text(entry)
             (root / 'share/icons/hicolor/256x256/apps').mkdir(parents=True)
             (root / 'share/icons/hicolor/256x256/apps/ardia.png').write_bytes(b'png')
             (root / 'share/polkit-1/actions').mkdir(parents=True)
@@ -220,6 +221,8 @@ class RpmTests(unittest.TestCase):
         self.assertRegex(listing, r'-rwsr-xr-x\s+1 root\s+root .* /usr/lib/ardia/chrome-sandbox\n')
         self.assertRegex(listing, r'/usr/bin/ardia -> \.\./lib/ardia/ardia-launch\n')
         self.assertNotRegex(listing, r'(?m)^\S+\s+\d+ (?!root\s+root)')
+        for name in formats.desktop_entries():
+            self.assertRegex(listing, rf'-rw-r--r--\s+1 root\s+root .* /usr/share/applications/{re.escape(name)}\n')
 
 
 class FlatpakTests(unittest.TestCase):
