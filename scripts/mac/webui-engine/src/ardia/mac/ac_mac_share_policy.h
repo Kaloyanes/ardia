@@ -222,46 +222,68 @@ struct Issuance {
   std::optional<std::string> evicted;
 };
 
+inline constexpr int kShareCommandFirst = 54100;
+inline constexpr int kShareCommandLast = kShareCommandFirst + static_cast<int>(kMaxPageShares) - 1;
+
 template <typename Owner>
 class IssuedFiles {
  public:
   Issuance Issue(std::string path, Owner owner) {
     if (entries_.contains(path)) return Issuance{};
-    std::optional<std::string> evicted;
     if (entries_.size() >= kMaxIssuedFiles) {
-      const auto waiting = std::find_if(order_.begin(), order_.end(),
-                                        [this](const std::string& held) { return !entries_.at(held).taken; });
+      const auto waiting = std::find_if(order_.begin(), order_.end(), [this](const std::string& held) {
+        const Entry& entry = entries_.at(held);
+        return !entry.taken && !entry.revoked;
+      });
       if (waiting == order_.end()) return Issuance{};
-      evicted = *waiting;
-      Release(*evicted);
+      entries_.at(*waiting).revoked = true;
+      return Issuance{false, *waiting};
     }
     order_.push_back(path);
-    entries_[std::move(path)] = Entry{std::move(owner), false};
-    return Issuance{true, std::move(evicted)};
+    entries_.emplace(std::move(path), Entry{std::move(owner), false, false});
+    return Issuance{true, std::nullopt};
   }
 
-  bool Take(std::string_view path, const Owner& owner) {
+  template <typename Accept>
+  bool Take(std::string_view path, Accept accept) {
     const auto found = entries_.find(std::string(path));
-    if (found == entries_.end() || found->second.taken || !(found->second.owner == owner)) return false;
+    if (found == entries_.end() || found->second.taken || found->second.revoked || !accept(found->second.owner)) {
+      return false;
+    }
     found->second.taken = true;
     return true;
   }
 
   bool Holds(std::string_view path) const { return entries_.contains(std::string(path)); }
 
+  bool Shareable(std::string_view path) const {
+    const auto found = entries_.find(std::string(path));
+    return found != entries_.end() && !found->second.taken && !found->second.revoked;
+  }
+
+  bool Revoke(std::string_view path) {
+    const auto found = entries_.find(std::string(path));
+    if (found == entries_.end()) return false;
+    found->second.revoked = true;
+    return true;
+  }
+
+  template <typename Match>
+  std::vector<std::string> RevokeIf(Match match) {
+    std::vector<std::string> revoked;
+    for (auto& [path, entry] : entries_) {
+      if (!entry.revoked && match(entry.owner)) {
+        entry.revoked = true;
+        revoked.push_back(path);
+      }
+    }
+    return revoked;
+  }
+
   bool Release(std::string_view path) {
     const std::string key(path);
     std::erase(order_, key);
     return entries_.erase(key) > 0;
-  }
-
-  std::vector<std::string> ReleaseOwner(const Owner& owner) {
-    std::vector<std::string> released;
-    for (const auto& [path, entry] : entries_) {
-      if (entry.owner == owner) released.push_back(path);
-    }
-    for (const std::string& path : released) Release(path);
-    return released;
   }
 
   std::size_t size() const { return entries_.size(); }
@@ -270,11 +292,16 @@ class IssuedFiles {
   struct Entry {
     Owner owner;
     bool taken = false;
+    bool revoked = false;
   };
 
   std::map<std::string, Entry> entries_;
   std::deque<std::string> order_;
 };
+
+inline bool SameChoice(bool service_known, bool same_service) {
+  return !service_known || same_service;
+}
 
 enum class InstanceLock { kMissing, kHeld, kFree };
 

@@ -159,37 +159,61 @@ TEST(each_context_menu_owns_its_observer_until_it_is_destroyed) {
 
 TEST(only_issued_images_are_taken_and_only_by_their_window) {
   policy::IssuedFiles<std::string> issued;
+  const auto by = [](std::string window) { return [window](const std::string& owner) { return owner == window; }; };
   CHECK(issued.Issue("/tmp/i/1-a/one.png", "w1").issued);
   CHECK(issued.Issue("/tmp/i/1-a/two.png", "w2").issued);
   CHECK(!issued.Issue("/tmp/i/1-a/one.png", "w2").issued);
-  CHECK(!issued.Take("/tmp/i/1-a/one.png", "w2"));
-  CHECK(issued.Take("/tmp/i/1-a/one.png", "w1"));
-  CHECK(!issued.Take("/tmp/i/1-a/one.png", "w1"));
-  CHECK(issued.Holds("/tmp/i/1-a/one.png"));
-  CHECK(!issued.Take("/tmp/i/1-a/never.png", "w1"));
-  CHECK(issued.Release("/tmp/i/1-a/one.png"));
-  CHECK(!issued.Holds("/tmp/i/1-a/one.png"));
-  CHECK((issued.ReleaseOwner("w2") == std::vector<std::string>{"/tmp/i/1-a/two.png"}));
+  CHECK(!issued.Take("/tmp/i/1-a/one.png", by("w2")));
+  CHECK(issued.Shareable("/tmp/i/1-a/one.png"));
+  CHECK(issued.Take("/tmp/i/1-a/one.png", by("w1")));
+  CHECK(!issued.Take("/tmp/i/1-a/one.png", by("w1")));
+  CHECK(!issued.Shareable("/tmp/i/1-a/one.png") && issued.Holds("/tmp/i/1-a/one.png"));
+  CHECK(!issued.Take("/tmp/i/1-a/never.png", by("w1")));
+  CHECK(!issued.Take("/tmp/i/1-a/two.png", [](const std::string&) { return false; }));
+  CHECK((issued.RevokeIf([](const std::string& owner) { return owner == "w2"; }) ==
+         std::vector<std::string>{"/tmp/i/1-a/two.png"}));
+  CHECK(!issued.Take("/tmp/i/1-a/two.png", by("w2")));
+  CHECK(issued.Holds("/tmp/i/1-a/two.png"));
+  CHECK(issued.Release("/tmp/i/1-a/two.png") && issued.Release("/tmp/i/1-a/one.png"));
   CHECK(issued.size() == 0);
 }
 
 TEST(taken_images_hold_their_slot_until_the_file_is_deleted) {
   policy::IssuedFiles<std::string> issued;
+  const auto anyone = [](const std::string&) { return true; };
   for (std::size_t index = 0; index < policy::kMaxIssuedFiles; ++index) {
     CHECK(issued.Issue("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1").issued);
   }
-  CHECK(issued.Take("/tmp/i/1-a/0.png", "w1"));
-  const auto evicting = issued.Issue("/tmp/i/1-a/next.png", "w1");
-  CHECK(evicting.issued && evicting.evicted == std::optional<std::string>("/tmp/i/1-a/1.png"));
-  CHECK(issued.Holds("/tmp/i/1-a/0.png") && issued.size() == policy::kMaxIssuedFiles);
+  CHECK(issued.Take("/tmp/i/1-a/0.png", anyone));
+  const auto full = issued.Issue("/tmp/i/1-a/next.png", "w1");
+  CHECK(!full.issued && full.evicted == std::optional<std::string>("/tmp/i/1-a/1.png"));
+  CHECK(!issued.Shareable("/tmp/i/1-a/1.png") && issued.Holds("/tmp/i/1-a/1.png"));
+  CHECK(issued.size() == policy::kMaxIssuedFiles);
+  CHECK(issued.Release("/tmp/i/1-a/1.png"));
+  CHECK(issued.Issue("/tmp/i/1-a/next.png", "w1").issued);
   for (std::size_t index = 2; index < policy::kMaxIssuedFiles; ++index) {
-    CHECK(issued.Take("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1"));
+    CHECK(issued.Take("/tmp/i/1-a/" + std::to_string(index) + ".png", anyone));
   }
-  CHECK(issued.Take("/tmp/i/1-a/next.png", "w1"));
-  const auto refused = issued.Issue("/tmp/i/1-a/full.png", "w1");
-  CHECK(!refused.issued && !refused.evicted && !issued.Holds("/tmp/i/1-a/full.png"));
+  CHECK(issued.Take("/tmp/i/1-a/next.png", anyone));
+  const auto refused = issued.Issue("/tmp/i/1-a/later.png", "w1");
+  CHECK(!refused.issued && !refused.evicted && !issued.Holds("/tmp/i/1-a/later.png"));
+  CHECK(issued.Revoke("/tmp/i/1-a/0.png") && issued.Holds("/tmp/i/1-a/0.png"));
+  CHECK(!issued.Issue("/tmp/i/1-a/later.png", "w1").issued);
   CHECK(issued.Release("/tmp/i/1-a/0.png"));
-  CHECK(issued.Issue("/tmp/i/1-a/full.png", "w1").issued);
+  CHECK(issued.Issue("/tmp/i/1-a/later.png", "w1").issued);
+}
+
+TEST(a_chosen_service_survives_either_callback_order) {
+  CHECK(policy::SameChoice(false, false));
+  CHECK(policy::SameChoice(true, true));
+  CHECK(!policy::SameChoice(true, false));
+}
+
+TEST(share_commands_sit_outside_chromiums_custom_ranges) {
+  CHECK(policy::kShareCommandFirst == 54100);
+  CHECK(policy::kShareCommandLast == policy::kShareCommandFirst + static_cast<int>(policy::kMaxPageShares) - 1);
+  CHECK(policy::kShareCommandFirst > 49000 + 1000);
+  CHECK(policy::kShareCommandLast < 0xE000);
 }
 
 TEST(only_exited_instances_are_swept) {

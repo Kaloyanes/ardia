@@ -79,9 +79,11 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
     shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
     binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
-    deleted. Each instance holds an advisory `flock` on its folder's `.lock`; a later instance deletes only
-    recognized folders whose lock it can take (or that have no lock and whose process is gone), never anything
-    else. Every picker and service callback is matched by sender. File › Share always ends with More….
+    deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
+    into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
+    delete finishes), or that have no lock and whose process is gone, never anything else. A removed image
+    stops being shareable at once but keeps its slot until the unlink is done. The Share… items use command
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, and the in-window menu waits up to 250 ms for a fresh service list.
   - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
     places them, through a dev-only `RenderViewContextMenuObserver` hook in
     `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`

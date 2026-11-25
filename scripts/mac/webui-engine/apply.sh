@@ -111,19 +111,22 @@ for path, anchor, text, where in HOOKS:
             print(f"apply.sh --check: {problem} hook in {path}: {text.strip().splitlines()[0]}", file=sys.stderr)
             failed = True
         continue
+    shapes = [text, *stale]
     if mode == "--revert":
-        for shape in [text, *stale]:
+        for shape in shapes:
             s = s.replace(shape, "")
+    elif copies == 1 and not stale:
+        pass
+    elif copies or stale:
+        first = min(s.find(shape) for shape in shapes if shape in s)
+        head, tail = s[:first], s[first:]
+        for shape in shapes:
+            tail = tail.replace(shape, "")
+        s = head + text + tail
     else:
-        if copies > 1:
-            sys.exit(f"apply.sh: {path} holds the hook {copies} times; run --revert first")
-        for earlier in stale:
-            s = s.replace(earlier, "" if copies else text, 1)
-            copies = 1
-        if not copies:
-            if s.count(anchor) != 1:
-                sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
-            s = s.replace(anchor, anchor + text if where == "after" else text + anchor, 1)
+        if s.count(anchor) != 1:
+            sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
+        s = s.replace(anchor, anchor + text if where == "after" else text + anchor, 1)
     pending[full] = s
 for full, s in pending.items():
     if open(full).read() != s:

@@ -21,20 +21,32 @@ let surface: ShareSurface | null = null;
 export const setShareSurface = (next: ShareSurface | null) => void (surface = next);
 
 let services: readonly ShareService[] = [];
-let refreshServices: (() => void) | null = null;
+type ServicesRefresh = () => Promise<void> | void;
+
+let refreshServices: ServicesRefresh | null = null;
+export const SHARE_SERVICES_WAIT_MS = 250;
 const serviceName = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= MAX_SERVICE_BYTES && !/[\u0000-\u001f\u007f]/.test(value);
 export const shareServicesFrom = (value: unknown): ShareService[] => (Array.isArray(value) ? value : []).flatMap((entry) => {
   const title = entry && typeof entry === "object" ? (entry as Record<string, unknown>).title : undefined;
   const menuTitle = entry && typeof entry === "object" ? (entry as Record<string, unknown>).menuTitle : undefined;
   return serviceName(title) && title !== COPY && title !== EMAIL && title !== MORE_SHARE_SERVICE ? [{ title, menuTitle: serviceName(menuTitle) ? menuTitle : title }] : [];
 }).slice(0, MAX_SERVICES);
-export const setShareServices = (next: readonly ShareService[], refresh: (() => void) | null = refreshServices) => {
+export const setShareServices = (next: readonly ShareService[], refresh: ServicesRefresh | null = refreshServices) => {
   services = next;
   refreshServices = refresh;
 };
 export const shareServices = (): readonly ShareService[] => services;
 export const shareServicesListed = () => refreshServices !== null;
-export const refreshShareServices = () => void refreshServices?.();
+export const refreshShareServices = async (waitMs = SHARE_SERVICES_WAIT_MS): Promise<void> => {
+  if (!refreshServices) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((resolve) => void (timer = setTimeout(resolve, waitMs)));
+  try {
+    await Promise.race([Promise.resolve(refreshServices()).catch(() => undefined), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 export const isLinkShareService = (service: unknown): service is "copy" | "email" => service === COPY || service === EMAIL;
 
 const unavailable = () => Object.assign(new Error("Sharing is unavailable in this window"), { code: "ERR_UNAVAILABLE" });
@@ -67,7 +79,7 @@ const expandShareMenus = (items: MenuItem[], seen: { share: boolean }): MenuItem
 export const withShareMenus = (items: MenuItem[]): MenuItem[] => {
   const seen = { share: false };
   const expanded = expandShareMenus(items, seen);
-  if (seen.share) refreshServices?.();
+  if (seen.share) void refreshServices?.();
   return expanded;
 };
 

@@ -41,7 +41,7 @@ export async function openAppMenu(windowId: string, button: HTMLElement) {
   const focusOrder = [windowId, ...state.ui.focusOrder.filter((id) => id !== windowId)];
   const editTarget = currentEditTarget();
   const updates = ardiaHost ? await updateMenuItem(ardiaHost).catch(() => null) : null;
-  refreshShareServices();
+  await refreshShareServices();
   const items = appMenuItems(menuState({ ...state, ui: { ...state.ui, focusOrder } }), shortcuts, hiddenCommands(), { fullScreen: !!state.windows[windowId]?.fullScreen, edit: currentEditMenu(windowId, editTarget), updates });
   const { left, bottom } = button.getBoundingClientRect();
   const openedByPointer = !button.matches(":focus-visible");

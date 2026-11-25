@@ -308,8 +308,10 @@ TEST(share_guards) {
     if (const auto name = share::InstanceDirectoryName(1, text)) CHECK(Charset(*name, "-") && name->find('/') == std::string::npos);
     share::IssuedFiles<std::string> issued;
     issued.Issue("/tmp/ardia-images/1-a/image.png", "w1");
-    CHECK(!issued.Take(text, "w1") || text == "/tmp/ardia-images/1-a/image.png");
-    CHECK(!issued.Take("/tmp/ardia-images/1-a/image.png", text) || text == "w1");
+    const auto window = [&text](const std::string& owner) { return owner == text; };
+    CHECK(!issued.Take(text, [](const std::string& owner) { return owner == "w1"; }) ||
+          text == "/tmp/ardia-images/1-a/image.png");
+    CHECK(!issued.Take("/tmp/ardia-images/1-a/image.png", window) || text == "w1");
     if (share::SweepsInstance(share::InstancePid(text).has_value(), false, share::InstanceLock::kFree, true)) {
       CHECK(share::InstancePid(text).has_value());
     }

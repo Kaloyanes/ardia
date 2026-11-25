@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { linkShareItems, mailtoLink, MORE_SHARE_SERVICE, openMailLink, setShareServices, setShareSurface, shareLink, shareLinkVia, shareServicesFrom, shareText, withShareMenus } from "./linkShare.ts";
+import { linkShareItems, mailtoLink, MORE_SHARE_SERVICE, refreshShareServices, openMailLink, setShareServices, setShareSurface, shareLink, shareLinkVia, shareServicesFrom, shareText, withShareMenus } from "./linkShare.ts";
 import { loadShareServices, shareModuleMethod } from "./hostShare.ts";
 import { appModuleFallback } from "./appModuleFallbacks.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
@@ -124,4 +124,22 @@ test("the Mac host shares through macOS, keeps Copy Link and Email Link in the s
   loadShareServices(mac);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["AirDrop", "More…"]);
+});
+
+test("opening a menu waits for the services macOS lists, but never longer than the fallback", async () => {
+  let release;
+  setShareServices([], () => new Promise((resolve) => (release = () => {
+    setShareServices([{ title: "AirDrop", menuTitle: "AirDrop" }]);
+    resolve();
+  })));
+  const waiting = refreshShareServices(1000);
+  release();
+  await waiting;
+  assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["AirDrop", "More…"]);
+  setShareServices([], () => new Promise(() => {}));
+  const started = Date.now();
+  await refreshShareServices(20);
+  assert.ok(Date.now() - started < 500, "a stalled host never holds the menu");
+  setShareServices([], () => Promise.reject(new Error("host gone")));
+  await refreshShareServices(20);
 });

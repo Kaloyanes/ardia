@@ -280,6 +280,21 @@ class ApplyTests(unittest.TestCase):
             duplicated = expected.replace('  InitMenu();\n', '  InitMenu();\n' + expected.split('  InitMenu();\n', 1)[1].split('  if (toolkit_delegate_)', 1)[0], 1)
             (old / target).write_text(duplicated)
             self.assertNotEqual(self.run_apply(old, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            twice_earlier = originals[target].replace(anchor, anchor + earlier + earlier, 1)
+            (old / target).write_text(twice_earlier)
+            self.assertNotEqual(self.run_apply(old, '--check').returncode, 0)
+            upgraded_twice = self.run_apply(old)
+            self.assertEqual(upgraded_twice.returncode, 0, upgraded_twice.stderr)
+            self.assertEqual((old / target).read_text(), expected)
+            self.assertEqual(self.run_apply(old, '--check').returncode, 0)
+            (old / target).write_text(expected.replace(anchor, anchor + earlier, 1) + earlier)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            (old / target).write_text(twice_earlier)
+            self.assertEqual(self.run_apply(old, '--revert').returncode, 0)
+            self.assertEqual((old / target).read_text(), originals[target])
             (old / target).write_text(doubled)
             reverted = self.run_apply(old, '--revert')
             self.assertEqual(reverted.returncode, 0, reverted.stderr)
@@ -784,19 +799,25 @@ class ContractTests(unittest.TestCase):
         self.assertIn('__weak NSWindow* window', share)
         retire = share.split('void Retire(const std::string& owner) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('[picker close];', retire)
-        self.assertIn('Issued().ReleaseOwner(owner)', retire)
+        self.assertIn('Issued().RevokeIf(', retire)
+        self.assertIn('found->second.chosen ? nil : found->second.picker', retire)
         shareable = share.split('std::optional<SharedFile> ShareableFile(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('lstat(', shareable)
         self.assertIn('S_ISREG(info.st_mode)', shareable)
-        self.assertIn('Issued().Take(path, owner)', shareable)
+        self.assertIn('Issued().Take(path, issued_here)', shareable)
+        self.assertIn('owner.origin.window_id == host->window_id() && StillCurrent(owner)', shareable)
         self.assertIn('InInstanceDirectory(path)', shareable)
         self.assertIn('share_policy::InstanceDirectoryName(', share)
         sweep = share.split('void ClaimAndSweep(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('flock(fd, LOCK_EX | LOCK_NB)', sweep)
+        claim = share.split('bool ClaimInstance(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('".staging"', claim)
+        self.assertLess(claim.index('flock(fd, LOCK_EX | LOCK_NB)'), claim.index('rename(staging.value().c_str(), own.value().c_str())'))
+        self.assertIn('InstanceLockState lock = LockOf(entry);', sweep)
+        self.assertLess(sweep.index('InstanceLockState lock = LockOf(entry);'), sweep.index('base::DeletePathRecursively(entry);'))
         self.assertIn('share_policy::SweepsInstance(', sweep)
         self.assertIn('base::FileEnumerator::DIRECTORIES)', sweep)
         self.assertNotIn('DeleteFile(entry)', sweep)
-        lock = share.split('share_policy::InstanceLock LockOf(', 1)[1].split('\n}\n', 1)[0]
+        lock = share.split('InstanceLockState LockOf(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('LOCK_EX | LOCK_NB', lock)
         self.assertIn('O_NOFOLLOW', lock)
         for callback in ('bool PickerOwns(std::uint64_t id,', 'void ServiceFinished(std::uint64_t id,',
@@ -804,15 +825,26 @@ class ContractTests(unittest.TestCase):
             body = share.split(callback, 1)[1].split('\n}\n', 1)[0]
             self.assertIn('service', body)
         self.assertIn('return ardia_mac::share::PickerOwns(_request, picker, service) ? self : nil;', share)
-        self.assertIn('Issued().Release(standard);', share.split('void RemoveTemporary(', 1)[1].split('\n}\n', 1)[0])
+        remove = share.split('void RemoveTemporary(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(remove.index('Issued().Revoke(standard);'), remove.index('ImageRunner()->PostTaskAndReplyWithResult('))
+        self.assertLess(remove.index('base::DeleteFile(path)'), remove.index('Issued().Release(standard);'))
+        image = share.split('void DeliverImage(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(image.index('StillBound(origin, contents.get(), &binding)'), image.index('ImageRunner()->PostTaskAndReplyWithResult('))
+        self.assertIn('Issued().Issue(issued, ImageOwner{origin, contents->GetWeakPtr()})', share)
+        self.assertIn('constexpr int kShareFirst = share_policy::kShareCommandFirst;', share)
+        self.assertNotIn('IDC_CONTENT_CONTEXT_CUSTOM_FIRST +', share)
+        owns = share.split('bool PickerOwns(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('share_policy::SameChoice(', owns)
+        chose = share.split('void PickerChose(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('picker = nil', chose)
         deliver = share.split('void Deliver(const PageOrigin& origin,', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('StillBound(origin, contents, &binding)', deliver)
-        bound = share.split('ShellHostView* StillBound(', 1)[1].split('\n}\n', 1)[0]
+        bound = share.split('ShellHostView* StillBound(const PageOrigin& origin, content::WebContents* contents, PageBinding** binding) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('found->renderer_generation == origin.generation', bound)
         self.assertIn('found->claim == origin.claim', bound)
         self.assertIn('base::BindOnce(&DeliverImage, std::move(*origin),', share)
         link = share.split('void ShareLink(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('host == &caller ? ShareableFile(link, host->window_id())', link)
+        self.assertIn('host == &caller ? ShareableFile(link, host)', link)
 
     def test_file_share_lists_the_system_services(self):
         model = self.read('ac_mac_menu_model.h')

@@ -23,15 +23,14 @@ export function shareModuleMethod(host: ArdiaHost, name: string, method: string)
 
 export function loadShareServices(host: ArdiaHost | undefined) {
   if (!host || !hostSupports(SHARE_SERVICES, host)) return;
-  let loading = false;
-  const refresh = () => {
-    if (loading) return;
-    loading = true;
-    invokeHost<unknown>(SHARE_SERVICES, { args: [] }, host)
+  let loading: Promise<void> | null = null;
+  const refresh = (): Promise<void> => {
+    loading ??= invokeHost<unknown>(SHARE_SERVICES, { args: [] }, host)
       .then((listed) => setShareServices(shareServicesFrom(listed), refresh))
       .catch(reportHostError)
-      .finally(() => void (loading = false));
+      .finally(() => void (loading = null));
+    return loading;
   };
   setShareServices([], refresh);
-  refresh();
+  void refresh();
 }
