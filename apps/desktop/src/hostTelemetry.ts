@@ -4,26 +4,27 @@ import { captureException } from "../../browser/src/state/telemetry/errors";
 import { capture, consentNow, devState, endSession, flush, loadChoice, queueLog, saveQueueNow } from "../../browser/src/state/telemetry/client";
 import { reloadChoice, savedChoice, useTelemetry, type ConsentToken } from "../../browser/src/state/telemetry/choice";
 import { setConsentPeriod } from "../../browser/src/state/telemetry/consentPeriod";
-import { DAILY_DOC } from "../../browser/src/state/telemetry/daily";
 import { requestLog } from "../../browser/src/state/telemetry/requestLog";
 import { setTelemetryRelay, type ChoiceChange } from "../../browser/src/state/telemetry/relay";
+import { reportShellMigrationAfterLead } from "../../browser/src/state/telemetry/shellMigrationLaunch";
 import { reopenSession } from "../../browser/src/state/telemetry/sessionControl";
 import { uuidv4 } from "../../browser/src/state/telemetry/ids";
 import { setTelemetryHost } from "../../browser/src/state/telemetry/transport";
-import { emitWindowUsage, sessionEnding } from "../../browser/src/state/telemetry/usage";
+import { emitWindowUsage, sessionEnding, setCountsRelayNow } from "../../browser/src/state/telemetry/usage";
+import { isLinuxUtility } from "./session";
 import { documentSaved } from "../../browser/src/platform/documents";
 import { withDeadline } from "../../browser/src/lib/deadline";
+import { PLATFORM_IDS, PLATFORM_TERMS } from "../../browser/src/lib/platformTerms";
 import { refreshDocument } from "./shims/shellBase";
 import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 import { startTelemetryLeadership, TELEMETRY_CHANNEL, type LeaderChannel, type LeaderLocks, type TelemetryLeadership, type TelemetryOp } from "./telemetryLeader.ts";
+import { TELEMETRY_DOCUMENTS, TELEMETRY_STATE_DOC as STATE_DOC } from "./telemetryDocuments.ts";
 import { createEndLedger, setTelemetrySettle } from "./telemetrySettle.ts";
 import { parseChoiceChange, shownAfter } from "./telemetryChoice.ts";
 import { applyChoiceDurably, followerChoiceSaved } from "./telemetryChoiceApply.ts";
 
 const TELEMETRY_POST = "ArdiaTelemetry.post";
 const TELEMETRY_STEP = "telemetry";
-const STATE_DOC = "telemetry.json";
-const TELEMETRY_DOCUMENTS = [STATE_DOC, "telemetry-queue.json", DAILY_DOC];
 const END_TIMEOUT_MS = 2_000;
 const RESET_TIMEOUT_MS = 10_000;
 const WINDOW_USAGE_MS = 60 * 60 * 1000;
@@ -119,7 +120,7 @@ const relayedConsent = (consent: unknown) => (typeof consent === "string" && con
 export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolean; locks?: LeaderLocks; channel?: LeaderChannel | null }) {
   const { host, candidate } = options;
   setTelemetrySettle({ settle: settleHostTelemetry, reopen: reopenHostTelemetry });
-  setTelemetryHost({ os: "Linux", osType: "linux", send: hostSupports(TELEMETRY_POST, host) ? hostTelemetrySend(host) : null });
+  setTelemetryHost({ os: PLATFORM_TERMS.os, osType: PLATFORM_IDS.otel, send: hostSupports(TELEMETRY_POST, host) ? hostTelemetrySend(host) : null });
   loadChoice();
   installErrorReporting();
   watchUncaughtErrors(globalThis);
@@ -169,6 +170,7 @@ export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolea
       await documentSaved(STATE_DOC).catch(report);
       current.announce();
     },
+    led: () => void reportShellMigrationAfterLead().catch(report),
     changed: () => void refreshState(),
     report,
   });
@@ -183,6 +185,9 @@ export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolea
   setInterval(() => {
     if (!current.leading()) emitWindowUsage(consentNow());
   }, WINDOW_USAGE_MS);
+  if (isLinuxUtility(options.host.bootstrap.windowId)) setCountsRelayNow((consent) => {
+    if (!current.leading()) emitWindowUsage(consent);
+  });
   return current;
 }
 

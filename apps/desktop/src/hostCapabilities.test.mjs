@@ -63,13 +63,13 @@ test("the command bar's Dictate button follows the dictation capability: off whi
 });
 
 test("unavailable choices map to exact settings ids and the Web engine rows", () => {
-  const ids = ["general.defaultBrowser", "general.openAtLogin", "general.askBefore", "advanced.pageEngine", "advanced.websiteEngines", "profiles.otherEngines", "advanced.ardiaCommand", "advanced.compactCliPill", "advanced.showFullUrl", "tabs.videoUpscaling", "tabs.autoPictureInPicture"];
-  const unrouted = ["tabs.openLinksInLittleArdia", "tabs.appLinksFirst", "tabs.littleArdiaOpensNewTabLinks", "tabs.peekLinksToOtherSites", "tabs.popupsOpenAsTabs"];
-  const routedRows = { littleArdiaNewTabLinks: true, peekOtherSites: true, popupsOpenAsTabs: true, linksFromOtherApps: true };
+  const ids = ["general.defaultBrowser", "general.openAtLogin", "general.askBefore", "advanced.pageEngine", "advanced.websiteEngines", "profiles.otherEngines", "advanced.ardiaCommand", "advanced.compactCliPill", "advanced.showFullUrl", "advanced.commandScrollZoom", "tabs.videoUpscaling", "tabs.autoPictureInPicture"];
+  const unrouted = ["advanced.commandScrollZoom", "tabs.openLinksInLittleArdia", "tabs.appLinksFirst", "tabs.littleArdiaOpensNewTabLinks", "tabs.peekLinksToOtherSites", "tabs.popupsOpenAsTabs"];
+  const routedRows = { commandScrollZoom: true, littleArdiaNewTabLinks: true, peekOtherSites: true, popupsOpenAsTabs: true, linksFromOtherApps: true };
   const webEngine = ["advanced.pageEngine", "advanced.websiteEngines"];
   const none = linuxCapabilities(fakeHost().host);
   assert.deepEqual([...unavailableSettingIds(none, ids)].sort(), [...unrouted, ...webEngine, "advanced.ardiaCommand", "advanced.compactCliPill", "general.autoUpdate", "general.defaultBrowser", "general.openAtLogin", "tabs.videoUpscaling"].sort());
-  for (const [capability, rows] of Object.entries({ littleArdiaNewTabLinks: ["tabs.littleArdiaOpensNewTabLinks"], peekOtherSites: ["tabs.peekLinksToOtherSites"], popupsOpenAsTabs: ["tabs.popupsOpenAsTabs"], linksFromOtherApps: ["tabs.openLinksInLittleArdia", "tabs.appLinksFirst"] })) {
+  for (const [capability, rows] of Object.entries({ commandScrollZoom: ["advanced.commandScrollZoom"], littleArdiaNewTabLinks: ["tabs.littleArdiaOpensNewTabLinks"], peekOtherSites: ["tabs.peekLinksToOtherSites"], popupsOpenAsTabs: ["tabs.popupsOpenAsTabs"], linksFromOtherApps: ["tabs.openLinksInLittleArdia", "tabs.appLinksFirst"] })) {
     const shown = unavailableSettingIds({ ...none, [capability]: true }, ids);
     assert.deepEqual(unrouted.filter((id) => !shown.has(id)), rows, capability);
   }
@@ -271,7 +271,7 @@ test("the native bootstrap advertises every route list, and every shared perform
   const bootstrap = host.slice(host.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), host.indexOf("void ShellHostView::LayoutOverlay()"));
   for (const list of ["linux_contract::kRoutes", "kLinuxZoomDomainRoutes", "kLinuxMemorySaverRoutes"]) assert.ok(bootstrap.includes(`: ardiacore::${list})`), list);
   const advertised = new Set([
-    ...listedRoutes("ac_linux_contract.h", "kRoutes", /\{"([^"]+)",/g),
+    ...[...readFileSync(new URL("../../../engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h", import.meta.url), "utf8").matchAll(/^\s+\{"([^"]+)",/gm)].map((match) => match[1]),
     ...listedRoutes("ac_linux_history_zoom.h", "kLinuxZoomDomainRoutes"),
     ...listedRoutes("ac_linux_memory_saver.h", "kLinuxMemorySaverRoutes"),
     ...[...host.matchAll(/capabilities\.Append\("(engine\.\w+)"\)/g)].map((match) => match[1]),

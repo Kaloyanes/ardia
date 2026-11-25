@@ -21,6 +21,15 @@ public class EngineModule: Module {
     }
   }
 
+  static func cliTabCall(_ name: String) -> CallHandler {
+    { args, reply in
+      var forwarded = args.values
+      forwarded.removeValue(forKey: "tabId")
+      forwarded["tab"] = ArdiaHost.chromeTabId(ofTab: try args.text("tabId"))
+      EngineCall.passing(name, profile: args.profile, args: forwarded, reply: reply)
+    }
+  }
+
   static let calls = engineCallTable(
     info: { _, reply in reply.ok(ArdiaHost.engineInfo) },
     components: { _, reply in ArdiaServices.components { reply.service($0, $1) } },
@@ -50,6 +59,20 @@ public class EngineModule: Module {
       let tab = ArdiaHost.chromeTabId(ofTab: try args.text("tabId"))
       EngineCall.passing("ac_cli_owns_tab", profile: args.profile, args: ["tab": tab], reply: reply)
     },
+    cliConsoleDelta: { args, reply in
+      let tab = ArdiaHost.chromeTabId(ofTab: try args.text("tabId"))
+      var delta: [String: Any] = ["tab": tab]
+      if let after = try args.optionalDouble("after") { delta["after"] = after }
+      if let generation = try args.optionalDouble("generation") { delta["generation"] = generation }
+      if let limit = try args.optionalDouble("limit") { delta["limit"] = Int(exactly: limit) ?? 0 }
+      EngineCall.passing("ac_cli_console_delta", profile: args.profile, args: delta, reply: reply)
+    },
+    cliDevToolsOpen: cliTabCall("ac_cli_devtools_open"),
+    cliSnapshot: cliTabCall("ac_cli_snapshot"),
+    cliWaitSettled: cliTabCall("ac_cli_wait_settled"),
+    cliHitTest: cliTabCall("ac_cli_hit_test"),
+    cliClick: cliTabCall("ac_cli_click"),
+    cliScreenshot: cliTabCall("ac_cli_screenshot"),
     cliMoveOffscreen: { args, reply in
       ArdiaHost.cliMoveOffscreen(try args.text("tabId")) { reply.ok($0) }
     },

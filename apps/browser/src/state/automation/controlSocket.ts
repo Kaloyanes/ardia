@@ -25,7 +25,7 @@ import { automationWindows, type AutomationWindow } from "./automationWindows";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { controlTabTargets } from "../../platform/control";
-import { releaseAllCliHolds } from "../tabs/cliHolds";
+import { releaseAllCliHolds, releaseCliHoldsOf } from "../tabs/cliHolds";
 import { watchCliHoldsForEngine } from "./cliHoldsEngine";
 import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
 import { clientProtocolProblem, commands, failure, hello, parseRequest, parseSubscription, planRun, type RequestId, type Subscription } from "./automationMethods";
@@ -44,7 +44,9 @@ import { dismissSocketAsks } from "./socketAsk";
 import { dropAllHistoryHandles, dropHistoryHandles } from "./historyHandles";
 import { dropLateResults, forgetTabCalls } from "./tabCalls";
 import { dropAllLogpoints, dropLogpoints } from "./devToolsLogpoints";
+import { clearFileArms } from "./fileArms";
 import { closeAllInspections, closeInspectionsFor } from "./devToolsSession";
+import { closeAllEngineCli, closeEngineCliFor, installEngineCli } from "./engineCli";
 import { backgroundInstance } from "../app/appSettings";
 import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
@@ -285,6 +287,7 @@ function takeIdleReplay(connection: number) {
 }
 
 function handleClose({ connection }: { connection: number }) {
+  releaseCliHoldsOf(connection);
   idleReplays.delete(connection);
   openConnections.delete(connection);
   dismissSocketAsks(connection);
@@ -294,6 +297,7 @@ function handleClose({ connection }: { connection: number }) {
   dropHistoryHandles(connection);
   dropLateResults(connection);
   void closeInspectionsFor(connection);
+  if (PLATFORM_FEATURES.drivesTabsFromEngine) closeEngineCliFor(connection);
   void dropLogpoints(connection);
   if (subscriptions.delete(connection)) refreshFeed();
 }
@@ -312,6 +316,7 @@ function listen() {
   onControlClose(handleClose);
   onControlWritten(({ tickets }) => runWritten(tickets));
   if (PLATFORM_FEATURES.controlDoorbell) startPeerDoorbell();
+  if (PLATFORM_FEATURES.drivesTabsFromEngine) installEngineCli((connection) => openConnections.has(connection));
 }
 
 async function start(consent: ConsentToken | null) {
@@ -325,6 +330,7 @@ async function start(consent: ConsentToken | null) {
 }
 
 async function stop() {
+  clearFileArms();
   openConnections.clear();
   generation = null;
   dismissSocketAsks();
@@ -332,6 +338,7 @@ async function stop() {
   forgetTabCalls();
   releaseAllCliHolds();
   void closeAllInspections();
+  closeAllEngineCli();
   void dropAllLogpoints();
   noteSocketServing(false);
   void capturePageMenus(false).catch(() => undefined);
@@ -351,6 +358,7 @@ function sync() {
   const consent = consentToken();
   if (!on) {
     cutOffControlSocket();
+    clearFileArms();
     openConnections.clear();
     generation = null;
     dismissSocketAsks();
@@ -358,6 +366,7 @@ function sync() {
     forgetTabCalls();
     releaseAllCliHolds();
     void closeAllInspections();
+    closeAllEngineCli();
     void dropAllLogpoints();
     noteSocketServing(false);
     void capturePageMenus(false).catch(() => undefined);

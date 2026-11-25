@@ -649,10 +649,10 @@ index 769a3e556d96b2b9f6c2795303b675b749cdeb61..078288af5be55afc260a48d0860a902e
  - (void)setBridge:(RCTBridge *)bridge
  {
 diff --git a/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm b/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm
-index 18bbe64f657a36596563b3eb6d135284e28c674a..a4046a33e13d35cac155e306f368e04ef8d1f51e 100644
+index 18bbe64f657a36596563b3eb6d135284e28c674a..6ba0e25c3b67676b92c011fade92884aa69a759f 100644
 --- a/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm
 +++ b/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm
-@@ -14,6 +14,25 @@
+@@ -14,6 +14,28 @@
  
  static void *TextFieldSelectionObservingContext = &TextFieldSelectionObservingContext;
  
@@ -668,6 +668,9 @@ index 18bbe64f657a36596563b3eb6d135284e28c674a..a4046a33e13d35cac155e306f368e04e
 +  if (key == nil || textInputDelegate == nil || editor.hasMarkedText || event.type != NSEventTypeKeyDown || ![textInputDelegate hasKeyDownEventOrKeyUpEvent:key]) {
 +    return NO;
 +  }
++  if ([key isEqualToString:@"Escape"] && event.isARepeat) {
++    return YES;
++  }
 +  if (commandSelector == @selector(deleteBackward:) && editor.string.length > 0) {
 +    return NO;
 +  }
@@ -678,7 +681,7 @@ index 18bbe64f657a36596563b3eb6d135284e28c674a..a4046a33e13d35cac155e306f368e04e
  #if !TARGET_OS_OSX // [macOS]
  @interface RCTBackedTextFieldDelegateAdapter () <UITextFieldDelegate, UITextDropDelegate>
  #else // [macOS
-@@ -235,6 +254,9 @@ - (BOOL)control:(NSControl *)control textShouldEndEditing:(NSText *)fieldEditor
+@@ -235,6 +257,9 @@ - (BOOL)control:(NSControl *)control textShouldEndEditing:(NSText *)fieldEditor
  - (BOOL)control:(NSControl *)control textView:(NSTextView *)fieldEditor doCommandBySelector:(SEL)commandSelector
  {
    id<RCTBackedTextInputDelegate> textInputDelegate = [_backedTextInputView textInputDelegate];
@@ -688,7 +691,7 @@ index 18bbe64f657a36596563b3eb6d135284e28c674a..a4046a33e13d35cac155e306f368e04e
    BOOL commandHandled = NO;
    // enter/return
    if (commandSelector == @selector(insertNewline:) || commandSelector == @selector(insertNewlineIgnoringFieldEditor:)) {
-@@ -490,6 +512,9 @@ - (BOOL)textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector
+@@ -490,6 +515,9 @@ - (BOOL)textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector
  {
    BOOL commandHandled = NO;
    id<RCTBackedTextInputDelegate> textInputDelegate = [_backedTextInputView textInputDelegate];
@@ -713,7 +716,7 @@ index bcaa6add683bab6a3b4e86cc091c9cadb9f22970..c295eff3cbde856de41c67064d684894
  #if !TARGET_OS_OSX // [macOS]
  @property (nonatomic, strong) NSString *inputAccessoryViewButtonLabel;
 diff --git a/Libraries/Text/TextInput/RCTBaseTextInputView.mm b/Libraries/Text/TextInput/RCTBaseTextInputView.mm
-index cac171e70c9fa225cdec45b205086342a0d50f06..a0d75d7f127c1da4758dcfcdd119513deb65fcc6 100644
+index cac171e70c9fa225cdec45b205086342a0d50f06..2be54c4d5d931d30c256496572131d72bbbfcb39 100644
 --- a/Libraries/Text/TextInput/RCTBaseTextInputView.mm
 +++ b/Libraries/Text/TextInput/RCTBaseTextInputView.mm
 @@ -47,6 +47,16 @@ @implementation RCTBaseTextInputView {
@@ -855,7 +858,17 @@ index cac171e70c9fa225cdec45b205086342a0d50f06..a0d75d7f127c1da4758dcfcdd119513d
      if (_onChange) {
        _onChange(@{
          @"text" : [self.attributedText.string copy],
-@@ -894,8 +962,49 @@ - (RCTUIView *)reactAccessibilityElement // [macOS]
+@@ -829,6 +897,9 @@ - (void)textInputDidCancel {
+ }
+ 
+ - (BOOL)textInputShouldHandleKeyEvent:(NSEvent *)event {
++  if (event.type == NSEventTypeKeyDown && event.isARepeat && event.keyCode == 53 && [self hasKeyDownEventOrKeyUpEvent:@"Escape"]) {
++    return NO;
++  }
+   return ![self handleKeyboardEvent:event];
+ }
+ 
+@@ -894,8 +965,49 @@ - (RCTUIView *)reactAccessibilityElement // [macOS]
  
  #pragma mark - Focus Control
  
@@ -905,7 +918,7 @@ index cac171e70c9fa225cdec45b205086342a0d50f06..a0d75d7f127c1da4758dcfcdd119513d
    [self.backedTextInputView reactFocus];
  
    if (_clearTextOnFocus) {
-@@ -909,6 +1018,9 @@ - (void)reactFocus
+@@ -909,6 +1021,9 @@ - (void)reactFocus
      [self.backedTextInputView setSelectedTextRange:NSMakeRange(NSNotFound, 0) notifyDelegate:NO];
  #endif // macOS]
    }
@@ -985,11 +998,12 @@ diff --git a/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputViewManag
 index 386405335b411e70a82909033febc7dd5b4adabe..ace454e53458fb82d2fd6b456c4e95623ee7311f 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputViewManager.mm
 +++ b/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputViewManager.mm
-@@ -30,4 +30,13 @@ - (RCTPlatformView *)view // [macOS]
+@@ -29,5 +29,14 @@ - (RCTPlatformView *)view // [macOS]
+ }
  
  RCT_REMAP_OSX_VIEW_PROPERTY(secureTextEntry, useSecureTextField, BOOL) // [macOS]
 +RCT_REMAP_OSX_VIEW_PROPERTY(ardiaCentersCapitals, backedTextInputView.ardiaCentersCapitals, BOOL)
- 
++
 +#if TARGET_OS_OSX // [Ardia: pastedTypes reached only multiline fields
 +RCT_CUSTOM_VIEW_PROPERTY(pastedTypes, NSArray<NSPasteboardType>*, RCTSinglelineTextInputView)
 +{
@@ -997,7 +1011,7 @@ index 386405335b411e70a82909033febc7dd5b4adabe..ace454e53458fb82d2fd6b456c4e9562
 +  [view.backedTextInputView setReadablePasteBoardTypes:types];
 +}
 +#endif // Ardia]
-+
+ 
  @end
 diff --git a/Libraries/Text/TextInput/Singleline/RCTUITextField.h b/Libraries/Text/TextInput/Singleline/RCTUITextField.h
 index 61242af88da2f235e5ae506e79dfb9898742eb51..259868183aa018ac6c0e7a83a9008ad63a2bb3dd 100644
@@ -1014,7 +1028,7 @@ index 61242af88da2f235e5ae506e79dfb9898742eb51..259868183aa018ac6c0e7a83a9008ad6
  #if TARGET_OS_OSX // [macOS
  @property (nonatomic, copy, nullable) NSString *text;
 diff --git a/Libraries/Text/TextInput/Singleline/RCTUITextField.mm b/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
-index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..aee0e19607a58db55ddf0afc4f6d682b672eabcc 100644
+index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..72a1aa82945dc5fe13630e3c63b2e8a6b93a6f98 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
 +++ b/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
 @@ -10,6 +10,7 @@
@@ -1236,8 +1250,8 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..aee0e19607a58db55ddf0afc4f6d682b
 +  CGFloat lift = _ardiaCentersCapitals ? 0 : RCTTextOpticalLift(self.font, ArdiaBackingDensity(self.superview ?: self));
 +  BOOL flipped = self.superview == nil || self.superview.isFlipped;
 +  return NSMakeRect(frame.origin.x, flipped ? frame.origin.y - lift : frame.origin.y, frame.size.width, frame.size.height + lift);
-+}
-+
+ }
+ 
 +- (void)ardia_setLiftedFrame:(NSRect)lifted
 +{
 +  if (NSEqualRects(super.frame, lifted)) {
@@ -1300,8 +1314,8 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..aee0e19607a58db55ddf0afc4f6d682b
 +- (void)ardia_interfaceScaleDidChange:(NSNotification *)notification
 +{
 +  [self ardia_applyOpticalLift];
- }
- 
++}
++
 +- (void)viewDidMoveToWindow
 +{
 +  [super viewDidMoveToWindow];
@@ -2107,7 +2121,7 @@ index 3edcc9670a8ccb5eef44524e78445117d2416ed8..1f7951f616996941706f11b380c12051
    if (sendIdleEvents) {
      [self startTimers];
 diff --git a/React/Modules/RCTLayoutAnimation.h b/React/Modules/RCTLayoutAnimation.h
-index f95d6a8..a91c9fb 100644
+index f95d6a8cd675dc4aedbe3d24ec79f72fb64368dc..a91c9fb84d261146e29e1e39a56deb3c0d8d3206 100644
 --- a/React/Modules/RCTLayoutAnimation.h
 +++ b/React/Modules/RCTLayoutAnimation.h
 @@ -31,4 +31,12 @@
@@ -2124,7 +2138,7 @@ index f95d6a8..a91c9fb 100644
 +
  @end
 diff --git a/React/Modules/RCTLayoutAnimation.m b/React/Modules/RCTLayoutAnimation.m
-index 64e697c..4ac22f5 100644
+index 64e697cf578cd5f28815405c4d765a95b7cc1022..4ac22f577f42197bf336e34c7f9723c2885e37b0 100644
 --- a/React/Modules/RCTLayoutAnimation.m
 +++ b/React/Modules/RCTLayoutAnimation.m
 @@ -8,8 +8,36 @@
@@ -2298,7 +2312,7 @@ index 64e697c..4ac22f5 100644
  {
  #if !TARGET_OS_OSX // [macOS]
 diff --git a/React/Modules/RCTUIManager.mm b/React/Modules/RCTUIManager.mm
-index 7f1aeff..e0ccd89 100644
+index 7f1aeff436b8a51514254b72d1fb1fd1ee3b1553..e0ccd89d8467dfd695e5d2d01f117bc894a7afa3 100644
 --- a/React/Modules/RCTUIManager.mm
 +++ b/React/Modules/RCTUIManager.mm
 @@ -7,6 +7,9 @@
@@ -2453,7 +2467,7 @@ index 152e76da136756ebc962ece4cc84e84df7cfce0e..4e38bf09796d31dfc63cf79a081e40ea
   * Hide subviews if they are outside the view bounds.
   * This is an optimisation used predominantly with RKScrollViews
 diff --git a/React/Views/RCTView.m b/React/Views/RCTView.m
-index 0a4efc1..887cd1d 100644
+index 0a4efc1fff0a6e32ea1634ab5f863c211f452409..c75665485afa81574f2f0be0829c1f3a10ee8341 100644
 --- a/React/Views/RCTView.m
 +++ b/React/Views/RCTView.m
 @@ -19,6 +19,7 @@
@@ -2647,7 +2661,29 @@ index 0a4efc1..887cd1d 100644
    BOOL needsHitSubview = !(_pointerEvents == RCTPointerEventsNone || _pointerEvents == RCTPointerEventsBoxOnly);
    if (needsHitSubview && (![self clipsToBounds] || isPointInside)) {
      // Take z-index into account when calculating the touch target.
-@@ -784,58 +942,109 @@ - (void)viewDidMoveToWindow
+@@ -733,11 +891,20 @@ - (void)setShadowColor:(CGColorRef)shadowColor
+ {
+     if (_shadowColor != shadowColor)
+     {
+-        _shadowColor = shadowColor;
++        // [Ardia: the property is assign, so the color the prop converter handed over was freed before the next
++        // shadow update read it (LogBox crashed in didUpdateShadow). Hold it. Ardia]
++        CGColorRef previous = _shadowColor;
++        _shadowColor = shadowColor ? CGColorRetain(shadowColor) : NULL;
++        if (previous) CGColorRelease(previous);
+         [self didUpdateShadow];
+     }
+ }
+ 
++- (void)dealloc
++{
++    if (_shadowColor) CGColorRelease(_shadowColor);
++}
++
+ - (void)setShadowOffset:(CGSize)shadowOffset
+ {
+     if (!CGSizeEqualToSize(_shadowOffset, shadowOffset))
+@@ -784,58 +951,109 @@ - (void)viewDidMoveToWindow
    // scroll event occurs either due to trackpad/gesture based scrolling or a scrollwheel event
    // both of which would not cause the mouseExited to be invoked.
  
@@ -2790,7 +2826,7 @@ index 0a4efc1..887cd1d 100644
      }
    }
  }
-@@ -943,28 +1152,63 @@ - (void)react_updateClippedSubviewsWithClipRect:(CGRect)clipRect relativeToView:
+@@ -943,28 +1161,63 @@ - (void)react_updateClippedSubviewsWithClipRect:(CGRect)clipRect relativeToView:
  
  - (void)setRemoveClippedSubviews:(BOOL)removeClippedSubviews
  {
@@ -2854,7 +2890,7 @@ index 0a4efc1..887cd1d 100644
  }
  
  - (void)layoutSubviews
-@@ -1196,12 +1440,42 @@ - (void)reactSetFrame:(CGRect)frame
+@@ -1196,12 +1449,42 @@ - (void)reactSetFrame:(CGRect)frame
    // be rendered as a stretchable image, we'll need to re-render.
    // TODO: detect up-front if re-rendering is necessary
    CGSize oldSize = self.bounds.size;
@@ -2897,7 +2933,7 @@ index 0a4efc1..887cd1d 100644
  - (void)displayLayer:(CALayer *)layer
  {
    if (CGSizeEqualToSize(layer.bounds.size, CGSizeZero)) {
-@@ -1248,17 +1522,8 @@ - (void)displayLayer:(CALayer *)layer
+@@ -1248,17 +1531,8 @@ - (void)displayLayer:(CALayer *)layer
    RCTUIColor *backgroundColor = _backgroundColor;
  #endif // macOS]
  
@@ -2917,7 +2953,7 @@ index 0a4efc1..887cd1d 100644
  
    if (useIOSBorderRendering) {
      layer.cornerRadius = cornerRadii.topLeftHorizontal;
-@@ -1293,9 +1558,10 @@ - (void)displayLayer:(CALayer *)layer
+@@ -1293,9 +1567,10 @@ - (void)displayLayer:(CALayer *)layer
    layer.contents = (id)image.CGImage;
    layer.contentsScale = image.scale;
  #else // [macOS
@@ -2929,7 +2965,7 @@ index 0a4efc1..887cd1d 100644
  #endif // macOS]
    layer.needsDisplayOnBoundsChange = YES;
    layer.magnificationFilter = kCAFilterNearest;
-@@ -1514,6 +1780,20 @@ - (BOOL)acceptsFirstResponder
+@@ -1514,6 +1789,20 @@ - (BOOL)acceptsFirstResponder
  	return [self focusable] || [super acceptsFirstResponder];
  }
  
@@ -2950,7 +2986,7 @@ index 0a4efc1..887cd1d 100644
  - (void)updateTrackingAreas
  {
    BOOL hasMouseHoverEvent = self.onMouseEnter || self.onMouseLeave;
-@@ -1522,32 +1802,614 @@ - (void)updateTrackingAreas
+@@ -1522,32 +1811,614 @@ - (void)updateTrackingAreas
    if (!wouldRecreateIdenticalTrackingArea) {
      if (_trackingArea) {
        [self removeTrackingArea:_trackingArea];
@@ -3162,7 +3198,7 @@ index 0a4efc1..887cd1d 100644
 +}
 +
 ++ (void)ardia_countHover:(NSString *)kind epoch:(NSString *)epoch
-+{
+ {
 +  if (epoch.length == 0) {
 +    return;
 +  }
@@ -3293,7 +3329,7 @@ index 0a4efc1..887cd1d 100644
 +}
 +
 ++ (void)ardia_checkHover
- {
++{
 +#if DEBUG
 +  ArdiaHoverPasses++;
 +#endif
@@ -3569,7 +3605,7 @@ index 0a4efc1..887cd1d 100644
    [self sendMouseEventWithBlock:self.onMouseLeave
                     locationInfo:[self locationInfoFromEvent:event]
                    modifierFlags:event.modifierFlags
-@@ -1768,7 +2630,7 @@ - (BOOL)handleKeyboardEvent:(NSEvent *)event {
+@@ -1768,7 +2639,7 @@ - (BOOL)handleKeyboardEvent:(NSEvent *)event {
    static const char kRCTViewKeyboardEventEmittedKey = 0;
    NSNumber *emitted = objc_getAssociatedObject(event, &kRCTViewKeyboardEventEmittedKey);
    BOOL alreadyEmitted = [emitted boolValue];
@@ -3578,7 +3614,7 @@ index 0a4efc1..887cd1d 100644
      [_eventDispatcher sendEvent:keyboardEvent];
      objc_setAssociatedObject(event, &kRCTViewKeyboardEventEmittedKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
    }
-@@ -1794,3 +2656,19 @@ - (void)keyUp:(NSEvent *)event {
+@@ -1794,3 +2665,19 @@ - (void)keyUp:(NSEvent *)event {
  #endif // macOS]
  
  @end

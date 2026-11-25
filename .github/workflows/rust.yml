@@ -33,6 +33,11 @@ on:
       - "apps/browser/src/lib/versions.ts"
       - "packages/import/ios/Core/**"
       - "packages/expo-windows/src/import/**"
+      - "packages/expo-windows/src/updater/**"
+      - "scripts/windows/windows-update.pem"
+      - "scripts/windows/sign-update.mjs"
+      - "scripts/windows/sign-update.test.mjs"
+      - "scripts/windows/publish-alpha.sh"
       - "scripts/security/hostile-inputs.mjs"
       - ".github/workflows/rust.yml"
   push:
@@ -49,7 +54,7 @@ concurrency:
 jobs:
   gate:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -77,8 +82,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - { os: macos-latest, runner: blacksmith-6vcpu-macos-latest }
+          - { os: ubuntu-latest, runner: blacksmith-8vcpu-ubuntu-2404 }
+          - { os: windows-latest, runner: windows-latest }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
       BINDGEN_CLI_VERSION: "0.73.2"
@@ -173,6 +181,11 @@ jobs:
         env:
           ARDIA_REQUIRE_LINUX_CROSSCHECK: "1"
         run: python3 -I tests/linux-update/test_linux_update.py -v
+      - name: Windows updater verifier, signing script and TypeScript against the shared update vectors and hostile inputs
+        if: runner.os == 'Linux'
+        env:
+          ARDIA_REQUIRE_WINDOWS_CROSSCHECK: "1"
+        run: python3 -I tests/windows-update/test_windows_update.py -v && node --test ../../scripts/windows/sign-update.test.mjs tests/windows-update/publish-alpha.test.mjs
       - name: Rust through the C ABI, the Linux C++ and the TypeScript Netscape HTML parsers against the shared vectors and hostile inputs
         if: runner.os == 'Linux'
         env:
@@ -197,7 +210,7 @@ jobs:
     name: Linux update helper and ardia-update-verify in Debian, Ubuntu and Arch
     needs: gate
     if: ${{ !cancelled() && (needs.gate.result == 'skipped' || (needs.gate.result == 'success' && needs.gate.outputs.run == 'true')) }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -218,7 +231,7 @@ jobs:
   plugin-broker:
     needs: gate
     if: ${{ !cancelled() && (needs.gate.result == 'skipped' || (needs.gate.result == 'success' && needs.gate.outputs.run == 'true')) }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     defaults:
       run:
@@ -242,3 +255,10 @@ jobs:
         run: cargo build --locked --all-targets
       - name: Test
         run: cargo test --locked --workspace --lib --bins
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - name: esbuild for the sdk-bench fixture, at the version packages/shaders pins
+        run: npm install --no-save --no-package-lock --prefix . "esbuild@$(node -p 'require("../shaders/package.json").devDependencies.esbuild')"
+      - name: Plugin host sandbox order and end to end
+        run: cargo test --locked -p ardia-plugin-host --test confine_order --test e2e
