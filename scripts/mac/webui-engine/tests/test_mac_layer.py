@@ -242,7 +242,8 @@ class ContractTests(unittest.TestCase):
     def test_glass_regions_emit_presented_after_the_commit(self):
         glass = self.read('ac_mac_glass.mm')
         host = self.read('ac_mac_shell_host.mm')
-        self.assertIn('setCompletionBlock', glass)
+        apply = glass.split('base::Value GlassRegions::Apply(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(apply.index('[CATransaction commit];'), apply.index('PostTask('))
         self.assertIn('glass::PresentableGeneration', glass)
         self.assertRegex(host, r'Emit\("ArdiaGlass", "presented",\s*base::Value\(base::DictValue\(\)\.Set\("generation", generation\)\)\)')
         desktop = (REPO / 'apps/desktop/src/glassRegions.ts').read_text()
@@ -266,6 +267,38 @@ class ContractTests(unittest.TestCase):
         self.assertIn('BuildMenu(root, target, false)', menu)
         self.assertIn('BuildItem(top, MainTarget(), true)', menu)
         self.assertIn('menu::InstallsAppMenu(item.role, app_menus)', menu)
+
+    def test_background_never_orders_the_window_onscreen(self):
+        entry = self.read('ac_mac_webui.mm')
+        self.assertIn('window::PresentationFor(BackgroundInstance())', entry)
+        for call in ('ShowInactive', 'orderBack:', 'orderFront:', 'makeKeyAndOrderFront'):
+            self.assertNotIn(call, entry)
+        self.assertRegex(entry, r'if \(presentation\.show\) \{\n\s+browser->GetWindow\(\)->Show\(\);')
+
+    def test_presented_is_posted_and_gated_by_clear(self):
+        glass = self.read('ac_mac_glass.mm')
+        self.assertNotIn('setCompletionBlock', glass)
+        self.assertIn('gate_.Issue(*presentable)', glass)
+        self.assertIn('gate_.Live(ticket)', glass)
+        clear = glass.split('void GlassRegions::Clear() {', 1)[1].split('\n}\n', 1)[0]
+        for step in ('gate_.Invalidate();', 'weak_factory_.InvalidateWeakPtrs();', 'regions_.clear();', 'backdrops_.clear();'):
+            self.assertIn(step, clear)
+        self.assertIn('glass::AcceptedGlass(mounted, backdrops_)', glass)
+        self.assertIn('glass_->Clear();', self.read('ac_mac_shell_host.mm'))
+
+    def test_queued_context_menu_binds_no_view(self):
+        menu = self.read('ac_mac_menu.mm')
+        self.assertNotIn('__weak', menu)
+        self.assertIn('base::BindOnce(&PopUpContextMenu, std::move(live_view)', menu)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('GetWeakPtr(), renderer_document_, renderer_generation_)', host)
+        self.assertIn('menu::ContextMenuLive(true, generation, renderer_generation_, current)', host)
+
+    def test_mac_ci_runs_this_suite(self):
+        workflow = (REPO / '.github/workflows/mac.yml').read_text()
+        self.assertIn('python3 scripts/mac/webui-engine/tests/test_mac_layer.py', workflow)
+        self.assertIn('"scripts/mac/webui-engine/**"', workflow)
+        self.assertIn('runs-on: blacksmith-6vcpu-macos-27', workflow.split('webui-engine:', 1)[1].split('\n\n', 1)[0])
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

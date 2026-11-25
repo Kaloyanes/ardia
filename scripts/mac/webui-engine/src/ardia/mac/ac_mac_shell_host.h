@@ -175,6 +175,8 @@ class ShellHostView : public views::View,
   BrowserWindowInterface* EnsureMember(Profile* profile);
   bool OwnsShellNativeView(gfx::NativeView view) const;
   bool PassesShellPoint(double x, double y) const;
+  gfx::NativeView LiveShellView(const content::WeakDocumentPtr& document,
+                                uint64_t generation) const;
   void Note(const std::string& line) const;
 
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;

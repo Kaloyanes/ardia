@@ -314,15 +314,20 @@ void OpenWindow(Profile* profile) {
       std::make_unique<ShellHostView>(browser, view, profile, launch.id));
   host->Initialize();
   ardia_mac::SetTrafficLights(view->GetWidget(), window::Lights{});
-  if (BackgroundInstance()) {
-    browser->GetWindow()->ShowInactive();
-    NSWindow* window = view->GetWidget()->GetNativeWindow().GetNativeNSWindow();
-    [window setLevel:kBackgroundLevel];
-    [window orderBack:nil];
-  } else {
+  const window::Presentation presentation =
+      window::PresentationFor(BackgroundInstance());
+  NSWindow* ns_window = view->GetWidget()->GetNativeWindow().GetNativeNSWindow();
+  if (presentation.lowest_level) {
+    [ns_window setLevel:kBackgroundLevel];
+  }
+  if (presentation.order_out) {
+    [ns_window orderOut:nil];
+  }
+  if (presentation.show) {
     browser->GetWindow()->Show();
   }
-  Trace("window " + launch.id + " shown");
+  Trace("window " + launch.id +
+        (presentation.show ? " shown" : " kept off screen (background)"));
 }
 
 webui_policy::Decision ShellDecision() {

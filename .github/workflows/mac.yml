@@ -38,6 +38,10 @@ on:
       - "apps/browser/official-plugins.json"
       - "apps/browser/official-plugins-history.json"
       - ".github/workflows/mac.yml"
+      - "scripts/mac/webui-engine/**"
+      - "apps/desktop/src/glassRegions.ts"
+      - "apps/desktop/src/shellGlass.ts"
+      - "apps/browser/src/boundaries.json"
   push:
     branches: [main]
     paths: *native
@@ -87,6 +91,7 @@ jobs:
     outputs:
       app: ${{ steps.filter.outcome != 'success' || steps.filter.outputs.app == 'true' }}
       swift: ${{ steps.filter.outcome != 'success' || steps.filter.outputs.swift == 'true' }}
+      webui: ${{ steps.filter.outcome != 'success' || steps.filter.outputs.webui == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: github.event_name == 'push'
@@ -142,6 +147,28 @@ jobs:
               - "apps/browser/official-plugins.json"
               - "apps/browser/official-plugins-history.json"
               - ".github/workflows/mac.yml"
+            webui:
+              - "scripts/mac/webui-engine/**"
+              - "apps/desktop/src/glassRegions.ts"
+              - "apps/desktop/src/shellGlass.ts"
+              - "apps/browser/src/boundaries.json"
+              - "engine/engine-key.sh"
+              - "engine/engine-key.py"
+              - "engine/patches/series"
+              - ".github/workflows/mac.yml"
+
+  webui-engine:
+    name: WebUI host layer (Clang, ASan/UBSan)
+    needs: [gate, changes]
+    if: ${{ !cancelled() && (needs.gate.result == 'skipped' || (needs.gate.result == 'success' && needs.gate.outputs.run == 'true')) && (needs.changes.result != 'success' || needs.changes.outputs.webui == 'true') }}
+    runs-on: blacksmith-6vcpu-macos-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pure headers, launcher, apply.sh, engine keys and boundaries
+        run: python3 scripts/mac/webui-engine/tests/test_mac_layer.py -v
 
   app:
     name: compile (Debug)

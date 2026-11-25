@@ -207,6 +207,21 @@ TEST(hostile_sinks) {
   CHECK(menu::Validate(control).empty());
 }
 
+TEST(background_never_orders_the_window_onscreen) {
+  const auto background = window::PresentationFor(true);
+  CHECK(!background.show && background.order_out && background.lowest_level);
+  const auto normal = window::PresentationFor(false);
+  CHECK(normal.show && !normal.order_out && !normal.lowest_level);
+}
+
+TEST(queued_context_menu_dies_with_its_document) {
+  CHECK(menu::ContextMenuLive(true, 3, 3, true));
+  CHECK(!menu::ContextMenuLive(false, 3, 3, true));
+  CHECK(!menu::ContextMenuLive(true, 3, 4, true));
+  CHECK(!menu::ContextMenuLive(true, 3, 3, false));
+  CHECK(!menu::ContextMenuLive(true, 0, 0, true));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

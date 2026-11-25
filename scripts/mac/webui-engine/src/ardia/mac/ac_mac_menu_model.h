@@ -152,6 +152,13 @@ inline bool InstallsAppMenu(Role role, bool main_menu) {
   return main_menu && (role == Role::kServices || role == Role::kWindowMenu || role == Role::kHelpMenu);
 }
 
+inline bool ContextMenuLive(bool host_alive,
+                            std::uint64_t requested_generation,
+                            std::uint64_t live_generation,
+                            bool document_current) {
+  return host_alive && requested_generation != 0 && requested_generation == live_generation && document_current;
+}
+
 inline bool ValidCommand(std::string_view command) {
   if (command.size() > kMaxCommand) return false;
   return std::all_of(command.begin(), command.end(), [](char c) {

@@ -329,6 +329,41 @@ TEST(hostile_sinks) {
   CHECK(control.placements.size() == 1);
 }
 
+TEST(accepted_reflects_what_was_mounted_under_the_shared_cap) {
+  std::vector<Region> backdrops;
+  for (int index = 0; index < 60; ++index) {
+    backdrops.push_back(Make("backdrop:" + std::to_string(index), {static_cast<double>(index), 0, 4, 4}, Layer::kBehind));
+  }
+  std::vector<Region> regions;
+  for (int index = 0; index < 10; ++index) {
+    regions.push_back(Make("g" + std::to_string(index), {static_cast<double>(index), 10, 4, 4}));
+  }
+  const auto mounted = glass::Lay(glass::Mounted(backdrops, regions), {}, kWindow, 1);
+  const auto accepted = glass::AcceptedGlass(mounted, backdrops);
+  CHECK(accepted == (std::vector<std::string>{"g0", "g1", "g2", "g3"}));
+  for (const Placement& placement : mounted.placements) {
+    CHECK(placement.id.rfind("backdrop:", 0) == 0 || placement.id < "g4");
+  }
+  Region impostor = Make("backdrop:0", {0, 0, 4, 4});
+  const auto clash = glass::Lay(glass::Mounted({backdrops[0]}, {impostor}), {}, kWindow, 1);
+  CHECK(glass::AcceptedGlass(clash, {backdrops[0]}).empty());
+  const auto roomy = glass::Lay(glass::Mounted({backdrops[0]}, regions), {}, kWindow, 1);
+  CHECK(glass::AcceptedGlass(roomy, {backdrops[0]}).size() == 10);
+}
+
+TEST(clear_cancels_pending_presented) {
+  glass::PresentedGate gate;
+  const auto before = gate.Issue(7);
+  CHECK(gate.Live(before));
+  gate.Invalidate();
+  CHECK(!gate.Live(before));
+  const auto after = gate.Issue(8);
+  CHECK(gate.Live(after) && after.generation == 8);
+  gate.Invalidate();
+  gate.Invalidate();
+  CHECK(!gate.Live(after) && !gate.Live(before));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

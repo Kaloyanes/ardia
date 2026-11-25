@@ -298,6 +298,37 @@ inline int ClampToInt(double value, double limit = kMaxCoordinate) {
   return static_cast<int>(std::lround(std::clamp(value, -limit, limit)));
 }
 
+inline std::vector<Region> Mounted(const std::vector<Region>& backdrops, const std::vector<Region>& glass) {
+  std::vector<Region> all = backdrops;
+  all.insert(all.end(), glass.begin(), glass.end());
+  return all;
+}
+
+inline std::vector<std::string> AcceptedGlass(const Layout& mounted, const std::vector<Region>& backdrops) {
+  std::set<std::string> backdrop_ids;
+  for (const Region& backdrop : backdrops) backdrop_ids.insert(backdrop.id);
+  std::vector<std::string> accepted;
+  for (const std::string& id : mounted.accepted) {
+    if (!backdrop_ids.contains(id)) accepted.push_back(id);
+  }
+  return accepted;
+}
+
+class PresentedGate {
+ public:
+  struct Ticket {
+    std::uint64_t epoch = 0;
+    int generation = 0;
+  };
+
+  Ticket Issue(int generation) const { return Ticket{epoch_, generation}; }
+  void Invalidate() { ++epoch_; }
+  bool Live(const Ticket& ticket) const { return ticket.epoch == epoch_; }
+
+ private:
+  std::uint64_t epoch_ = 0;
+};
+
 inline SlotKey KeyOf(const Placement& placement) {
   return SlotKey{placement.plane, placement.page, placement.id};
 }

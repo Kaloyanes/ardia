@@ -223,47 +223,47 @@ void InstallDefaultMainMenu(MenuCommandHandler handler) {
   InstallMainMenu(menu::DefaultMainMenu(base::SysNSStringToUTF8(name)), std::move(handler));
 }
 
-void ShowContextMenu(gfx::NativeView view,
+void PopUpContextMenu(LiveMenuView live_view,
+                      gfx::Point point,
+                      NSMenu* built,
+                      ArdiaMacMenuTarget* target,
+                      ContextMenuDone done) {
+  NSView* view = std::move(live_view).Run().GetNativeNSView();
+  if (!view || !view.window) {
+    std::move(done).Run(std::nullopt);
+    return;
+  }
+  const NSPoint location =
+      NSMakePoint(point.x(), view.isFlipped ? point.y() : NSHeight(view.bounds) - point.y());
+  {
+    base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
+    [built popUpMenuPositioningItem:nil atLocation:location inView:view];
+  }
+  NSDictionary* chosen = target.chosen;
+  if (!chosen) {
+    std::move(done).Run(std::nullopt);
+    return;
+  }
+  std::move(done).Run(MenuChoice{base::SysNSStringToUTF8(chosen[@"command"]),
+                                 base::SysNSStringToUTF8(chosen[@"arg"])});
+}
+
+void ShowContextMenu(LiveMenuView live_view,
                      const gfx::Point& point,
                      const menu::Item& root,
                      bool background_instance,
                      ContextMenuDone done) {
-  NSView* ns_view = view.GetNativeNSView();
-  if (background_instance || !ns_view || !ns_view.window) {
-    LogMenu(background_instance ? "context menu (background, not shown)"
-                                : "context menu without a window",
-            root);
+  if (background_instance) {
+    LogMenu("context menu (background, not shown)", root);
     std::move(done).Run(std::nullopt);
     return;
   }
   ArdiaMacMenuTarget* target = [[ArdiaMacMenuTarget alloc] init];
   target.forContextMenu = YES;
   NSMenu* built = BuildMenu(root, target, false);
-  const NSPoint location =
-      NSMakePoint(point.x(), ns_view.isFlipped ? point.y() : NSHeight(ns_view.bounds) - point.y());
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(
-                     [](NSMenu* built, NSView* __weak weak_view, NSPoint location,
-                        ArdiaMacMenuTarget* target, ContextMenuDone done) {
-                       NSView* strong = weak_view;
-                       if (!strong.window) {
-                         std::move(done).Run(std::nullopt);
-                         return;
-                       }
-                       {
-                         base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
-                         [built popUpMenuPositioningItem:nil atLocation:location inView:strong];
-                       }
-                       NSDictionary* chosen = target.chosen;
-                       if (!chosen) {
-                         std::move(done).Run(std::nullopt);
-                         return;
-                       }
-                       std::move(done).Run(MenuChoice{
-                           base::SysNSStringToUTF8(chosen[@"command"]),
-                           base::SysNSStringToUTF8(chosen[@"arg"])});
-                     },
-                     built, ns_view, location, target, std::move(done)));
+      FROM_HERE, base::BindOnce(&PopUpContextMenu, std::move(live_view), point,
+                                built, target, std::move(done)));
 }
 
 }

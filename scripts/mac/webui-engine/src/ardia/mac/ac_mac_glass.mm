@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "ui/views/widget/widget.h"
 
 @interface ArdiaMacGlassSlotView : NSView
@@ -195,6 +197,16 @@ void GlassRegions::Clear() {
   [views_->behind removeFromSuperview];
   views_->behind = nil;
   placed_.clear();
+  regions_.clear();
+  backdrops_.clear();
+  gate_.Invalidate();
+  weak_factory_.InvalidateWeakPtrs();
+}
+
+void GlassRegions::EmitPresented(glass::PresentedGate::Ticket ticket) {
+  if (gate_.Live(ticket) && presented_) {
+    presented_.Run(ticket.generation);
+  }
 }
 
 base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) {
@@ -221,19 +233,15 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
   const std::optional<int> presentable =
       raw_generation ? glass::PresentableGeneration(*raw_generation) : std::nullopt;
   [CATransaction begin];
-  if (presentable && presented_) {
-    base::WeakPtr<GlassRegions> weak = weak_factory_.GetWeakPtr();
-    const int committed = *presentable;
-    [CATransaction setCompletionBlock:^{
-      if (weak && weak->presented_) {
-        weak->presented_.Run(committed);
-      }
-    }];
-  }
-  Relayout();
+  const glass::Layout mounted = Relayout();
   [CATransaction commit];
-  const glass::Layout layout = glass::Lay(regions_, {}, glass::Rect{}, zoom_);
-  for (const std::string& id : layout.accepted) {
+  if (presentable && presented_) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&GlassRegions::EmitPresented,
+                                  weak_factory_.GetWeakPtr(),
+                                  gate_.Issue(*presentable)));
+  }
+  for (const std::string& id : glass::AcceptedGlass(mounted, backdrops_)) {
     accepted.Append(id);
   }
   reply.Set("accepted", std::move(accepted));
@@ -276,23 +284,22 @@ void GlassRegions::SetSurface(const glass::Rect& shell_in_window,
   Relayout();
 }
 
-void GlassRegions::Relayout() {
+glass::Layout GlassRegions::Relayout() {
   NSWindow* window =
       widget_ ? widget_->GetNativeWindow().GetNativeNSWindow() : nil;
   NSView* content = window.contentView;
   NSView* frame = content.superview;
   if (!content || !frame) {
-    return;
+    return glass::Lay(glass::Mounted(backdrops_, regions_), {}, glass::Rect{}, zoom_);
   }
   std::vector<glass::Page> pages;
   pages.reserve(pages_.size());
   for (const GlassPage& page : pages_) {
     pages.push_back(page.page);
   }
-  std::vector<glass::Region> all = backdrops_;
-  all.insert(all.end(), regions_.begin(), regions_.end());
-  const glass::Layout layout = glass::Lay(
-      all, pages, glass::Rect{0, 0, shell_.width, shell_.height}, zoom_);
+  const glass::Layout layout =
+      glass::Lay(glass::Mounted(backdrops_, regions_), pages,
+                 glass::Rect{0, 0, shell_.width, shell_.height}, zoom_);
   const bool liquid = LiquidGlassAvailable();
   if (!views_->behind) {
     views_->behind = [[ArdiaMacGlassSlotView alloc] initWithFrame:NSZeroRect];
@@ -390,6 +397,7 @@ void GlassRegions::Relayout() {
     }
   }
   placed_ = layout.placements;
+  return layout;
 }
 
 }

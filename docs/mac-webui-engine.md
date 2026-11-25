@@ -18,8 +18,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
 - A development build needs its own non-official out dir on a dev copy of the tree. `build.sh` refuses
   `is_official_build = true` and the shared `~/chromium-build`.
 - Background mode is `--ardia-background` or `ARDIA_BACKGROUND=1`/`true` (Wave 4A's handoff and `open --env` pass the
-  variable). The launcher adds `--ardia-background` when the variable is set. In background mode no window, popover or
-  menu is shown or takes focus.
+  variable). The launcher adds `--ardia-background` when the variable is set. In background mode the window stays
+  ordered out (never `ShowInactive` or `orderBack:`), and no popover or menu is shown or takes focus. A queued context
+  menu looks its view up again and pops up only if the document that asked is still the live one.
 
 ## What it does
 
@@ -38,8 +39,10 @@ that branch). It is a development tool and never runs in a release. Like Windows
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
   - A glass region over no page falls back behind the window.
-  - After the regions of a `shell.glassRegions` call are committed (`CATransaction` completion), the host sends
-    `ArdiaGlass` `presented {generation}`, which `shellGlass.ts` waits for before dropping its opaque fallback.
+  - After a `shell.glassRegions` call's regions are committed, the host posts `ArdiaGlass` `presented {generation}`
+    on a later main-thread turn, which `shellGlass.ts` waits for before dropping its opaque fallback. A reload clears
+    the glass and drops any `presented` still pending. `accepted` lists only the regions actually mounted, after
+    backdrops and glass share the 64-region cap.
   - Liquid materials use `NSGlassEffectView` on macOS 26+ (corner radius and `style`, as in
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
@@ -69,7 +72,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `bootstrap.js`, `generate_bootstrap.py` and the desktop route table come in from `dev-copies.tsv`.
 - `apps/browser/src/boundaries.json` has a `mac-webui-*` row for each bridge handler and for the launch environment;
   each cites the guard and its `hostile_sinks` test.
-- `tests/mac-layer.test.mjs` runs `tests/test_mac_layer.py` in `node --run test:root`.
+- `tests/mac-layer.test.mjs` runs `tests/test_mac_layer.py` in `node --run test:root` (Linux CI), and the Mac
+  workflow's `webui-engine` job runs it with Clang on macOS.
 
 ## Commands
 

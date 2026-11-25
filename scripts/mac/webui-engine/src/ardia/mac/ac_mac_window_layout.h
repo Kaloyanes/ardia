@@ -68,6 +68,17 @@ inline TitlebarMetrics TitlebarFor(const Lights& lights, Size button) {
                          std::max(1.0, std::round(lights.center.y * 2))};
 }
 
+struct Presentation {
+  bool show = false;
+  bool order_out = false;
+  bool lowest_level = false;
+};
+
+inline Presentation PresentationFor(bool background_instance) {
+  if (background_instance) return Presentation{false, true, true};
+  return Presentation{true, false, false};
+}
+
 struct Translucency {
   bool opaque = true;
   bool clear_background = false;

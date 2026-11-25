@@ -615,6 +615,20 @@ bool ShellHostView::PassesShellPoint(double x, double y) const {
   return glass::Passes(pass_, glass::Point{x / zoom, y / zoom});
 }
 
+gfx::NativeView ShellHostView::LiveShellView(
+    const content::WeakDocumentPtr& document,
+    uint64_t generation) const {
+  content::WebContents* shell = shell_contents();
+  content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
+  const bool current = shell && frame && frame == shell->GetPrimaryMainFrame() &&
+                       frame->IsActive();
+  if (!menu::ContextMenuLive(true, generation, renderer_generation_, current) ||
+      closing_) {
+    return gfx::NativeView();
+  }
+  return shell->GetNativeView();
+}
+
 double ShellHostView::ShellZoom() const {
   content::WebContents* shell = shell_contents();
   if (!shell) {
@@ -1227,7 +1241,13 @@ void ShellHostView::ShowShellContextMenu(const base::DictValue& args, Done done)
                            parsed.problems[0].reason));
   }
   ardia_mac::ShowContextMenu(
-      shell_contents()->GetNativeView(),
+      base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, content::WeakDocumentPtr document,
+             uint64_t generation) {
+            return host ? host->LiveShellView(document, generation)
+                        : gfx::NativeView();
+          },
+          GetWeakPtr(), renderer_document_, renderer_generation_),
       gfx::Point(glass::ClampToInt(x * zoom), glass::ClampToInt(y * zoom)),
       parsed.root, BackgroundInstance(),
       base::BindOnce(

@@ -42,7 +42,8 @@ class GlassRegions {
  private:
   struct Views;
 
-  void Relayout();
+  glass::Layout Relayout();
+  void EmitPresented(glass::PresentedGate::Ticket ticket);
 
   raw_ptr<views::Widget> widget_;
   std::unique_ptr<Views> views_;
@@ -53,6 +54,7 @@ class GlassRegions {
   glass::Rect shell_;
   double zoom_ = 1;
   Presented presented_;
+  glass::PresentedGate gate_;
   base::WeakPtrFactory<GlassRegions> weak_factory_{this};
 };
 

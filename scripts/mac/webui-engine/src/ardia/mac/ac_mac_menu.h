@@ -20,6 +20,7 @@ struct MenuChoice {
 
 using MenuCommandHandler = base::RepeatingCallback<void(const MenuChoice&)>;
 using ContextMenuDone = base::OnceCallback<void(std::optional<MenuChoice>)>;
+using LiveMenuView = base::OnceCallback<gfx::NativeView()>;
 
 struct ParsedMenu {
   menu::Item root;
@@ -31,7 +32,7 @@ ParsedMenu ParseMenu(const base::Value& spec);
 void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler);
 void InstallDefaultMainMenu(MenuCommandHandler handler);
 
-void ShowContextMenu(gfx::NativeView view,
+void ShowContextMenu(LiveMenuView live_view,
                      const gfx::Point& point,
                      const menu::Item& root,
                      bool background_instance,
