@@ -126,11 +126,11 @@ test("a second ⌘L closes the bar it opened over a page, in every layout and pl
   ];
   for (const settings of layouts) {
     const w = pageWindow(settings);
-    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
     assert.equal(S().windowUi[w].panel.open, true, JSON.stringify(settings));
-    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
     assert.equal(S().windowUi[w].panel.open, false, JSON.stringify(settings));
-    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
     assert.equal(S().windowUi[w].panel.open, true, JSON.stringify(settings));
   }
 });
@@ -139,7 +139,7 @@ test("⌘L over ⌘T's bar on a page swaps it for the address bar instead of clo
   const { runCommand } = await import("../commands/commands.ts");
   const w = pageWindow({ commandBarPlacement: "field", addressBar: "toolbar" });
   S().openPanel(w, "", { kind: "list" });
-  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
   assert.equal(S().windowUi[w].panel.open, true);
   assert.equal(S().windowUi[w].panel.newTab, undefined);
   assert.equal(S().windowUi[w].panel.initialText, "https://example.com/");
@@ -159,10 +159,10 @@ test("the second ⌘L gives the keyboard back to the page, in a main window and 
     const w = S().createWindow(kind === "small" ? { kind: "small", url: "https://example.com/" } : { url: "https://example.com/" });
     const page = activeTabId(S(), w);
     const focused = focusLog([page]);
-    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
     assert.equal(S().windowUi[w].panel.open, true, kind);
     assert.deepEqual(focused, [], `${kind}: opening the bar leaves the page alone`);
-    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
     assert.equal(S().windowUi[w].panel.open, false, kind);
     assert.deepEqual(focused, [page], `${kind}: the page has the keyboard again`);
   }
@@ -176,19 +176,19 @@ test("on a blank New Tab page with the address in the sidebar, and in a blank Li
   const blank = activeTabId(S(), w);
   assert.equal(S().tabs[blank].url, "");
   const focused = focusLog([blank]);
-  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
   assert.equal(S().windowUi[w].panel.open, true, "the first ⌘L opens the sidebar dropdown");
-  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
   assert.equal(S().windowUi[w].panel.open, false, "the second closes it");
   assert.deepEqual(focused, [], "a blank tab has no page to hand the keyboard to");
-  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
   assert.equal(S().windowUi[w].panel.open, true, "and the third opens it again");
 
   S().hydrate({});
   const little = S().createWindow({ kind: "small" });
-  runCommand({ command: "focusCommandBar", arg: null, windowId: little });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: little }, { user: { consent: null } });
   assert.equal(S().windowUi[little].panel.open, true);
-  runCommand({ command: "focusCommandBar", arg: null, windowId: little });
+  runCommand({ command: "focusCommandBar", arg: null, windowId: little }, { user: { consent: null } });
   assert.equal(S().windowUi[little].panel.open, false, "a blank Little Ardia closes its bar instead of reopening it");
   assert.ok(S().windows[little], "and keeps its window");
 });
@@ -208,4 +208,24 @@ test("each ⌘L dismissal is counted once, under the consent of the key press", 
   runCommand({ command: "focusCommandBar", arg: null, windowId: w }, { user: { consent: null } });
   assert.equal(takeInlineCompletionCounts().command_bar_key_dismissals, 1, "an open is not a dismissal, and a press without consent isn't counted");
   client.setSharing(false, "settings");
+});
+
+test("automation's Open Command Bar opens and focuses the bar every time and never closes it", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  const { runMethod } = await import("../automation/controlSocket.ts");
+  for (const kind of ["main", "small"]) {
+    S().hydrate({});
+    S().updateSettings({ commandBarPlacement: "field", addressBar: "toolbar" });
+    const w = S().createWindow(kind === "small" ? { kind: "small", url: "https://example.com/" } : { url: "https://example.com/" });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+    assert.equal(S().windowUi[w].panel.open, true, `${kind}: a launch action or script run twice keeps the bar open`);
+  }
+  S().hydrate({});
+  const w = S().createWindow({ url: "https://example.com/" });
+  for (const n of [1, 2]) {
+    const body = runMethod({ command: "focusCommandBar", windowId: w }, false);
+    assert.deepEqual(body, { result: { ok: true } }, JSON.stringify(body));
+    assert.equal(S().windowUi[w].panel.open, true, `the control socket's run, call ${n}`);
+  }
 });

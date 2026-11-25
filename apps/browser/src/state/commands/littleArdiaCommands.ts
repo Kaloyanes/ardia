@@ -1,10 +1,10 @@
 import { useBrowser } from "../browser/store";
 import { activeTabId } from "../browser/model";
 import { dismissBarByCommandKey } from "../omnibox/barState";
-import type { ConsentToken } from "../telemetry/client";
+import type { ByUser } from "../tabs/closeActivation";
 import { closeLittleArdia, cycleLittleArdiaProfile, moveLittleArdiaToProfile, openInMainWindow, openLittleArdiaProfileMenu } from "../littleArdia/actions";
 
-export function runLittleArdiaCommand(command: string, arg: string | null | undefined, windowId: string, consent: ConsentToken | null = null): boolean {
+export function runLittleArdiaCommand(command: string, arg: string | null | undefined, windowId: string, user?: ByUser): boolean {
   const s = useBrowser.getState();
   const tabId = activeTabId(s, windowId);
   const tab = tabId ? s.tabs[tabId] : undefined;
@@ -14,7 +14,7 @@ export function runLittleArdiaCommand(command: string, arg: string | null | unde
       else void closeLittleArdia(windowId);
       return true;
     case "focusCommandBar":
-      if (s.windowUi[windowId]?.panel.open && tab) dismissBarByCommandKey(windowId, tab.id, consent);
+      if (user && s.windowUi[windowId]?.panel.open && tab) dismissBarByCommandKey(windowId, tab.id, user.consent);
       else s.openPanel(windowId, tab?.url ?? "");
       return true;
     case "openFile":

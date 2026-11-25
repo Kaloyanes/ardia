@@ -100,7 +100,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       if (command === "closeTab") return requestWindowClose(target.windowId);
       return focusSettingsSearch();
     case "little":
-      return void runLittleArdiaCommand(command, arg, target.windowId, user?.consent ?? null);
+      return void runLittleArdiaCommand(command, arg, target.windowId, user);
     case "peek":
       return void runPeekCommand(command, target.windowId);
   }
@@ -187,7 +187,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return arg ? s.restoreClosed(arg, windowId) : undefined;
     case "focusCommandBar": {
       const placement = commandKeyPlacement(s, windowId);
-      if (tabId && ui?.panel.open && !ui.panel.newTab) return dismissBarByCommandKey(windowId, tabId, user?.consent ?? null);
+      if (user && tabId && ui?.panel.open && !ui.panel.newTab) return dismissBarByCommandKey(windowId, tabId, user.consent);
       if (page) return s.openPanel(windowId, page.url, undefined, placement);
       if (isEmptyCardTab(s, tab) && showNewTabBar(windowId)) return;
       if (tab && addressBarInSidebar(s, windowId) && placement === "field") return s.openPanel(windowId, "", undefined, placement);
