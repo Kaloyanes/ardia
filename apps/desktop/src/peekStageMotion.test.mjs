@@ -216,3 +216,27 @@ test("a close or promote reports done while the hold is still on, so nothing rea
   assert.deepEqual(seen, [true]);
   assert.equal(h.held(), false);
 });
+
+test("a scrim animate() that throws cancels the card animation already started and releases the moving marker", async () => {
+  const root = fakeNode();
+  const card = fakeNode();
+  const scrim = { ...fakeNode(), animate() { throw new Error("animate failed"); } };
+  let settledBounds = 0;
+  const states = [];
+  const animator = createWebAnimator(() => root, () => card, () => scrim, () => settledBounds++);
+  const controller = createStageController(animator, { state: (phase) => states.push(phase), done() {} }, () => ({ geometry, reduceMotion: false }));
+  controller.begin(1);
+  assert.equal(card.animations[0].cancelled, true, "the card animation is cancelled at once");
+  await tick();
+  assert.equal(root.attributes.has(PEEK_MOVING_ATTRIBUTE), false);
+  assert.equal(settledBounds, 1);
+  assert.deepEqual(states, ["entering", "open"]);
+});
+
+test("an animator whose run throws synchronously still releases the hold", async () => {
+  const released = [];
+  const controller = createStageController({ hold() { released.push("hold"); }, release() { released.push("release"); }, cancel() {}, run() { throw new Error("boom"); } }, { state() {}, done() {} }, () => ({ geometry, reduceMotion: false }));
+  assert.equal(controller.begin(1), true);
+  await tick();
+  assert.deepEqual(released, ["hold", "release"]);
+});

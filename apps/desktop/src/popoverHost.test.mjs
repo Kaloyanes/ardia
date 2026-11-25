@@ -18,7 +18,7 @@ function element(name) {
 }
 let active = null;
 
-function harness({ childPanels = false, beyondWindow = false, openFails = false, openThrows = false, holdOpen = false, focusable } = {}) {
+function harness({ childPanels = false, beyondWindow = false, openFails = false, openThrows = false, holdOpen = false, focusable, mountThrows = false, scale = 2 } = {}) {
   const target = new EventTarget();
   const calls = [];
   const mounted = [];
@@ -53,8 +53,9 @@ function harness({ childPanels = false, beyondWindow = false, openFails = false,
     },
     viewport: () => ({ x: 0, y: 0, width: 1000, height: 700 }),
     workArea: () => ({ x: -100, y: -100, width: 1920, height: 1080 }),
-    scale: () => 2,
+    scale: () => scale,
     mountDom: (popoverId, spec, placement) => {
+      if (mountThrows) throw new Error("mount failed");
       const node = element(popoverId);
       const record = { id: popoverId, node, placements: [placement], unmounted: false };
       mounted.push(record);
@@ -369,4 +370,59 @@ test("focus is not restored to a hidden, inert or aria-hidden element", () => {
   const other = throwing.host.open(throwing.spec());
   other.close();
   assert.equal(button.focused, 0);
+});
+
+test("closing a parent directly closes every nested popover above it", async () => {
+  const h = harness();
+  const parent = h.host.open(h.spec());
+  const child = h.host.open(h.spec({ nested: true }));
+  const grandchild = h.host.open(h.spec({ nested: true }));
+  parent.close();
+  assert.equal(h.host.openCount(), 0);
+  assert.ok(child.closed() && grandchild.closed());
+  assert.deepEqual(h.dismissed, ["closed", "closed", "closed"]);
+  child.close();
+  assert.equal(h.dismissed.length, 3);
+});
+
+test("a host dismissal that arrives before the open is acknowledged sends no redundant close", async () => {
+  const h = harness({ childPanels: true, holdOpen: true });
+  const handle = h.host.open(h.spec());
+  await tick();
+  h.shell(POPOVER_DISMISSED_EVENT, { id: handle.id, windowId: "w1", reason: "outside" });
+  assert.equal(handle.closed(), true);
+  h.pendingOpens[0].resolve(null);
+  await handle.ready;
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD]);
+  assert.deepEqual(h.dismissed, ["outside"]);
+});
+
+test("a DOM fallback that throws cleans up the entry and its listeners and rejects ready", async () => {
+  const native = harness({ childPanels: true, openFails: true, mountThrows: true });
+  const handle = native.host.open(native.spec());
+  await assert.rejects(handle.ready, /mount failed/);
+  assert.equal(native.host.openCount(), 0);
+  assert.equal(native.listening(), false);
+  assert.equal(handle.closed(), true);
+  assert.equal(native.regions.size, 0);
+  const dom = harness({ mountThrows: true });
+  const direct = dom.host.open(dom.spec());
+  await assert.rejects(direct.ready, /mount failed/);
+  assert.equal(dom.host.openCount(), 0);
+  assert.equal(dom.listening(), false);
+});
+
+test("the host never receives a non-finite anchor or scale", async () => {
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const h = harness({ childPanels: true, scale: bad });
+    const handle = h.host.open(h.spec({ anchor: { x: bad, y: bad, width: bad, height: bad } }));
+    await handle.ready;
+    handle.update({ anchor: { x: bad, y: 10, width: 10, height: bad } });
+    await tick();
+    for (const { args } of h.calls.filter((c) => c.method !== POPOVER_CLOSE_METHOD)) {
+      for (const value of [...Object.values(args.anchor), ...Object.values(args.rect), args.scale, args.arrowOffset]) assert.ok(Number.isFinite(value), JSON.stringify(args));
+      assert.ok(args.scale > 0);
+    }
+  }
 });

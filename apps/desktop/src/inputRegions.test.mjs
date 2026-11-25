@@ -13,7 +13,7 @@ function node(rect, { children = [], pointer = true } = {}) {
   return element;
 }
 
-function harness({ send = true, animating = false } = {}) {
+function harness({ send = true, animating = false, frozen = null } = {}) {
   const sent = [];
   const replies = [];
   const concealed = new Set();
@@ -32,6 +32,7 @@ function harness({ send = true, animating = false } = {}) {
     } : null,
     viewport: () => ({ width: 1000, height: 800 }),
     rectOf: (element) => element.rect,
+    ...(frozen ? { pageFrozen: (slot) => frozen.has(slot) } : {}),
     receivesPointer: (element) => element.pointer,
     watch: () => () => {},
     animating: () => animating,
@@ -625,4 +626,35 @@ test("the shell cuts the same corners the engine clips, at fractional edges, any
       assert.equal(radii.upperLeft, inset === 0 ? 0 : inset < windowRadius ? Math.max(12, windowRadius - inset) : 12, `inset ${inset} at radius ${windowRadius}`);
     }
   }
+});
+
+test("a page inside a moving Peek stage keeps its cutout and hit-region rect until the stage settles, then commits once", async () => {
+  const frozen = new Set();
+  const h = harness({ frozen });
+  const peekPage = node({ x: 300, y: 100, width: 600, height: 500 });
+  const overlay = node({ x: 280, y: 60, width: 640, height: 560 }, { children: [peekPage] });
+  h.registry.setPage(peekPage, true);
+  const stop = h.registry.addOverlay(overlay, "box", false);
+  await h.settle();
+  h.replies.splice(0).forEach((reply) => reply.resolve());
+  await h.settle();
+  const before = h.pagesSeen.length;
+  const sentBefore = h.sent.length;
+  frozen.add(peekPage);
+  for (const x of [320, 340, 360, 380]) {
+    peekPage.rect = { x, y: 100, width: 600 - (x - 300), height: 500 };
+    h.registry.refresh();
+    await h.nextFrame();
+    h.replies.splice(0).forEach((reply) => reply.resolve());
+    await h.settle();
+  }
+  assert.equal(h.pagesSeen.length, before, "the cutout never moves mid-motion");
+  for (const regions of h.sent.slice(sentBefore)) assert.deepEqual(regions.pages, [{ x: 300, y: 100, width: 600, height: 500 }]);
+  frozen.delete(peekPage);
+  h.registry.refresh();
+  await h.settle();
+  assert.equal(h.pagesSeen.length, before + 1);
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 380, y: 100, width: 520, height: 500 }]);
+  assert.deepEqual(h.sent.at(-1).pages, [{ x: 380, y: 100, width: 520, height: 500 }]);
+  stop();
 });

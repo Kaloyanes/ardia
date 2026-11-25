@@ -94,8 +94,17 @@ export function createWebAnimator(root: () => AnimatedNode | null, card: () => A
     cancel: cancelAll,
     run(_move, motion) {
       cancelAll();
-      const started = [play(card(), motion.card, motion), play(scrim(), motion.scrim, motion)].filter((animation): animation is Pick<Animation, "cancel" | "finished"> => !!animation);
+      const started: Pick<Animation, "cancel" | "finished">[] = [];
       running = started;
+      try {
+        for (const [node, frames] of [[card(), motion.card], [scrim(), motion.scrim]] as const) {
+          const animation = play(node, frames, motion);
+          if (animation) started.push(animation);
+        }
+      } catch (error) {
+        if (running === started) cancelAll();
+        return Promise.reject(error);
+      }
       const interrupted = () => {
         if (running === started) cancelAll();
       };
@@ -134,7 +143,13 @@ export function createStageController(animator: StageAnimator, events: StageEven
       settled();
       animator.release();
     };
-    void animator.run(move, motion).then(end, end);
+    let moving: Promise<void>;
+    try {
+      moving = animator.run(move, motion);
+    } catch (error) {
+      moving = Promise.reject(error);
+    }
+    void moving.then(end, end);
   };
   return {
     phase: () => phase,

@@ -3,10 +3,12 @@ import { hostSupports, INPUT_REGIONS_METHOD, invokeHost, reportHostError, type A
 import { createInputRegions, type InputRegionsRegistry, type RegionDeps, type RegionShape } from "./inputRegions.ts";
 import { clippedRectOf } from "./hostViewport.ts";
 import { createPageHoles, type PageHoles } from "./pageHoles.ts";
+import { PEEK_MOVING_ATTRIBUTE } from "./peekStageMotion.ts";
 import { startShellGlass } from "./shellGlass.ts";
 import { currentWindowCorners, onWindowCornersChanged } from "./windowDecorations.ts";
 
 const SHELL_ABOVE_CLASS = "ardia-shell-above";
+const MOVING_STAGE = `[${PEEK_MOVING_ATTRIBUTE}]`;
 const MOTION_EVENTS = ["transitionrun", "transitionend", "transitioncancel", "animationstart", "animationend", "animationcancel"] as const;
 
 let regions: InputRegionsRegistry | null = null;
@@ -26,6 +28,7 @@ export function domRegionDeps(host: ArdiaHost): Omit<RegionDeps, "conceal"> {
       return { x, y, width, height };
     },
     pageRectOf: clippedRectOf,
+    pageFrozen: (slot) => !!slot.closest?.(MOVING_STAGE),
     receivesPointer: (element) => getComputedStyle(element).pointerEvents !== "none",
     watch: (element, changed) => {
       const mutations = new MutationObserver(changed);

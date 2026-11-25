@@ -84,3 +84,15 @@ test("device-pixel snapping keeps every edge inside a fractional work area, nega
   }
   assert.ok(placePopover({ anchor: { x: -90, y: 0, width: 10, height: 10 }, size: { width: 50, height: 50 }, area: work, align: "start" }).rect.x < 0);
 });
+
+test("a fractional work area narrower than a device pixel keeps its zero-sized rect inside the area", () => {
+  for (const scale of [1, 1.5, 2]) {
+    const work = { x: 10.2, y: 20.1, width: 0.3, height: 0.25 };
+    const placed = placePopover({ anchor: { x: 0, y: 0, width: 5, height: 5 }, size: { width: 100, height: 100 }, area: work, scale });
+    const { x, y, width, height } = placed.rect;
+    assert.equal(width, 0);
+    assert.equal(height, 0);
+    assert.ok(x >= work.x && x <= work.x + work.width, `x ${x} at ${scale}`);
+    assert.ok(y >= work.y && y <= work.y + work.height, `y ${y} at ${scale}`);
+  }
+});

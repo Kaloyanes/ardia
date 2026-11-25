@@ -15,6 +15,7 @@ export type RegionDeps = {
   viewport: () => { width: number; height: number };
   rectOf: (element: Element) => Rect;
   pageRectOf?: (element: Element) => Rect;
+  pageFrozen?: (slot: Element) => boolean;
   receivesPointer: (element: Element) => boolean;
   watch: (element: Element, changed: () => void) => () => void;
   animating: (elements: readonly Element[]) => boolean;
@@ -101,7 +102,15 @@ export function createInputRegions(deps: RegionDeps) {
     for (const child of element.children) hitRects(child, out);
   };
 
-  const pageRectOf = deps.pageRectOf ?? deps.rectOf;
+  const measuredPageRect = deps.pageRectOf ?? deps.rectOf;
+  const settledPageRects = new WeakMap<Element, Rect>();
+  const pageRectOf = (slot: Element) => {
+    const settled = settledPageRects.get(slot);
+    if (settled && deps.pageFrozen?.(slot)) return settled;
+    const rect = measuredPageRect(slot);
+    settledPageRects.set(slot, rect);
+    return rect;
+  };
 
   const measurePages = () => {
     const window = { x: 0, y: 0, ...deps.viewport() };

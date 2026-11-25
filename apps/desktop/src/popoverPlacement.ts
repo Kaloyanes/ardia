@@ -18,14 +18,16 @@ export type Placement = { rect: PlacementRect; side: PopoverSide; flipped: boole
 const OPPOSITE: Record<PopoverSide, PopoverSide> = { bottom: "top", top: "bottom", left: "right", right: "left" };
 const vertical = (side: PopoverSide) => side === "top" || side === "bottom";
 
+export const deviceScale = (scale: number | undefined) => (typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : 1);
+
 export function snapToDevice(value: number, scale: number) {
-  const ratio = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const ratio = deviceScale(scale);
   return Math.round(value * ratio) / ratio;
 }
 
-const finite = (value: number | undefined, fallback = 0) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
+export const finite = (value: number | undefined, fallback = 0) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const extent = (value: number | undefined) => Math.max(0, finite(value));
-const cleanRect = (rect: PlacementRect): PlacementRect => ({ x: finite(rect?.x), y: finite(rect?.y), width: extent(rect?.width), height: extent(rect?.height) });
+export const cleanRect = (rect: PlacementRect): PlacementRect => ({ x: finite(rect?.x), y: finite(rect?.y), width: extent(rect?.width), height: extent(rect?.height) });
 
 function room(side: PopoverSide, anchor: PlacementRect, area: PlacementRect, gap: number, margin: { x: number; y: number }) {
   if (side === "bottom") return area.y + area.height - margin.y - (anchor.y + anchor.height + gap);
@@ -40,9 +42,10 @@ function clampSpan(start: number, length: number, low: number, high: number) {
 }
 
 function snapSpan(start: number, length: number, low: number, high: number, scale: number) {
-  const ratio = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const ratio = deviceScale(scale);
   const floorEdge = Math.ceil(low * ratio - 1e-9) / ratio;
-  const ceilEdge = Math.max(floorEdge, Math.floor(high * ratio + 1e-9) / ratio);
+  const ceilEdge = Math.floor(high * ratio + 1e-9) / ratio;
+  if (floorEdge > ceilEdge) return { start: Math.min(Math.max(start, low), high), length: 0 };
   const begin = Math.min(Math.max(snapToDevice(start, ratio), floorEdge), ceilEdge);
   const end = Math.min(Math.max(snapToDevice(start + length, ratio), begin), ceilEdge);
   return { start: begin, length: end - begin };
@@ -57,7 +60,7 @@ export function placePopover(request: PlacementRequest): Placement {
   const gap = Math.max(0, finite(request.gap, 4));
   const wanted = Math.max(0, finite(request.margin, 8));
   const margin = { x: Math.min(wanted, Math.floor(area.width / 2)), y: Math.min(wanted, Math.floor(area.height / 2)) };
-  const scale = finite(request.scale, 1);
+  const scale = deviceScale(request.scale);
   const need = vertical(side) ? size.height : size.width;
   const preferred = room(side, anchor, area, gap, margin);
   const opposite = room(OPPOSITE[side], anchor, area, gap, margin);

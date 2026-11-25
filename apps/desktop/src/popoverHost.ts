@@ -1,6 +1,6 @@
 import { hostSupports, invokeHost, reportHostError, type ArdiaHost, type HostRect } from "./host.ts";
 import { watchPageFocus } from "./pageFocus.ts";
-import { placePopover, type Placement, type PopoverAlign, type PopoverSide } from "./popoverPlacement.ts";
+import { cleanRect, deviceScale, placePopover, type Placement, type PopoverAlign, type PopoverSide } from "./popoverPlacement.ts";
 
 export const POPOVER_OPEN_METHOD = "shell.popover.open";
 export const POPOVER_UPDATE_METHOD = "shell.popover.update";
@@ -98,6 +98,7 @@ type Entry = {
   panelOpen: boolean;
   updateQueued: boolean;
   closeReason: PopoverDismissReason;
+  hostDismissed: boolean;
 };
 
 const modifierFree = (event: KeyboardEvent) => !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
@@ -114,11 +115,11 @@ export function createPopoverHost(deps: PopoverHostDeps) {
   const geometry = (entry: Entry): PopoverUpdateRequest => ({
     id: entry.id,
     windowId: deps.windowId,
-    anchor: entry.spec.anchor,
+    anchor: cleanRect(entry.spec.anchor),
     rect: entry.placement.rect,
     side: entry.placement.side,
     arrowOffset: entry.placement.arrowOffset,
-    scale: deps.scale(),
+    scale: deviceScale(deps.scale()),
   });
   const closePanel = (entry: Entry) => quietly(POPOVER_CLOSE_METHOD, { id: entry.id, windowId: deps.windowId, reason: entry.closeReason } satisfies PopoverCloseRequest);
 
@@ -204,6 +205,7 @@ export function createPopoverHost(deps: PopoverHostDeps) {
       if (!entry || entry.mode !== "native") return;
       const reason = event.reason ?? "host";
       closeFrom(index + 1, reason);
+      entry.hostDismissed = true;
       entry.panelOpen = false;
       finish(entry, reason, false);
       if (reason === "blur" && deps.windowFocused && !deps.windowFocused()) closeFrom(0, "blur");
@@ -226,11 +228,11 @@ export function createPopoverHost(deps: PopoverHostDeps) {
     const request: PopoverOpenRequest = { ...geometry(entry), beyondWindow: deps.capabilities.beyondWindow, takesFocus: entry.spec.takesFocus !== false, content: entry.spec.content };
     return call(POPOVER_OPEN_METHOD, request).then(
       () => {
-        entry.panelOpen = true;
         if (entry.state === "closed") {
-          closePanel(entry);
+          if (!entry.hostDismissed) closePanel(entry);
           return "native";
         }
+        entry.panelOpen = true;
         entry.state = "open";
         if (entry.updateQueued) {
           entry.updateQueued = false;
@@ -243,7 +245,12 @@ export function createPopoverHost(deps: PopoverHostDeps) {
         entry.updateQueued = false;
         if (entry.state === "closed") return "native";
         entry.state = "open";
-        mountDom(entry);
+        try {
+          mountDom(entry);
+        } catch (mountError) {
+          finish(entry, "failed", false);
+          throw mountError;
+        }
         return "dom";
       },
     );
@@ -269,6 +276,7 @@ export function createPopoverHost(deps: PopoverHostDeps) {
         panelOpen: false,
         updateQueued: false,
         closeReason: "closed",
+        hostDismissed: false,
       };
       stack.push(entry);
       attach();
@@ -279,19 +287,24 @@ export function createPopoverHost(deps: PopoverHostDeps) {
       } else {
         try {
           mountDom(entry);
+          ready = Promise.resolve("dom");
         } catch (error) {
-          finish(entry, "failed", false);
           deps.report?.(error);
+          finish(entry, "failed", false);
+          ready = Promise.reject(error);
         }
-        ready = Promise.resolve("dom");
       }
+      ready.catch(() => {});
       return {
         id,
         ready,
         mode: () => entry.mode,
         placement: () => entry.placement,
         closed: () => entry.state === "closed",
-        close: (reason = "closed") => finish(entry, reason, true),
+        close: (reason = "closed") => {
+          const index = stack.indexOf(entry);
+          if (index >= 0) closeFrom(index, reason);
+        },
         update(next) {
           if (entry.state === "closed") return;
           entry.spec = { ...entry.spec, ...next };
