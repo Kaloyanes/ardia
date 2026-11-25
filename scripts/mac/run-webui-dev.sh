@@ -31,16 +31,8 @@ data_dir="$support/Ardia WebUI Dev"
 lowercase() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 canonical_path() {
-  local path=$1 missing=""
-  case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
-  while [ ! -e "$path" ] && [ "$path" != "/" ]; do
-    missing="/$(basename "$path")$missing"
-    path=$(dirname "$path")
-  done
-  [ -d "$path" ] || return 1
-  path=$(cd "$path" 2>/dev/null && pwd -P) || return 1
-  [ "$path" = / ] && path=""
-  printf '%s%s' "$path" "$missing"
+  command -v python3 >/dev/null || return 1
+  python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]), end="")' "$1"
 }
 
 inside_profile() {
@@ -96,10 +88,9 @@ fi
 live_roots=("$support/com.ardia.browser" "$support/Ardia")
 app_identifier=$([ -f "$app/Contents/Info.plist" ] && /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)
 [ -z "$app_identifier" ] || live_roots+=("$support/$app_identifier")
-refuse_live_profile "$data_dir"
-[ "$dry_run" = 1 ] || mkdir -p "$data_dir" || die "can't create $data_dir"
 data_dir=$(canonical_path "$data_dir") || die "can't resolve $data_dir"
 refuse_live_profile "$data_dir"
+[ "$dry_run" = 1 ] || mkdir -p "$data_dir" || die "can't create $data_dir"
 
 bundle="$root/apps/desktop/dist/mac"
 build_cmd=(pnpm -C "$root/apps/desktop" build:mac)

@@ -32,6 +32,18 @@ public enum WebUIShellHost {
     return String(cString: resolved)
   }
 
+  public static func sameFile(_ a: String, _ b: String) -> Bool {
+    var first = stat()
+    var second = stat()
+    guard stat(a, &first) == 0, stat(b, &second) == 0 else { return false }
+    return first.st_dev == second.st_dev && first.st_ino == second.st_ino
+  }
+
+  static func isRunningBundle(_ candidate: String, running: URL) -> Bool {
+    if let canonical = canonicalPath(candidate), canonical == canonicalPath(running.path) { return true }
+    return sameFile(candidate, running.path)
+  }
+
   public static func hostExecutable(bundle: String, requiredIdentifier: String?) -> String? {
     guard let root = canonicalPath(bundle), root.hasSuffix(".app") else { return nil }
     let rootURL = URL(fileURLWithPath: root, isDirectory: true)
@@ -49,11 +61,10 @@ public enum WebUIShellHost {
 
   public static func route(_ request: Request, runningBundle: URL) -> Route {
     if request.handedOff { return .stay(reason: "the WebUI host handed back to this app; staying on the React Native shell") }
-    let running = canonicalPath(runningBundle.path) ?? runningBundle.standardizedFileURL.path
     let sibling = runningBundle.deletingLastPathComponent().appendingPathComponent(devHostAppName, isDirectory: true).path
     let named = request.hostApp.flatMap { $0.isEmpty ? nil : $0 }
     let candidates: [(bundle: String, identifier: String?)] = [named.map { ($0, nil) }, (sibling, devHostBundleIdentifier)].compactMap { $0 }
-    for candidate in candidates where canonicalPath(candidate.bundle) != running {
+    for candidate in candidates where !isRunningBundle(candidate.bundle, running: runningBundle) {
       if let executable = hostExecutable(bundle: candidate.bundle, requiredIdentifier: candidate.identifier) { return .handOff(executable: executable) }
     }
     let looked = candidates.map(\.bundle).joined(separator: " or ")
@@ -62,6 +73,15 @@ public enum WebUIShellHost {
 
   public static func handOffArguments(_ arguments: [String]) -> [String] {
     arguments.contains { $0.lowercased() == argument } ? arguments : arguments + [argument]
+  }
+
+  public static let refusedExitCode: Int32 = 78
+
+  public static func refuseLiveProfile() {
+    #if DEBUG
+    NSLog("[webui-dev] refusing to start: the WebUI shell's data dir is inside the installed app's profile. Nothing was opened; pass a copy in ARDIA_DATA_DIR")
+    exit(refusedExitCode)
+    #endif
   }
 
   public static func perform(_ request: Request, arguments: [String] = CommandLine.arguments, runningBundle: URL = Bundle.main.bundleURL) {

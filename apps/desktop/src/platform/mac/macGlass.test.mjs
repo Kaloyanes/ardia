@@ -103,6 +103,30 @@ test("a send the host refuses is retried, and only an accepted layout counts as 
   assert.equal(sent.length, 2, "once accepted, the layout isn't sent again");
 });
 
+test("frames that move a backdrop while a refused send waits for its retry send nothing until the retry, then the latest layout once", async () => {
+  const { sent, timers, rects, backdrops, runFrames, motion, setAnimating } = harness({ fail: (n) => n === 1 });
+  const sidebar = {};
+  rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
+  backdrops.add(sidebar);
+  await runFrames();
+  assert.equal(sent.length, 1);
+  assert.equal(timers.length, 1);
+  setAnimating(true);
+  motion()();
+  for (const x of [-60, -40, -20, -10]) {
+    rects.set(sidebar, { x, y: 0, width: 240, height: 800 });
+    await runFrames();
+  }
+  assert.equal(sent.length, 1, "no send while the retry waits, however many frames move the backdrop");
+  setAnimating(false);
+  await runFrames();
+  timers[0].run();
+  await runFrames();
+  assert.equal(sent.length, 2, "one send when the retry comes due");
+  assert.equal(sent.at(-1)[0].rect.x, -10, "and it carries the latest layout");
+  assert.equal(timers.length, 1, "an accepted retry schedules no more retries");
+});
+
 test("a hidden or removed backdrop takes its glass away, and the material follows the setting", async () => {
   const { sent, watched, rects, backdrops, runFrames, motion } = harness();
   const sidebar = {};

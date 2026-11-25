@@ -43,6 +43,7 @@ export function createMacBackdrops(deps: BackdropDeps) {
   };
 
   const transmit = () => {
+    if (retry !== null) return;
     if (inFlight) {
       resendAfterReply = true;
       return;

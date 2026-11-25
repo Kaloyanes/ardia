@@ -3,9 +3,11 @@
 #
 #   scripts/release/no-debug-build.sh --settings [<build setting>…]   refuses extra build settings that define DEBUG or
 #                                                                      name ARDIA_SHELL or ARDIA_WEBUI
-#   scripts/release/no-debug-build.sh --effective                      reads `xcodebuild -showBuildSettings` output on
-#                                                                      stdin and fails when any target defines DEBUG, or
-#                                                                      when it lists no target at all
+#   scripts/release/no-debug-build.sh --effective [--require-targets A,B]
+#                                                                      reads one `xcodebuild -showBuildSettings` output on
+#                                                                      stdin and fails when any target defines DEBUG, when
+#                                                                      it lists no target at all, or when a required target
+#                                                                      is missing
 set -euo pipefail
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
@@ -25,14 +27,21 @@ case "${1:-}" in
     exit "$refused"
     ;;
   --effective)
-    awk -v token="$DEBUG_TOKEN" '
-      /^Build settings for action / { target = $0; sub(/^.* and target "?/, "", target); sub(/"?:$/, "", target); targets++; next }
+    required=""
+    if [ "${2:-}" = --require-targets ]; then
+      [ -n "${3:-}" ] || { usage >&2; exit 2; }
+      required=$3
+    fi
+    awk -v token="$DEBUG_TOKEN" -v required="$required" '
+      /^Build settings for action / { target = $0; sub(/^.* and target "?/, "", target); sub(/"?:$/, "", target); targets++; seen[target] = 1; next }
       /^[ \t]+(SWIFT_ACTIVE_COMPILATION_CONDITIONS|GCC_PREPROCESSOR_DEFINITIONS|OTHER_SWIFT_FLAGS|OTHER_CFLAGS|OTHER_CPLUSPLUSFLAGS) = / {
         value = $0; sub(/^[ \t]+[A-Z_]+ = /, "", value)
         if (value ~ token) { key = $1; print "no-debug-build: target " target " defines DEBUG in " key > "/dev/stderr"; bad++ }
       }
       END {
         if (!targets) { print "no-debug-build: no build settings to check" > "/dev/stderr"; exit 1 }
+        n = split(required, wanted, ",")
+        for (i = 1; i <= n; i++) if (!(wanted[i] in seen)) { print "no-debug-build: the build settings have no target " wanted[i] > "/dev/stderr"; bad++ }
         exit bad ? 1 : 0
       }'
     ;;

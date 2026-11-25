@@ -16,16 +16,18 @@ Or by hand, on a Debug app: `ARDIA_SHELL=webui` or `--ardia-shell=webui`.
 
 - Without `ARDIA_DATA_DIR` the profile is `~/Library/Application Support/Ardia WebUI Dev`, never the live one. A data
   dir inside the installed app's profile (`Application Support/com.ardia.browser` or `Application Support/Ardia`, by any
-  case, symlink or alias) turns the WebUI shell off, in the launch config and in the script. To try a real profile,
-  copy it and pass the copy. The WebUI writes `session.json` back in its own format, which the React
+  case, symlink, `..` or alias) is refused: the script stops before it makes anything, and the app logs
+  `[webui-dev] refusing to start` and exits (status 78) before isolation, migration or the engine touch it. To try a
+  real profile, copy it and pass the copy. The WebUI writes `session.json` back in its own format, which the React
   Native app can't read, so a copy is one-way.
 - The app hands off to the WebUI host: `ARDIA_WEBUI_APP`, else `Ardia WebUI Dev.app` beside the running app, whose
   `CFBundleIdentifier` must be `com.ardia.browser.webui-dev`. A host's executable must resolve, through any symlink, to a
   regular executable inside its own `Contents/MacOS`. With no usable host it logs `[webui-dev] no usable WebUI host at …`
   and stays on the React Native shell.
 - `scripts/release/archive.sh` runs `scripts/release/no-debug-build.sh` before it archives: it refuses
-  `RELEASE_BUILD_SETTINGS` that define `DEBUG` or name the WebUI shell, and fails when the effective Release settings of
-  the app or any pod define `DEBUG`.
+  `RELEASE_BUILD_SETTINGS` that define `DEBUG` or name the WebUI shell. It also reads the app's and the pods' effective
+  Release settings, using the archive's own destination, architecture, signing xcconfig and extra settings. Each dump is
+  checked on its own and must list its targets, and the check fails if any target defines `DEBUG`.
 
 ## Pieces
 

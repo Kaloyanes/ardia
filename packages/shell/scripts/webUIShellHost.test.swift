@@ -55,6 +55,16 @@ enum WebUIShellHostTest {
     let appLink = root + "/AppLink.app"
     try! fileManager.createSymbolicLink(atPath: appLink, withDestinationPath: app.path)
     check(route(request(hostApp: appLink)) == .handOff(executable: sibling + "/Contents/MacOS/host"), "never hands off to itself through a symlink")
+    let firmlinked = "/System/Volumes/Data" + app.path
+    if fileManager.fileExists(atPath: firmlinked) {
+      check(WebUIShellHost.sameFile(firmlinked, app.path), "the Data volume path is the same bundle")
+      check(route(request(hostApp: firmlinked)) == .handOff(executable: sibling + "/Contents/MacOS/host"), "never hands off to itself through the Data volume's path")
+    } else {
+      check(false, "the Data volume path of a temporary folder exists on macOS")
+    }
+    let hardFolder = root + "/hard"
+    try! fileManager.createDirectory(atPath: hardFolder, withIntermediateDirectories: true)
+    check(!WebUIShellHost.sameFile(hardFolder, app.path), "another folder is not the running bundle")
     if case .handOff = route(request(handedOff: true)) { check(false, "a host that handed back doesn't loop") }
 
     let outside = root + "/outside"

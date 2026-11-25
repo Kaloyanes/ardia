@@ -181,16 +181,18 @@ NSString *RealPath(NSString *path) {
 }
 
 NSString *CanonicalPath(NSString *path) {
-  NSString *existing = path.stringByStandardizingPath;
-  NSMutableArray<NSString *> *missing = [NSMutableArray array];
-  NSString *real = nil;
-  while (!(real = RealPath(existing))) {
-    if (existing.length <= 1) return path.stringByStandardizingPath;
-    [missing insertObject:existing.lastPathComponent atIndex:0];
-    existing = existing.stringByDeletingLastPathComponent;
+  if (!path.absolutePath) path = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:path];
+  NSString *resolved = @"/";
+  for (NSString *component in path.pathComponents) {
+    if (!component.length || [component isEqualToString:@"/"] || [component isEqualToString:@"."]) continue;
+    if ([component isEqualToString:@".."]) {
+      resolved = resolved.stringByDeletingLastPathComponent;
+      continue;
+    }
+    NSString *next = [resolved stringByAppendingPathComponent:component];
+    resolved = RealPath(next) ?: next;
   }
-  for (NSString *component in missing) real = [real stringByAppendingPathComponent:component];
-  return real;
+  return resolved;
 }
 
 BOOL SameFile(const struct stat &a, const struct stat &b) {
@@ -286,9 +288,10 @@ BOOL SignedForDistribution() {
         _dataDirectory = [homeDirectory stringByAppendingPathComponent:kWebUIDevDataFolder];
         _webUIDataDirectoryDefaulted = YES;
       }
-      if (InsideLiveProfile(_dataDirectory, homeDirectory)) {
-        Note([NSString stringWithFormat:@"%@=webui ignored: %@ is inside the installed app's profile; pass a copy in %@", kShellVariable, _dataDirectory, kDataDirVariable]);
-        if (_webUIDataDirectoryDefaulted) _dataDirectory = nil;
+      NSString *requested = Present(environment[kDataDirVariable]);
+      if (InsideLiveProfile(_dataDirectory, homeDirectory) || (requested && InsideLiveProfile(requested, homeDirectory))) {
+        Note([NSString stringWithFormat:@"%@=webui refused: %@ is inside the installed app's profile; pass a copy in %@", kShellVariable, _dataDirectory, kDataDirVariable]);
+        _dataDirectory = nil;
         _webUIShell = NO;
         _webUIDataDirectoryDefaulted = NO;
         _webUIHostApp = nil;

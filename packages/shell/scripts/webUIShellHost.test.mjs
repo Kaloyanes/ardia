@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -81,7 +81,7 @@ test("the flag is read in the launch config, under DEBUG only, and the app acts 
   const init = config.slice(config.indexOf("- (instancetype)initWithEnvironment:"));
   const debugBlock = init.slice(init.indexOf("#if DEBUG\n"), init.indexOf("#endif\n") + 7);
   assert.equal(config.match(/_webUI\w+ = /g).length, debugBlock.match(/_webUI\w+ = /g).length, "every WebUI field is set inside the DEBUG block");
-  assert.match(debugBlock, /if \(InsideLiveProfile\(_dataDirectory, homeDirectory\)\) \{[\s\S]*_webUIShell = NO;/, "a live profile turns the WebUI shell off before ArdiaIsolation reads the data dir");
+  assert.match(debugBlock, /if \(InsideLiveProfile\(_dataDirectory, homeDirectory\) \|\| \(requested && InsideLiveProfile\(requested, homeDirectory\)\)\) \{[\s\S]*_dataDirectory = nil;\n\s+_webUIShell = NO;/, "a live profile turns the WebUI shell off before ArdiaIsolation reads the data dir");
   assert.match(body(read("packages/shell/ios/WebUIShellLaunch.swift"), "func routeIfRequested"), /^#if DEBUG\n[\s\S]*\n\s*#endif$/);
   assert.match(body(read("packages/shell/ios/WebUIShellHost.swift"), "static func perform"), /^#if DEBUG\n[\s\S]*\n\s*#endif$/);
   const main = read("apps/browser/macos/Ardia-macOS/main.swift");
@@ -140,15 +140,33 @@ test("a release fails when the effective Release settings of the app or any pod 
   assert.equal(effective("").status, 1, "no settings at all fails closed");
 });
 
-test("the archive step checks the extra settings and the effective Release settings before it archives", () => {
+test("the archive step checks the app's and the pods' effective Release settings apart, with the archive's own settings, before it archives", () => {
   const archive = read("scripts/release/archive.sh");
+  assert.match(archive, /release_settings=\(-configuration Release -destination 'generic\/platform=macOS' ARCHS=arm64\n\s+ARDIACORE_STAGE_DIR="\$build\/ArdiaCoreFramework" "\$@" "\$\{archive_signing\[@\]\}"\)/);
+  assert.match(archive, /xcodebuild "\$@" "\$\{release_settings\[@\]\}" -showBuildSettings\) > "\$dist\/release-settings-\$name\.txt"/, "each query is saved on its own");
+  assert.match(archive, /no-debug-build\.sh" --effective --require-targets "\$required" < "\$dist\/release-settings-\$name\.txt"/, "each dump is checked on its own");
+  assert.match(archive, /^check_release_settings app Ardia-macOS -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS$/m);
+  assert.match(archive, /^check_release_settings pods ArdiaCore,ArdiaShell -project macos\/Pods\/Pods\.xcodeproj -alltargets$/m);
+  assert.match(archive, /xcodebuild -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS \\\n\s+"\$\{release_settings\[@\]\}" -derivedDataPath "\$build" -archivePath "\$dist\/Ardia\.xcarchive" archive\)/, "the archive builds with exactly the settings checked");
   const checks = archive.indexOf('no-debug-build.sh" --settings "$@"');
-  const effective = archive.indexOf('no-debug-build.sh" --effective');
-  const archiving = archive.indexOf("archive) \\");
-  assert.ok(checks > 0 && effective > checks && archiving > effective, "both guards run before xcodebuild archive");
-  assert.match(archive, /-workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS -configuration Release "\$@" -showBuildSettings/);
-  assert.match(archive, /-project macos\/Pods\/Pods\.xcodeproj -alltargets -configuration Release "\$@" -showBuildSettings/);
+  const app = archive.indexOf("check_release_settings app ");
+  const pods = archive.indexOf("check_release_settings pods ");
+  const archiving = archive.indexOf('-archivePath "$dist/Ardia.xcarchive" archive)');
+  assert.ok(checks > 0 && app > checks && pods > app && archiving > pods, "every guard runs before xcodebuild archive");
   assert.match(read("scripts/release.sh"), /extra_build_settings/);
+});
+
+test("each settings dump must hold the targets it was asked for, so an empty or wrong dump never passes", () => {
+  const effective = (input, ...args) => spawnSync(guard, ["--effective", ...args], { input, encoding: "utf8" });
+  const app = settingsDump("Ardia-macOS", ["GCC_PREPROCESSOR_DEFINITIONS =  COCOAPODS=1"]);
+  const pods = settingsDump("ArdiaCore", ["SWIFT_ACTIVE_COMPILATION_CONDITIONS = "]) + settingsDump("ArdiaShell", ["SWIFT_ACTIVE_COMPILATION_CONDITIONS = "]);
+  assert.equal(effective(app, "--require-targets", "Ardia-macOS").status, 0);
+  assert.equal(effective(pods, "--require-targets", "ArdiaCore,ArdiaShell").status, 0);
+  assert.equal(effective("", "--require-targets", "ArdiaCore,ArdiaShell").status, 1, "an empty pods dump fails");
+  const wrong = effective(app, "--require-targets", "ArdiaCore,ArdiaShell");
+  assert.equal(wrong.status, 1, "the app's dump can't stand in for the pods'");
+  assert.match(wrong.stderr, /no target ArdiaShell/);
+  assert.equal(effective(app, "--require-targets").status, 2);
 });
 
 test("run-webui-dev.sh refuses any data dir inside the installed app's profile, by case, symlink or default", () => {
@@ -164,6 +182,11 @@ test("run-webui-dev.sh refuses any data dir inside the installed app's profile, 
       assert.match(result.stderr, /inside the installed app's profile/);
     }
     for (const linked of ["live-link", "live-link/Chromium", "live-link/not-made-yet"]) assert.equal(run("--data-dir", join(home, linked)).status, 1, `${linked} was accepted`);
+    symlinkSync(join(support, "com.ardia.browser/Chromium"), join(home, "deep"));
+    for (const climbing of ["deep/..", "deep/../made-later", "missing/../deep/../made-later"]) {
+      assert.equal(run("--data-dir", `${home}/${climbing}`).status, 1, `${climbing} resolves physically into the profile but was accepted`);
+    }
+    assert.equal(run("--data-dir", `${home}/deep/../../../../scratch-after-climb`).status, 0, "climbing back out of the profile is fine");
     assert.equal(run("--data-dir", join(home, "library/application support/com.ardia.browser")).status, 1, "a case alias of the folders above was accepted");
     symlinkSync(join(support, "Ardia"), join(support, "Ardia WebUI Dev"));
     assert.equal(run().status, 1, "a default dir symlinked into the profile was accepted");
@@ -176,4 +199,61 @@ test("run-webui-dev.sh refuses any data dir inside the installed app's profile, 
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("the data dir is resolved and checked before anything is made", () => {
+  const script = read("scripts/mac/run-webui-dev.sh");
+  assert.match(script, /os\.path\.realpath\(sys\.argv\[1\]\)/, "symlinks and .. resolve physically");
+  const resolved = script.indexOf('data_dir=$(canonical_path "$data_dir")');
+  const refused = script.indexOf('refuse_live_profile "$data_dir"', resolved);
+  const made = script.indexOf('mkdir -p "$data_dir"');
+  assert.ok(resolved > 0 && refused > resolved && made > refused, "resolve, then refuse, then mkdir");
+});
+
+function probeFolder() {
+  return mkdtempSync(join(tmpdir(), "ardia-webui-probe-"));
+}
+
+test("a debug app whose WebUI data dir was refused exits before it migrates or opens anything", (t) => {
+  if (!swiftAvailable()) return t.skip("swiftc is not available");
+  const dir = probeFolder();
+  try {
+    const main = join(dir, "main.swift");
+    writeFileSync(main, '@main enum Probe { static func main() { WebUIShellHost.refuseLiveProfile(); print("continued") } }\n');
+    const debug = spawnSync(compile(dir, ["-DDEBUG", "-Onone"], [path("../ios/WebUIShellHost.swift"), main]), { encoding: "utf8" });
+    assert.equal(debug.status, 78);
+    assert.doesNotMatch(debug.stdout, /continued/);
+    assert.match(debug.stderr, /refusing to start/);
+    const release = spawnSync(compile(dir, ["-O"], [path("../ios/WebUIShellHost.swift"), main]), { encoding: "utf8" });
+    assert.equal(release.status, 0);
+    assert.match(release.stdout, /continued/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const launch = read("packages/shell/ios/WebUIShellLaunch.swift");
+  assert.match(body(launch, "func routeIfRequested"), /^#if DEBUG\n\s+if config\.webUIRefusedDataDirectory \{ WebUIShellHost\.refuseLiveProfile\(\) \}\n/, "the refusal comes first");
+});
+
+test("ArdiaIsolation never installs itself on a refused WebUI data dir", (t) => {
+  const clang = spawnSync("clang++", ["--version"], { encoding: "utf8" });
+  if (clang.error || clang.status !== 0) return t.skip("clang is not available");
+  const dir = probeFolder();
+  try {
+    mkdirSync(join(dir, "include/ArdiaCore"), { recursive: true });
+    symlinkSync(repo("packages/ardiacore/ios/ArdiaLaunchConfig.h"), join(dir, "include/ArdiaCore/ArdiaLaunchConfig.h"));
+    const object = join(dir, "isolation.o");
+    const isolation = spawnSync("clang", ["-fobjc-arc", "-Wall", "-Werror", "-DDEBUG=1", `-I${join(dir, "include")}`, "-c", path("../ios/ArdiaIsolation.m"), "-o", object], { encoding: "utf8" });
+    assert.equal(isolation.status, 0, isolation.stderr);
+    const binary = join(dir, "probe");
+    const linked = spawnSync("clang++", ["-std=c++20", "-fobjc-arc", "-Wall", "-Werror", "-DDEBUG=1", "-framework", "Foundation", "-framework", "Security", "-framework", "AppKit", repo("packages/ardiacore/ios/ArdiaLaunchConfig.mm"), path("./webUIIsolation.test.mm"), object, "-o", binary], { encoding: "utf8" });
+    assert.equal(linked.status, 0, linked.stderr);
+    const run = (env) => spawnSync(binary, { encoding: "utf8", env: { PATH: process.env.PATH, ...env } }).stdout.trim();
+    assert.equal(run({ ARDIA_DATA_DIR: join(dir, "scratch") }), "isolated", "a scratch data dir is isolated as before");
+    const live = join(homedir(), "Library/Application Support/com.ardia.browser", `ardia-probe-${process.pid}-never-made`);
+    assert.equal(run({ ARDIA_SHELL: "webui", ARDIA_DATA_DIR: live }), "system", "a refused live data dir gets no isolation");
+    assert.equal(existsSync(live), false, "and nothing is made in the live profile");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(read("packages/shell/ios/ArdiaIsolation.m"), /ArdiaLaunchConfig \*config = ArdiaLaunchConfig\.shared;\n\s+if \(config\.webUIRefusedDataDirectory\) return;/);
 });
