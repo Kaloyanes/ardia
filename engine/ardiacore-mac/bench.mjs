@@ -153,7 +153,12 @@ async function rnSwipe(side, win, reverse, label) {
   const start = Number(recording[1]);
   const times = pts.map((p) => start + p * 1000 - origin);
   const metrics = measure({ movie, times, rest: rest - origin, crop: [0, 0, 330, 760] });
-  return { restMs: Math.round(rest - origin), metrics: { ...metrics, fresh: undefined }, fresh: metrics.fresh };
+  const steps = moved.map((s) => s[0]);
+  const gaps = steps.slice(1).map((t, i) => t - steps[i]).sort((a, b) => a - b);
+  const motion = gaps.length
+    ? { motionP50GapMs: gaps[Math.floor((gaps.length - 1) / 2)], motionP95GapMs: gaps[Math.round(0.95 * (gaps.length - 1))], motionMaxGapMs: gaps.at(-1), motionLongGaps: gaps.filter((g) => g > 25).length }
+    : {};
+  return { restMs: Math.round(rest - origin), metrics: { ...metrics, ...motion, fresh: undefined }, fresh: metrics.fresh };
 }
 
 async function webuiSwipe(side, win, reverse, label) {
@@ -230,7 +235,7 @@ for (const kind of ["rn", "webui"]) {
   };
   for (const direction of ["fwd", "back"]) {
     const runs = results.swipe[kind][direction];
-    summary[kind][direction] = Object.fromEntries(["p50GapMs", "p95GapMs", "maxGapMs", "longGaps", "slideMs", "rowsPaintedMs"].map((k) => [k, median(runs.map((r) => r.metrics?.[k]))]));
+    summary[kind][direction] = Object.fromEntries(["p50GapMs", "p95GapMs", "maxGapMs", "longGaps", "slideMs", "rowsPaintedMs", "motionP50GapMs", "motionP95GapMs", "motionMaxGapMs", "motionLongGaps"].map((k) => [k, median(runs.map((r) => r.metrics?.[k]))]));
     summary[kind][direction].restMs = median(runs.map((r) => r.restMs));
     summary[kind][direction].arrived = runs.filter((r) => r.from !== r.to).length + "/" + runs.length;
   }
