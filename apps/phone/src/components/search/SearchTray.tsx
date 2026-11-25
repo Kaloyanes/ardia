@@ -42,7 +42,7 @@ import { plateMaterial, SEARCH_PANEL_FACE, useSolidChrome, usesGlass, type Plate
 import { actionWords } from "../../lib/sharedWords";
 import { panelRowLayout, panelTitleLines, SuggestionRow } from "./SuggestionRow";
 import { MaterialSearchTray } from "./MaterialSearchView";
-import { NewTabPins } from "./NewTabPins";
+import { PanelPins, usePanelPins } from "./NewTabPins";
 import { TrayInput, type TrayInputHandle } from "./TrayInput";
 import { canSearchByVoice } from "../../state/voice/store";
 import { presentVoiceSearchFrom } from "./VoiceSearchView";
@@ -54,7 +54,7 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { useKeyboardTopFromBottom } from "./useKeyboardHeight";
 import { chromeInk, chromeLayout, nativeClassicChrome } from "../ui/tokens";
 import { incognitoTheme, type Theme } from "../ui/theme";
-import { searchFieldHeight, searchFieldInnerHeight, searchFieldRadius, searchPanel, searchPanelFieldCenter, searchPanelInk, searchPanelPlace, searchPanelPlacement, searchPanelRadius, searchTrayHeight, type SearchPanelCorners } from "./searchPanelTokens";
+import { searchFieldHeight, searchFieldInnerHeight, searchFieldRadius, searchPanel, searchPanelFieldCenter, searchPanelInk, searchPanelPlace, searchPanelPlacement, searchPanelRadius, searchTrayHeight, type SearchPanelCorners, type SearchPanelPlace } from "./searchPanelTokens";
 import type { Point } from "../../lib/menuPlace";
 
 
@@ -337,7 +337,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   useLayoutEffect(() => {
     if (!standby) setSearchClearsPagePrefill(arcPanel);
   }, [arcPanel, standby]);
-  const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
+  const baseTrayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
+  const pinsBlock = usePanelPins({ closing, room: arcPanel && !standby && furnished ? pinsRoom(window.height, insets.top, place, resting, baseTrayHeight) : 0 });
+  const trayHeight = baseTrayHeight + pinsBlock.height;
   const extend = placement === "underKeyboard" ? window.height : 0;
   const closedOnPressIn = useRef(false);
   const closeFromTouch = (): boolean => {
@@ -580,14 +582,6 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       transform: [{ translateY: trayOffset(lift, drag.value, rise, trayHeight, panelRadius) + back.value * trayBackTravel }],
     };
   }, [trayHeight, safeBottom, reduceMotion, command !== null, panelRadius]);
-  const pinsStyle = useAnimatedStyle(() => {
-    const lift = liftOf(heldLift.value, keyboard.height.value, keyboard.full.value, hasLanded.value, isClosing.value, pinned.value, floor.value);
-    const rise = reduceMotion ? 1 : Math.max(landing.value, keyboardProgress(keyboard.height.value, keyboard.full.value, 0));
-    return {
-      opacity: reduceMotion ? dim.value : 1,
-      transform: [{ translateY: trayOffset(lift, drag.value, rise, trayHeight, panelRadius) + back.value * trayBackTravel }],
-    };
-  }, [trayHeight, safeBottom, reduceMotion, panelRadius]);
 
   return (
     <StandbyContext.Provider value={standby}>
@@ -608,11 +602,6 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       </Animated.View>
       {panel ? (
         <MotionView style={StyleSheet.absoluteFill} pointerEvents="box-none" to={departed ? PANEL_DEPARTED : PANEL_HOME} motion={PANEL_DEPART}>
-        {arcPanel && furnished && !standby && !closing ? (
-          <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, pinsStyle]}>
-            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} inset={place.cardInset} onLeave={beginDeparture} plate={origin === "page" ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null} />
-          </Animated.View>
-        ) : null}
         <Animated.View
           testID="trayPanel"
           style={[
@@ -625,6 +614,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
           <SearchPanelFace incognito={incognito} dark={theme.dark} panelRadius={panelRadius} corners={corners} waiting={standby || !furnished} />
           <View style={[styles.clip, panelCornerStyle(panelRadius, corners), { height: trayHeight }]}>
             <SearchPanelContext.Provider value={arcPanel}>
+              <PanelPins block={pinsBlock} closing={closing} onLeave={beginDeparture} />
               <GestureDetector gesture={dismissDrag}>
                 <View collapsable={false}>
                   <TrayField key={fieldKey} closing={closing} standby={standby} reveal={fieldKey === "kept" ? fieldReveal : undefined} />
@@ -676,7 +666,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
 }
 
 
-const STAGE_PRESENT_RETRIES = 3;
+const pinsRoom = (windowHeight: number, safeTop: number, place: SearchPanelPlace, resting: number, baseTrayHeight: number) => Math.max(0, windowHeight - safeTop - place.gapAbove - resting - place.gapAboveKeyboard - baseTrayHeight);
 
 let knownLift = 0;
 let knownFieldHeight = 0;
@@ -728,7 +718,9 @@ function StagedTray() {
   const placement = searchPanelPlacement(arcPanel, command !== null);
   const place = searchPanelPlace(placement, resting);
   const corners = place.corners;
-  const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
+  const baseTrayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
+  const pinsBlock = usePanelPins({ closing, room: mounted !== null && arcPanel && command === null ? pinsRoom(window.height, insets.top, place, resting, baseTrayHeight) : 0 });
+  const trayHeight = baseTrayHeight + pinsBlock.height;
   const underKeyboard = place.underKeyboard;
   const morphs = phoneLayout && !reduceMotion && command === null && pills > 0;
   live.current.morphs = morphs;
@@ -749,72 +741,21 @@ function StagedTray() {
     heldRelease.current = null;
   };
 
-  const presentRetry = useRef<{ frame: number | null; resume: (() => void) | null; sawBackground: boolean }>({ frame: null, resume: null, sawBackground: false });
-  const dropPresentRetry = () => {
-    const retry = presentRetry.current;
-    if (retry.frame !== null) cancelAnimationFrame(retry.frame);
-    retry.frame = null;
-    retry.resume = null;
-  };
-  useEffect(() => {
-    const watching = AppState.addEventListener("change", (next) => {
-      const retry = presentRetry.current;
-      if (next === "background") {
-        retry.sawBackground = true;
-        if (retry.frame !== null) cancelAnimationFrame(retry.frame);
-        retry.frame = null;
-        return;
-      }
-      if (next !== "active" || retry.frame !== null || !retry.resume) return;
-      const resume = retry.resume;
-      retry.resume = null;
-      resume();
-    });
-    return () => {
-      watching.remove();
-      dropPresentRetry();
-    };
-  }, []);
-
   const presentStage = (presentation: number) => {
     markSearchPhase("present");
     live.current.presentation = presentation;
     setPresentation(presentation);
     if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
     setPresented(false);
-    dropPresentRetry();
-    presentRetry.current.sawBackground = AppState.currentState === "background";
     const launch = searchState().arrival === "atRest";
-    const isCurrent = () => live.current.presentation === presentation && !live.current.closing && searchState().open;
-    const presented = () => {
-      if (!isCurrent()) return;
-      if (launch && !presentRetry.current.sawBackground && AppState.currentState !== "background") launchTrayUp();
+    void stage.current?.present().then(() => {
+      if (live.current.presentation !== presentation || live.current.closing) return;
+      if (launch) launchTrayUp();
       markSearchPhase("presented");
       setPresented(true);
       stagePresented();
       searchPresented(searchState().session);
-    };
-    const tryPresent = (triesLeft: number) => {
-      if (!isCurrent()) return;
-      const retry = presentRetry.current;
-      if (AppState.currentState === "background") {
-        retry.resume = () => tryPresent(triesLeft);
-        return;
-      }
-      const asked = stage.current?.present();
-      if (!asked) return;
-      asked.then(presented, () => {
-        if (triesLeft <= 0 || !isCurrent()) return;
-        retry.resume = () => tryPresent(triesLeft - 1);
-        retry.frame = requestAnimationFrame(() => {
-          retry.frame = null;
-          const next = retry.resume;
-          retry.resume = null;
-          next?.();
-        });
-      });
-    };
-    tryPresent(STAGE_PRESENT_RETRIES);
+    });
   };
   const clearsPrefill = searchPanelShown(phoneLayout, command !== null);
   useLayoutEffect(() => setSearchClearsPagePrefill(clearsPrefill), [clearsPrefill]);
@@ -845,7 +786,6 @@ function StagedTray() {
       return;
     }
     if (now.mounted === null || now.closing) return;
-    dropPresentRetry();
     now.closing = true;
     markSearchClosePhase("closing");
     clearHeldRelease();
@@ -1035,11 +975,11 @@ function StagedTray() {
       focusNativeId={SEARCH_FIELD_ID}
       revealNativeId={SEARCH_REVEAL_ID}
       rowsRevealNativeId={SEARCH_ROWS_REVEAL_ID}
-      fieldCenter={searchPanelFieldCenter(fieldHeight)}
+      fieldCenter={searchPanelFieldCenter(fieldHeight) + pinsBlock.height}
       cardInset={place.cardInset}
       cardGap={place.cardGap}
       fieldInset={place.fieldInset}
-      fieldTop={place.fieldTop}
+      fieldTop={place.fieldTop + pinsBlock.height}
       commandTop={command ? command.top : null}
       landsDirectly={landsDirectly}
       morphLook={morphLook}
@@ -1081,6 +1021,7 @@ function StagedTray() {
                   <TrayContentContext.Provider value={measuredRows}>
                   <SearchPanelContext.Provider value={arcPanel}>
                     <TrayListContext.Provider value={arcPanel ? trayList : null}>
+                    <PanelPins block={pinsBlock} closing={closing} anchorShift={lift.up ? -lift.lift : 0} />
                     <StagedFieldContext.Provider value={field}>
                       <GestureDetector gesture={dismissDrag}>
                         <View collapsable={false}>
@@ -1097,15 +1038,6 @@ function StagedTray() {
                 </View>
               </View>
             </View>
-          ) : null}
-          {mounted !== null && presented && !closing && arcPanel && command === null ? (
-            <NewTabPins
-              style={[styles.pinsAbovePanel, { paddingLeft: insets.left, paddingRight: insets.right }]}
-              maxHeight={window.height - insets.top - lift.lift - trayHeight - place.cardGap - space.m * 2}
-              inset={place.cardInset}
-              anchorShift={lift.up ? -lift.lift : 0}
-              plate={overPage ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null}
-            />
           ) : null}
         </Animated.View>
       </SearchStagePanel>
@@ -1680,8 +1612,6 @@ const styles = StyleSheet.create({
   leavingText: { textAlignVertical: "center" },
   rows: { flex: 1 },
   stagePanel: { position: "absolute", left: 0, right: 0 },
-  pinsAbovePanel: { position: "absolute", left: 0, right: 0, bottom: "100%", paddingBottom: space.m },
-  pinsOverPanel: { position: "absolute", left: 0, right: 0, paddingBottom: space.m },
   incognitoNote: { alignItems: "center", justifyContent: "center", paddingHorizontal: space.l },
   semibold: { fontWeight: "600" },
   centered: { textAlign: "center" },

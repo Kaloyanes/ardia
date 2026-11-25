@@ -2860,20 +2860,26 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
     passed to the native morph as `panelRadius` and used by the wide layout's command bar too; they were 26, tighter
     than the field's own curve allowed.
   - **To watch:** `new_tab_search_opened` should hold its level after the release.
-  - **Pinned sites above the field** (#4251, tester feedback: + and the address opened the same empty panel, and the
+  - **Pinned sites in the panel** (#4251, tester feedback: + and the address opened the same empty panel, and the
     space's pinned sites, used as bookmarks, took two steps to reach): + (the browsing bar's, the deck's and the start
-    page's) opens the panel with the selected space's pinned tiles above it while the field is empty, as Safari shows
-    Favorites above the keyboard. Tapping the address still edits the page's address with no tiles; typing hides them
-    and clearing the field brings them back; Incognito, sync off and a space with no pins show none.
+    page's) opens the panel with the selected space's pinned tiles inside it, above the field, while the field is
+    empty, as Safari shows Favorites above the keyboard: one panel, tiles then field then suggestions, on the panel's
+    own surface and padding (the owner, on #4254: a separate card above the panel "doesn't make sense"). Tapping the
+    address still edits the page's address with no tiles; typing hides them and clearing the field brings them
+    back; Incognito, sync off and a space with no pins show none.
     - **Reused, not forked:** `NewTabPins` draws Spaces' `Tiles` and menus (`pinnedLinkMenu`, `pinnedFolderMenu` in
       `SpacesParts.tsx`), and a tile opens through `openRemote` with its pinned key, so a pinned tab already open is
       switched to (`pinned_tabs_refound`). The tiles come from the sync view already in memory; nothing is fetched
       when the panel opens.
-    - **iPhone:** the tiles hang above the stage's panel (`bottom: 100%` inside `trayDrag`), so they ride the
-      keyboard's lift and the pull-down and stay inside the panel's VoiceOver modal region; they fade in once the stage
-      has presented, after the unfold, and the card the morph measures is unchanged. Taps reach them with no native
-      change: `SearchStagePanelView` is an Expo Fabric view, so its hit test is React Native's, which follows the
-      layout's `overflowInset` into children outside the panel's bounds.
+    - **Layout:** `PanelPins` sits in the panel's clip above the field in both trays (`StagedTray` on iPhone,
+      `TrayLayer` on Android's redesign), and the panel grows by the tiles' height (`usePanelPins`), so the field and
+      the rows keep their place above the keyboard; when the tiles go, the panel's top comes down and the field
+      doesn't move. The tiles' height is estimated from the pin count, width and text size (`tilesHeight`) for the
+      first frame, then measured and remembered. It is capped at the room the keyboard leaves above the field and the
+      rows (`pinsRoom`), and a space with more pins scrolls inside that cap. On iPhone the stage is told the field sits
+      below the tiles (`fieldTop` and `fieldCenter` grow by their height), so the morph and the pill line up with
+      the field, not the panel's top. While the panel closes, its last tiles stay drawn (and take no touches), so
+      the panel doesn't shrink mid-close.
     - **They leave at once:** typing, Incognito, the address tap or a space with no pins removes them in the same
       render, with no exit fade, so nothing outgoing takes a touch. Every open (tile, long-press Open, a folder's
       row) checks again at the press, against the pin as sync has it now: search still open in the same session,
@@ -2892,19 +2898,7 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       (`useFocusReturn`). Both menus stop at the keyboard's top as a hard limit (`roomAbove`, `keepAbove`); on
       iPhone a folder menu measures its tile shifted by the stage's lift (`anchorShift`), since Fabric's measure
       doesn't see the transform the native stage applies.
-    - **At launch with Auto-Open Keyboard:** the stage's first `present()` can reach the main queue before Fabric has
-      mounted its native view, and Expo refuses it ("Unable to find the 'SearchStageView' view"). The refusal went
-      unseen, so the launch panel never counted as presented: no tiles, and none of `launchTrayUp`,
-      `stagePresented` or `searchPresented` ran. The open now asks again on each of the next three frames, only for
-      the presentation that is still current (not dismissed, no newer open): the queued frame is cancelled on close
-      and on a newer open, waits while the app is in the background and resumes when it's active, and a present that
-      completes for a panel no longer current records no launch timing. A launch whose panel saw the background
-      before it presented sends no launch timing at all, since its wall time includes the time away. Natively,
-      `SearchStageView` presents (from `shown` and from `present()`) only while the app is active; a present asked
-      for in the background or while launching waits for `didBecomeActive`, so nothing presents or takes keyboard
-      focus off screen.
-    - **Android:** beside the panel with the panel's own lift transform in the redesign, and above the rows in the
-      Material You search sheet. A space with more pins than fit above the panel scrolls.
+    - **Material You:** the same tiles at the top of the search sheet, above its rows.
     - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened` on iPhone, filtered by the envelope's `platform`; `new_tab_search_opened` isn't counted on Android.
 
 - Settings, Archive, History and Bookmarks keep one neutral background, the system's grouped background, whatever

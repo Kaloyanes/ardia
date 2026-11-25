@@ -37,7 +37,7 @@ public final class SearchStageModule: Module {
         MainActor.assumeIsolated { view.propsDidUpdate() }
       }
       AsyncFunction("present") { (view: SearchStageView, promise: Promise) in
-        MainActor.assumeIsolated { view.requestPresent { promise.resolve(nil) } }
+        MainActor.assumeIsolated { view.present { promise.resolve(nil) } }
       }.runOnQueue(.main)
       AsyncFunction("holdLift") { (view: SearchStageView) in
         MainActor.assumeIsolated { view.holdLift() }

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { ScrollView, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { ScrollView, StyleSheet, useWindowDimensions, View, type ViewInstance } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Point } from "../../lib/menuPlace";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
@@ -15,7 +15,8 @@ import { useTabs } from "../../state/tabs/store";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { FloatingMenu, space, tabsLayout, trayMotion, type MenuItem } from "../ui";
 import { useFocusReturn } from "../ui/focusReturn";
-import { pinnedFolderMenu, pinnedLinkMenu, Tiles, type PinOpener } from "../sync/SpacesParts";
+import { pinnedFolderMenu, pinnedLinkMenu, Tiles, tilesHeight, type PinOpener } from "../sync/SpacesParts";
+import { searchPanel } from "./searchPanelTokens";
 import { useKeyboardTopFromBottom } from "./useKeyboardHeight";
 
 export const NEW_TAB_PINS_MIN_ROOM = 64;
@@ -73,9 +74,35 @@ export function useNewTabPins(): NewTabPinsShown | null {
   return { profileId: profile.syncId, tiles: profile.pinned.tiles };
 }
 
-export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorShift = 0, onLeave = leavesNothing }: { style?: StyleProp<ViewStyle>; maxHeight?: number; plate?: ReactNode; inset?: number; anchorShift?: number; onLeave?: () => void }) {
-  const pins = useNewTabPins();
+const PANEL_PINS_TOP = searchPanel.fieldInset - space.xs;
+
+const knownPanelPins = new Map<string, number>();
+
+export type PanelPinsBlock = { pins: NewTabPinsShown | null; height: number; scrolls: boolean; onMeasured: (contentHeight: number) => void };
+
+export function usePanelPins({ closing, room }: { closing: boolean; room: number }): PanelPinsBlock {
+  const live = useNewTabPins();
   const open = useSearchOpen();
+  const kept = useRef<NewTabPinsShown | null>(null);
+  if (!closing) kept.current = open ? live : null;
+  const pins = closing ? kept.current : open ? live : null;
+  const { width, fontScale } = useWindowDimensions();
+  const sizeKey = pins ? `${pins.tiles.length}:${Math.round(width)}:${fontScale}` : "";
+  const [measured, setMeasured] = useState<{ key: string; height: number } | null>(null);
+  const natural = pins ? (measured?.key === sizeKey ? measured.height : knownPanelPins.get(sizeKey) ?? PANEL_PINS_TOP + tilesHeight(pins.tiles.length, width, fontScale)) : 0;
+  const shown = pins !== null && room >= NEW_TAB_PINS_MIN_ROOM;
+  const onMeasured = useCallback(
+    (contentHeight: number) => {
+      if (!sizeKey || contentHeight <= 0) return;
+      knownPanelPins.set(sizeKey, contentHeight);
+      setMeasured((was) => (was?.key === sizeKey && Math.abs(was.height - contentHeight) < 0.5 ? was : { key: sizeKey, height: contentHeight }));
+    },
+    [sizeKey],
+  );
+  return { pins: shown ? pins : null, height: shown ? Math.min(natural, room) : 0, scrolls: shown && natural > room, onMeasured };
+}
+
+function PinTiles({ pins, closing, anchorShift, onLeave }: { pins: NewTabPinsShown; closing: boolean; anchorShift: number; onLeave: () => void }) {
   const session = useSearchSession();
   const window = useWindowDimensions();
   const keyboardTop = useKeyboardTopFromBottom();
@@ -83,16 +110,14 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorSh
   const stopReturn = useRef<() => void>(() => undefined);
   useEffect(() => () => stopReturn.current(), []);
   const [menu, setMenu] = useState<PinsMenu | null>(null);
-  const shown = pins !== null && open && (maxHeight === undefined || maxHeight >= NEW_TAB_PINS_MIN_ROOM);
-  const opener = pins ? opensOfferedPin(session, pins.profileId, onLeave) : null;
-  const items = shown && menu && opener && menu.session === session && menu.profileId === pins.profileId ? menuItems(menu, pins.tiles, opener) : [];
+  const opener = opensOfferedPin(session, pins.profileId, onLeave);
+  const items = !closing && menu && menu.session === session && menu.profileId === pins.profileId ? menuItems(menu, pins.tiles, opener) : [];
   const menuShown = menu !== null && items.length > 0;
   const menuStale = menu !== null && !menuShown;
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
   useEffect(() => (menuShown ? coverTray() : undefined), [menuShown]);
-  if (!shown || !opener) return null;
   const openMenu = (next: Omit<PinsMenu, "session" | "profileId">) => {
     stopReturn.current();
     menuOpenedHaptic();
@@ -113,30 +138,18 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorSh
       },
     );
   };
-  const tiles = (
-    <Tiles
-      key={`${session}:${pins.profileId}`}
-      tiles={pins.tiles}
-      profileId={pins.profileId}
-      open={opener}
-      onLink={(_url, _title, at, pinnedKey, from) => {
-        if (pinnedKey !== null) openMenu({ kind: "link", pinKey: pinnedKey, at, from: from ?? null });
-      }}
-      onFolder={(tile, anchor) => openMenu({ kind: "folder", pinKey: tile.key, at: null, anchor, from: anchor })}
-    />
-  );
   return (
-    <Animated.View testID="newTabPins" entering={FadeIn.duration(trayMotion.resultsIn)} style={style} pointerEvents="box-none">
-      <View testID={plate ? "newTabPinsPlate" : undefined} style={[{ marginHorizontal: inset }, plate ? styles.plated : null]}>
-        {plate}
-        {maxHeight === undefined ? (
-          tiles
-        ) : (
-          <ScrollView testID="newTabPinsScroll" style={[styles.scroll, { maxHeight: plate ? maxHeight - space.s * 2 : maxHeight }]} bounces={false} overScrollMode="never" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="none">
-            {tiles}
-          </ScrollView>
-        )}
-      </View>
+    <View collapsable={false} pointerEvents={closing ? "none" : "box-none"} importantForAccessibility={closing ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing}>
+      <Tiles
+        key={`${session}:${pins.profileId}`}
+        tiles={pins.tiles}
+        profileId={pins.profileId}
+        open={opener}
+        onLink={(_url, _title, at, pinnedKey, from) => {
+          if (pinnedKey !== null) openMenu({ kind: "link", pinKey: pinnedKey, at, from: from ?? null });
+        }}
+        onFolder={(tile, anchor) => openMenu({ kind: "folder", pinKey: tile.key, at: null, anchor, from: anchor })}
+      />
       {menuShown ? (
         <FloatingMenu
           items={items}
@@ -150,11 +163,45 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorSh
           onDismiss={closeMenu}
         />
       ) : null}
+    </View>
+  );
+}
+
+export function NewTabPins({ onLeave = leavesNothing }: { onLeave?: () => void }) {
+  const pins = useNewTabPins();
+  const open = useSearchOpen();
+  if (!pins || !open) return null;
+  return (
+    <Animated.View testID="newTabPins" entering={FadeIn.duration(trayMotion.resultsIn)} pointerEvents="box-none">
+      <PinTiles pins={pins} closing={false} anchorShift={0} onLeave={onLeave} />
+    </Animated.View>
+  );
+}
+
+export function PanelPins({ block, closing, anchorShift = 0, onLeave = leavesNothing }: { block: PanelPinsBlock; closing: boolean; anchorShift?: number; onLeave?: () => void }) {
+  if (!block.pins) return null;
+  return (
+    <Animated.View testID="newTabPins" entering={FadeIn.duration(trayMotion.resultsIn)} style={[styles.panel, { height: block.height }]} pointerEvents="box-none">
+      <ScrollView
+        testID="newTabPinsScroll"
+        style={styles.scroll}
+        contentContainerStyle={styles.panelContent}
+        scrollEnabled={block.scrolls}
+        bounces={false}
+        overScrollMode="never"
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="none"
+        onContentSizeChange={(_width, height) => block.onMeasured(height)}
+      >
+        <PinTiles pins={block.pins} closing={closing} anchorShift={anchorShift} onLeave={onLeave} />
+      </ScrollView>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  scroll: { flexGrow: 0 },
-  plated: { paddingVertical: space.s },
+  panel: { overflow: "hidden" },
+  scroll: { flex: 1 },
+  panelContent: { paddingTop: PANEL_PINS_TOP },
 });

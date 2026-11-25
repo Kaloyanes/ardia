@@ -1,4 +1,4 @@
-import { AppState, Dimensions, Keyboard, Platform, StyleSheet } from "react-native";
+import { Dimensions, Keyboard, Platform, StyleSheet } from "react-native";
 import { act } from "react-test-renderer";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, FloatingMenu } from "../components/ui";
@@ -14,6 +14,7 @@ import * as telemetry from "../state/telemetry/telemetry";
 import * as focusReturn from "../components/ui/focusReturn";
 import * as tabMenus from "../state/browse/tabMenus";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
+import { tilesHeight } from "../components/sync/SpacesParts";
 
 const mockFaceTaken = { then: (taken: () => void) => taken() };
 const mockStage = { present: jest.fn(() => mockFaceTaken), holdLift: jest.fn(), releaseLift: jest.fn(), close: jest.fn(), finish: jest.fn() };
@@ -106,18 +107,6 @@ test("+ opens the search panel with the space's pinned tiles above the field, an
   unmount(edit);
 });
 
-onIPhone("on iPhone the tiles hang above the stage's panel, so they ride its lift and its drag, and wait for the panel to be presented", () => {
-  act(() => browse.newTab());
-  const root = tray();
-  const shown = pins(root)!;
-  expect(StyleSheet.flatten(shown.props.style)).toMatchObject({ position: "absolute", bottom: "100%" });
-  let parent = shown.parent;
-  while (parent && parent.props.testID !== "trayDrag") parent = parent.parent;
-  expect(parent?.props.testID).toBe("trayDrag");
-  expect(mockStage.present).toHaveBeenCalled();
-  unmount(root);
-});
-
 test("typing hides the tiles and clearing the field brings them back", () => {
   act(() => browse.newTab());
   const root = tray();
@@ -177,23 +166,6 @@ test("the Material search sheet shows the same tiles above its rows, and none wh
   const edit = tray("material");
   expect(pins(edit)).toBeUndefined();
   unmount(edit);
-});
-
-test("over a page the tiles sit on the panel's own face so they read over any page; over the start page they sit on the space's backdrop", () => {
-  const plate = (root: Root) => root.root.findAll((node) => node.props.testID === "newTabPinsPlate" && typeof node.type === "string")[0];
-  act(() => browse.newTab());
-  const onStart = tray();
-  expect(pins(onStart)).toBeDefined();
-  expect(plate(onStart)).toBeUndefined();
-  unmount(onStart);
-  act(() => dismissSearch());
-  act(() => jest.runOnlyPendingTimers());
-  act(() => browse.useBrowse.setState({ surface: "browsing" }));
-  act(() => browse.newTab());
-  const overPage = tray();
-  expect(plate(overPage)).toBeDefined();
-  expect(plate(overPage)!.findAll((node) => node.props.testID === "searchPanelFace")).not.toHaveLength(0);
-  unmount(overPage);
 });
 
 const menus = (root: Root) => root.root.findAll((node) => node.type === FloatingMenu);
@@ -391,113 +363,6 @@ test("a pin opens with the submitted exit, like a row, and a pin menu closed wit
   unmount(root);
 });
 
-onIPhone("when the stage's first present is refused because its native view isn't mounted yet, as at a launch with Auto-Open Keyboard, it asks again next frame and the tiles still come", () => {
-  mockStage.present.mockImplementationOnce(() => ({ then: (_presented: () => void, refused: (error: Error) => void) => refused(new Error("Unable to find the 'SearchStageView' view")) }) as never);
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const root = tray();
-  act(() => jest.advanceTimersByTime(20));
-  expect(mockStage.present.mock.calls.length).toBeGreaterThanOrEqual(2);
-  expect(pins(root)).toBeDefined();
-  unmount(root);
-});
-
-type Thenable = { then: (presented: () => void, refused: (error: Error) => void) => void };
-const refusedOnce = () => mockStage.present.mockImplementationOnce((() => ({ then: (_presented: () => void, refused: (error: Error) => void) => refused(new Error("Unable to find the 'SearchStageView' view")) })) as never);
-
-function holdFrames() {
-  const queued: { id: number; run: (time: number) => void }[] = [];
-  let next = 1;
-  jest.spyOn(globalThis, "requestAnimationFrame").mockImplementation((run) => {
-    const id = next++;
-    queued.push({ id, run });
-    return id;
-  });
-  jest.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
-    const at = queued.findIndex((frame) => frame.id === id);
-    if (at >= 0) queued.splice(at, 1);
-  });
-  return {
-    pending: () => queued.length,
-    run: () => act(() => queued.splice(0).forEach((frame) => frame.run(0))),
-  };
-}
-
-function watchAppState() {
-  const listeners: ((state: string) => void)[] = [];
-  jest.spyOn(AppState, "addEventListener").mockImplementation(((_type: string, listener: (state: string) => void) => {
-    listeners.push(listener);
-    return { remove: () => undefined };
-  }) as never);
-  const set = (state: string) => {
-    Object.defineProperty(AppState, "currentState", { value: state, configurable: true, writable: true });
-    act(() => listeners.forEach((listener) => listener(state)));
-  };
-  return { set };
-}
-
-onIPhone("a refused present queued for the next frame is dropped when the panel is dismissed, so it can't reopen the tray", () => {
-  const frames = holdFrames();
-  refusedOnce();
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const root = tray();
-  expect(frames.pending()).toBeGreaterThan(0);
-  const asked = mockStage.present.mock.calls.length;
-  act(() => dismissSearch());
-  frames.run();
-  expect(mockStage.present.mock.calls.length).toBe(asked);
-  unmount(root);
-});
-
-onIPhone("a retry from an earlier open does nothing once a newer open has presented", () => {
-  const frames = holdFrames();
-  refusedOnce();
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const root = tray();
-  act(() => dismissSearch());
-  act(() => browse.newTab());
-  const asked = mockStage.present.mock.calls.length;
-  frames.run();
-  expect(mockStage.present.mock.calls.length).toBe(asked);
-  expect(pins(root)).toBeDefined();
-  unmount(root);
-});
-
-onIPhone("a retry waiting while the app is in the background asks again only once it's active, and the tiles then come", () => {
-  const appState = watchAppState();
-  const frames = holdFrames();
-  refusedOnce();
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const root = tray();
-  const asked = mockStage.present.mock.calls.length;
-  appState.set("background");
-  frames.run();
-  expect(mockStage.present.mock.calls.length).toBe(asked);
-  expect(pins(root)).toBeUndefined();
-  appState.set("active");
-  expect(mockStage.present.mock.calls.length).toBe(asked + 1);
-  expect(pins(root)).toBeDefined();
-  unmount(root);
-});
-
-onIPhone("a launch present that completes after its panel was dismissed records no launch timing", () => {
-  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
-  let complete: (() => void) | null = null;
-  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const stale = tray();
-  act(() => dismissSearch());
-  act(() => complete!());
-  expect(launchMarks).not.toHaveBeenCalled();
-  unmount(stale);
-  act(() => jest.runOnlyPendingTimers());
-  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
-  act(() => presentSearch("home", "", false, null, "atRest"));
-  const live = tray();
-  act(() => complete!());
-  expect(launchMarks).toHaveBeenCalledTimes(1);
-  unmount(live);
-});
-
 test("a pin menu's Copy Link and Share read the pin when chosen: a moved pin copies its new address, a removed one shares nothing", () => {
   const copied = jest.spyOn(tabMenus, "copyLink").mockImplementation((() => undefined) as never);
   const shared = jest.spyOn(tabMenus, "shareUrl").mockImplementation((() => undefined) as never);
@@ -560,34 +425,54 @@ test("a newer search session over the same open panel remounts the tiles, so a p
   unmount(root);
 });
 
-onIPhone("a launch whose panel saw the background before it presented sends no launch timing, even when it completes after the app is active again", () => {
-  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
-  const appState = watchAppState();
-  let complete: (() => void) | null = null;
-  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
-  act(() => presentSearch("home", "", false, null, "atRest"));
+const surfaceOf = (root: Root) => {
+  const hosts = root.root.findAll((node) => typeof node.type === "string" && (node.props.testID === "traySurface" || node.props.testID === "trayPanel"));
+  return hosts.find((node) => node.props.testID === "traySurface") ?? hosts.find((node) => StyleSheet.flatten(node.props.style)?.height !== undefined)!;
+};
+const insideSurface = (root: Root) => {
+  let parent = pins(root)!.parent;
+  while (parent && parent !== surfaceOf(root)) parent = parent.parent;
+  return parent === surfaceOf(root);
+};
+const heightOf = (root: Root) => StyleSheet.flatten(surfaceOf(root).props.style).height as number;
+
+test("the tiles sit inside the search panel, above its field, on the panel's own surface with no card of their own, and the panel grows by their height", () => {
+  act(() => browse.newTab());
   const root = tray();
-  appState.set("background");
-  appState.set("active");
-  act(() => complete!());
   expect(pins(root)).toBeDefined();
-  expect(launchMarks).not.toHaveBeenCalled();
+  expect(insideSurface(root)).toBe(true);
+  expect(root.root.findAll((node) => node.props.testID === "newTabPinsPlate")).toHaveLength(0);
+  const order = root.root.findAll((node) => typeof node.type === "string" && (node.props.testID === "newTabPins" || node.props.testID === "trayFieldCapsule")).map((node) => node.props.testID);
+  expect(order).toEqual(["newTabPins", "trayFieldCapsule"]);
+  const withPins = heightOf(root);
+  act(() => setSearchText("pin"));
+  act(() => jest.advanceTimersByTime(400));
+  expect(pins(root)).toBeUndefined();
+  expect(heightOf(root)).toBeLessThan(withPins);
   unmount(root);
 });
 
-onIPhone("a launch retry paused in the background and resumed on return presents once and sends no launch timing", () => {
-  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
-  const appState = watchAppState();
-  const frames = holdFrames();
-  refusedOnce();
-  act(() => presentSearch("home", "", false, null, "atRest"));
+onIPhone("on iPhone the stage is told the field sits below the tiles, so the morph and the pill line up with the field, not the panel's top", () => {
+  act(() => browse.newTab());
   const root = tray();
-  const asked = mockStage.present.mock.calls.length;
-  appState.set("background");
-  frames.run();
-  appState.set("active");
-  expect(mockStage.present.mock.calls.length).toBe(asked + 1);
-  expect(pins(root)).toBeDefined();
-  expect(launchMarks).not.toHaveBeenCalled();
+  const block = StyleSheet.flatten(pins(root)!.props.style).height as number;
+  expect(block).toBeGreaterThan(0);
+  expect(mockSeen.props!.fieldTop).toBeCloseTo(16 + block, 3);
+  act(() => setSearchText("pin"));
+  act(() => jest.advanceTimersByTime(400));
+  expect(mockSeen.props!.fieldTop).toBe(16);
+  unmount(root);
+});
+
+test("many pins with the keyboard up stay within the room above it: the tile block is capped and scrolls, and the field and rows keep their place", () => {
+  jest.spyOn(Keyboard, "metrics").mockReturnValue({ height: 400, screenX: 0, screenY: Dimensions.get("window").height - 400, width: 393 } as never);
+  act(() => withSpace(Array.from({ length: 24 }, (_, i) => tile(i))));
+  act(() => browse.newTab());
+  const root = tray();
+  const block = StyleSheet.flatten(pins(root)!.props.style).height as number;
+  expect(block).toBeGreaterThan(0);
+  expect(block).toBeLessThan(tilesHeight(24, Dimensions.get("window").width, Dimensions.get("window").fontScale));
+  const scroll = root.root.findAll((node) => node.props.testID === "newTabPinsScroll" && node.props.scrollEnabled !== undefined)[0]!;
+  expect(scroll.props.scrollEnabled).toBe(true);
   unmount(root);
 });

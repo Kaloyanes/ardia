@@ -39,11 +39,21 @@ export function pinnedFolderMenu(tile: PinnedTile, profileId: string, open: PinO
   return (tile.folder ?? []).map((tab) => ({ label: remoteTitle(tab.title, tab.url), onPress: () => open(tab.url, tab.title, tab.key) }));
 }
 
+const tileColumns = (width: number) => Math.max(1, Math.floor((width - space.l * 2 + space.s) / (TILE_MIN_WIDTH + space.s)));
+
+export function tilesHeight(count: number, width: number, fontScale: number): number {
+  if (count <= 0) return 0;
+  const rows = Math.ceil(count / tileColumns(width));
+  const face = Math.min(TILE_HEIGHT * fontScale, TILE_HEIGHT_MAX);
+  const tile = fontScale < SPACES_LARGE_TEXT ? face + spacesLayout.tileGap + font.caption.lineHeight * fontScale : face;
+  return space.xs + space.s + rows * tile + (rows - 1) * space.s;
+}
+
 export function Tiles({ tiles, profileId, onFolder, onLink, open = opensRemote(profileId) }: { tiles: PinnedTile[]; profileId: string; onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void; onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null, from?: RefObject<ViewInstance | null>) => void; open?: PinOpener }) {
   const { width, fontScale } = useWindowDimensions();
   const height = Math.min(TILE_HEIGHT * fontScale, TILE_HEIGHT_MAX);
   const titled = fontScale < SPACES_LARGE_TEXT;
-  const columns = Math.max(1, Math.floor((width - space.l * 2 + space.s) / (TILE_MIN_WIDTH + space.s)));
+  const columns = tileColumns(width);
   const rows: PinnedTile[][] = [];
   for (let i = 0; i < tiles.length; i += columns) rows.push(tiles.slice(i, i + columns));
   return (

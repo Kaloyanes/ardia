@@ -50,7 +50,6 @@ final class SearchStageView: ExpoView {
   private(set) var isStarted = false
   private var contentGaveUp = false
   private var startWaiters: [() -> Void] = []
-  let foregroundGate = StageForegroundGate()
   var fieldCenter = BrowseLayout.stageFieldCenter(fieldHeight: BrowseLayout.searchFieldHeight)
   var commandTop: CGFloat?
   var landsDirectly = false
@@ -112,7 +111,6 @@ final class SearchStageView: ExpoView {
     keyboardSentinel.isUserInteractionEnabled = false
     addSubview(keyboardSentinel)
     NotificationCenter.default.addObserver(self, selector: #selector(reduceMotionChanged), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
-    NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
   }
 
   deinit {
@@ -190,9 +188,7 @@ final class SearchStageView: ExpoView {
     let turnedOff = !shownProp && appliedShown
     appliedShown = shownProp
     if turnedOn {
-      requestPresent()
-    } else if turnedOff, foregroundGate.holdsPresent {
-      foregroundGate.release().waiters.forEach { $0() }
+      present()
     } else if turnedOff, isShown {
       finish()
     } else {
