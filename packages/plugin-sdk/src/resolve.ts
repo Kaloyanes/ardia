@@ -80,6 +80,7 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
   const rootIds = new Set(input.roots.map((r) => r.id));
   const candidateCache = new Map<string, { choices: Choice[]; rejected: Set<Rejection> }>();
   let steps = 0;
+  let limit = maxSteps;
   let lastFailure: ResolveProblem | null = null;
 
   function candidates(detail: RegistryPluginPayload, constraints: readonly Constraint[]): { choices: Choice[]; rejected: Set<Rejection> } {
@@ -148,7 +149,7 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
   };
 
   function search(picks: Picks, pending: readonly string[], extra: ReadonlyMap<string, Constraint[]>): Picks | null {
-    if (++steps > maxSteps) throw new Unsettled();
+    if (++steps > limit) throw new Unsettled();
     const index = pending.findIndex((id) => !picks.has(id));
     if (index < 0) return picks;
     const id = pending[index]!;
@@ -179,10 +180,33 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
         continue;
       }
       const next = new Map(picks).set(id, choice);
+      const loop = cycleThrough(next, id);
+      if (loop) {
+        fail({ code: "cycle", id, message: `The plugins depend on each other in a circle: ${loop.join(" → ")}`, wantedBy });
+        continue;
+      }
       const solved = search(next, [...rest, ...sortedKeys(choice.version.dependencies)], extra);
       if (solved) return solved;
     }
     return null;
+  }
+
+  function cycleThrough(picks: Picks, start: string): string[] | null {
+    const path: string[] = [start];
+    const seen = new Set<string>();
+    const walk = (id: string): string[] | null => {
+      for (const dep of sortedKeys(picks.get(id)?.version.dependencies)) {
+        if (dep === start) return [...path, start];
+        if (!picks.has(dep) || seen.has(dep)) continue;
+        seen.add(dep);
+        path.push(dep);
+        const found = walk(dep);
+        if (found) return found;
+        path.pop();
+      }
+      return null;
+    };
+    return walk(start);
   }
 
   function reaches(edges: ReadonlyMap<string, readonly string[]>, from: string, to: string): boolean {
@@ -230,7 +254,16 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
         }
         lastFailure = null;
         const extra = new Map([[edge.dep, [{ from: edge.label, range: edge.range, channel: defaultChannel }]]]);
-        const grown = search(picks, [edge.dep], extra);
+        steps = 0;
+        limit = maxSteps;
+        let grown: Picks | null;
+        try {
+          grown = search(picks, [edge.dep], extra);
+        } catch (error) {
+          if (!(error instanceof Unsettled)) throw error;
+          skip("unsettled", `${edge.dep} didn't settle within ${maxSteps} steps`);
+          continue;
+        }
         if (!grown) {
           const failure = lastFailure as ResolveProblem | null;
           skip(failure?.code ?? "no-version", failure?.message ?? `${edge.dep} couldn't be resolved`);

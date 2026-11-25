@@ -197,26 +197,37 @@
     let next = 0;
     let closedBy = null;
     const send = (message) => transport.send(JSON.stringify(message));
+    function start(method, params = {}) {
+      const id = ++next;
+      if (closedBy) return { id, done: Promise.reject(closedBy) };
+      let line;
+      try {
+        line = JSON.stringify({ id, method, params });
+      } catch (error) {
+        return { id, done: Promise.reject(new LocalEncodingError("unencodable", `The ${method} request couldn't be encoded: ${errorMessage(error)}`)) };
+      }
+      const done = new Promise((resolve, reject) => {
+        waiting.set(id, { resolve, reject });
+        try {
+          transport.send(line);
+        } catch (error) {
+          waiting.delete(id);
+          reject(error);
+        }
+      });
+      return { id, done };
+    }
     return {
       send,
       request(method, params = {}) {
-        if (closedBy) return Promise.reject(closedBy);
-        const id = ++next;
-        let line;
-        try {
-          line = JSON.stringify({ id, method, params });
-        } catch (error) {
-          return Promise.reject(new LocalEncodingError("unencodable", `The ${method} request couldn't be encoded: ${errorMessage(error)}`));
-        }
-        return new Promise((resolve, reject) => {
-          waiting.set(id, { resolve, reject });
-          try {
-            transport.send(line);
-          } catch (error) {
-            waiting.delete(id);
-            reject(error);
-          }
-        });
+        return start(method, params).done;
+      },
+      start,
+      forget(id, reason) {
+        const waiter = waiting.get(id);
+        if (!waiter) return;
+        waiting.delete(id);
+        waiter.reject(reason);
       },
       takeReply(message) {
         if (typeof message.method === "string" || !("id" in message)) return false;
@@ -611,10 +622,7 @@
     };
   }
 
-  var abortError = (signal) => signal.reason instanceof Error ? signal.reason : new PluginError("aborted", typeof signal.reason === "string" ? signal.reason : "The request was aborted.");
   var MAX_BUFFERED_CHUNKS = 4096;
-  var MAX_HELD_MESSAGES = 256;
-  var quiet = () => void 0;
   function chunkQueue(onDone, onFail) {
     const buffered = [];
     const readers = [];
@@ -658,6 +666,10 @@
     };
     return queue;
   }
+
+  var abortError = (signal) => signal.reason instanceof Error ? signal.reason : new PluginError("aborted", typeof signal.reason === "string" ? signal.reason : "The request was aborted.");
+  var MAX_HELD_MESSAGES = 256;
+  var quiet = () => void 0;
   function createChannels(rpc, report) {
     const streams = new Map();
     const sockets = new Map();
@@ -717,6 +729,7 @@
       const id = `f${++next}`;
       let cancelled = false;
       let rejectHead = null;
+      let headId = 0;
       const cancelRemote = () => {
         if (cancelled) return Promise.resolve();
         cancelled = true;
@@ -728,7 +741,10 @@
           signal?.removeEventListener("abort", onAbort);
         },
         (error, fromHost) => {
-          rejectHead?.(error);
+          if (rejectHead) {
+            rejectHead(error);
+            rpc.forget(headId, error instanceof Error ? error : new PluginError("failed", String(error)));
+          }
           if (!fromHost) void cancelRemote();
         }
       );
@@ -744,7 +760,9 @@
       signal?.addEventListener("abort", onAbort, { once: true });
       const head = await new Promise((resolve, reject) => {
         rejectHead = reject;
-        rpc.request(HOST_METHODS_V3.fetchStream, { ...request, stream: id }).then(resolve, (error) => {
+        const started = rpc.start(HOST_METHODS_V3.fetchStream, { ...request, stream: id });
+        headId = started.id;
+        started.done.then(resolve, (error) => {
           rejectHead = null;
           queue.fail(error, true);
           reject(error);
@@ -787,11 +805,20 @@
       let protocol = "";
       let settle = null;
       const held = { message: [], close: [], error: [] };
-      const flush = () => void Promise.resolve().then(() => {
+      let flushing = false;
+      const drain = () => {
         if (listeners.message.size) for (const [data, binary] of held.message.splice(0)) for (const l of [...listeners.message]) safely(() => l(data, binary));
         if (listeners.error.size) for (const message of held.error.splice(0)) for (const l of [...listeners.error]) safely(() => l(message));
-        if (listeners.close.size) for (const [code, reason] of held.close.splice(0)) for (const l of [...listeners.close]) safely(() => l(code, reason));
-      });
+        if (listeners.close.size && (!held.message.length || !listeners.message.size)) for (const [code, reason] of held.close.splice(0)) for (const l of [...listeners.close]) safely(() => l(code, reason));
+      };
+      const flush = () => {
+        if (flushing) return;
+        flushing = true;
+        void Promise.resolve().then(() => {
+          flushing = false;
+          drain();
+        });
+      };
       const attach = (set, listener) => {
         const added = addTo(set, listener);
         flush();
@@ -838,8 +865,9 @@
           settle?.resolve();
         },
         message(data, binary) {
-          if (!listeners.message.size) {
+          if (!listeners.message.size || held.message.length) {
             if (held.message.length < MAX_HELD_MESSAGES) held.message.push([data, binary]);
+            if (listeners.message.size) drain();
             return;
           }
           for (const listener of [...listeners.message]) safely(() => listener(data, binary));
@@ -848,21 +876,40 @@
           if (state === "closed") return;
           state = "closed";
           forget();
-          settle?.reject(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
-          if (!listeners.close.size) held.close.push([code, reason]);
-          else for (const listener of [...listeners.close]) safely(() => listener(code, reason));
+          handshakeFailed(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
+          if (!listeners.close.size || held.message.length || held.close.length) {
+            held.close.push([code, reason]);
+            drain();
+          } else for (const listener of [...listeners.close]) safely(() => listener(code, reason));
         },
         failed(message) {
-          settle?.reject(new PluginError("failed", message));
-          if (!listeners.error.size) {
+          if (state === "connecting") {
+            state = "closed";
+            forget();
+            handshakeFailed(new PluginError("failed", message));
+          }
+          if (!listeners.error.size || held.error.length) {
             if (held.error.length < MAX_HELD_MESSAGES) held.error.push(message);
+            if (listeners.error.size) drain();
             return;
           }
           for (const listener of [...listeners.error]) safely(() => listener(message));
         }
       });
+      let connectId = 0;
+      function handshakeFailed(error) {
+        if (!settle) return;
+        settle.reject(error);
+        rpc.forget(connectId, error);
+      }
       function onAbort() {
-        settle?.reject(abortError(options.signal));
+        if (state === "connecting") {
+          state = "closed";
+          forget();
+          handshakeFailed(abortError(options.signal));
+          void rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code: 1e3, reason: "aborted" }).then(void 0, quiet);
+          return;
+        }
         void socket.close(1e3, "aborted").catch(report);
       }
       if (options.signal?.aborted) {
@@ -882,7 +929,9 @@
             reject(error);
           }
         };
-        rpc.request(HOST_METHODS_V3.wsConnect, { ...params }).then(
+        const started = rpc.start(HOST_METHODS_V3.wsConnect, { ...params });
+        connectId = started.id;
+        started.done.then(
           (reply) => {
             if (reply && reply.open === true) sockets.get(id)?.opened(typeof reply.protocol === "string" ? reply.protocol : "");
           },

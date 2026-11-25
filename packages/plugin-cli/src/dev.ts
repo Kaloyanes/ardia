@@ -160,11 +160,19 @@ export async function runDev(dir: string | undefined, out: Output, flags: DevFla
   writeDevLink(project, paths);
   out.info(`linked ${project.manifest.id} → ${paths.link}`);
   if (flags.once) {
-    const report = await buildProject(project, flags);
-    const reloaded = await reload(report);
-    if (!report.ok) throw new CliError("The build failed", report.errors);
-    if (!reloaded) throw new CliError(`${project.manifest.id} has problems, so Ardia wasn't asked to reload it`, checkProject(project, { built: true }).problems);
-    out.result(describeBuild(report), { id: project.manifest.id, link: paths.link, socket: paths.socket, build: report });
+    const interrupted = () => new CliError(`Stopped before ${project.manifest.id} was reloaded; the dev link is removed`, [], 130);
+    try {
+      const report = await buildProject(project, flags);
+      if (signal?.aborted) throw interrupted();
+      const reloaded = await reload(report);
+      if (signal?.aborted) throw interrupted();
+      if (!report.ok) throw new CliError("The build failed, so the dev link is removed", report.errors);
+      if (!reloaded) throw new CliError(`${project.manifest.id} has problems, so Ardia wasn't asked to reload it and the dev link is removed`, checkProject(project, { built: true }).problems);
+    } catch (error) {
+      if (removeDevLink(paths)) out.info(`unlinked ${project.manifest.id}`);
+      throw error;
+    }
+    out.result(`linked ${project.manifest.id} at ${paths.link}`, { id: project.manifest.id, link: paths.link, socket: paths.socket });
     return finished();
   }
   let finish!: () => void;

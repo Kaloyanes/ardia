@@ -98,6 +98,18 @@ const LEVELS: Record<string, readonly unknown[]> = {
   files: [false, "picker"],
 };
 
+function stableText(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableText).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableText(record[key])}`)
+      .join(",")}}`;
+  }
+  return typeof value === "string" ? JSON.stringify(value) : String(value);
+}
+
 export function permissionGrants(permissions: PermissionsV3 | Readonly<Record<string, unknown>> | undefined): string[] {
   const grants: string[] = [];
   const p = (permissions ?? {}) as Record<string, unknown>;
@@ -128,6 +140,9 @@ export function permissionGrants(permissions: PermissionsV3 | Readonly<Record<st
     for (const event of Array.isArray(events) ? events : []) grants.push(`state.events:${String(event)}`);
     for (const intent of Array.isArray(intents) ? intents : []) grants.push(`state.intents:${String(intent)}`);
   } else if (state !== undefined && state !== false) grants.push(`state:${String(state)}`);
-  for (const key of Object.keys(p)) if (!(PERMISSION_KEYS as readonly string[]).includes(key)) grants.push(`unknown:${key}`);
+  for (const [key, value] of Object.entries(p)) {
+    if ((PERMISSION_KEYS as readonly string[]).includes(key) || value === undefined || value === null || value === false) continue;
+    grants.push(`unknown:${key}=${stableText(value)}`);
+  }
   return [...new Set(grants)].sort();
 }

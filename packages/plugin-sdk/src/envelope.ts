@@ -24,6 +24,8 @@ export const ENVELOPE_CONTEXT = REGISTRY_SIGNATURE_DOMAIN;
 
 const SIG_PATTERN = /^[A-Za-z0-9_-]{86}$/;
 
+export const KID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
 const ED25519 = { name: "Ed25519" } as const;
 
 export class CanonicalJsonError extends TypeError {
@@ -185,7 +187,7 @@ async function publicKey(subtle: SubtleLike, text: string): Promise<CryptoKeyLik
 export const envelopeMessage = (kid: string, payload: unknown): Uint8Array => utf8(REGISTRY_SIGNATURE_DOMAIN + canonicalJson({ v: REGISTRY_ENVELOPE_VERSION, kid, payload }));
 
 export async function signEnvelope<T>(payload: T, kid: string, privateKeyPem: string, options: CryptoOptions = {}): Promise<SignedEnvelope<T>> {
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(kid)) throw new Error("kid must be 1 to 64 letters, digits, ., _ and -");
+  if (!KID_PATTERN.test(kid)) throw new Error("kid must be 1 to 128 letters, digits, ., _, : and -");
   const pkcs8 = pemBody(privateKeyPem, "PRIVATE KEY");
   if (!pkcs8) throw new Error("The private key must be a PKCS #8 PEM (-----BEGIN PRIVATE KEY-----).");
   const subtle = subtleOf(options);
@@ -203,7 +205,7 @@ export async function verifyEnvelope<T = unknown>(envelope: unknown, publicKeys:
   if (extra.length) return { ok: false, reason: `The envelope has unknown keys: ${extra.join(", ")}` };
   const { v, kid, sig, payload } = envelope;
   if (v !== 1) return { ok: false, reason: "The envelope's v must be 1" };
-  if (typeof kid !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(kid)) return { ok: false, reason: "The envelope's kid must be 1 to 64 letters, digits, ., _ and -" };
+  if (typeof kid !== "string" || !KID_PATTERN.test(kid)) return { ok: false, reason: "The envelope's kid must be 1 to 128 letters, digits, ., _, : and -" };
   if (typeof sig !== "string") return { ok: false, reason: "The envelope has no sig" };
   if (!("payload" in envelope)) return { ok: false, reason: "The envelope has no payload" };
   const keyText = lookup(publicKeys, kid);

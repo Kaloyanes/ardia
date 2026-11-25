@@ -35,8 +35,23 @@ export function sameRegistry(a: string | undefined, b: string | undefined): bool
   return left.host === right.host;
 }
 
-export function versionMatches(version: string, patterns: readonly string[]): boolean {
-  return patterns.some((pattern) => (isSemver(pattern) ? pattern === version : satisfies(version, pattern, { includePrerelease: true })));
+export function exactSelector(selector: string): string {
+  return selector
+    .split("||")
+    .map((alternative) => {
+      const tight = alternative.trim().replace(/(\^|~>?|>=|<=|>|<|=)\s+/g, "$1");
+      if (/\s-\s/.test(tight)) return tight;
+      return tight
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((token) => (isSemver(token) ? `=${token}` : token))
+        .join(" ");
+    })
+    .join(" || ");
+}
+
+export function versionMatches(version: string, selectors: readonly string[]): boolean {
+  return selectors.some((selector) => satisfies(version, exactSelector(selector), { includePrerelease: true }));
 }
 
 function entryMatches(entry: RevocationEntry, target: RevocationTarget): boolean {

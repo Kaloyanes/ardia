@@ -73,9 +73,9 @@ export function assetFiles(project: Project, platforms: readonly PlatformKey[]):
   const owners = new Map<string, PlatformKey>();
   for (const platform of platforms) {
     const name = assetName(project, platform);
-    const clash = owners.get(name);
-    if (clash) throw new CliError(`${clash} and ${platform} would both be released as ${name}; give each platform its own name in release.assets or use {platform} in release.asset`);
-    owners.set(name, platform);
+    const clash = owners.get(name.toLowerCase());
+    if (clash) throw new CliError(`${clash} and ${platform} would both be released as ${name} (names that differ only in case collide on macOS and Windows); give each platform its own name in release.assets or use {platform} in release.asset`);
+    owners.set(name.toLowerCase(), platform);
     names.set(platform, name);
   }
   return names;

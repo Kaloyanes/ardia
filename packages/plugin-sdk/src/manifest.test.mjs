@@ -146,11 +146,13 @@ describe("manifest v3", () => {
   test("sidecar.run[0] is a program inside the plugin's folder", () => {
     ok({ sidecar: { run: ["bin/server", "--port", "0"] } });
     ok({ sidecar: { run: ["server"] } });
-    for (const bad of ["/usr/bin/env", "../bin/x", "C:\\tools\\x.exe", "D:/x", "bin/../../x"]) assert.equal(problems({ sidecar: { run: [bad] } })[0], "sidecar.run[0] must be a program inside the plugin's folder, as a relative path like bin/server", bad);
+    for (const bad of ["/usr/bin/env", "../bin/x", "C:\\tools\\x.exe", "D:/x", "bin/../../x", "bin/"]) assert.equal(problems({ sidecar: { run: [bad] } })[0], "sidecar.run[0] must be a program inside the plugin's folder, as a relative path like bin/server", bad);
     assert.equal(problems({ sidecar: { run: ["bin/s", "a\u0000b"] } })[0], "sidecar.run[1] must be an argument of 1 to 1024 characters with no NUL");
     assert.deepEqual(problems({ sidecar: { run: [] } }), ["sidecar.run must be a list of 1 to 32"]);
     const run = generateManifestV3JsonSchema().properties.sidecar.properties.run;
     assert.equal(new RegExp(run.prefixItems[0].pattern, "u").test("/usr/bin/env"), false);
+    assert.equal(new RegExp(run.prefixItems[0].pattern, "u").test("bin/"), false);
+    assert.equal(new RegExp(run.prefixItems[0].pattern, "u").test("bin/server"), true);
   });
 
   test("icon is an SF Symbol; iconUrl is an https image", () => {

@@ -119,6 +119,10 @@ describe("signed envelopes", () => {
     assert.equal((await verifyEnvelope({ ...envelope, payload: { bad: "\ud800" } }, { k1: k.publicPem })).ok, false);
     assert.equal((await verifyEnvelope(envelope, { k1: "not a key" })).ok, false);
     await assert.rejects(signEnvelope(payload, "bad kid!", k.privatePem));
+    const colon = await signEnvelope(payload, "prod:2026", k.privatePem);
+    assert.equal((await verifyEnvelope(colon, { "prod:2026": k.publicPem })).ok, true);
+    await assert.rejects(signEnvelope(payload, "k".repeat(129), k.privatePem));
+    assert.equal((await verifyEnvelope({ ...colon, kid: "prod 2026" }, { "prod 2026": k.publicPem })).ok, false);
     await assert.rejects(signEnvelope(payload, "k1", "nope"));
   });
 
@@ -181,7 +185,14 @@ describe("registry documents", () => {
     assert.deepEqual(validateRegistryIndex(index).problems, undefined);
     assert.deepEqual(validateRegistryIndex({ ...index, v: 1 }).problems, ["v isn't a key of the registry index"]);
     assert.deepEqual(validateRegistryIndex({ ...index, plugins: [indexEntry(), indexEntry()] }).problems, ["plugins[1].id: @a/b is listed twice"]);
-    assert.deepEqual(validateRegistryIndex({ ...index, plugins: [indexEntry({ tags: {} })] }).problems, ["plugins[0].tags must name latest, beta or both"]);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ tags: {} })] }).ok, true);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ iconUrl: null })] }).ok, true);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ iconUrl: "https://cdn.example.com/i.png" })] }).ok, true);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ iconUrl: "http://cdn.example.com/i.png" })] }).ok, false);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ description: "" })] }).ok, true);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ description: "x".repeat(1000) })] }).ok, true);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ description: "x".repeat(1001) })] }).ok, false);
+    assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ description: "bad\u202e" })] }).ok, false);
     assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ icon: undefined })] }).ok, false);
     assert.equal(validateRegistryIndex({ ...index, plugins: [indexEntry({ tier: "wasm" })] }).ok, false);
   });
@@ -193,6 +204,8 @@ describe("registry documents", () => {
     assert.deepEqual(validatePluginDetail({ ...d, tags: { latest: "1.1.0-beta.1" } }).problems, ["tags.latest: 1.1.0-beta.1 is a beta version"]);
     assert.deepEqual(validatePluginDetail({ ...d, tags: { latest: "9.9.9" } }).problems, ["tags.latest: 9.9.9 isn't one of the versions"]);
     assert.equal(validatePluginDetail({ ...d, v: 1 }).ok, false);
+    assert.equal(validatePluginDetail({ ...d, tags: {}, versions: d.versions.map((v) => ({ ...v, yanked: true })) }).ok, true);
+    assert.equal(validatePluginDetail({ ...d, description: "y".repeat(1000) }).ok, true);
     assert.equal(validatePluginDetail({ ...d, versions: [version("1.0.0", { artifacts: { "beos-x86": artifact() } })] }).ok, false);
     assert.deepEqual(validatePluginDetail({ ...d, versions: [version("1.0.0", { artifacts: {} })], tags: { latest: "1.0.0" } }).problems, ["versions[0].artifacts must have at least one platform"]);
     assert.equal(validatePluginDetail({ ...d, versions: [version("1.0.0", { artifacts: { universal: { ...artifact(), url: "http://x.com/a" } } })] }).ok, false);
@@ -225,6 +238,20 @@ describe("revocations", () => {
       revocation({ match: { registry: "https://evil.example.com" }, action: "block" }),
     ],
   };
+
+  test("a bare version inside || or a space-joined set still matches exactly", () => {
+    const or = [revocation({ match: { id: "@a/b", versions: ["1.0.0 || 2.0.0"] } })];
+    assert.equal(matchRevocations({ id: "@a/b", version: "1.0.0" }, or).length, 1);
+    assert.equal(matchRevocations({ id: "@a/b", version: "2.0.0" }, or).length, 1);
+    assert.equal(matchRevocations({ id: "@a/b", version: "1.5.0" }, or).length, 0);
+    assert.equal(matchRevocations({ id: "@a/b", version: "3.0.0" }, or).length, 0);
+    const mixed = [revocation({ match: { id: "@a/b", versions: ["1.0.0 || >= 3.0.0 <3.2.0", "1.2.3 - 1.2.5"] } })];
+    assert.deepEqual(["1.0.0", "1.0.1", "3.1.0", "3.2.0", "1.2.4", "1.2.6"].map((v) => matchRevocations({ id: "@a/b", version: v }, mixed).length), [1, 0, 1, 0, 1, 0]);
+    const list = { seq: 1, issuedAt: "2026-11-25T00:00:00Z", entries: [revocation({ match: { id: "@a/b", versions: Array.from({ length: 256 }, (_, i) => `1.0.${i}`) }, reason: "r".repeat(1000) })] };
+    assert.equal(validateRevocationList(list).ok, true);
+    assert.equal(validateRevocationList({ ...list, entries: [{ ...list.entries[0], match: { id: "@a/b", versions: Array.from({ length: 257 }, (_, i) => `1.0.${i}`) } }] }).ok, false);
+    assert.equal(validateRevocationList({ ...list, entries: [{ ...list.entries[0], reason: "r".repeat(1001) }] }).ok, false);
+  });
 
   test("a bare version matches exactly; a range matches as a range", () => {
     assert.deepEqual(matchRevocations({ id: "@a/b", version: "1.2.0" }, list).map((m) => [m.action, m.rollbackTo]), [["yank", "1.1.0"]]);
@@ -329,11 +356,41 @@ describe("resolvePluginGraph", () => {
     assert.equal(conflict.problems[0].id, "@a/ai");
     const cycle = resolvePluginGraph({ ...base, roots: [{ id: "@a/loop1" }] });
     assert.equal(cycle.problems[0].code, "cycle");
-    assert.match(cycle.problems[0].message, /@a\/loop1 → @a\/loop2 → @a\/loop1/);
+    assert.match(cycle.problems[0].message, /@a\/loop(1|2) → @a\/loop(1|2) → @a\/loop(1|2)/);
     assert.deepEqual(resolvePluginGraph({ ...base, roots: [{ id: "@a/nope" }] }).problems.map((p) => p.code), ["not-found"]);
     assert.match(resolvePluginGraph({ ...base, ardiaVersion: "0.2.0", roots: [{ id: "@a/ai" }] }).problems[0].message, /no version works with this Ardia/);
     const wide = new Map(Array.from({ length: 12 }, (_, i) => [`@w/p${i}`, detail(`@w/p${i}`, Array.from({ length: 6 }, (_, v) => version(`1.${v}.0`, { dependencies: i < 11 ? { [`@w/p${i + 1}`]: "^1.0.0" } : { "@w/none": "*" } })))]));
     assert.equal(resolvePluginGraph({ catalog: wide, ardiaVersion: "1.0.0", platform: null, maxSteps: 200, roots: [{ id: "@w/p0" }] }).problems[0].code, "unsettled");
+  });
+
+  test("a candidate that closes a cycle is passed over for an older one that doesn't", () => {
+    const graph = new Map([
+      ["@c/a", detail("@c/a", [version("1.0.0", { dependencies: { "@c/b": "^1.0.0" } })])],
+      ["@c/b", detail("@c/b", [version("1.0.0"), version("1.1.0", { dependencies: { "@c/a": "*" } })])],
+    ]);
+    const result = resolvePluginGraph({ catalog: graph, ardiaVersion: "1.0.0", platform: null, roots: [{ id: "@c/a" }] });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.deepEqual(result.plan.map((p) => [p.id, p.version]), [["@c/b", "1.0.0"], ["@c/a", "1.0.0"]]);
+  });
+
+  test("an optional branch that runs out of steps is skipped and the required plan stands", () => {
+    const graph = new Map(Array.from({ length: 12 }, (_, i) => [`@w/p${i}`, detail(`@w/p${i}`, Array.from({ length: 6 }, (_, v) => version(`1.${v}.0`, { dependencies: i < 11 ? { [`@w/p${i + 1}`]: "^1.0.0" } : { "@w/none": "*" } })))]));
+    graph.set("@w/app", detail("@w/app", [version("1.0.0", { dependencies: { "@w/core": "*" }, optionalDependencies: { "@w/p0": "*" } })]));
+    graph.set("@w/core", detail("@w/core", [version("1.0.0")]));
+    const result = resolvePluginGraph({ catalog: graph, ardiaVersion: "1.0.0", platform: null, maxSteps: 300, roots: [{ id: "@w/app" }] });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.deepEqual(result.plan.map((p) => p.id), ["@w/core", "@w/app"]);
+    assert.deepEqual(result.skipped.map((s) => [s.id, s.code]), [["@w/p0", "unsettled"]]);
+    const cyclic = new Map([
+      ["@x/app", detail("@x/app", [version("1.0.0", { dependencies: { "@x/core": "*" }, optionalDependencies: { "@x/ring1": "*" } })])],
+      ["@x/core", detail("@x/core", [version("1.0.0")])],
+      ["@x/ring1", detail("@x/ring1", [version("1.0.0", { dependencies: { "@x/ring2": "*" } })])],
+      ["@x/ring2", detail("@x/ring2", [version("1.0.0", { dependencies: { "@x/ring1": "*" } })])],
+    ]);
+    const ringed = resolvePluginGraph({ catalog: cyclic, ardiaVersion: "1.0.0", platform: null, roots: [{ id: "@x/app" }] });
+    assert.equal(ringed.ok, true, JSON.stringify(ringed.problems));
+    assert.deepEqual(ringed.plan.map((p) => p.id), ["@x/core", "@x/app"]);
+    assert.deepEqual(ringed.skipped.map((s) => [s.id, s.code]), [["@x/ring1", "cycle"]]);
   });
 
   test("revocations use each version's own repo, and keep a yanked install only on request", () => {
@@ -453,6 +510,41 @@ describe("diffSecuritySurface", () => {
       assert.equal(diff.expanded, true, `${name}: ${JSON.stringify(diff)}`);
     });
   }
+
+  test("scripts and styles compare as whole units, so swapping their origins needs a prompt", () => {
+    const two = (aMatch, bMatch) => ({
+      permissions: { pages: ["https://*/*"] },
+      contributes: {
+        contentScripts: [
+          { id: "a", matches: [aMatch], js: ["a.js"] },
+          { id: "b", matches: [bMatch], js: ["b.js"] },
+        ],
+      },
+    });
+    assert.equal(diffSecuritySurface(two("https://a.com/*", "https://bank.com/*"), two("https://bank.com/*", "https://a.com/*")).expanded, true);
+    assert.equal(diffSecuritySurface(two("https://a.com/*", "https://bank.com/*"), two("https://a.com/x*", "https://bank.com/*")).expanded, false);
+    const styles = (a, b) => ({ contributes: { pageStyles: [{ id: "a", matches: [a], css: "a.css" }, { id: "b", matches: [b], css: "b.css" }] } });
+    assert.equal(diffSecuritySurface(styles("https://a.com/*", "https://b.com/*"), styles("https://b.com/*", "https://a.com/*")).expanded, true);
+    const when = (w) => ({ contributes: { pageStyles: [{ id: "a", matches: ["https://a.com/*"], css: "a.css", ...(w ? { when: w } : {}) }] } });
+    assert.equal(diffSecuritySurface(when("isPinned"), when(undefined)).expanded, true);
+    assert.equal(diffSecuritySurface(when(undefined), when("isPinned")).expanded, false);
+    assert.equal(diffSecuritySurface(when("isPinned"), when("true")).expanded, true);
+  });
+
+  test("a command that gains or changes its target needs a prompt", () => {
+    const command = (extra) => ({ contributes: { commands: [{ name: "go", title: "Go", ...extra }] } });
+    assert.equal(diffSecuritySurface(command({}), command({ panel: "side" })).expanded, true);
+    assert.equal(diffSecuritySurface(command({ view: "a" }), command({ view: "b" })).expanded, true);
+    assert.equal(diffSecuritySurface(command({ open: "tab", path: "/a" }), command({ open: "tab", path: "/b" })).expanded, true);
+    assert.equal(diffSecuritySurface(command({ panel: "side" }), command({ panel: "side" })).expanded, false);
+  });
+
+  test("an unknown permission moving from false to anything needs a prompt", () => {
+    assert.equal(diffSecuritySurface({ permissions: { camera: false } }, { permissions: { camera: true } }).expanded, true);
+    assert.equal(diffSecuritySurface({ permissions: { camera: "front" } }, { permissions: { camera: "both" } }).expanded, true);
+    assert.equal(diffSecuritySurface({ permissions: { camera: { a: 1, b: 2 } } }, { permissions: { camera: { b: 2, a: 1 } } }).expanded, false);
+    assert.equal(diffSecuritySurface({ permissions: { camera: true } }, { permissions: { camera: false } }).expanded, false);
+  });
 
   test("adding a sidecar or a first program from nothing expands", () => {
     assert.deepEqual(diffSecuritySurface({}, { scope: "global", sidecar: { run: ["x"] }, contributes: { programs: [{ name: "tool", path: "bin/tool" }] } }).expanded, true);

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { parseArgs } from "./args.ts";
+import { buildProject } from "./build.ts";
 import { checkProject } from "./check.ts";
 import { devPaths, runDev } from "./dev.ts";
 import { globRule } from "./files.ts";
@@ -412,9 +413,50 @@ describe("round 1 fixes", () => {
     try {
       await assert.rejects(runDev(dir, silent(), { dataDir: data, once: true }), /wasn't asked to reload/);
       assert.equal(requests.length, 0);
+      assert.equal(existsSync(join(data, "config", "plugins-dev", "acme__unfit.json")), false);
     } finally {
       server.close();
     }
+  });
+
+  test("dev --once unlinks and exits non-zero when it's interrupted or the build fails", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/oncer" });
+    const data = mkdtempSync(join(tmpdir(), "apn-"));
+    const link = join(data, "config", "plugins-dev", "acme__oncer.json");
+    const q = quiet();
+    assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], q.streams), 0);
+    assert.equal(existsSync(link), true);
+    const handlers = {};
+    const interrupted = main(["dev", dir, "--once", "--data-dir", data, "--no-tail"], { streams: quiet().streams, env: {}, signals: { once: (name, listener) => (handlers[name] = listener) } });
+    handlers.SIGTERM();
+    assert.equal(await interrupted, 130);
+    assert.equal(existsSync(link), false);
+    writeFileSync(join(dir, "src/index.tsx"), "this is not ( valid");
+    const broken = quiet();
+    assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], broken.streams), 1);
+    assert.match(broken.out.stderr, /The build failed, so the dev link is removed/);
+    assert.equal(existsSync(link), false);
+  });
+
+  test("a build that can't write its output fails instead of passing", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/blocked" });
+    writeFileSync(join(dir, "dist"), "a file where the folder should be");
+    const report = await buildProject(loadProject(dir));
+    assert.equal(report.ok, false);
+    assert.match(report.errors.join("\n"), /dist\/index\.js: .*(ENOTDIR|EEXIST|not a directory|file already exists)/);
+    const q = quiet();
+    assert.equal(await mainWith(["build", dir], q.streams), 1);
+  });
+
+  test("release asset names that differ only in case collide", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/cased" });
+    const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
+    manifest.release = { github: "acme/cased", assets: { "macos-arm64": "Plugin.tar.gz", "linux-x64": "plugin.tar.gz" } };
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both be released as plugin\.tar\.gz/);
   });
 
   test("a stop that races setup still unlinks, and stopping twice is safe", async () => {

@@ -65,7 +65,7 @@ export const GITHUB_REPO_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-
 export const SEMVER_PATTERN =
   "^(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})(?:-((?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?$";
 export const HTTPS_URL_PATTERN = "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})(?::\\d{1,5})?(?:[/?#][^\\s]*)?$";
-const PLUGIN_PATH_PATTERN = "^(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/\\\\\\u0000][^\\\\\\u0000]*$";
+const PLUGIN_PATH_PATTERN = "^(?![A-Za-z]:)(?!.*/$)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/\\\\\\u0000][^\\\\\\u0000]*$";
 
 export const PLATFORM_KEYS = ["universal", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64", "windows-x64"] as const;
 export type PlatformKey = (typeof PLATFORM_KEYS)[number];

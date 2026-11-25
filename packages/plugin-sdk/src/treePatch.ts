@@ -30,6 +30,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return proto === Object.prototype || proto === null;
 };
 
+const dense = (items: readonly unknown[], check: (item: unknown) => boolean) => {
+  for (let i = 0; i < items.length; i++) if (!(i in items) || !check(items[i])) return false;
+  return true;
+};
+
 const definedKeys = (record: Record<string, unknown>) => Object.keys(record).filter((key) => record[key] !== undefined);
 
 export function deepEqual(a: unknown, b: unknown): boolean {
@@ -51,7 +56,7 @@ function safeValue(value: unknown, depth: number): boolean {
   if (depth > MAX_DEPTH) return false;
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every((item) => safeValue(item, depth + 1));
+  if (Array.isArray(value)) return dense(value, (item) => safeValue(item, depth + 1));
   if (!isRecord(value)) return false;
   return Object.keys(value).every((key) => !FORBIDDEN_KEYS.has(key) && (value[key] === undefined || safeValue(value[key], depth + 1)));
 }
@@ -64,7 +69,7 @@ function validChild(value: unknown, depth: number): value is TreeChild {
   if (typeof type !== "string" || !type) return false;
   if (key !== undefined && typeof key !== "string" && !(typeof key === "number" && Number.isFinite(key))) return false;
   if (!isRecord(props) || !safeValue(props, depth + 1)) return false;
-  return Array.isArray(children) && children.every((child) => validChild(child, depth + 1));
+  return Array.isArray(children) && dense(children, (child) => validChild(child, depth + 1));
 }
 
 export const isTreeNode = (value: unknown): value is PluginNode => typeof value !== "string" && validChild(value, 0);
@@ -170,7 +175,7 @@ function applyOne(tree: TreeChild, op: TreeOp): TreeChild {
       });
     }
     case "insert":
-      if (!Array.isArray(op.nodes) || !op.nodes.every((n) => validChild(n, op.path.length + 1))) throw new TreePatchError("An insert op needs well-formed nodes");
+      if (!Array.isArray(op.nodes) || !dense(op.nodes, (n) => validChild(n, op.path.length + 1))) throw new TreePatchError("An insert op needs well-formed nodes");
       return update(tree, op.path, 0, (target) => {
         const node = asNode(target, "insert");
         if (!Number.isInteger(op.index) || op.index < 0 || op.index > node.children.length) throw new TreePatchError(`Can't insert at ${op.index}`);

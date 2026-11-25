@@ -62,6 +62,16 @@ describe("tree patch hardening", () => {
     assert.equal(isTreeNode(deep), false);
   });
 
+  test("sparse node and child arrays are refused", () => {
+    const holes = [node("Text")];
+    holes.length = 3;
+    assert.throws(() => applyTreePatch(node("Box"), [{ op: "insert", path: [], index: 0, nodes: holes }]), /well-formed/);
+    const parent = node("Box");
+    parent.children = holes;
+    assert.equal(isTreeNode(parent), false);
+    assert.equal(isTreeNode(node("Box", { list: [1, , 3] })), false);
+  });
+
   test("__proto__, constructor and prototype keys are refused everywhere", () => {
     const poisoned = JSON.parse('{"type":"Box","props":{"__proto__":{"polluted":true}},"children":[]}');
     assert.equal(isTreeNode(poisoned), false);
@@ -233,26 +243,25 @@ describe("streaming and sockets", () => {
 describe("channel edge cases", () => {
   const fakeRpc = (handlers) => {
     const calls = [];
-    return {
-      calls,
-      rpc: {
-        request: (method, params) => {
-          calls.push([method, params]);
-          const handler = handlers[method];
-          return handler ? Promise.resolve().then(() => handler(params)) : Promise.resolve(null);
-        },
-      },
+    const forgotten = [];
+    let next = 0;
+    const start = (method, params) => {
+      calls.push([method, params]);
+      const handler = handlers[method];
+      return { id: ++next, done: handler ? Promise.resolve().then(() => handler(params)) : Promise.resolve(null) };
     };
+    return { calls, forgotten, rpc: { start, request: (method, params) => start(method, params).done, forget: (id) => forgotten.push(id) } };
   };
 
   test("a stream error before the head arrives rejects fetchStream instead of stranding it", async () => {
     let release;
-    const { rpc } = fakeRpc({ "net.fetch.stream": () => new Promise((r) => (release = r)) });
+    const { rpc, forgotten } = fakeRpc({ "net.fetch.stream": () => new Promise((r) => (release = r)) });
     const channels = createChannels(rpc, () => {});
     const pending = channels.fetchStream("https://a.com/");
     await Promise.resolve();
     channels.deliver("net.fetch.error", { stream: "f1", message: "dns failed", code: "dns" });
     await assert.rejects(pending, /dns failed/);
+    assert.deepEqual(forgotten, [1]);
     release({ status: 200, statusText: "OK", headers: {}, url: "https://a.com/" });
     assert.equal(channels.openCount(), 0);
   });
@@ -293,6 +302,36 @@ describe("channel edge cases", () => {
     socket.onClose((c, r) => got.push(["close", c, r]));
     await new Promise((r) => setTimeout(r, 0));
     assert.deepEqual(got, [["message", "early"], ["error", "hiccup"], ["close", 1000, "done"]]);
+  });
+
+  test("held socket messages always come out before newer ones", async () => {
+    const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    channels.deliver("net.ws.message", { socket: socket.id, data: "first" });
+    const got = [];
+    socket.onMessage((d) => got.push(d));
+    channels.deliver("net.ws.message", { socket: socket.id, data: "second" });
+    channels.deliver("net.ws.close", { socket: socket.id, code: 1000, reason: "" });
+    socket.onClose(() => got.push("closed"));
+    channels.deliver("net.ws.message", { socket: socket.id, data: "third" });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(got, ["first", "second", "closed"]);
+  });
+
+  test("a handshake error forgets the connect waiter, the socket and the abort listener", async () => {
+    let added = 0;
+    let removed = 0;
+    const signal = { aborted: false, addEventListener: () => added++, removeEventListener: () => removed++ };
+    const { rpc, forgotten } = fakeRpc({ "net.ws.connect": () => new Promise(() => {}) });
+    const channels = createChannels(rpc, () => {});
+    const pending = channels.connect("wss://a.com/", { signal });
+    await Promise.resolve();
+    channels.deliver("net.ws.error", { socket: "w1", message: "tls failed" });
+    await assert.rejects(pending, /tls failed/);
+    assert.deepEqual(forgotten, [1]);
+    assert.equal(channels.openCount(), 0);
+    assert.equal([added, removed].join(), "1,1");
   });
 
   test("a refused close leaves the socket open", async () => {

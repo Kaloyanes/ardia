@@ -1,8 +1,8 @@
 import { LIMITS_V3, PLATFORM_KEYS, PLUGIN_ID_PATTERN, githubRepo, httpsUrl, interfaceName, pluginId, semver, semverRange, slug, symbol } from "./manifestParts";
 import { isRange } from "./semver";
-import { arr, bool, int, json, nullable, obj, oneOf, record, str, text, validate, type Infer } from "./spec";
+import { arr, bool, freeText, int, json, nullable, obj, oneOf, record, str, text, validate, type Infer } from "./spec";
 
-export const REGISTRY_LIMITS = { plugins: 20000, versions: 500, revocations: 5000, reason: 200, versionMatches: 32 } as const;
+export const REGISTRY_LIMITS = { plugins: 20000, versions: 500, revocations: 5000, reason: 1000, versionMatches: 256, description: 1000 } as const;
 
 const sha256 = str({ pattern: "^[a-f0-9]{64}$", rule: "a lowercase hex SHA-256" });
 const timestamp = str({ pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$", rule: "a UTC time like 2026-11-25T10:00:00Z" });
@@ -18,8 +18,9 @@ export const indexEntrySpec = obj(
   {
     id: pluginId,
     name: text(LIMITS_V3.name),
-    description: text(LIMITS_V3.description),
+    description: freeText(REGISTRY_LIMITS.description),
     icon: nullable(symbol),
+    iconUrl: nullable(httpsUrl),
     official: bool(),
     tier,
     repo: githubRepo,
@@ -77,7 +78,7 @@ export const pluginDetailSpec = obj(
   {
     id: pluginId,
     name: text(LIMITS_V3.name),
-    description: text(LIMITS_V3.description),
+    description: freeText(REGISTRY_LIMITS.description),
     official: bool(),
     tier,
     repo: githubRepo,
@@ -145,7 +146,6 @@ export function validateRegistryIndex(raw: unknown): Validated<RegistryIndexPayl
   result.value.plugins.forEach((entry, i) => {
     if (seen.has(entry.id)) problems.push(`plugins[${i}].id: ${entry.id} is listed twice`);
     seen.add(entry.id);
-    if (entry.tags.latest === undefined && entry.tags.beta === undefined) problems.push(`plugins[${i}].tags must name latest, beta or both`);
   });
   return problems.length ? { ok: false, problems } : result;
 }
@@ -165,7 +165,6 @@ export function validatePluginDetail(raw: unknown, expectedId?: string): Validat
       if (Object.hasOwn(entry[field], detail.id)) problems.push(`versions[${i}].${field}: a plugin can't depend on itself`);
     }
   });
-  if (detail.tags.latest === undefined && detail.tags.beta === undefined) problems.push("tags must name latest, beta or both");
   for (const [tag, version] of Object.entries(detail.tags)) {
     const entry = detail.versions.find((v) => v.version === version);
     if (!entry) problems.push(`tags.${tag}: ${version} isn't one of the versions`);

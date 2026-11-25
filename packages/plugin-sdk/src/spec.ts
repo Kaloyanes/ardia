@@ -69,6 +69,24 @@ export function str(options: StringOptions): Spec<string> {
   };
 }
 
+export function freeText(max: number, description?: string): Spec<string> {
+  return {
+    accepts: (value) => typeof value === "string",
+    check(value, path, problems) {
+      if (typeof value !== "string" || value.length > max) {
+        problems.push(`${label(path)} must be text of at most ${max} characters`);
+        return INVALID;
+      }
+      if (UNSAFE_TEXT.test(value)) {
+        problems.push(`${label(path)} has control or direction characters`);
+        return INVALID;
+      }
+      return value;
+    },
+    schema: () => withDescription({ type: "string", pattern: `^[^${UNSAFE_CLASS}]{0,${max}}$` }, description),
+  };
+}
+
 export function text(max: number, description?: string): Spec<string> {
   return {
     accepts: (value) => typeof value === "string",

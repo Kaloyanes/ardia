@@ -142,12 +142,26 @@ const combine = (built: readonly Built[]): BuildReport => ({
 
 async function buildOne(project: Project, entry: string, source: string, flags: BuildFlags): Promise<Built> {
   try {
-    const result = await esbuild(buildOptions(project, entry, source, flags));
+    return settledBuild(project, entry, source, await esbuild(buildOptions(project, entry, source, flags)));
+  } catch (error) {
+    return failedBuild(project, entry, source, error);
+  }
+}
+
+function failedBuild(project: Project, entry: string, source: string, error: unknown): Built {
+  const shaped = error as { errors?: unknown; warnings?: unknown };
+  if (Array.isArray(shaped?.errors) && shaped.errors.length) return builtOf(project, entry, source, null, shaped as { errors: Message[]; warnings?: Message[] });
+  const message = error instanceof Error ? `${entry}: ${error.message}` : `${entry}: ${String(error)}`;
+  return { entry, source, bytes: 0, errors: [message], warnings: [] };
+}
+
+function settledBuild(project: Project, entry: string, source: string, result: BuildResult): Built {
+  try {
     const refused = result.errors.length ? [] : writeOutputs(project.dir, result);
     const built = builtOf(project, entry, source, result);
     return refused.length ? { ...built, bytes: 0, errors: [...built.errors, ...refused] } : built;
   } catch (error) {
-    return builtOf(project, entry, source, null, error as { errors?: Message[]; warnings?: Message[] });
+    return failedBuild(project, entry, source, error);
   }
 }
 
@@ -168,9 +182,7 @@ export async function watchProject(project: Project, flags: BuildFlags, onBuild:
             name: "ardia-plugin-report",
             setup(build) {
               build.onEnd((result) => {
-                const refused = result.errors.length ? [] : writeOutputs(project.dir, result);
-                const built = builtOf(project, entry, source, result);
-                latest.set(entry, refused.length ? { ...built, bytes: 0, errors: [...built.errors, ...refused] } : built);
+                latest.set(entry, settledBuild(project, entry, source, result));
                 if (latest.size === entries.length) onBuild(combine([...latest.values()]));
               });
             },

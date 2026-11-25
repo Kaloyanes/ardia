@@ -1,9 +1,9 @@
 import { permissionGrants, type PermissionsV3 } from "./manifestPermissions";
 import { hostCoveredBy, patternCovers } from "./matchPatterns";
 
-type ScriptShape = { id?: string; matches?: readonly string[]; js?: readonly string[]; css?: readonly string[]; runAt?: string; allFrames?: boolean };
+type ScriptShape = { id?: string; matches?: readonly string[]; js?: readonly string[]; css?: readonly string[]; runAt?: string; allFrames?: boolean; when?: string };
 
-type CommandShape = { name?: string; shortcut?: string; open?: string; tool?: string; handler?: boolean };
+type CommandShape = { name?: string; shortcut?: string; open?: string; tool?: string; handler?: boolean; view?: string; panel?: string; inputMode?: string };
 
 export type SecuritySurfaceInput = {
   scope?: "global" | "profile";
@@ -17,7 +17,7 @@ export type SecuritySurfaceInput = {
     hooks?: readonly string[];
     passwordManager?: unknown;
     contentScripts?: readonly ScriptShape[];
-    pageStyles?: readonly { id?: string; matches?: readonly string[]; css?: string }[];
+    pageStyles?: readonly { id?: string; matches?: readonly string[]; css?: string; when?: string }[];
     netRules?: string;
     menus?: Readonly<Record<string, readonly { command: string; when?: string }[] | undefined>>;
     commands?: readonly CommandShape[];
@@ -43,33 +43,57 @@ function permissionGrant(key: string): Grant {
   return plain(key);
 }
 
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
+
+const coversAll = (outer: readonly string[], inner: readonly string[]) => inner.every((match) => outer.some((o) => patternCovers(o, match)));
+
+type ScriptUnit = { kind: "script"; js: string[]; css: string[]; matches: string[]; reach: number; allFrames: boolean; when: string | undefined };
+
+type StyleUnit = { kind: "style"; css: string; matches: string[]; when: string | undefined };
+
 function scriptGrants(scripts: readonly ScriptShape[]): Grant[] {
-  const out: Grant[] = [];
-  for (const script of scripts) {
+  return scripts.map((script) => {
     const runAt = script.runAt ?? "document_idle";
-    const reach = RUN_AT_REACH[runAt] ?? 2;
-    const allFrames = script.allFrames === true;
-    for (const match of list<string>(script.matches)) {
-      out.push({
-        key: `contentScripts:${runAt}${allFrames ? "+allFrames" : ""}:${match}`,
-        data: { kind: "script", reach, allFrames, match },
-        covers: (e) =>
-          e.data?.kind === "script" &&
-          (e.data.reach as number) >= reach &&
-          (e.data.allFrames === true || !allFrames) &&
-          patternCovers(e.data.match as string, match),
-      });
-    }
-    for (const file of [...list<string>(script.js), ...list<string>(script.css)]) out.push(plain(`contentScripts.files:${file}`));
-  }
-  return out;
+    const unit: ScriptUnit = {
+      kind: "script",
+      js: list<string>(script.js),
+      css: list<string>(script.css),
+      matches: list<string>(script.matches),
+      reach: RUN_AT_REACH[runAt] ?? 2,
+      allFrames: script.allFrames === true,
+      when: (script as { when?: string }).when,
+    };
+    return {
+      key: `contentScripts:${JSON.stringify({ js: [...unit.js].sort(), css: [...unit.css].sort(), matches: [...unit.matches].sort(), runAt, allFrames: unit.allFrames, when: unit.when ?? null })}`,
+      data: unit,
+      covers: (e: Grant) => {
+        const prior = e.data as ScriptUnit | undefined;
+        return (
+          prior?.kind === "script" &&
+          sameList(prior.js, unit.js) &&
+          sameList(prior.css, unit.css) &&
+          prior.reach >= unit.reach &&
+          (prior.allFrames || !unit.allFrames) &&
+          (prior.when === undefined || prior.when === unit.when) &&
+          coversAll(prior.matches, unit.matches)
+        );
+      },
+    };
+  });
 }
 
 function styleGrants(styles: NonNullable<SecuritySurfaceInput["contributes"]>["pageStyles"]): Grant[] {
-  return list<{ matches?: readonly string[]; css?: string }>(styles).flatMap((style) => [
-    ...list<string>(style.matches).map((match) => ({ key: `pageStyles:${match}`, covers: (e: Grant) => e.key.startsWith("pageStyles:") && patternCovers(e.key.slice(11), match) })),
-    ...(style.css ? [plain(`pageStyles.files:${style.css}`)] : []),
-  ]);
+  return list<{ matches?: readonly string[]; css?: string; when?: string }>(styles).map((style) => {
+    const unit: StyleUnit = { kind: "style", css: style.css ?? "", matches: list<string>(style.matches), when: style.when };
+    return {
+      key: `pageStyles:${JSON.stringify({ css: unit.css, matches: [...unit.matches].sort(), when: unit.when ?? null })}`,
+      data: unit,
+      covers: (e: Grant) => {
+        const prior = e.data as StyleUnit | undefined;
+        return prior?.kind === "style" && prior.css === unit.css && (prior.when === undefined || prior.when === unit.when) && coversAll(prior.matches, unit.matches);
+      },
+    };
+  });
 }
 
 function menuGrants(menus: NonNullable<SecuritySurfaceInput["contributes"]>["menus"]): Grant[] {
@@ -83,13 +107,14 @@ function menuGrants(menus: NonNullable<SecuritySurfaceInput["contributes"]>["men
   return out;
 }
 
+const COMMAND_TARGET_KEYS = ["view", "panel", "tool", "open", "handler", "inputMode", "path", "side", "sideSetting", "context"] as const;
+
 function commandGrants(commands: readonly CommandShape[]): Grant[] {
-  return commands.flatMap((c) => [
-    ...(c.shortcut ? [plain(`commands.shortcut:${c.name}:${c.shortcut}`)] : []),
-    ...(c.open ? [plain(`commands.open:${c.name}:${c.open}`)] : []),
-    ...(c.tool ? [plain(`commands.tool:${c.name}:${c.tool}`)] : []),
-    ...(c.handler ? [plain(`commands.handler:${c.name}`)] : []),
-  ]);
+  return commands.flatMap((c) => {
+    const record = c as Record<string, unknown>;
+    const target = Object.fromEntries(COMMAND_TARGET_KEYS.filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
+    return [...(c.shortcut ? [plain(`commands.shortcut:${c.name}:${c.shortcut}`)] : []), plain(`commands.target:${c.name}:${JSON.stringify(target)}`)];
+  });
 }
 
 function grantsOf(input: SecuritySurfaceInput | null | undefined): Grant[] {
