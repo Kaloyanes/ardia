@@ -49,9 +49,14 @@ export function createMacBackdrops(deps: BackdropDeps) {
   let stopMotion: (() => void) | null = null;
 
   const measured = () => {
+    const seen = new Set<string>();
     const regions = [...layers].flatMap(([element, { material }]) => {
       const rect = deps.measure(element);
-      return rect ? [{ rect, material }] : [];
+      if (!rect) return [];
+      const key = JSON.stringify([rect, material]);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ rect, material }];
     });
     return { regions, text: JSON.stringify(regions) };
   };

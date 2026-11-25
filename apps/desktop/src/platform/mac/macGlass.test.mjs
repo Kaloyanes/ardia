@@ -215,3 +215,17 @@ test("the window backdrop asks for the Mac app's vibrancy treatment, never Liqui
   await runFrames();
   assert.deepEqual(sent, [[{ rect: { x: 0, y: 0, width: 1280, height: 800 }, material: "windowTreatment" }]]);
 });
+
+test("profile pages stacked over the same window rect ask the host for one backdrop, not one per page", async () => {
+  const { sent, rects, backdrops, runFrames } = harness();
+  const pages = [{}, {}, {}];
+  for (const page of pages) {
+    rects.set(page, { x: 0, y: 0, width: 1280, height: 800 });
+    backdrops.add(page, "windowTreatment");
+  }
+  const sidebar = {};
+  rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
+  backdrops.add(sidebar, "windowTreatment");
+  await runFrames();
+  assert.deepEqual(sent, [[{ rect: { x: 0, y: 0, width: 1280, height: 800 }, material: "windowTreatment" }, { rect: { x: 0, y: 0, width: 240, height: 800 }, material: "windowTreatment" }]]);
+});

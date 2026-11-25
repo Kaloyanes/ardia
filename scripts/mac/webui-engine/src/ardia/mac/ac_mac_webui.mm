@@ -87,7 +87,7 @@ bool ValidAssetPath(std::string_view path) {
   }
   for (char c : path) {
     if (!(base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '.' ||
-          c == '_' || c == '-' || c == '/' || c == '@')) {
+          c == '_' || c == '-' || c == '/')) {
       return false;
     }
   }

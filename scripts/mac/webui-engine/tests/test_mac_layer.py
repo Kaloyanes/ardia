@@ -827,11 +827,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('blur.isEmphasized = true', swift)
         self.assertIn('NSVisualEffectView.Material(rawValue: dark ? 29 : 13)', swift)
 
-    def test_retina_asset_names_are_served(self):
+    def test_asset_paths_keep_the_allowlist_every_host_shares(self):
         webui = self.read('ac_mac_webui.mm')
         valid = webui.split('bool ValidAssetPath(std::string_view path) {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn("c == '/' || c == '@'", valid)
+        self.assertNotIn("'@'", valid)
+        self.assertIn("c == '_' || c == '-' || c == '/')) {", valid)
         self.assertIn('path.find("..") != std::string_view::npos', valid)
+        self.assertIn('hostSafeFileName', (REPO / 'apps/desktop/vite.shared.ts').read_text())
 
     def test_help_menu_offers_show_onboarding_like_the_mac_app(self):
         model = self.read('ac_mac_menu_model.h')
