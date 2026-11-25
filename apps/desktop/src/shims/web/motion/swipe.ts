@@ -383,7 +383,7 @@ let installed = false;
 function install() {
   if (installed || typeof window === "undefined") return;
   installed = true;
-  window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  window.addEventListener("wheel", onWheel, { capture: true, passive: import.meta.env?.MODE === "mac" });
   listenForPageSwipes();
 }
 

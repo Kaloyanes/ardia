@@ -71,6 +71,14 @@ const importerReplacements = new Map([
   [`${here("../browser/src/state/windows/layout.ts")}\0${here("../browser/src/components/downloads/Downloads.tsx")}`, here("./src/sidebarHeaderLayout.ts")],
   [`${here("../browser/src/state/windows/layout.ts")}\0${here("../browser/src/components/sidebar/AddressBar.tsx")}`, here("./src/sidebarHeaderLayout.ts")],
 ]);
+const macImporterReplacements = new Map([
+  [`${here("../browser/src/components/sidebar/SidebarPages.tsx")}\0${here("../browser/src/components/sidebar/Sidebar.tsx")}`, here("./src/platform/mac/MacSidebarPages.tsx")],
+  [`${here("../browser/src/components/window/ProfileSwipe.tsx")}\0${here("../browser/src/components/window/SidebarDock.tsx")}`, here("./src/platform/mac/MacProfileSwipe.tsx")],
+  [`${here("../browser/src/components/window/ProfileSwipe.tsx")}\0${here("../browser/src/App.tsx")}`, here("./src/platform/mac/MacProfileSwipe.tsx")],
+  [`${here("../browser/src/components/window/ProfileSwipe.tsx")}\0${here("../browser/src/components/tabstrip/TopTabStrip.tsx")}`, here("./src/platform/mac/MacProfileSwipe.tsx")],
+  [`${here("../browser/src/state/windows/profilePager.ts")}\0${here("../browser/src/components/sidebar/SidebarPage.tsx")}`, here("./src/platform/mac/macPageStyle.ts")],
+  [`${here("../browser/src/state/sidebar/sharedTiles.ts")}\0${here("../browser/src/components/sidebar/SidebarPage.tsx")}`, here("./src/platform/mac/macPageStyle.ts")],
+]);
 const siteMeadow = here("../site/src/scripts/meadow/");
 const siteMeadowKey = pathKey(siteMeadow);
 const SITE_MEADOW_TSCONFIG = JSON.stringify({ compilerOptions: { target: "ESNext", verbatimModuleSyntax: true, strict: true } });
@@ -91,6 +99,8 @@ function siteMeadowScripts(): Plugin {
 const adapters = pathKeys([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
 const replacementsByKey = keyedPaths(replacements);
 const importerReplacementsByKey = keyedPaths(importerReplacements);
+const macImporterReplacementsByKey = keyedPaths(macImporterReplacements);
+const macAdapters = pathKeys(macImporterReplacements.values());
 const passwordSaveSource = pathKey(importedPasswordSave.source);
 const passwordSaveImporters = pathKeys(importedPasswordSave.importers);
 
@@ -111,12 +121,12 @@ function desktopComponents(mode: DesktopMode): Plugin {
     async resolveId(source, rawImporter, options) {
       if (!rawImporter) return null;
       const importer = pathKey(rawImporter);
-      if (adapters.has(importer)) return null;
+      if (adapters.has(importer) || (mode === "mac" && macAdapters.has(importer))) return null;
       const resolved = await this.resolve(source, rawImporter, { ...options, skipSelf: true });
       if (!resolved) return null;
       const id = pathKey(resolved.id);
       if (id === passwordSaveSource && passwordSaveImporters.has(importer)) return importedPasswordSave.replacement;
-      const scoped = importerReplacementsByKey.get(`${id}\0${importer}`);
+      const scoped = (mode === "mac" ? macImporterReplacementsByKey.get(`${id}\0${importer}`) : undefined) ?? importerReplacementsByKey.get(`${id}\0${importer}`);
       if (scoped) return scoped;
       return resolveInputAdapter(id, importer) ?? replacementsByKey.get(id) ?? null;
     },
