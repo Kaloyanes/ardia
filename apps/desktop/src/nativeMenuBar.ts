@@ -191,7 +191,7 @@ export function utilityMenuSpec({ appName = "Ardia", closeThroughHost = false }:
     : { title: "Close Window", role: "close", ...MAC_SHORTCUTS[CLOSE_WINDOW] };
   const edit = EDIT_ITEMS.map((item): NativeMenuItem => ({ title: item.title, role: item.action, ...MAC_SHORTCUTS[item.id] }));
   return [
-    { title: appName, children: [{ title: `About ${appName}`, role: "about" }, ...appMenuStandardItems(appName), { title: `Quit ${appName}`, role: "quit", ...MAC_SHORTCUTS[QUIT] }] },
+    { title: appName, children: [{ title: `About ${appName}`, role: "about" }, ...appMenuStandardItems(appName), { title: `Quit ${appName}`, command: "quit", ...MAC_SHORTCUTS[QUIT] }] },
     { title: "File", children: [close] },
     { title: "Edit", children: [...edit.slice(0, 2), { separator: true }, ...edit.slice(2)] },
     { title: "Window", role: "windowMenu", children: [{ title: "Minimize", role: "minimize", ...MAC_SHORTCUTS["window:minimize"] }, { title: "Zoom", role: "zoom" }] },

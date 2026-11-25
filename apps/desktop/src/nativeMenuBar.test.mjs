@@ -305,9 +305,10 @@ test("Settings and Import get their own bar with Close Window, editing and the w
   assert.deepEqual(bar[1].children.map((item) => [item.title, item.role]), [["Close Window", "close"]]);
   assert.deepEqual(utilityMenuSpec({ closeThroughHost: true })[1].children.map((item) => [item.command, item.arg]), [[MENU_PICK, "window:close"]]);
   assert.deepEqual(bar[2].children.filter((item) => item.role).map((item) => item.role), ["undo", "redo", "cut", "copy", "paste", "pasteAndMatchStyle", "selectAll"]);
+  assert.deepEqual([bar[0].children.at(-1).command, bar[0].children.at(-1).key], ["quit", "q"]);
   assert.equal(bar[3].role, "windowMenu");
   assert.equal(bar[4].role, "helpMenu");
-  assert.deepEqual(bar[0].children.map((item) => item.role ?? (item.separator ? "---" : item.title)), ["about", "---", "services", "---", "hide", "hideOthers", "showAll", "---", "quit"]);
+  assert.deepEqual(bar[0].children.map((item) => item.role ?? (item.separator ? "---" : item.title)), ["about", "---", "services", "---", "hide", "hideOthers", "showAll", "---", "Quit Ardia"]);
   let count = 0;
   walk(bar, () => count++);
   assert.ok(count < NATIVE_MENU_MAX_ITEMS);

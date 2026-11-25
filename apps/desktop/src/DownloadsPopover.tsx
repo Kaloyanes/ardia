@@ -13,18 +13,18 @@ import { OutsidePressIgnoreContext } from "./outsidePressScope";
 import { PageOverlayRegion } from "./PageOverlayRegion";
 import { watchPageFocus } from "./pageFocus";
 import { nativePopovers } from "./desktopPopovers";
-import { downloadPresence, downloadsProps, openNativeDownloads, RECENT_PRESS_MS, type ButtonPress } from "./nativeDownloads";
-import { FILE_STATUS } from "./fileCapabilities";
+import { createButtonPresses, downloadPresence, downloadsProps, openNativeDownloads } from "./nativeDownloads";
+import { hostFiles } from "./hostFiles";
 import { DOWNLOADS_BUTTON_TEST_ID } from "../../browser/src/components/downloads/downloadsButtonId";
 import { useDownloads } from "../../browser/src/state/browser/hooks";
 import { useTheme } from "../../browser/src/components/ui/theme";
 import { cancelDownload, keepDownload, pauseDownload, resumeDownload } from "../../browser/src/state/downloads/actions";
 import { openDownload } from "../../browser/src/state/downloads/openDownload";
-import { fileExists, revealFile } from "../../browser/src/state/app/system";
+import { revealFile } from "../../browser/src/state/app/system";
 import { clearDownloads, dismissDownloadsByPress } from "../../browser/src/state/windows/actions";
 import { openInternalPage } from "../../browser/src/state/pages/urls";
 import { PLATFORM_TERMS } from "../../browser/src/lib/platformTerms";
-import { ardiaHost, hostSupports, reportHostError } from "./host";
+import { ardiaHost, reportHostError } from "./host";
 
 export * from "../../browser/src/components/downloads/Downloads";
 
@@ -41,31 +41,20 @@ function downloadsAnchor() {
 }
 
 function watchButtonPresses() {
-  let held = false;
-  let releasedAt = Number.NEGATIVE_INFINITY;
-  let waiting: (() => void)[] = [];
-  const press = (event: Event) => {
-    if (isDownloadsButton(event.target)) held = true;
-  };
-  const release = () => {
-    if (!held) return;
-    held = false;
-    releasedAt = performance.now();
-    const run = waiting;
-    waiting = [];
-    setTimeout(() => run.forEach((next) => next()), 0);
-  };
-  window.addEventListener("pointerdown", press, true);
-  window.addEventListener("pointerup", release, true);
-  window.addEventListener("pointercancel", release, true);
+  const presses = createButtonPresses(isDownloadsButton, () => performance.now(), (run) => void setTimeout(run, 0));
+  const down = (event: PointerEvent) => presses.down(event);
+  const up = (event: PointerEvent) => presses.up(event);
+  window.addEventListener("pointerdown", down, true);
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("pointercancel", up, true);
   return {
-    press: (): ButtonPress => (held ? "held" : performance.now() - releasedAt <= RECENT_PRESS_MS ? "recent" : "none"),
-    afterRelease: (run: () => void) => void (held ? waiting.push(run) : setTimeout(run, 0)),
+    press: presses.press,
+    afterRelease: presses.afterRelease,
     stop: () => {
-      waiting = [];
-      window.removeEventListener("pointerdown", press, true);
-      window.removeEventListener("pointerup", release, true);
-      window.removeEventListener("pointercancel", release, true);
+      presses.clear();
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
     },
   };
 }
@@ -75,7 +64,10 @@ function NativeDownloadsPopover({ onFallback }: { onFallback: () => void }) {
   const open = useWindowUiOf(windowId, (ui) => !!ui?.downloadsOpen);
   const list = useDownloads(windowId, useShallow((downloads) => downloads));
   const dark = useTheme().dark;
-  const props = useMemo(() => downloadsProps(list, downloadPresence(fileExists, !!ardiaHost && hostSupports(FILE_STATUS, ardiaHost)), dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark]);
+  const files = ardiaHost ? hostFiles(ardiaHost) : null;
+  const [statusVersion, statusChanged] = useState(0);
+  useEffect(() => files?.onChange(() => statusChanged((version) => version + 1)), [files]);
+  const props = useMemo(() => downloadsProps(list, downloadPresence((path) => files?.fileStatus(path) ?? "unknown"), dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark, statusVersion]);
   const latest = useRef({ list, props });
   latest.current = { list, props };
   const controller = useRef<ReturnType<typeof openNativeDownloads> | null>(null);

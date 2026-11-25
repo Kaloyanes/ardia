@@ -72,7 +72,6 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.setMainMenu",
     "ArdiaShell.setMenuState",
     "ArdiaShell.setMenuBookmarks",
-    "ArdiaShell.setShortcutRecording",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",
@@ -304,13 +303,6 @@ void ShellHostView::Invoke(const std::string& method,
     if (error) {
       return std::move(done).Run(false, base::Value(*error));
     }
-    return Reply(std::move(done), base::Value());
-  }
-  if (method == "ArdiaShell.setShortcutRecording") {
-    if (!values || values->size() != 1 || !(*values)[0].is_bool()) {
-      return std::move(done).Run(false, base::Value("Shortcut recording takes one boolean"));
-    }
-    SetMenuKeysSuppressed(window_id_, (*values)[0].GetBool());
     return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {

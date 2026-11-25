@@ -41,7 +41,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
   - A glass region over no page falls back behind the window, and the part of a region that no page covers (a menu
-    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles; `accepted` names a region only once every
+    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles, each masked by the whole region's rounded outline; `accepted` names a region only once every
     slice mounted, so a half-mounted region keeps its DOM fallback. The host advertises `shell.glassBehindWindow`, so
     `glassRegions.ts` also sends regions over the sidebar, toolbar or empty space instead of dropping them.
   - A region may carry `material` (`regular`, `clear`, `sidebar`, `header`, `menu`, `popover`, `hud`, `window`,
@@ -65,12 +65,13 @@ that branch). It is a development tool and never runs in a release. Like Windows
   (`kPopoverRendererShipped`), so `shell.popover.*` is advertised and `popoverHost` opens native panels.
   - `main.tsx` is a small entry that loads `popoverEntry.tsx` (`PopoverRoot.tsx`) instead of `shellEntry.tsx` when
     the bootstrap says `surface: "popover"` and the URL's `?popover=` matches (`popoverSurface.ts`), so a panel never
-    loads the browser shell, its store or its shims; a popover URL or bootstrap that doesn't validate stops with an
-    error instead of loading the shell; it draws only the requested route on a transparent page.
+    loads the browser shell, its store or its shims; a popover URL or bootstrap that doesn't validate (one `?popover=`,
+    plain-object props) stops with an error instead of loading the shell; it draws only the requested route on a transparent page.
   - Downloads is the first panel: with `shell.popover.*` advertised, `DownloadsPopover.tsx` opens it through
     `popoverHost` (`nativeDownloads.ts`) under the Downloads button, pushes rows as props, runs the actions the panel
     sends back, and falls back to the DOM panel when the host can't open one. A press on its own button closes it on
-    release however long it's held. Without `ArdiaSystem.fileStatus`, finished downloads count as present.
+    release however long it's held. A finished download shows Deleted only after `ArdiaSystem.fileStatus` confirms
+    the file is gone; pending, failed or unsupported lookups count as present.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
@@ -87,7 +88,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   (`nativeMenuBar.ts`) pushes the full Ardia, File, Edit, View, Tabs, Bookmarks, History, Extensions, Window and Help
   menus with `ArdiaShell.setMainMenu`. Every window pushes its own menu, state and bookmarks; the host keeps them by
   window and shows the key window's, switching when another window becomes key; a background window can't rewrite the
-  bar while any Ardia window is key. Settings and Import push their own Ardia, File, Edit, Window and Help bar. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
+  bar while any Ardia window is key, and a key window with no menu yet shows a command-free Ardia, Edit, Window and
+  Help bar. Menu commands go to the key window, or to the window that owns a key popover. Settings and Import push their own Ardia, File, Edit, Window and Help bar. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
   as `menu.pick`. Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs
   the Services, Window and Help menus.
   - `ArdiaShell.setMenuState` updates enabled, checked and titles in place by state id (`command` or

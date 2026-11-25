@@ -277,14 +277,13 @@ ShellHostView* HostForShell(content::WebContents* contents) {
 
 MenuCommandHandler MainMenuHandler() {
   return base::BindRepeating([](const MenuChoice& choice) {
-    NSWindow* key = NSApp.keyWindow ?: NSApp.mainWindow;
+    const std::optional<std::string> key = KeyMenuWindowId();
     ShellHostView* target = nullptr;
     for (ShellHostView* host : Hosts()) {
-      views::Widget* widget = host->GetWidget();
       if (!target) {
         target = host;
       }
-      if (widget && widget->GetNativeWindow().GetNativeNSWindow() == key) {
+      if (key && host->window_id() == *key) {
         target = host;
         break;
       }

@@ -9,7 +9,9 @@ const bootstrap = (popover, extra = {}) => ({ bootstrap: { windowId: "w1", profi
 
 test("only a popover surface with a valid id and route boots the popover renderer", () => {
   assert.deepEqual(popoverBoot(bootstrap({ id: "popover-w1-ab-1", route: "list", props: { title: "Pick" } })), { id: "popover-w1-ab-1", route: "list", props: { title: "Pick" } });
-  assert.deepEqual(popoverBoot(bootstrap({ id: "p1", route: "menus/list", props: [1] })), { id: "p1", route: "menus/list", props: {} });
+  assert.deepEqual(popoverBoot(bootstrap({ id: "p1", route: "menus/list" })), { id: "p1", route: "menus/list", props: {} });
+  for (const props of [[1], "x", 7, null, new Date(0), new Map()]) assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list", props })), null, String(props));
+  assert.deepEqual(popoverBoot(bootstrap({ id: "p1", route: "list", props: Object.assign(Object.create(null), { a: 1 }) }))?.props.a, 1);
   assert.equal(popoverBoot(undefined), null);
   assert.equal(popoverBoot({ bootstrap: { windowId: "w1", profileId: "", windowKind: "browser" } }), null);
   assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }, { windowKind: "browser" })), null);
@@ -18,6 +20,10 @@ test("only a popover surface with a valid id and route boots the popover rendere
   assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p1")?.id, "p1");
   assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p2"), null);
   assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), ""), null);
+  assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p1&popover=p1"), null);
+  assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p1&popover=p2"), null);
+  assert.equal(entryKind(bootstrap({ id: "p1", route: "list" }), "?popover=p1&popover=p1").kind, "invalid");
+  assert.equal(entryKind(bootstrap({ id: "p1", route: "list", props: [] }), "?popover=p1").kind, "invalid");
 });
 
 test("the channel closes, messages and reads its own props, and hears only its own props events", async () => {

@@ -29,7 +29,37 @@ export type DownloadsActions = {
 
 type Shown = Pick<Download, "id" | "filename" | "path" | "state" | "received" | "total" | "paused" | "dangerous" | "url" | "speed">;
 
-export const downloadPresence = (fileExists: (path: string) => boolean, statusKnown: boolean) => (path: string) => !statusKnown || fileExists(path);
+type PointerPress = { pointerId?: number; target: EventTarget | null };
+
+export function createButtonPresses(isButton: (target: EventTarget | null) => boolean, now: () => number, defer: (run: () => void) => void) {
+  let holder: number | null = null;
+  let releasedAt = Number.NEGATIVE_INFINITY;
+  let waiting: (() => void)[] = [];
+  const idOf = (event: PointerPress) => (typeof event.pointerId === "number" ? event.pointerId : 1);
+  return {
+    down(event: PointerPress) {
+      if (holder === null && isButton(event.target)) holder = idOf(event);
+    },
+    up(event: PointerPress) {
+      if (holder === null || idOf(event) !== holder) return;
+      holder = null;
+      releasedAt = now();
+      const run = waiting;
+      waiting = [];
+      defer(() => run.forEach((next) => next()));
+    },
+    press: (): ButtonPress => (holder !== null ? "held" : now() - releasedAt <= RECENT_PRESS_MS ? "recent" : "none"),
+    afterRelease(run: () => void) {
+      if (holder !== null) waiting.push(run);
+      else defer(run);
+    },
+    clear() {
+      waiting = [];
+    },
+  };
+}
+
+export const downloadPresence = (status: (path: string) => "present" | "missing" | "unknown") => (path: string) => status(path) !== "missing";
 
 export function downloadsRow(d: Shown, exists: (path: string) => boolean): DownloadsRow {
   const present = d.state !== "finished" || exists(d.path);

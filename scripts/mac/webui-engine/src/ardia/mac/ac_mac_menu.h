@@ -42,6 +42,7 @@ std::optional<std::string> SetWindowMenuBookmarks(const std::string& window_id, 
 void ForgetWindowMenu(const std::string& window_id);
 void SetMenuKeysSuppressed(const std::string& window_id, bool suppressed);
 bool MenuKeysSuppressed();
+std::optional<std::string> KeyMenuWindowId();
 
 void ShowContextMenu(LiveMenuView live_view,
                      const gfx::Point& point,

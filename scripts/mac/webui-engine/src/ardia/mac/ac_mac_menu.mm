@@ -72,7 +72,7 @@ std::optional<std::string> WindowIdOf(NSWindow* window) {
 }
 
 std::optional<std::string> KeyWindowId() {
-  return WindowIdOf(NSApp.keyWindow);
+  return WindowIdOf(NSApp.keyWindow ?: NSApp.mainWindow);
 }
 
 struct BookmarksSlot {
@@ -346,7 +346,10 @@ void ActivateKeyWindow(NSWindow* window) {
   auto found = WindowMenus().find(*id);
   if (found != WindowMenus().end() && found->second.root) {
     Present(found->second, true);
+    return;
   }
+  NSString* name = NSRunningApplication.currentApplication.localizedName ?: @"Ardia";
+  BuildBar(menu::MinimalMainMenu(base::SysNSStringToUTF8(name)));
 }
 
 void WatchKeyWindows() {
@@ -484,6 +487,10 @@ void ForgetWindowMenu(const std::string& window_id) {
 
 void SetMenuKeysSuppressed(const std::string& window_id, bool suppressed) {
   Suppression().Set(window_id, suppressed);
+}
+
+std::optional<std::string> KeyMenuWindowId() {
+  return KeyWindowId();
 }
 
 bool MenuKeysSuppressed() {

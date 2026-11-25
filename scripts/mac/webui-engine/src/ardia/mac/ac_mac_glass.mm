@@ -158,6 +158,28 @@ void ApplyCornerMask(NSView* view, const glass::CornerShape& shape) {
   view.layer.mask = mask;
 }
 
+void ApplySliceMask(NSView* view, const glass::SliceMask& mask) {
+  view.wantsLayer = YES;
+  const glass::Rect& outline = mask.outline;
+  const NSRect shape =
+      NSMakeRect(outline.x, view.isFlipped ? outline.y : NSHeight(view.bounds) - outline.y - outline.height,
+                 outline.width, outline.height);
+  CAShapeLayer* layer = [CAShapeLayer layer];
+  layer.frame = view.bounds;
+  CGPathRef path = CornerPath(shape, mask.radii, view.isFlipped);
+  layer.path = path;
+  CGPathRelease(path);
+  view.layer.mask = layer;
+}
+
+void ApplyMask(NSView* view, const glass::CornerShape& shape, const glass::SliceMask& slice) {
+  if (slice.active) {
+    ApplySliceMask(view, slice);
+  } else {
+    ApplyCornerMask(view, shape);
+  }
+}
+
 void Style(NSView* view, const glass::Placement& placement) {
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
@@ -166,7 +188,8 @@ void Style(NSView* view, const glass::Placement& placement) {
   view.alphaValue = placement.opacity;
   view.appearance = AppearanceOf(placement.appearance);
   const glass::CornerShape shape = glass::ShapeFor(placement.radii);
-  const double native = glass::NativeCornerRadius(shape);
+  const glass::SliceMask slice = glass::MaskFor(placement);
+  const double native = slice.active ? 0 : glass::NativeCornerRadius(shape);
   if ([view isKindOfClass:GlassEffectClass()]) {
     if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
       [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
@@ -177,14 +200,14 @@ void Style(NSView* view, const glass::Placement& placement) {
     if ([view respondsToSelector:NSSelectorFromString(@"setTintColor:")]) {
       [view setValue:ColorOf(placement.tint) forKey:@"tintColor"];
     }
-    ApplyCornerMask(view, shape);
+    ApplyMask(view, shape, slice);
   } else if ([view isKindOfClass:NSVisualEffectView.class]) {
     NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
     vibrancy.material = VibrancyMaterial(placement.material);
     view.layer.cornerRadius = native;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.masksToBounds = native > 0;
-    ApplyCornerMask(view, shape);
+    ApplyMask(view, shape, slice);
     ApplyTintLayer(view, placement.tint, native);
   }
   [CATransaction commit];

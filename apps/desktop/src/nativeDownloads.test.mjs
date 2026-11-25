@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPopoverHost, POPOVER_CLOSE_METHOD, POPOVER_DISMISSED_EVENT, POPOVER_MESSAGE_EVENT, POPOVER_OPEN_METHOD, POPOVER_UPDATE_METHOD } from "./popoverHost.ts";
-import { DOWNLOADS_POPOVER, DOWNLOADS_ROUTE, downloadPresence, downloadsMessage, downloadsPanelSize, downloadsProps, openNativeDownloads, OUTSIDE_SETTLE_MS, runDownloadsMessage } from "./nativeDownloads.ts";
+import { createButtonPresses, RECENT_PRESS_MS, DOWNLOADS_POPOVER, DOWNLOADS_ROUTE, downloadPresence, downloadsMessage, downloadsPanelSize, downloadsProps, openNativeDownloads, OUTSIDE_SETTLE_MS, runDownloadsMessage } from "./nativeDownloads.ts";
 
 const download = (overrides) => ({ id: "d", filename: "file.zip", path: "/tmp/file.zip", url: "https://example.com/file.zip", state: "finished", received: 2000, total: 2000, speed: 0, paused: false, dangerous: false, ...overrides });
 const LIST = [
@@ -214,14 +214,13 @@ test("holding the Downloads button past any timer and releasing never reopens th
   assert.deepEqual(dragged.closes, [true], "a press dragged off the button still closes the panel once released");
 });
 
-test("finished downloads keep Open and Show until the host can say a file is gone", () => {
-  const unknown = downloadPresence(() => false, false);
-  const known = downloadPresence((path) => path === "/tmp/file.zip", true);
+test("finished downloads keep Open and Show until the host confirms a file is gone", () => {
   const done = download({ id: "done" });
-  assert.deepEqual(downloadsProps([done], unknown, false, "").rows[0].actions, ["open", "reveal"]);
-  assert.equal(downloadsProps([done], unknown, false, "").rows[0].missing, false);
-  assert.deepEqual(downloadsProps([done], known, false, "").rows[0].actions, ["open", "reveal"]);
-  const gone = downloadsProps([download({ id: "gone", path: "/tmp/gone.zip" })], known, false, "").rows[0];
+  for (const status of ["unknown", "present"]) {
+    const row = downloadsProps([done], downloadPresence(() => status), false, "").rows[0];
+    assert.deepEqual([row.actions, row.missing, row.status], [["open", "reveal"], false, "2.0 KB"], status);
+  }
+  const gone = downloadsProps([done], downloadPresence(() => "missing"), false, "").rows[0];
   assert.deepEqual([gone.actions, gone.missing, gone.status], [[], true, "Deleted"]);
 });
 
@@ -243,4 +242,39 @@ test("a host that can't open the panel falls back to the DOM Downloads without c
   await h.settle();
   assert.deepEqual(h.fallbacks, [true]);
   assert.deepEqual(h.closes, []);
+});
+
+test("a hold belongs to the pointer that pressed the Downloads button, so another pointer's release can't end it", () => {
+  let now = 0;
+  const deferred = [];
+  const presses = createButtonPresses((target) => target === "button", () => now, (run) => deferred.push(run));
+  const ran = [];
+  const flush = () => deferred.splice(0).forEach((run) => run());
+  presses.down({ pointerId: 7, target: "elsewhere" });
+  assert.equal(presses.press(), "none");
+  presses.down({ pointerId: 1, target: "button" });
+  presses.down({ pointerId: 2, target: "button" });
+  assert.equal(presses.press(), "held");
+  presses.afterRelease(() => ran.push("released"));
+  presses.up({ pointerId: 2, target: "button" });
+  presses.up({ pointerId: 3, target: "page" });
+  flush();
+  assert.equal(presses.press(), "held", "a second pointer lifting doesn't release the first one's hold");
+  assert.deepEqual(ran, []);
+  now = 900;
+  presses.up({ pointerId: 1, target: "elsewhere" });
+  assert.equal(presses.press(), "recent");
+  flush();
+  assert.deepEqual(ran, ["released"]);
+  now += RECENT_PRESS_MS + 1;
+  assert.equal(presses.press(), "none");
+  presses.afterRelease(() => ran.push("idle"));
+  flush();
+  assert.deepEqual(ran, ["released", "idle"]);
+  presses.down({ target: "button" });
+  presses.afterRelease(() => ran.push("cleared"));
+  presses.clear();
+  presses.up({ target: "button" });
+  flush();
+  assert.deepEqual(ran, ["released", "idle"]);
 });

@@ -111,6 +111,7 @@ struct Placement {
   std::string group;
   Appearance appearance = Appearance::kAuto;
   int slice = 0;
+  Rect outline;
   bool operator==(const Placement&) const = default;
 };
 
@@ -376,14 +377,15 @@ inline void Subtract(std::vector<Rect>& region, const Rect& cut) {
   region = std::move(remaining);
 }
 
-inline Radii SliceRadii(const Radii& radii, const Rect& slice, const Rect& whole) {
-  const auto same = [](double a, double b) { return std::abs(a - b) < 0.01; };
-  const bool left = same(slice.x, whole.x);
-  const bool right = same(slice.right(), whole.right());
-  const bool top = same(slice.y, whole.y);
-  const bool bottom = same(slice.bottom(), whole.bottom());
-  return Radii{left && top ? radii.upper_left : 0, right && top ? radii.upper_right : 0,
-               right && bottom ? radii.lower_right : 0, left && bottom ? radii.lower_left : 0};
+struct SliceMask {
+  bool active = false;
+  Rect outline;
+  Radii radii;
+};
+
+inline SliceMask MaskFor(const Placement& placement) {
+  if (placement.slice <= 0) return SliceMask{};
+  return SliceMask{true, Offset(placement.outline, placement.frame.x, placement.frame.y), placement.radii};
 }
 
 inline Layout Lay(const std::vector<Region>& regions,
@@ -438,7 +440,7 @@ inline Layout Lay(const std::vector<Region>& regions,
                                             Offset(visible, origin.x, origin.y), UniformRadius(*radii),
                                             CornerMask(*radii), opacity, region.material, order,
                                             region.source, *radii, region.tint, region.group,
-                                            region.appearance});
+                                            region.appearance, 0, Rect{}});
       return true;
     };
     bool on_page = false;
@@ -464,11 +466,10 @@ inline Layout Lay(const std::vector<Region>& regions,
       int slice = 0;
       for (const Rect& piece : uncovered) {
         if (piece.empty()) continue;
-        const Radii kept = SliceRadii(*radii, piece, rect);
-        layout.placements.push_back(Placement{region.id, Plane::kBehindWindow, 0, piece, piece, UniformRadius(kept),
-                                              CornerMask(kept), opacity, region.material, behind_order++,
-                                              region.source, kept, region.tint, region.group, region.appearance,
-                                              ++slice});
+        layout.placements.push_back(Placement{region.id, Plane::kBehindWindow, 0, piece, piece, UniformRadius(*radii),
+                                              CornerMask(*radii), opacity, region.material, behind_order++,
+                                              region.source, *radii, region.tint, region.group, region.appearance,
+                                              ++slice, rect});
       }
     }
   }

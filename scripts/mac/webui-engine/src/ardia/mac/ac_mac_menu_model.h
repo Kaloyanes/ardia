@@ -280,6 +280,57 @@ inline std::vector<std::string> Describe(const Item& item, std::size_t depth = 0
   return lines;
 }
 
+inline Item MinimalMainMenu(std::string_view app_name) {
+  const std::string app(app_name);
+  const auto role = [](std::string title, Role role, std::string key = {}, std::uint32_t modifiers = 0) {
+    Item item;
+    item.title = std::move(title);
+    item.role = role;
+    item.key = std::move(key);
+    item.modifiers = modifiers;
+    return item;
+  };
+  const auto command = [](std::string title, std::string name, std::string key, std::uint32_t modifiers) {
+    Item item;
+    item.title = std::move(title);
+    item.command = std::move(name);
+    item.key = std::move(key);
+    item.modifiers = modifiers;
+    return item;
+  };
+  const auto separator = []() {
+    Item item;
+    item.role = Role::kSeparator;
+    return item;
+  };
+  const auto submenu = [](std::string title, std::vector<Item> children, Role role = Role::kNone) {
+    Item item;
+    item.title = std::move(title);
+    item.role = role;
+    item.children = std::move(children);
+    return item;
+  };
+  Item root;
+  root.children = {
+      submenu(app,
+              {role("About " + app, Role::kAbout), separator(), submenu("Services", {}, Role::kServices), separator(),
+               role("Hide " + app, Role::kHide, "h", kCommand),
+               role("Hide Others", Role::kHideOthers, "h", kCommand | kOption), role("Show All", Role::kShowAll),
+               separator(), command("Quit " + app, "quit", "q", kCommand)}),
+      submenu("Edit",
+              {role("Undo", Role::kUndo, "z", kCommand), role("Redo", Role::kRedo, "z", kCommand | kShift),
+               separator(), role("Cut", Role::kCut, "x", kCommand), role("Copy", Role::kCopy, "c", kCommand),
+               role("Paste", Role::kPaste, "v", kCommand), role("Select All", Role::kSelectAll, "a", kCommand)}),
+      submenu("Window",
+              {role("Minimize", Role::kMinimize, "m", kCommand), role("Zoom", Role::kZoom),
+               role("Close Window", Role::kClose, "w", kCommand | kShift), separator(),
+               role("Bring All to Front", Role::kBringAllToFront)},
+              Role::kWindowMenu),
+      submenu("Help", {}, Role::kHelpMenu),
+  };
+  return root;
+}
+
 inline Item DefaultMainMenu(std::string_view app_name) {
   const std::string app(app_name);
   const auto role = [](std::string title, Role role, std::string key = {}, std::uint32_t modifiers = 0) {

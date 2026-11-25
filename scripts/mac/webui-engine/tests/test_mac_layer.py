@@ -531,7 +531,10 @@ class ContractTests(unittest.TestCase):
         style = style.split('\n}\n', 1)[0]
         self.assertIn('vibrancy.material = VibrancyMaterial(placement.material);', style)
         self.assertIn('glass::GlassStyle(placement.material)', style)
-        self.assertEqual(style.count('ApplyCornerMask(view, shape);'), 2)
+        self.assertEqual(style.count('ApplyMask(view, shape, slice);'), 2)
+        apply = self.read('ac_mac_glass.mm').split('void ApplyMask(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ApplyCornerMask(view, shape);', apply)
+        self.assertIn('ApplySliceMask(view, slice);', apply)
         mask = self.read('ac_mac_glass.mm').split('void ApplyCornerMask(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('view.layer.mask = mask;', mask)
         self.assertIn('view.layer.mask = nil;', mask)
@@ -653,11 +656,16 @@ class ContractTests(unittest.TestCase):
             self.assertIn('ClaimsBar(window_id)', body)
         self.assertIn('return Owner().Claims(window_id, key == window_id, key.has_value());', menu)
         self.assertIn('NSWindowDidBecomeKeyNotification', menu)
+        activate = menu.split('void ActivateKeyWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('BuildBar(menu::MinimalMainMenu(', activate)
+        handler = self.read('ac_mac_shell_host.mm').split('MenuCommandHandler MainMenuHandler() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('KeyMenuWindowId()', handler)
 
     def test_shortcut_recording_suppresses_menu_key_equivalents(self):
-        calls = self.read('ac_mac_shell_calls.mm')
-        self.assertIn('if (method == "ArdiaShell.setShortcutRecording") {', calls)
-        self.assertIn('SetMenuKeysSuppressed(window_id_, (*values)[0].GetBool());', calls)
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        keyboard = lifecycle.split('void ShellHostView::KeyboardCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('SetMenuKeysSuppressed(window_id_, on);', keyboard)
+        self.assertNotIn('"ArdiaShell.setShortcutRecording"', self.read('ac_mac_shell_calls.mm'))
         menu = self.read('ac_mac_menu.mm')
         key = menu.split('- (BOOL)performKeyEquivalent:(NSEvent*)event {', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(key.index('MenuKeysSuppressed()'), key.index('[super performKeyEquivalent:event]'))

@@ -526,7 +526,9 @@ TEST(a_region_straddling_the_sidebar_and_a_page_is_glass_on_both_sides) {
   CHECK(behind && behind->frame == (Rect{200, 100, 100, 200}) && behind->visible == (Rect{200, 100, 100, 200}));
   const auto rounded = glass::Lay({Make("menu", {200, 100, 300, 200}, Layer::kAuto, 12)}, pages, kWindow, 1);
   const Placement* left = Find(rounded, "menu", 0);
-  CHECK(left && left->radii == (glass::Radii{12, 0, 0, 12}));
+  CHECK(left && left->outline == (Rect{200, 100, 300, 200}) && left->radii == (glass::Radii{12, 12, 12, 12}));
+  const glass::SliceMask mask = left ? glass::MaskFor(*left) : glass::SliceMask{};
+  CHECK(mask.active && mask.outline == (Rect{0, 0, 300, 200}) && mask.radii == (glass::Radii{12, 12, 12, 12}));
   const auto framed = glass::Lay({Make("ring", {250, 100, 200, 200})}, {{1, {300, 150, 100, 100}}}, kWindow, 1);
   int slices = 0;
   double area = 0;
@@ -546,6 +548,21 @@ TEST(a_region_straddling_the_sidebar_and_a_page_is_glass_on_both_sides) {
   CHECK(glass::MountedGlass(both) == (std::vector<std::string>{"menu"}));
   const auto off_window = glass::Lay({Make("edge", {900, 700, 600, 300})}, {{1, {0, 0, 1280, 800}}}, kWindow, 1);
   CHECK(off_window.placements.size() == 1 && off_window.placements[0].plane == Plane::kOverPage);
+}
+
+TEST(a_slice_narrower_than_the_corner_radius_traces_the_whole_region_outline) {
+  const auto layout = glass::Lay({Make("menu", {200, 100, 300, 200}, Layer::kAuto, 12)}, {{1, {205, 0, 1075, 800}}}, kWindow, 1);
+  const Placement* sliver = Find(layout, "menu", 0);
+  CHECK(sliver && sliver->slice == 1 && sliver->frame == (Rect{200, 100, 5, 200}));
+  if (!sliver) return;
+  const glass::SliceMask mask = glass::MaskFor(*sliver);
+  CHECK(mask.active);
+  CHECK(mask.outline == (Rect{0, 0, 300, 200}));
+  CHECK(mask.outline.right() > sliver->frame.width && mask.radii.upper_left == 12);
+  const Placement* page = Find(layout, "menu", 1);
+  CHECK(page && !glass::MaskFor(*page).active);
+  const auto whole = glass::Lay({Make("free", {20, 20, 100, 100}, Layer::kAuto, 12)}, {}, kWindow, 1);
+  CHECK(whole.placements.size() == 1 && !glass::MaskFor(whole.placements[0]).active);
 }
 
 int main(int argc, char** argv) {

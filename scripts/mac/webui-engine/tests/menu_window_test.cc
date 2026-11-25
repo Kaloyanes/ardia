@@ -492,6 +492,26 @@ TEST(shortcut_recording_suppresses_menu_keys_only_in_its_key_window) {
   CHECK(keys.empty());
 }
 
+TEST(a_key_window_without_its_own_menu_gets_a_minimal_system_bar) {
+  const menu::Item root = menu::MinimalMainMenu("Ardia");
+  CHECK(menu::Validate(root).empty());
+  CHECK(root.children.size() == 4);
+  CHECK(root.children[0].title == "Ardia" && root.children[1].title == "Edit");
+  CHECK(root.children[2].role == menu::Role::kWindowMenu && root.children[3].role == menu::Role::kHelpMenu);
+  std::function<bool(const menu::Item&)> commandFree = [&](const menu::Item& item) {
+    if (!item.command.empty() && item.command != "quit") return false;
+    for (const menu::Item& child : item.children) {
+      if (!commandFree(child)) return false;
+    }
+    return true;
+  };
+  CHECK(commandFree(root));
+  CHECK(root.children[0].children.back().command == "quit" && root.children[0].children.back().key == "q");
+  bool closes = false;
+  for (const menu::Item& item : root.children[2].children) closes |= item.role == menu::Role::kClose;
+  CHECK(closes);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

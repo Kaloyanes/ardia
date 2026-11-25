@@ -212,3 +212,38 @@ test("a file downloaded again to a path known to be missing reads as present at 
   files.expect("/d/again.zip");
   assert.equal(files.fileExists("/d/again.zip"), true);
 });
+
+test("file status stays unknown while a lookup is pending or failed, and is missing only after the host says so", async () => {
+  const f = fixture();
+  let fail = false;
+  const present = new Set(["/d/a.zip"]);
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => {
+    if (fail) throw new Error("no answer");
+    return paths.map((path) => present.has(path));
+  });
+  const files = createHostFiles(f.host, f.clock);
+  let changes = 0;
+  files.onChange(() => changes++);
+  assert.equal(files.fileStatus("/d/a.zip"), "unknown");
+  assert.equal(files.fileStatus("/d/b.zip"), "unknown");
+  await f.flush();
+  assert.equal(files.fileStatus("/d/a.zip"), "present");
+  assert.equal(files.fileStatus("/d/b.zip"), "missing");
+  assert.equal(changes, 1);
+  fail = true;
+  const errors = await quiet(async () => {
+    assert.equal(files.fileStatus("/d/c.zip"), "unknown");
+    await f.flush();
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(files.fileStatus("/d/c.zip"), "unknown", "a failed lookup is not a missing file");
+  f.advance(FILE_STATUS_FRESH_MS + 1);
+  await quiet(async () => {
+    files.fileStatus("/d/b.zip");
+    await f.flush();
+  });
+  assert.equal(files.fileStatus("/d/b.zip"), "missing", "a failed refresh keeps the last confirmed answer");
+  files.expect("/d/new.zip");
+  assert.equal(files.fileStatus("/d/new.zip"), "unknown");
+  assert.equal(createHostFiles(fixture([]).host, f.clock).fileStatus("/d/a.zip"), "unknown");
+});
