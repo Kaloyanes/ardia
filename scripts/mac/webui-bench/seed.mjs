@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
-import { session } from "../../lib/instance.mjs";
 
-const HELP = `The seeded sessions both sides of the shootout load, written in the Mac app's on-disk session format.
+const HELP = `The seeded sessions both sides of the shootout load, in the Mac app's current on-disk format (version 11).
 
   node scripts/mac/webui-bench/seed.mjs [large|small|multi] [--origin http://127.0.0.1:9600] [--table]
 
@@ -20,6 +19,8 @@ export const WINDOW_FRAME = [60, 60, 1360, 820];
 export const SECOND_WINDOW_FRAME = [140, 120, 1100, 760];
 export const SECOND_WINDOW_TABS = 8;
 export const DEFAULT_ORIGIN = "http://127.0.0.1:9600";
+export const SESSION_VERSION = 11;
+export const COLORS = ["plum", "blue", "green"];
 export const SETTINGS = { searchSuggestions: false, warnBeforeClosingLastTab: false, warnBeforeClosingWindow: false, restoreSession: true };
 
 const tabsOf = (origin, profile, count, windowId = "main", prefix = "t") =>
@@ -29,7 +30,18 @@ const tabsOf = (origin, profile, count, windowId = "main", prefix = "t") =>
     profileId: profile.id,
     url: `${origin}/${profile.id}/${prefix}${n}`,
     title: `${profile.name} ${prefix === "t" ? "tab" : "window tab"} ${n + 1}`,
+    favicon: null,
+    pinned: false,
+    muted: false,
+    zoom: 1,
+    customTitle: null,
+    customIcon: null,
+    pinnedUrl: null,
+    openerId: null,
+    createdAt: 1,
     lastActiveAt: n + 1,
+    page: { kind: "idle" },
+    pin: null,
   }));
 
 function build(origin, counts, extraWindow = false) {
@@ -40,7 +52,22 @@ function build(origin, counts, extraWindow = false) {
     windows.push({ id: "second", frame: SECOND_WINDOW_FRAME, sidebarOpen: true, profileId: work.id });
     tabs.push(...tabsOf(origin, work, SECOND_WINDOW_TABS, "second", "w"));
   }
-  const s = session({ profiles: PROFILES.map(({ name, id }) => ({ name, id })), windows, tabs });
+  const s = {
+    version: SESSION_VERSION,
+    profiles: Object.fromEntries(PROFILES.map(({ name, id }, i) => [id, { id, name, color: COLORS[i], icon: null, createdAt: i }])),
+    profileOrder: PROFILES.map((p) => p.id),
+    windows: windows.map((w, i) => ({ incognito: false, createdAt: i + 1, ...w })),
+    windowOrder: windows.map((w) => w.id),
+    focusedWindowId: windows[0].id,
+    tabs,
+    groups: [],
+    splits: [],
+    closedTabs: [],
+    closedWindows: [],
+    closedGroups: [],
+    cleanedTabs: [],
+    settingsMeta: { chosen: [], inferred: [] },
+  };
   const selectedIn = (p) => Math.min(p.selected, counts(p) - 1);
   s.windows[0].tabIds = tabs.filter((t) => t.windowId === "main").map((t) => t.id);
   s.windows[0].activeTabIds = Object.fromEntries(PROFILES.map((p) => [p.id, `${p.id}-t${selectedIn(p)}`]));
@@ -73,8 +100,15 @@ export function tableSession(s) {
   };
 }
 
+export function expectedFixture(s) {
+  return { profiles: s.profileOrder.length, tabs: s.tabs.length, windows: s.windows.length };
+}
+
 export function validateSession(s) {
   const problems = [];
+  if (s.version !== SESSION_VERSION) problems.push(`version is ${s.version}, not ${SESSION_VERSION}`);
+  for (const t of s.tabs ?? []) if (t.page?.kind !== "idle" || !("pin" in t)) problems.push(`tab ${t.id} lacks the version ${SESSION_VERSION} page and pin fields`);
+  if (!s.settingsMeta) problems.push("settingsMeta is missing");
   const profileIds = new Set(s.profileOrder ?? []);
   for (const id of profileIds) if (!s.profiles?.[id]) problems.push(`profile ${id} is ordered but missing`);
   const tabs = new Map();

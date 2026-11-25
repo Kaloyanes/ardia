@@ -11,13 +11,15 @@ const HELP = `Frame-difference metrics for one captured interaction, the same co
 spec.json: {"pattern": "dir/%05d.jpg" | "movie": "file.mov", "times": [ms per frame], "rest": ms (optional),
             "inputs": [ms per input event] (optional), "crop": [x, y, w, h] in image pixels (optional)}
 Frames are decoded to grey at half size. A frame is new when more than 0.04 % of its pixels differ by more than 14
-levels from the frame before. Prints JSON: newFrames, slideMs, p50/p95/max gap between new frames up to rest + 50 ms,
-longGaps (> 25 ms), rowsPaintedMs (rest to the last new frame after rest + 50 ms), blankFrames (new frames that are
-one flat colour), and with inputs, the latency from each input to the next new frame.`;
+levels from the frame before. Prints JSON: newFrames, slideMs, p50/p95/max gap between new frames up to rest,
+longGaps (> 25 ms), rowsPaintedMs (rest to the last new frame after it), blankFrames (every captured frame that is one
+flat colour, the first included), and with inputs, the latency from each input to the next new frame. Without a rest,
+rest is the last new frame followed by at least 100 ms with no new frame; when the capture ends sooner, it is null.`;
 
 export const PIXEL = 14;
 export const SHARE = 0.0004;
-export const SETTLE_SLACK_MS = 50;
+export const QUIET_MS = 100;
+export const DECODE_TIMEOUT_MS = 120000;
 export const LONG_GAP_MS = 25;
 export const INPUT_WINDOW_MS = 250;
 export const BLANK_SPREAD = 6;
@@ -26,9 +28,13 @@ export function decode(spec, ffmpeg = process.env.FFMPEG ?? "/opt/homebrew/bin/f
   const input = spec.movie ? ["-i", spec.movie] : ["-framerate", "1000", "-i", spec.pattern];
   const crop = spec.crop ? `crop=${spec.crop[2]}:${spec.crop[3]}:${spec.crop[0]}:${spec.crop[1]},` : "";
   const filter = `${crop}scale=trunc(iw/4)*2:trunc(ih/4)*2`;
-  const run = (extra, maxBuffer) => execFileSync(ffmpeg, ["-v", "error", ...input, ...extra, "-vf", filter, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer, timeout: 120000 });
-  const size = run(["-frames:v", "1"], 256 << 20).length;
-  const raw = run(["-fps_mode", "passthrough"], 1 << 30);
+  const run = (extra, maxBuffer) => execFileSync(ffmpeg, ["-v", "error", ...input, ...extra, "-vf", filter, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer, timeout: DECODE_TIMEOUT_MS });
+  return splitFrames(run(["-fps_mode", "passthrough"], 1 << 30), run(["-frames:v", "1"], 256 << 20).length);
+}
+
+export function splitFrames(raw, size) {
+  if (!Number.isInteger(size) || size <= 0) throw new Error(`the first frame decoded to ${size} bytes`);
+  if (raw.length % size) throw new Error(`decoded ${raw.length} bytes, not a whole number of ${size}-byte frames`);
   const frames = [];
   for (let at = 0; at + size <= raw.length; at += size) frames.push(raw.subarray(at, at + size));
   return frames;
@@ -72,12 +78,18 @@ export function inputLatencies(freshTimes, inputs, windowMs = INPUT_WINDOW_MS) {
   });
 }
 
-export function analyze({ frames, times, rest, inputs }) {
+export function restFromFrames(fresh, endAt, quietMs = QUIET_MS) {
+  if (!fresh.length) return null;
+  return endAt - fresh.at(-1) >= quietMs ? fresh.at(-1) : null;
+}
+
+export function analyze({ frames, times, rest, inputs, endAt }) {
+  const n = Math.min(frames.length, times.length);
   const freshIdx = freshFrames(frames, times);
   const fresh = freshIdx.map((i) => times[i]);
-  const end = rest ?? Infinity;
-  const slide = fresh.filter((t) => t <= end + SETTLE_SLACK_MS);
-  const after = fresh.filter((t) => t > end + SETTLE_SLACK_MS);
+  const end = rest ?? (endAt == null ? Infinity : restFromFrames(fresh, endAt) ?? Infinity);
+  const slide = fresh.filter((t) => t <= end);
+  const after = fresh.filter((t) => t > end);
   const gaps = gapsOf(slide);
   const result = {
     frames: Math.min(frames.length, times.length),
@@ -89,7 +101,9 @@ export function analyze({ frames, times, rest, inputs }) {
     maxGapMs: round1(gaps.length ? Math.max(...gaps) : null),
     longGaps: gaps.filter((g) => g > LONG_GAP_MS).length,
     rowsPaintedMs: round1(after.length && Number.isFinite(end) ? after.at(-1) - end : 0),
-    blankFrames: freshIdx.filter((i) => isBlank(frames[i])).length,
+    blankFrames: frames.slice(0, n).filter(isBlank).length,
+    firstFrameBlank: n ? isBlank(frames[0]) : null,
+    restAt: Number.isFinite(end) ? round1(end) : null,
   };
   if (inputs) {
     const latencies = inputLatencies(fresh, inputs);
@@ -99,12 +113,16 @@ export function analyze({ frames, times, rest, inputs }) {
   return { ...result, fresh };
 }
 
-export function settleMs(samples, epsilon = 0.01) {
-  const moved = samples.filter((s, i) => i && Math.abs(s[1] - samples[i - 1][1]) > epsilon);
-  if (!moved.length) return { startAt: null, restAt: null, restMs: null };
-  const startAt = moved[0][0];
-  const restAt = moved.at(-1)[0];
-  return { startAt, restAt, restMs: round1(restAt - startAt) };
+export function settleMs(samples, { epsilon = 0.01, quietMs = QUIET_MS, quietSamples = 2 } = {}) {
+  const moving = samples.map((s, i) => i > 0 && Math.abs(s[1] - samples[i - 1][1]) > epsilon);
+  const first = moving.indexOf(true);
+  if (first < 0) return { startAt: null, restAt: null, restMs: null, settled: false };
+  const last = moving.lastIndexOf(true);
+  const tail = samples.slice(last + 1);
+  const settled = tail.length >= quietSamples && tail.at(-1)[0] - samples[last][0] >= quietMs;
+  const startAt = samples[first][0];
+  const restAt = settled ? samples[last][0] : null;
+  return { startAt, restAt, restMs: settled ? round1(restAt - startAt) : null, settled };
 }
 
 export const measure = (spec) => analyze({ ...spec, frames: decode(spec) });

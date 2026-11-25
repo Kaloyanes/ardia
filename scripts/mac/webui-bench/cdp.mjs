@@ -19,14 +19,23 @@ export async function shellTarget(port, match = isShell, timeoutMs = 5000) {
   return target;
 }
 
+export function openSocket(url, { timeoutMs = 15000, Socket = WebSocket } = {}) {
+  const socket = new Socket(url);
+  return new Promise((resolve, reject) => {
+    const fail = (message) => {
+      clearTimeout(timer);
+      try { socket.close(); } catch {}
+      reject(new Error(message));
+    };
+    const timer = setTimeout(() => fail(`DevTools socket ${url} did not open in ${timeoutMs} ms`), timeoutMs);
+    socket.onopen = () => (clearTimeout(timer), resolve(socket));
+    socket.onerror = () => fail(`DevTools socket ${url} failed`);
+  });
+}
+
 export async function connect(port, { match = isShell, timeoutMs = 15000 } = {}) {
   const target = await shellTarget(port, match);
-  const socket = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`DevTools socket on ${port} did not open`)), timeoutMs);
-    socket.onopen = () => (clearTimeout(timer), resolve());
-    socket.onerror = () => (clearTimeout(timer), reject(new Error(`DevTools socket on ${port} failed`)));
-  });
+  const socket = await openSocket(target.webSocketDebuggerUrl, { timeoutMs });
   let next = 0;
   const pending = new Map();
   const listeners = new Set();
@@ -77,7 +86,7 @@ export const TRACE_CATEGORIES = [
   "input",
 ];
 
-export async function traced(cdp, action, { categories = TRACE_CATEGORIES, tailMs = 1500, timeoutMs = 30000 } = {}) {
+export async function traced(cdp, action, { categories = TRACE_CATEGORIES, tailMs = 1500, warmupMs = 300, timeoutMs = 30000 } = {}) {
   const events = [];
   let finish;
   const complete = new Promise((resolve) => (finish = resolve));
@@ -85,15 +94,22 @@ export async function traced(cdp, action, { categories = TRACE_CATEGORIES, tailM
     if (m.method === "Tracing.dataCollected") events.push(...m.params.value);
     else if (m.method === "Tracing.tracingComplete") finish();
   });
+  let started = false;
+  let ended = false;
+  let timer;
   try {
     await cdp.send("Tracing.start", { traceConfig: { includedCategories: categories, recordMode: "recordAsMuchAsPossible" }, transferMode: "ReportEvents" });
-    await new Promise((r) => setTimeout(r, 300));
+    started = true;
+    await new Promise((r) => setTimeout(r, warmupMs));
     const value = await action();
     await new Promise((r) => setTimeout(r, tailMs));
+    ended = true;
     await cdp.send("Tracing.end");
-    await Promise.race([complete, new Promise((_, reject) => setTimeout(() => reject(new Error("trace did not complete")), timeoutMs))]);
+    await Promise.race([complete, new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("trace did not complete")), timeoutMs)))]);
     return { value, events };
   } finally {
+    clearTimeout(timer);
+    if (started && !ended) await cdp.send("Tracing.end").catch(() => {});
     off();
   }
 }
