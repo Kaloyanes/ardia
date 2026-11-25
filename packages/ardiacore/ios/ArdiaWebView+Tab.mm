@@ -129,7 +129,7 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
   [self tabDidChangeFavicon:tab];
   if (_tabIndex >= 0) [self placeTab];
   if (ArdiaWindowController *controller = self.controller)
-    [ArdiaTabStrip changedInWindow:controller profile:tab.profile cause:NSNull.null];
+    [ArdiaTabStrip changedInWindow:controller profile:tab.profile cause:NSNull.null trigger:@"attach" deferredTab:nil];
   [self settleFirstShowFocus];
 }
 

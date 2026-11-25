@@ -202,6 +202,7 @@ ARDIACORE_EXPORT
                                     kind:(NSString*)kind;
 @property(nonatomic, nullable) ArdiaCoreProfile* activeProfile;
 - (void)activateTab:(ArdiaCoreTab*)tab;
+@property(readonly) BOOL activationDeferred;
 - (NSArray<ArdiaCoreTab*>*)tabsForProfile:(ArdiaCoreProfile*)profile;
 - (int)chromeWindowIdForProfile:(ArdiaCoreProfile*)profile;
 - (BOOL)executeChromeCommand:(int)commandId profile:(ArdiaCoreProfile*)profile;
