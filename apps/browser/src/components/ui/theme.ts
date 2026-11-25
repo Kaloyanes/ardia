@@ -6,7 +6,7 @@ import { contrastRatio, isRgbFunction, luminance, mix, over, parseColor, rgbToHs
 import { CARD_INSET, DEFAULT_SIDEBAR_WIDTH } from "../../lib/windowLayout";
 import { SIDEBAR_ROW } from "../../lib/sidebarMetrics";
 import { WINDOW_CHROME } from "../../lib/windowChrome";
-import { arcSelectedFill, colorRoles, fieldInk, HIGH_CONTRAST_INK, ink, INCOGNITO_TINT, withAlpha, PROFILE_COLORS, radius, type ColorRoles, type ProfileColorSpec, type ShadowLevel } from "./tokens";
+import { arcSelectedFill, colorRoles, fieldInk, HIGH_CONTRAST_INK, ink, INCOGNITO_TINT, popoverMenuMaterial, withAlpha, PROFILE_COLORS, radius, type ColorRoles, type ProfileColorSpec, type ShadowLevel } from "./tokens";
 import type { BasePalette } from "../../lib/themeFile";
 import { visibleLine, visibleSelection } from "../../lib/selectionContrast";
 
@@ -138,14 +138,23 @@ export const caretColor = (theme: Theme, surface: FieldSurface = "ntpBarSolid"):
 
 const quietInk = (theme: Theme) => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
 
-export const popoverFieldSurface = (roles: ColorRoles): string => over(roles.popoverTint, roles.popoverFill);
+export const popoverFieldSurface = (roles: ColorRoles): string => {
+  const base = over(roles.popoverFill, roles.dark ? ink.black : ink.white);
+  return over(roles.popoverTint, over(popoverMenuMaterial[roles.dark ? "dark" : "light"], base));
+};
 
 export function caretColorOnRow(theme: Theme, fill: string, stockFill: string = fill): string {
-  const worstOn = (rowFill: string, color: string) => Math.min(...theme.windowTint.map((tint) => shownContrast(color, over(rowFill, tint))));
+  const stockKey = theme.profileColor === "incognito" ? "incognito" : `${theme.profileColor}:${theme.dark ? "dark" : "light"}`;
+  const stockBackdrop = themeFor(stockKey).windowTint;
+  const worstOn = (backdrops: readonly string[], rowFill: string, color: string) =>
+    Math.min(...backdrops.map((tint) => shownContrast(color, over(rowFill, tint))));
   const preferred = fieldInk.caret[theme.dark ? "dark" : "light"];
-  const floor = Math.min(MIN_FIELD_INK_CONTRAST, worstOn(stockFill, preferred));
-  if (worstOn(fill, preferred) >= floor) return preferred;
-  return [theme.textPrimary, ink.black, ink.white].reduce((best, color) => (worstOn(fill, color) > worstOn(fill, best) ? color : best), preferred);
+  const floor = Math.min(MIN_FIELD_INK_CONTRAST, worstOn(stockBackdrop, stockFill, preferred));
+  if (worstOn(theme.windowTint, fill, preferred) >= floor) return preferred;
+  return [theme.textPrimary, ink.black, ink.white].reduce(
+    (best, color) => (worstOn(theme.windowTint, fill, color) > worstOn(theme.windowTint, fill, best) ? color : best),
+    preferred,
+  );
 }
 
 export const quietBarGlyph = (theme: Theme): string => readableInk(theme, quietInk(theme), theme.ntpBarSolid, stockRoles(theme).ntpBarSolid);

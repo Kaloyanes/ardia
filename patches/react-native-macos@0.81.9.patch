@@ -656,6 +656,61 @@ index 769a3e556d96b2b9f6c2795303b675b749cdeb61..078288af5be55afc260a48d0860a902e
  
  - (void)setBridge:(RCTBridge *)bridge
  {
+diff --git a/Libraries/Text/TextInput/Multiline/RCTUITextView.mm b/Libraries/Text/TextInput/Multiline/RCTUITextView.mm
+index a5b5a6a71c7b50f49666e966ed8d8906835ff43e..59e19ca80574e7fdf17521506a85592def69c754 100644
+--- a/Libraries/Text/TextInput/Multiline/RCTUITextView.mm
++++ b/Libraries/Text/TextInput/Multiline/RCTUITextView.mm
+@@ -28,6 +28,7 @@ @implementation RCTUITextView {
+ #if TARGET_OS_OSX // [macOS
+   BOOL _enableFocusRing;
+   NSArray<NSPasteboardType> *_readablePasteboardTypes;
++  RCTUIColor *_ardiaSelectionColor;
+ #endif // macOS]
+ }
+ 
+@@ -176,13 +177,20 @@ - (void)toggleGrammarChecking:(id)sender
+   [_textInputDelegate grammarCheckingDidChange:self.isGrammarCheckingEnabled];
+ }
+ 
+-- (void)setSelectionColor:(RCTUIColor *)selectionColor
++- (void)ardia_refreshSelectionLook
+ {
+-  NSMutableDictionary *selectTextAttributes = self.selectedTextAttributes.mutableCopy;
+-  selectTextAttributes[NSBackgroundColorAttributeName] = selectionColor ?: [NSColor selectedControlColor];
++  NSMutableDictionary *selectTextAttributes = [self.selectedTextAttributes mutableCopy] ?: [NSMutableDictionary new];
++  selectTextAttributes[NSBackgroundColorAttributeName] = _ardiaSelectionColor ?: [NSColor selectedControlColor];
++  selectTextAttributes[NSForegroundColorAttributeName] = _defaultTextAttributes[NSForegroundColorAttributeName] ?: [NSColor selectedTextColor];
+   self.selectedTextAttributes = selectTextAttributes.copy;
+ }
+ 
++- (void)setSelectionColor:(RCTUIColor *)selectionColor
++{
++  _ardiaSelectionColor = selectionColor;
++  [self ardia_refreshSelectionLook];
++}
++
+ - (RCTUIColor*)selectionColor
+ {
+   return (RCTUIColor*)self.selectedTextAttributes[NSBackgroundColorAttributeName];
+@@ -191,7 +199,7 @@ - (RCTUIColor*)selectionColor
+ - (void)setCursorColor:(NSColor *)cursorColor
+ {
+   _cursorColor = cursorColor;
+-  self.insertionPointColor = cursorColor;
++  self.insertionPointColor = cursorColor ?: [NSColor textColor];
+ }
+ 
+ - (void)setEnabledTextCheckingTypes:(NSTextCheckingTypes)checkingType
+@@ -291,6 +299,9 @@ - (void)setDefaultTextAttributes:(NSDictionary<NSAttributedStringKey, id> *)defa
+   _defaultTextAttributes = defaultTextAttributes;
+   self.typingAttributes = defaultTextAttributes;
+   [self _updatePlaceholder];
++#if TARGET_OS_OSX
++  [self ardia_refreshSelectionLook];
++#endif
+ }
+ 
+ - (NSDictionary<NSAttributedStringKey, id> *)defaultTextAttributes
 diff --git a/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm b/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm
 index 18bbe64f657a36596563b3eb6d135284e28c674a..a4046a33e13d35cac155e306f368e04ef8d1f51e 100644
 --- a/Libraries/Text/TextInput/RCTBackedTextInputDelegateAdapter.mm

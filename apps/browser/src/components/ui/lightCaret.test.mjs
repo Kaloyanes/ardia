@@ -100,7 +100,7 @@ test("a bare search field's caret is resolved against the surface it sits on: th
   assert.equal(bareCallers.length, 3, `every bare SearchField is one of the three above: ${bareCallers}`);
 });
 
-test("the group search sits on the popover's own material: a #787D86 popover tint gets a readable caret, and the stock popover keeps the stock ink", async () => {
+test("the group search sits on the popover's own material: a #787D86 popover tint and a black fill under the menu material get readable carets, and the stock popover keeps the stock ink", async () => {
   const { PROFILE_COLOR_NAMES } = await import("../../lib/profileLook.ts");
   for (const dark of [false, true]) for (const color of PROFILE_COLOR_NAMES) {
     assert.equal(caretColor(profileTheme({ color }, dark), popoverFieldSurface), fieldInk.caret[dark ? "dark" : "light"], `${color} ${dark ? "dark" : "light"}`);
@@ -108,22 +108,43 @@ test("the group search sits on the popover's own material: a #787D86 popover tin
   const tinted = { ...stock(false), popoverTint: "#787D86", panel: "#FFFFFF", textPrimary: "#FFFFFF" };
   const caret = caretColor(tinted, popoverFieldSurface);
   assert.ok(shown(caret, popoverFieldSurface(tinted)) >= 3, `caret on a #787D86 popover tint: ${caret} at ${shown(caret, popoverFieldSurface(tinted)).toFixed(2)}`);
+  const darkFill = { ...stock(false), popoverFill: "#000000", popoverTint: "#00000000", panel: "#FFFFFF" };
+  const painted = popoverFieldSurface(darkFill);
+  assert.equal(painted, "#B1B1B1", "translucent light menu material over a black popover fill paints #B1B1B1");
+  assert.ok(shown(fieldInk.caret.light, painted) < 2, `the stock caret fails contrast on ${painted}`);
+  const onMenuMaterial = caretColor(darkFill, popoverFieldSurface);
+  assert.ok(shown(onMenuMaterial, painted) >= 3, `caret on the painted menu material: ${onMenuMaterial} at ${shown(onMenuMaterial, painted).toFixed(2)}`);
 });
 
-test("a sidebar rename field reads its caret against the row it sits in: a #787D86 selected tab gets a readable caret, and every stock row keeps the stock ink", async () => {
-  const { PROFILE_COLOR_NAMES } = await import("../../lib/profileLook.ts");
+test("a sidebar rename field reads its caret against the row it sits in: a #787D86 selected tab and an opaque #787D86 light profile get readable carets, and every stock row keeps the stock ink", async () => {
+  const { PROFILE_COLOR_NAMES, hexColor } = await import("../../lib/profileLook.ts");
   for (const dark of [false, true]) for (const color of PROFILE_COLOR_NAMES) {
     const theme = profileTheme({ color }, dark), mode = dark ? "dark" : "light";
     assert.equal(caretColorOnRow(theme, theme.tabSelected, arcSelectedFill[mode]), fieldInk.caret[mode], `${color} ${mode}: the selected row`);
     assert.equal(caretColorOnRow(theme, "#00000000"), fieldInk.caret[mode], `${color} ${mode}: a plain row`);
-    assert.equal(caretColorOnRow(theme, theme.tabPressed), fieldInk.caret[mode], `${color} ${mode}: a folder taking a drop`);
+    assert.equal(caretColorOnRow(theme, theme.tabPressed, colorRoles[mode].tabPressed), fieldInk.caret[mode], `${color} ${mode}: a folder taking a drop`);
   }
   const custom = { ...stock(false), tabSelected: "#787D86", textPrimary: "#FFFFFF" };
   const caret = caretColorOnRow(custom, custom.tabSelected, arcSelectedFill.light);
   const worst = Math.min(...custom.windowTint.map((tint) => shown(caret, over(custom.tabSelected, tint))));
   assert.ok(worst >= 3, `caret on a #787D86 selected tab: ${caret} at ${worst.toFixed(2)}`);
+  const opaqueGrey = profileTheme({ color: "plum", theme: { mode: "light", stops: [{ color: hexColor("#787D86"), x: 0.5, y: 0.5 }], intensity: 1, grain: 0, texture: "grain", translucency: 0 } }, false);
+  assert.ok(Math.min(...opaqueGrey.windowTint.map((tint) => shown(fieldInk.caret.light, tint))) < 1.1, "the stock light caret vanishes on an opaque #787D86 profile");
+  const inactiveCaret = caretColorOnRow(opaqueGrey, "#00000000");
+  const inactiveWorst = Math.min(...opaqueGrey.windowTint.map((tint) => shown(inactiveCaret, tint)));
+  assert.ok(inactiveWorst >= 3, `inactive tab or group rename on an opaque #787D86 light profile: ${inactiveCaret} at ${inactiveWorst.toFixed(2)}`);
   const tabRow = readFileSync(fileURLToPath(new URL("../sidebar/TabRow.tsx", import.meta.url)), "utf8");
   assert.match(tabRow, /surface=\{fill\}\s+stockSurface=\{active && !quiet \? arcSelectedFill\[theme\.dark \? "dark" : "light"\] : fill\}/, "the tab row passes the fill it paints");
   assert.match(tabRow, /cursorColor=\{caretColorOnRow\(theme, surface, stockSurface\)\}/);
   assert.match(readFileSync(fileURLToPath(new URL("../sidebar/GroupBlock.tsx", import.meta.url)), "utf8"), /<RenameField[^>]*surface=\{dropInto \? theme\.tabPressed : ink\.clear\}/s, "the group header passes its fill");
+});
+
+test("the macOS multiline editor patch keeps selected text in the field's foreground ink", () => {
+  const patch = readFileSync(fileURLToPath(new URL("../../../../../patches/react-native-macos@0.81.9.patch", import.meta.url)), "utf8");
+  const start = patch.indexOf("diff --git a/Libraries/Text/TextInput/Multiline/RCTUITextView.mm");
+  assert.ok(start >= 0, "RCTUITextView.mm is patched");
+  const end = patch.indexOf("diff --git ", start + 1);
+  const section = patch.slice(start, end > 0 ? end : undefined);
+  assert.match(section, /selectTextAttributes\[NSForegroundColorAttributeName\] = _defaultTextAttributes\[NSForegroundColorAttributeName\] \?: \[NSColor selectedTextColor\];/);
+  assert.match(section, /\[self ardia_refreshSelectionLook\];/);
 });
