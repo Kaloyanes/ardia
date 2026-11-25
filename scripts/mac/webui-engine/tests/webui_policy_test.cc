@@ -1,6 +1,7 @@
 #include "ardia/mac/ac_mac_webui_policy.h"
 
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "check.h"
@@ -84,6 +85,29 @@ TEST(decisions_are_described) {
 
 static_assert(!policy::Active(policy::Decide(Build::kRelease, "webui", "webui")));
 static_assert(policy::Active(policy::Decide(Build::kDevelopment, "webui", std::nullopt)));
+
+TEST(background_from_switch_or_environment) {
+  CHECK(policy::Background(true, nullopt));
+  CHECK(policy::Background(false, "1"));
+  CHECK(policy::Background(false, "true"));
+  CHECK(policy::Background(true, "0"));
+  CHECK(!policy::Background(false, nullopt));
+  for (std::string_view value : {"", "0", "false", "TRUE", "yes", " 1", "1 ", "10", "true\n"}) {
+    CHECK(!policy::Background(false, value));
+  }
+}
+
+TEST(hostile_sinks) {
+  constexpr char nul_webui[] = {'w', 'e', 'b', 'u', 'i', '\0'};
+  const std::string long_value(100000, 'w');
+  for (std::string_view value : {std::string_view(nul_webui, 6), std::string_view(long_value), std::string_view("\x7fwebui"),
+                                 std::string_view("webui\r\n"), std::string_view("../webui"), std::string_view("%77ebui")}) {
+    CHECK(!policy::Active(policy::Decide(Build::kDevelopment, value, nullopt)));
+    CHECK(!policy::Active(policy::Decide(Build::kDevelopment, nullopt, value)));
+    CHECK(!policy::Active(policy::Decide(Build::kRelease, value, value)));
+    CHECK(!policy::Background(false, value));
+  }
+}
 
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);

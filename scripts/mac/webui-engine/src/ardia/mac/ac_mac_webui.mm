@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ardia/core/ac_hooks.h"
+#include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_hooks.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_popover.h"
@@ -267,10 +268,11 @@ LaunchWindow ReadLaunchWindow() {
     }
     const base::ListValue* frame = window ? window->FindList("frame") : nullptr;
     if (frame && frame->size() == 4) {
-      launch.frame = gfx::Rect((*frame)[0].GetIfDouble().value_or(80),
-                               (*frame)[1].GetIfDouble().value_or(80),
-                               (*frame)[2].GetIfDouble().value_or(1280),
-                               (*frame)[3].GetIfDouble().value_or(800));
+      launch.frame = gfx::Rect(
+          glass::ClampToInt((*frame)[0].GetIfDouble().value_or(80), 1e5),
+          glass::ClampToInt((*frame)[1].GetIfDouble().value_or(80), 1e5),
+          std::max(1, glass::ClampToInt((*frame)[2].GetIfDouble().value_or(1280), 1e5)),
+          std::max(1, glass::ClampToInt((*frame)[3].GetIfDouble().value_or(800), 1e5)));
     }
   }
   if (command->HasSwitch("ardia-window-frame")) {

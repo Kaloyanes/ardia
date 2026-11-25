@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "check.h"
@@ -223,6 +224,49 @@ TEST(names_and_ids) {
   CHECK(!popover::ValidRoute("/abs"));
   CHECK(!popover::ValidRoute("a//b"));
   CHECK(!popover::ValidRoute("a?b"));
+}
+
+TEST(beyond_window_survives_an_update_without_it) {
+  const Rect content{100, 100, 800, 600};
+  std::optional<bool> stored;
+  const bool opened = popover::ResolveBeyondWindow(false, stored);
+  CHECK(!opened);
+  stored = opened;
+  const bool updated = popover::ResolveBeyondWindow(std::nullopt, stored);
+  CHECK(!updated);
+  const auto clamped = popover::ClampToScreen({-60, 10, 300, 200}, {120, 120, 20, 20}, kOneScreen, updated, content);
+  CHECK(clamped && clamped->frame.x >= content.x && clamped->frame.right() <= content.right());
+  CHECK(clamped && clamped->frame.y >= content.y && clamped->frame.bottom() <= content.bottom());
+  CHECK(popover::ResolveBeyondWindow(true, stored));
+  CHECK(popover::ResolveBeyondWindow(std::nullopt, std::nullopt));
+}
+
+TEST(hostile_sinks) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  const std::vector<double> numbers{nan, inf, -inf, 1e20, -1e20, 1e308, -0.0, 4.9e-324, 1e5 + 1};
+  for (double a : numbers) {
+    for (double b : numbers) {
+      const Rect hostile{a, b, a, b};
+      const auto mapped = popover::WindowToScreen(hostile, {0, 0, 1280, 800}, a);
+      if (mapped) CHECK(std::isfinite(mapped->x) && std::isfinite(mapped->width));
+      const auto clamped = popover::ClampToScreen(hostile, hostile, kTwoScreens, false, hostile);
+      if (clamped) CHECK(std::isfinite(clamped->frame.x) && clamped->frame.width <= popover::kMaxExtent);
+      popover::Request request = Below(hostile, a, b);
+      request.gap = a;
+      request.margin = b;
+      const auto placed = popover::Place(request, kTwoScreens);
+      if (placed) CHECK(std::isfinite(placed->frame.x) && std::isfinite(placed->frame.y));
+      CHECK(popover::ClassifyClick({a, b}, {0, 0, 10, 10}) == popover::Event::kOutsideClick ||
+            (a >= 0 && a < 10 && b >= 0 && b < 10));
+    }
+  }
+  for (std::string_view text : {"", "../x", "/abs", "a//b", "a b", "x\n", "<script>", "%2e%2e", "route?x=1"}) {
+    CHECK(!popover::ValidRoute(text));
+    CHECK(!popover::ValidId(text));
+  }
+  CHECK(!popover::ReasonNamed(std::string_view("\0", 1)) && !popover::EdgeNamed("bottom\n"));
+  CHECK(popover::ClampToScreen({10, 10, 100, 100}, {10, 10, 5, 5}, kOneScreen, true, {}).has_value());
 }
 
 int main(int argc, char** argv) {

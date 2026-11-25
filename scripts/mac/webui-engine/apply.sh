@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  echo "usage: engine/ardiacore-mac/apply.sh [--dev|--check|--paths|--revert]   copy //ardia/mac (the dev-only Mac WebUI shell) into CHROMIUM_SRC and hook it in; every hook compiles out of official builds; --dev also copies dev-copies.tsv, the inputs only non-official builds compile" >&2
+  echo "usage: scripts/mac/webui-engine/apply.sh [--dev|--check|--paths|--revert]   copy //ardia/mac (the dev-only Mac WebUI shell) into CHROMIUM_SRC and hook it in; every hook compiles out of official builds; --dev also copies dev-copies.tsv, the inputs only non-official builds compile" >&2
   exit 0
 fi
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
+repo=$(cd "$here/../../.." && pwd)
 src=${CHROMIUM_SRC:-$HOME/chromium-build/chromium_git/chromium/src}
 owned=(ardia/mac)
 mode=${1:-apply}
@@ -19,7 +19,7 @@ HOOKS_INCLUDE = '#include "ardia/mac/ac_mac_hooks.h"  // nogncheck\n'
 HOOKS = [
     ("chrome/BUILD.gn",
      '      "//ardia/core",  # Ardia: ArdiaCore (engine/ardiacore)\n',
-     '      "//ardia/mac",  # Ardia: dev-only Mac WebUI shell (engine/ardiacore-mac)\n',
+     '      "//ardia/mac",\n',
      "after"),
     ("chrome/browser/chrome_browser_main.cc",
      '#include "build/build_config.h"\n',

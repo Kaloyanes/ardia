@@ -122,9 +122,9 @@ NSEventModifierFlags Modifiers(std::uint32_t modifiers) {
   return flags;
 }
 
-NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool top);
+NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool app_menus);
 
-NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target) {
+NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target, bool app_menus) {
   if (item.role == menu::Role::kSeparator) {
     return [NSMenuItem separatorItem];
   }
@@ -136,11 +136,13 @@ NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target) {
   entry.enabled = item.enabled;
   if (!item.children.empty() || item.role == menu::Role::kServices ||
       item.role == menu::Role::kWindowMenu || item.role == menu::Role::kHelpMenu) {
-    NSMenu* submenu = BuildMenu(item, target, false);
+    NSMenu* submenu = BuildMenu(item, target, app_menus);
     entry.submenu = submenu;
-    if (item.role == menu::Role::kServices) NSApp.servicesMenu = submenu;
-    if (item.role == menu::Role::kWindowMenu) NSApp.windowsMenu = submenu;
-    if (item.role == menu::Role::kHelpMenu) NSApp.helpMenu = submenu;
+    if (menu::InstallsAppMenu(item.role, app_menus)) {
+      if (item.role == menu::Role::kServices) NSApp.servicesMenu = submenu;
+      if (item.role == menu::Role::kWindowMenu) NSApp.windowsMenu = submenu;
+      if (item.role == menu::Role::kHelpMenu) NSApp.helpMenu = submenu;
+    }
     return entry;
   }
   const std::string_view selector = menu::SelectorFor(item.role);
@@ -160,11 +162,11 @@ NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target) {
   return entry;
 }
 
-NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool top) {
+NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool app_menus) {
   NSMenu* built = [[NSMenu alloc] initWithTitle:base::SysUTF8ToNSString(item.title)];
   built.autoenablesItems = NO;
   for (const menu::Item& child : item.children) {
-    [built addItem:BuildItem(child, target)];
+    [built addItem:BuildItem(child, target, app_menus)];
   }
   return built;
 }
@@ -207,7 +209,7 @@ void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler) {
   MainHandler() = std::move(handler);
   NSMenu* bar = [[NSMenu alloc] initWithTitle:@""];
   for (const menu::Item& top : root.children) {
-    NSMenuItem* entry = BuildItem(top, MainTarget());
+    NSMenuItem* entry = BuildItem(top, MainTarget(), true);
     if (!entry.submenu) {
       entry.submenu = [[NSMenu alloc] initWithTitle:entry.title];
     }
@@ -236,7 +238,7 @@ void ShowContextMenu(gfx::NativeView view,
   }
   ArdiaMacMenuTarget* target = [[ArdiaMacMenuTarget alloc] init];
   target.forContextMenu = YES;
-  NSMenu* built = BuildMenu(root, target, true);
+  NSMenu* built = BuildMenu(root, target, false);
   const NSPoint location =
       NSMakePoint(point.x(), ns_view.isFlipped ? point.y() : NSHeight(ns_view.bounds) - point.y());
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

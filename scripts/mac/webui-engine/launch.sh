@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ $# -lt 3 || $1 == -h || $1 == --help ]]; then
-  echo "usage: engine/ardiacore-mac/launch.sh <Ardia WebUI Dev.app> <data dir> <devtools port> [switches…]   hidden WebUI instance (ARDIA_WEBUI_BUNDLE picks the UI bundle); prints its pid" >&2
+  echo "usage: scripts/mac/webui-engine/launch.sh <Ardia WebUI Dev.app> <data dir> <devtools port> [switches…]   hidden WebUI instance (ARDIA_WEBUI_BUNDLE picks the UI bundle); prints its pid" >&2
   exit 64
 fi
 app=$1 data=$2 port=$3

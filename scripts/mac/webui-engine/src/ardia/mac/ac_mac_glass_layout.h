@@ -288,6 +288,16 @@ inline Layout Lay(const std::vector<Region>& regions,
   return layout;
 }
 
+inline std::optional<int> PresentableGeneration(double raw) {
+  if (!Finite(raw) || raw < 0 || raw > 2147483647.0 || std::floor(raw) != raw) return std::nullopt;
+  return static_cast<int>(raw);
+}
+
+inline int ClampToInt(double value, double limit = kMaxCoordinate) {
+  if (!Finite(value)) return 0;
+  return static_cast<int>(std::lround(std::clamp(value, -limit, limit)));
+}
+
 inline SlotKey KeyOf(const Placement& placement) {
   return SlotKey{placement.plane, placement.page, placement.id};
 }

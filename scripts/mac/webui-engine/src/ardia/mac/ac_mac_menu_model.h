@@ -148,6 +148,10 @@ inline std::string_view SelectorFor(Role role) {
   return {};
 }
 
+inline bool InstallsAppMenu(Role role, bool main_menu) {
+  return main_menu && (role == Role::kServices || role == Role::kWindowMenu || role == Role::kHelpMenu);
+}
+
 inline bool ValidCommand(std::string_view command) {
   if (command.size() > kMaxCommand) return false;
   return std::all_of(command.begin(), command.end(), [](char c) {

@@ -5,7 +5,9 @@
 #include <vector>
 
 #include "ardia/mac/ac_mac_glass_layout.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -24,7 +26,9 @@ bool LiquidGlassAvailable();
 
 class GlassRegions {
  public:
-  explicit GlassRegions(views::Widget* widget);
+  using Presented = base::RepeatingCallback<void(int generation)>;
+
+  GlassRegions(views::Widget* widget, Presented presented);
   GlassRegions(const GlassRegions&) = delete;
   GlassRegions& operator=(const GlassRegions&) = delete;
   ~GlassRegions();
@@ -48,6 +52,8 @@ class GlassRegions {
   std::vector<GlassPage> pages_;
   glass::Rect shell_;
   double zoom_ = 1;
+  Presented presented_;
+  base::WeakPtrFactory<GlassRegions> weak_factory_{this};
 };
 
 }

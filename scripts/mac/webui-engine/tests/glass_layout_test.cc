@@ -271,6 +271,64 @@ TEST(pass_through_ignores_bad_rects) {
   CHECK(glass::Passes(pass, {5, 5}));
 }
 
+TEST(presentable_generation) {
+  CHECK(glass::PresentableGeneration(0) == 0);
+  CHECK(glass::PresentableGeneration(42) == 42);
+  CHECK(glass::PresentableGeneration(2147483647.0) == 2147483647);
+  CHECK(!glass::PresentableGeneration(-1));
+  CHECK(!glass::PresentableGeneration(1.5));
+  CHECK(!glass::PresentableGeneration(2147483648.0));
+  CHECK(!glass::PresentableGeneration(std::numeric_limits<double>::quiet_NaN()));
+  CHECK(!glass::PresentableGeneration(std::numeric_limits<double>::infinity()));
+}
+
+TEST(clamp_to_int_never_overflows) {
+  CHECK(glass::ClampToInt(12.4) == 12);
+  CHECK(glass::ClampToInt(-12.6) == -13);
+  CHECK(glass::ClampToInt(1e20) == 1000000);
+  CHECK(glass::ClampToInt(-1e20) == -1000000);
+  CHECK(glass::ClampToInt(std::numeric_limits<double>::quiet_NaN()) == 0);
+  CHECK(glass::ClampToInt(std::numeric_limits<double>::infinity()) == 0);
+  CHECK(glass::ClampToInt(5e9, 1e5) == 100000);
+}
+
+TEST(hostile_sinks) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  const std::vector<double> numbers{nan, inf, -inf, 1e20, -1e20, 1e308, -0.0, 4.9e-324};
+  std::vector<Region> regions;
+  int index = 0;
+  for (double a : numbers) {
+    for (double b : numbers) {
+      Region region = Make("h" + std::to_string(index++), {a, b, a, b});
+      region.radii = {a, b, a, b};
+      region.opacity = a;
+      region.blur = b;
+      regions.push_back(region);
+    }
+  }
+  for (const std::string& id : {std::string("x\n"), std::string("../etc"), std::string(4096, 'a'),
+                                std::string("<script>"), std::string("\0", 1), std::string("id with space")}) {
+    regions.push_back(Make(id, {0, 0, 10, 10}));
+  }
+  const std::vector<Page> pages{{1, {nan, 0, 10, 10}}, {2, {0, 0, inf, 10}}, {3, {0, 0, 500, 500}}};
+  const auto layout = glass::Lay(regions, pages, kWindow, 1e300);
+  for (const Placement& placement : layout.placements) {
+    CHECK(std::isfinite(placement.frame.x) && std::isfinite(placement.frame.y));
+    CHECK(std::isfinite(placement.frame.width) && std::isfinite(placement.frame.height));
+    CHECK(placement.frame.width <= glass::kMaxCoordinate && placement.frame.height <= glass::kMaxCoordinate);
+    CHECK(std::isfinite(placement.radius) && placement.radius >= 0);
+    CHECK(placement.opacity >= 0 && placement.opacity <= 1);
+    CHECK(glass::ValidId(placement.id));
+  }
+  CHECK(layout.accepted.size() <= glass::kMaxRegions);
+  const auto pass = glass::PassThrough({{nan, nan, nan, nan}, {0, 0, 1e300, 1e300}}, {{-inf, -inf, inf, inf}});
+  CHECK(pass.empty());
+  CHECK(!glass::Passes({{0, 0, 100, 100}}, {inf, 5}));
+  const auto control = glass::Lay({Make("ok", {10, 10, 20, 20}, Layer::kBehind)}, {}, kWindow, 1);
+  CHECK(control.placements.size() == 1);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

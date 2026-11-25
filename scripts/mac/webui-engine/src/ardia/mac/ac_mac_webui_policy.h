@@ -53,6 +53,18 @@ constexpr bool Active(Decision decision) {
          decision == Decision::kOnFromEnvironment;
 }
 
+inline constexpr std::string_view kBackgroundSwitch = "ardia-background";
+inline constexpr std::string_view kBackgroundEnvironment = "ARDIA_BACKGROUND";
+
+constexpr bool BackgroundValue(std::optional<std::string_view> value) {
+  return value.has_value() && (*value == "1" || *value == "true");
+}
+
+constexpr bool Background(bool background_switch,
+                          std::optional<std::string_view> background_environment) {
+  return background_switch || BackgroundValue(background_environment);
+}
+
 constexpr bool ShouldStart(std::optional<std::string_view> shell_switch,
                            std::optional<std::string_view> shell_environment) {
   return Active(Decide(CompiledBuild(), shell_switch, shell_environment));

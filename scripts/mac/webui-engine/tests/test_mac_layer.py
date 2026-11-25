@@ -9,13 +9,23 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-REPO = ROOT.parents[1]
+REPO = ROOT.parents[2]
 SOURCE = ROOT / 'src'
 MAC = SOURCE / 'ardia/mac'
 TESTS = ROOT / 'tests'
-CXX = os.environ.get('CXX') or shutil.which('clang++') or 'c++'
-FLAGS = ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wshorten-64-to-32', '-g',
-         '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-fno-sanitize-recover=all']
+CXX = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('c++') or 'c++'
+
+
+def compiler_flags():
+    version = subprocess.run([CXX, '--version'], capture_output=True, text=True).stdout
+    flags = ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-g',
+             '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-fno-sanitize-recover=all']
+    if 'clang' in version:
+        flags.append('-Wshorten-64-to-32')
+    return flags
+
+
+FLAGS = compiler_flags()
 HOOKED_FILES = (
     'chrome/BUILD.gn',
     'chrome/browser/chrome_browser_main.cc',
@@ -26,7 +36,8 @@ HOOKED_FILES = (
 
 
 def compile_and_run(test, source, binary, defines=()):
-    built = subprocess.run([CXX, *FLAGS, *defines, '-I', str(SOURCE), '-I', str(TESTS), str(source), '-o', str(binary)],
+    built = subprocess.run([CXX, *FLAGS, *defines, '-I', str(SOURCE), '-I', str(TESTS), '-I', str(ROOT / 'launcher'),
+                            str(source), '-o', str(binary)],
                            capture_output=True, text=True, timeout=180)
     test.assertEqual(built.returncode, 0, built.stderr)
     ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
@@ -55,6 +66,9 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_menu_and_window_layout(self):
         compile_and_run(self, TESTS / 'menu_window_test.cc', self.out / 'menu')
+
+    def test_launcher_arguments(self):
+        compile_and_run(self, TESTS / 'launch_args_test.cc', self.out / 'launcher')
 
     def test_webui_policy_without_defines_is_release(self):
         compile_and_run(self, TESTS / 'webui_policy_test.cc', self.out / 'policy-release')
@@ -199,27 +213,78 @@ class ApplyTests(unittest.TestCase):
             self.assertNotIn(target.removeprefix('ardia/mac/'), official)
 
 
-class SeriesTests(unittest.TestCase):
-    def test_series_selects_the_layer_for_mac_only(self):
-        lines = [line.split('#', 1)[0].split() for line in (REPO / 'engine/patches/series').read_text().splitlines()]
-        layer = [fields for fields in lines if fields[:2] == ['layer', 'engine/ardiacore-mac']]
-        self.assertEqual(layer, [['layer', 'engine/ardiacore-mac', 'mac']])
-        order = [fields[1] for fields in lines if fields and fields[0] == 'layer']
-        self.assertLess(order.index('engine/ardiacore'), order.index('engine/ardiacore-mac'))
+class EngineKeyTests(unittest.TestCase):
+    def test_the_layer_is_not_in_the_engine_series(self):
+        series = (REPO / 'engine/patches/series').read_text()
+        self.assertNotIn('webui-engine', series)
+        self.assertNotIn('ardiacore-mac', series)
+        self.assertFalse((REPO / 'engine/ardiacore-mac').exists())
 
-    def test_linux_key_ignores_the_layer(self):
-        listed = subprocess.run([str(REPO / 'engine/engine-key.sh'), '--platform', 'linux', '--paths'],
-                                capture_output=True, text=True, timeout=120)
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        self.assertIn(':(exclude)engine/ardiacore-mac', listed.stdout.splitlines())
+    def test_no_engine_key_reads_the_layer(self):
+        for platform in ('macos', 'linux', 'win'):
+            listed = subprocess.run([str(REPO / 'engine/engine-key.sh'), '--platform', platform, '--paths'],
+                                    capture_output=True, text=True, timeout=120)
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            for spec in listed.stdout.splitlines():
+                path = spec.split(')', 1)[-1]
+                self.assertFalse(path.startswith('scripts/mac'), f'{platform}: {spec}')
+                self.assertFalse(path.startswith('scripts') and 'webui-engine' in path, f'{platform}: {spec}')
 
-    def test_mac_key_covers_the_layer_but_not_linux(self):
-        listed = subprocess.run([str(REPO / 'engine/engine-key.sh'), '--platform', 'macos', '--paths'],
-                                capture_output=True, text=True, timeout=120)
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        lines = listed.stdout.splitlines()
-        self.assertNotIn(':(exclude)engine/ardiacore-mac', lines)
-        self.assertIn(':(exclude)engine/ardiacore-linux', lines)
+    def test_shared_engine_scripts_leave_ardia_mac_to_this_layer(self):
+        self.assertNotIn('webui-engine', (REPO / 'scripts/agent/engine-build').read_text())
+        self.assertNotIn('ardiacore-mac', (REPO / 'scripts/agent/engine-build').read_text())
+
+
+class ContractTests(unittest.TestCase):
+    def read(self, name):
+        return (MAC / name).read_text()
+
+    def test_glass_regions_emit_presented_after_the_commit(self):
+        glass = self.read('ac_mac_glass.mm')
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('setCompletionBlock', glass)
+        self.assertIn('glass::PresentableGeneration', glass)
+        self.assertRegex(host, r'Emit\("ArdiaGlass", "presented",\s*base::Value\(base::DictValue\(\)\.Set\("generation", generation\)\)\)')
+        desktop = (REPO / 'apps/desktop/src/glassRegions.ts').read_text()
+        self.assertIn('export const GLASS_MODULE = "ArdiaGlass"', desktop)
+        shell = (REPO / 'apps/desktop/src/shellGlass.ts').read_text()
+        self.assertIn('event === "presented" && typeof value.generation === "number"', shell)
+
+    def test_background_honours_the_environment(self):
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('webui_policy::kBackgroundEnvironment', host)
+        self.assertIn('webui_policy::Background(', host)
+        self.assertIn('getenv("ARDIA_BACKGROUND")', (ROOT / 'launcher/main.c').read_text())
+
+    def test_popovers_keep_beyond_window_across_updates(self):
+        popover = self.read('ac_mac_popover.mm')
+        self.assertIn('popover::ResolveBeyondWindow(args.FindBool("beyondWindow"), panel.beyond_window)', popover)
+        self.assertIn('panel.beyond_window = beyond;', popover)
+
+    def test_context_menus_never_install_app_menus(self):
+        menu = self.read('ac_mac_menu.mm')
+        self.assertIn('BuildMenu(root, target, false)', menu)
+        self.assertIn('BuildItem(top, MainTarget(), true)', menu)
+        self.assertIn('menu::InstallsAppMenu(item.role, app_menus)', menu)
+
+    def test_no_unbounded_integer_narrowing(self):
+        for path in MAC.glob('*.mm'):
+            self.assertNotIn('std::lround(', path.read_text(), path.name)
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_every_bridge_handler_has_a_boundary_row(self):
+        import json
+        rows = json.loads((REPO / 'apps/browser/src/boundaries.json').read_text())['rows']
+        mac = [row for row in rows if any('scripts/mac/webui-engine' in check for check in row.get('checks', []))]
+        guards = ' '.join(row['guard'] for row in mac)
+        for method in ('shell.glassRegions', 'shell.backdropRegions', 'shell.trafficLights', 'shell.popover.open',
+                       'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
+                       'shell.showContextMenu', 'ardiaRequest'):
+            self.assertIn(method, guards)
+        cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
+        for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc'):
+            self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 
 class HardRuleTests(unittest.TestCase):
@@ -230,7 +295,7 @@ class HardRuleTests(unittest.TestCase):
 
     def test_no_comments_in_sources(self):
         allowed = ('// nogncheck',)
-        for path in sorted([*MAC.iterdir(), *TESTS.glob('*.cc'), *TESTS.glob('*.h'), ROOT / 'launcher/main.c']):
+        for path in sorted([*MAC.iterdir(), *TESTS.glob('*.cc'), *TESTS.glob('*.h'), *(ROOT / 'launcher').iterdir()]):
             if path.suffix not in ('.h', '.mm', '.cc', '.c', '.gn'):
                 continue
             for number, line in enumerate(path.read_text().splitlines(), 1):

@@ -168,6 +168,45 @@ TEST(translucency_only_for_the_webui_shell) {
   CHECK(!on.opaque && on.clear_background && on.full_size_content && on.transparent_titlebar && on.hide_title);
 }
 
+TEST(app_menus_only_from_the_main_menu) {
+  for (menu::Role role : {menu::Role::kServices, menu::Role::kWindowMenu, menu::Role::kHelpMenu}) {
+    CHECK(menu::InstallsAppMenu(role, true));
+    CHECK(!menu::InstallsAppMenu(role, false));
+  }
+  CHECK(!menu::InstallsAppMenu(menu::Role::kCopy, true));
+}
+
+TEST(hostile_sinks) {
+  menu::Item root;
+  for (const std::string& text : {std::string("\x1b[31m"), std::string("a\0b", 3), std::string(5000, 'x'),
+                                  std::string("rm -rf /"), std::string("../../x"), std::string("\x7f")}) {
+    menu::Item item;
+    item.title = text;
+    item.command = text;
+    item.key = text;
+    item.argument = std::string(5000, 'a');
+    item.modifiers = 0xffffffffu;
+    root.children.push_back(item);
+  }
+  const auto problems = menu::Validate(root);
+  CHECK(problems.size() >= 6 * 4);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  for (double value : {nan, inf, -inf, 1e20, -1e20}) {
+    const auto lights = window::LightsFrom(value, value, false, {1280, 800});
+    if (lights) {
+      CHECK(std::isfinite(lights->center.x) && lights->center.x <= 1280);
+      CHECK(std::isfinite(lights->center.y) && lights->center.y <= 800);
+    }
+  }
+  menu::Item control;
+  menu::Item ok;
+  ok.title = "Open";
+  ok.command = "open";
+  control.children.push_back(ok);
+  CHECK(menu::Validate(control).empty());
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

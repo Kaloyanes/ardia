@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ $# -ne 3 || $1 == -h || $1 == --help ]]; then
-  echo "usage: engine/ardiacore-mac/assemble.sh <Chromium Framework.framework> <apps/desktop/dist/mac> <out .app>" >&2
+  echo "usage: scripts/mac/webui-engine/assemble.sh <Chromium Framework.framework> <apps/desktop/dist/mac> <out .app>" >&2
   exit 64
 fi
 here=$(cd "$(dirname "$0")" && pwd)

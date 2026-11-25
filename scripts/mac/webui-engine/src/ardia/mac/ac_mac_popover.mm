@@ -203,6 +203,7 @@ struct PopoverHost::Panel : public content::WebContentsDelegate,
   std::string key;
   popover::State state = popover::State::kClosed;
   popover::Options options;
+  std::optional<bool> beyond_window;
   popover::Rect frame;
   std::string route;
   base::Value props;
@@ -273,7 +274,8 @@ std::optional<std::string> PopoverHost::Place(Panel& panel,
   const std::optional<popover::Rect> anchor_css = RectOf(args.FindDict("anchor"));
   const std::optional<popover::Rect> rect_css = RectOf(args.FindDict("rect"));
   const std::vector<popover::Rect> screens = VisibleScreens();
-  const bool beyond = args.FindBool("beyondWindow").value_or(true);
+  const bool beyond =
+      popover::ResolveBeyondWindow(args.FindBool("beyondWindow"), panel.beyond_window);
   std::optional<popover::Rect> anchor;
   if (anchor_css) {
     anchor = popover::WindowToScreen(
@@ -303,6 +305,7 @@ std::optional<std::string> PopoverHost::Place(Panel& panel,
   if (!clamped) {
     return "The popover has no screen to show on";
   }
+  panel.beyond_window = beyond;
   panel.frame = clamped->frame;
   const popover::Rect cocoa = popover::FlipVertical(panel.frame, PrimaryHeight());
   [panel.panel setFrame:NSMakeRect(cocoa.x, cocoa.y, cocoa.width, cocoa.height)

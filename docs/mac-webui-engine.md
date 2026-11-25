@@ -1,8 +1,9 @@
-# Mac WebUI host (`engine/ardiacore-mac`)
+# Mac WebUI host (`scripts/mac/webui-engine`)
 
 The Chromium side of the Mac WebUI shell: Chrome's own process is the app and serves `apps/desktop`'s `--mode mac`
 bundle from `chrome://ardia/`, as on Linux and Windows. It grew out of `spike/mac-webui` (`docs/mac-webui-spike.md` on
-that branch). It is a development tool and never runs in a release.
+that branch). It is a development tool and never runs in a release. Like Windows' `scripts/windows/engine`, it lives outside
+`engine/`, so no engine key reads it and the Mac release engine is untouched.
 
 ## Never in a release
 
@@ -16,6 +17,9 @@ that branch). It is a development tool and never runs in a release.
   `tests/webui_policy_test.cc` runs it in a release build, a dev build, and with both the dev and official defines.
 - A development build needs its own non-official out dir on a dev copy of the tree. `build.sh` refuses
   `is_official_build = true` and the shared `~/chromium-build`.
+- Background mode is `--ardia-background` or `ARDIA_BACKGROUND=1`/`true` (Wave 4A's handoff and `open --env` pass the
+  variable). The launcher adds `--ardia-background` when the variable is set. In background mode no window, popover or
+  menu is shown or takes focus.
 
 ## What it does
 
@@ -34,6 +38,8 @@ that branch). It is a development tool and never runs in a release.
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
   - A glass region over no page falls back behind the window.
+  - After the regions of a `shell.glassRegions` call are committed (`CATransaction` completion), the host sends
+    `ArdiaGlass` `presented {generation}`, which `shellGlass.ts` waits for before dropping its opaque fallback.
   - Liquid materials use `NSGlassEffectView` on macOS 26+ (corner radius and `style`, as in
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
@@ -44,32 +50,32 @@ that branch). It is a development tool and never runs in a release.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
     `chrome://ardia/?popover=<id>` page.
   - That page's bridge may only close itself or send `shell.popoverMessage`.
-  - `rect` is in window CSS pixels and is clamped to the anchor screen's visible frame.
+  - `rect` is in window CSS pixels and is clamped to the anchor screen's visible frame, or to the window when
+    `beyondWindow` was false at open; an update without `beyondWindow` keeps the value from open.
   - With `ARDIA_BACKGROUND=1` a popover is logged and never shown.
   - Placement and lifecycle are in `ac_mac_popover_policy.h`.
 - **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu. `ArdiaShell.setMainMenu` replaces it.
-  Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. `shell.showContextMenu` pops an `NSMenu`;
+  Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
+`shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 
-## Engine key
+## Engine key and checks
 
-- `layer engine/ardiacore-mac mac` is in `engine/patches/series`, so the Linux key ignores the layer.
-- The Mac key moves with any file here, as it does for anything under `engine/`.
-- Linux's `bootstrap.js`, `generate_bootstrap.py` and the desktop route table reach the tree only through
-  `apply.sh --dev` (`dev-copies.tsv`), since only non-official builds compile them. They are not Mac-key inputs.
-- `engine/ardiacore/apply.sh` leaves `ardia/mac` alone. `scripts/agent/engine-build` applies and checks this layer
-  after it.
-- The two files the series newly touches need capturing into the series base before the first `engine-build` on a
-  tree: `chrome/browser/ui/window_feature_controller/window_feature_controller.cc` and
-  `chrome/browser/ui/views/frame/browser_frame_view_mac.mm`.
+- No engine key reads `scripts/mac/webui-engine`, and `engine/patches/series`, `engine/ardiacore/apply.sh` and
+  `scripts/agent/engine-build` are unchanged, so the Mac and Linux keys stay as they were.
+- `build.sh` applies the layer to its own dev tree after `engine/chromium` and `engine/ardiacore`, with `--dev`: Linux's
+  `bootstrap.js`, `generate_bootstrap.py` and the desktop route table come in from `dev-copies.tsv`.
+- `apps/browser/src/boundaries.json` has a `mac-webui-*` row for each bridge handler and for the launch environment;
+  each cites the guard and its `hostile_sinks` test.
+- `tests/mac-layer.test.mjs` runs `tests/test_mac_layer.py` in `node --run test:root`.
 
 ## Commands
 
 ```sh
-python3 engine/ardiacore-mac/tests/test_mac_layer.py
-CHROMIUM_SRC=<dev tree> engine/ardiacore-mac/build.sh out/WebUIDev_arm64
-engine/ardiacore-mac/assemble.sh "<dev tree>/out/WebUIDev_arm64/Chromium Framework.framework" apps/desktop/dist/mac /tmp/webui/"Ardia WebUI Dev.app"
-ARDIA_WEBUI_BUNDLE=$PWD/apps/desktop/dist/mac engine/ardiacore-mac/launch.sh /tmp/webui/"Ardia WebUI Dev.app" /tmp/webui-data 9333
+python3 scripts/mac/webui-engine/tests/test_mac_layer.py
+CHROMIUM_SRC=<dev tree> scripts/mac/webui-engine/build.sh out/WebUIDev_arm64
+scripts/mac/webui-engine/assemble.sh "<dev tree>/out/WebUIDev_arm64/Chromium Framework.framework" apps/desktop/dist/mac /tmp/webui/"Ardia WebUI Dev.app"
+ARDIA_WEBUI_BUNDLE=$PWD/apps/desktop/dist/mac scripts/mac/webui-engine/launch.sh /tmp/webui/"Ardia WebUI Dev.app" /tmp/webui-data 9333
 ```

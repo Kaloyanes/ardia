@@ -13,6 +13,7 @@
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
+#include "ardia/mac/ac_mac_webui_policy.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -190,7 +191,12 @@ base::FilePath AssetDirectory() {
 }
 
 bool BackgroundInstance() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch("ardia-background");
+  const char* environment =
+      getenv(std::string(webui_policy::kBackgroundEnvironment).c_str());
+  return webui_policy::Background(
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          std::string(webui_policy::kBackgroundSwitch)),
+      environment ? std::optional<std::string_view>(environment) : std::nullopt);
 }
 
 void Trace(const std::string& line) {
@@ -410,7 +416,16 @@ void ShellHostView::Initialize() {
   content::WebContents* shell = shell_->GetWebContents();
   shell->SetDelegate(this);
   Transparencies()[shell] = std::make_unique<ShellTransparency>(shell);
-  glass_ = std::make_unique<GlassRegions>(browser_view_->GetWidget());
+  glass_ = std::make_unique<GlassRegions>(
+      browser_view_->GetWidget(),
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host, int generation) {
+            if (host) {
+              host->Emit("ArdiaGlass", "presented",
+                         base::Value(base::DictValue().Set("generation", generation)));
+            }
+          },
+          GetWeakPtr()));
   popovers_ = std::make_unique<PopoverHost>(
       browser_view_->GetWidget(), app_profile_.get(), window_id_,
       BackgroundInstance(),
@@ -1119,8 +1134,8 @@ void ShellHostView::SetGlassRegions(const base::DictValue& args, Done done) {
     return std::move(done).Run(
         false, base::Value("Glass regions are unavailable in this window"));
   }
-  base::Value reply = glass_->Apply(args, ShellZoom());
   UpdateGlassSurface();
+  base::Value reply = glass_->Apply(args, ShellZoom());
   std::move(done).Run(true, std::move(reply));
 }
 
@@ -1213,8 +1228,7 @@ void ShellHostView::ShowShellContextMenu(const base::DictValue& args, Done done)
   }
   ardia_mac::ShowContextMenu(
       shell_contents()->GetNativeView(),
-      gfx::Point(static_cast<int>(std::lround(x * zoom)),
-                 static_cast<int>(std::lround(y * zoom))),
+      gfx::Point(glass::ClampToInt(x * zoom), glass::ClampToInt(y * zoom)),
       parsed.root, BackgroundInstance(),
       base::BindOnce(
           [](Done done, std::optional<MenuChoice> choice) {

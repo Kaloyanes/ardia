@@ -173,8 +173,10 @@ struct GlassRegions::Views {
   std::map<glass::SlotKey, NSView*> effects;
 };
 
-GlassRegions::GlassRegions(views::Widget* widget)
-    : widget_(widget), views_(std::make_unique<Views>()) {}
+GlassRegions::GlassRegions(views::Widget* widget, Presented presented)
+    : widget_(widget),
+      views_(std::make_unique<Views>()),
+      presented_(std::move(presented)) {}
 
 GlassRegions::~GlassRegions() {
   Clear();
@@ -215,7 +217,21 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
   }
   regions_ = std::move(regions);
   zoom_ = glass::SanitizedScale(shell_zoom);
+  const std::optional<double> raw_generation = Number(&args, "generation");
+  const std::optional<int> presentable =
+      raw_generation ? glass::PresentableGeneration(*raw_generation) : std::nullopt;
+  [CATransaction begin];
+  if (presentable && presented_) {
+    base::WeakPtr<GlassRegions> weak = weak_factory_.GetWeakPtr();
+    const int committed = *presentable;
+    [CATransaction setCompletionBlock:^{
+      if (weak && weak->presented_) {
+        weak->presented_.Run(committed);
+      }
+    }];
+  }
   Relayout();
+  [CATransaction commit];
   const glass::Layout layout = glass::Lay(regions_, {}, glass::Rect{}, zoom_);
   for (const std::string& id : layout.accepted) {
     accepted.Append(id);

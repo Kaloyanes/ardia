@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == -h || ${1:-} == --help || $# -lt 1 ]]; then
-  echo "usage: CHROMIUM_SRC=<dev tree> engine/ardiacore-mac/build.sh <out dir> [targets…]   apply the Mac layers with the dev-only inputs and build the WebUI shell incrementally; the out dir must be non-official (is_official_build compiles only the inert stub) and the tree must not be the shared ~/chromium-build" >&2
+  echo "usage: CHROMIUM_SRC=<dev tree> scripts/mac/webui-engine/build.sh <out dir> [targets…]   apply the Mac layers with the dev-only inputs and build the WebUI shell incrementally; the out dir must be non-official (is_official_build compiles only the inert stub) and the tree must not be the shared ~/chromium-build" >&2
   exit 64
 fi
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
+repo=$(cd "$here/../../.." && pwd)
 src=${CHROMIUM_SRC:-}
 out=$1
 shift
@@ -26,8 +26,8 @@ exec "$repo/scripts/agent/locked" chromium --wait 1800 -- bash -c '
   export CHROMIUM_SRC=$src
   "$repo/engine/chromium/apply.sh"
   "$repo/engine/ardiacore/apply.sh"
-  "$repo/engine/ardiacore-mac/apply.sh" --dev
-  "$repo/engine/ardiacore-mac/apply.sh" --check
+  "$repo/scripts/mac/webui-engine/apply.sh" --dev
+  "$repo/scripts/mac/webui-engine/apply.sh" --check
   source "$repo/engine/patches/build/env.sh"
   cd "$src"
   memory_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))

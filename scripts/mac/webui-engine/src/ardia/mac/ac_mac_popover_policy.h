@@ -256,6 +256,10 @@ inline std::optional<Rect> WindowToScreen(const Rect& rect, const Rect& content_
               rect.height * scale};
 }
 
+inline bool ResolveBeyondWindow(std::optional<bool> requested, std::optional<bool> stored) {
+  return requested.value_or(stored.value_or(true));
+}
+
 struct Clamped {
   Rect frame;
   std::size_t screen = 0;
