@@ -1,0 +1,234 @@
+import type { MenuItem, MenuState } from "@ardia-real/shell";
+import { appMenuChoice } from "./appMenu.ts";
+import { EDIT_ITEMS } from "./editCommands.ts";
+
+export const SET_MAIN_MENU_METHOD = "ArdiaShell.setMainMenu";
+export const SET_MENU_STATE_METHOD = "ArdiaShell.setMenuState";
+export const SET_MENU_BOOKMARKS_METHOD = "ArdiaShell.setMenuBookmarks";
+export const MENU_PICK = "menu.pick";
+export const NATIVE_MENU_MAX_ITEMS = 400;
+export const NATIVE_MENU_MAX_DEPTH = 4;
+export const NATIVE_MENU_SYNC_MS = 120;
+const MAX_TITLE_BYTES = 200;
+const MAX_ARGUMENT_BYTES = 2048;
+const MAX_STATE_ID_BYTES = 96 + 1 + MAX_ARGUMENT_BYTES;
+const COMMAND = /^[A-Za-z0-9._:-]{1,96}$/;
+const STRUCTURAL_DISABLED: ReadonlySet<string> = new Set(["togglePinnedFold", "togglePin:tile"]);
+
+export type NativeMenuItem = {
+  title?: string;
+  defaultTitle?: string;
+  command?: string;
+  arg?: string;
+  id?: string;
+  key?: string;
+  modifiers?: number;
+  role?: string;
+  enabled?: boolean;
+  checked?: boolean;
+  fixedCheck?: boolean;
+  separator?: true;
+  children?: NativeMenuItem[];
+};
+
+export type MenuFlags = Pick<MenuState, "disabled" | "checked" | "titles">;
+export const NO_MENU_FLAGS: MenuFlags = { disabled: [], checked: [], titles: {} };
+
+const MODIFIER_BITS: Record<string, number> = { shift: 1, control: 2, option: 4, command: 8 };
+const SUBMENU_ROLES: Record<string, string> = { "menu:Window": "windowMenu", "menu:Help": "helpMenu", "menu:Bookmarks": "bookmarksMenu" };
+const ITEM_ROLES: Record<string, string> = {
+  ...Object.fromEntries(EDIT_ITEMS.map((item) => [item.id, item.action])),
+  about: "about",
+  "window:minimize": "minimize",
+  "window:maximize": "zoom",
+  "std:toggleFullScreen:": "toggleFullScreen",
+};
+const SKIPPED: ReadonlySet<string> = new Set(["window:minimizeAll"]);
+const NAMED_KEYS: Record<string, string> = {
+  "\r": "Enter", "\t": "Tab", "\u0008": "Backspace", "\u001b": "Escape", " ": "Space",
+  "": "Up", "": "Down", "": "Left", "": "Right", "": "Delete", "": "Home", "": "End",
+  Enter: "Enter", Return: "Enter", Tab: "Tab", Backspace: "Backspace", Escape: "Escape", Space: "Space", Delete: "Delete",
+  ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Up: "Up", Down: "Down", Left: "Left", Right: "Right",
+  Home: "Home", End: "End",
+};
+
+const encoder = new TextEncoder();
+const byteLength = (text: string) => encoder.encode(text).length;
+const controls = /[\u0000-\u001f\u007f]/g;
+const control = /[\u0000-\u001f\u007f]/;
+
+export function nativeMenuTitle(raw: string): string {
+  const clean = raw.replace(controls, " ").trim();
+  if (byteLength(clean) <= MAX_TITLE_BYTES) return clean;
+  let kept = "";
+  let used = 0;
+  for (const point of clean) {
+    const size = byteLength(point);
+    if (used + size > MAX_TITLE_BYTES) break;
+    kept += point;
+    used += size;
+  }
+  return kept.trim();
+}
+
+export function nativeMenuKey(key: string | undefined): string | undefined {
+  if (!key) return undefined;
+  const named = NAMED_KEYS[key];
+  if (named) return named;
+  const point = key.codePointAt(0)!;
+  if (key.length === 1 && point >= 0xf704 && point <= 0xf717) return `F${point - 0xf703}`;
+  if (/^F([1-9]|1[0-9]|20)$/.test(key)) return key;
+  if (key.length === 1 && point >= 0x21 && point < 0x7f) return key.toLowerCase();
+  return undefined;
+}
+
+const shortcutOf = (item: Extract<MenuItem, { id: string }>): Pick<NativeMenuItem, "key" | "modifiers"> => {
+  const key = nativeMenuKey(item.key);
+  if (!key) return {};
+  const modifiers = (item.modifiers ?? []).reduce((bits, modifier) => bits | (MODIFIER_BITS[modifier] ?? 0), 0);
+  return { key, modifiers };
+};
+
+const tidy = (items: NativeMenuItem[]) =>
+  items.filter((item, index) => !item.separator || (index > 0 && index < items.length - 1 && !items[index - 1]!.separator));
+
+const staticBookmarkItems = (children: readonly MenuItem[]) => {
+  const cut = children.findIndex((child) => "id" in child && (child.id.startsWith("folder:") || child.id.startsWith("header:")));
+  return cut < 0 ? children : children.slice(0, cut);
+};
+
+export function structuralMenuState(state: MenuState): MenuState {
+  return { ...state, bookmarkFolders: [], recentBookmarks: [], bookmarksBar: [], otherBookmarks: [], disabled: state.disabled.filter((id) => STRUCTURAL_DISABLED.has(id)), checked: [], titles: {} };
+}
+
+export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO_MENU_FLAGS): NativeMenuItem[] {
+  const disabled = new Set(flags.disabled);
+  const checked = new Set(flags.checked);
+  let budget = NATIVE_MENU_MAX_ITEMS;
+  const take = () => {
+    if (budget <= 0) return false;
+    budget -= 1;
+    return true;
+  };
+
+  const convert = (item: MenuItem, depth: number): NativeMenuItem | null => {
+    if ("separator" in item) return take() ? { separator: true } : null;
+    if (item.alternate || SKIPPED.has(item.id)) return null;
+    const title = nativeMenuTitle(item.title);
+    if (item.children) {
+      if (depth >= NATIVE_MENU_MAX_DEPTH || !take()) return null;
+      const role = SUBMENU_ROLES[item.id];
+      const source = role === "bookmarksMenu" ? staticBookmarkItems(item.children) : item.children;
+      const children = tidy(source.map((child) => convert(child, depth + 1)).filter((child): child is NativeMenuItem => !!child));
+      return { title: title || "Untitled", ...(role ? { role } : {}), children };
+    }
+    if (!title) return null;
+    const role = ITEM_ROLES[item.id];
+    if (role) return take() ? { title, role, ...shortcutOf(item) } : null;
+    const choice = appMenuChoice(item.id);
+    if (!choice) return take() ? { title, enabled: false } : null;
+    if (choice.kind !== "command") {
+      return take() ? { title, command: MENU_PICK, arg: item.id, enabled: item.enabled !== false, ...shortcutOf(item) } : null;
+    }
+    const { command, arg } = choice;
+    if (!COMMAND.test(command) || (arg !== null && byteLength(arg) > MAX_ARGUMENT_BYTES)) return null;
+    if (byteLength(item.id) > MAX_STATE_ID_BYTES || control.test(item.id) || !take()) return null;
+    const fixedCheck = item.checked === true;
+    const shown = nativeMenuTitle(flags.titles[item.id] ?? "") || title;
+    return {
+      title: shown,
+      ...(shown !== title ? { defaultTitle: title } : {}),
+      command,
+      ...(arg !== null ? { arg } : {}),
+      id: item.id,
+      enabled: !disabled.has(item.id) && !disabled.has(command),
+      checked: fixedCheck || checked.has(item.id),
+      ...(fixedCheck ? { fixedCheck } : {}),
+      ...shortcutOf(item),
+    };
+  };
+
+  return items.map((item) => convert(item, 1)).filter((item): item is NativeMenuItem => !!item && !!item.children);
+}
+
+export type NativeMenuBarDeps = {
+  supports(method: string): boolean;
+  invoke(method: string, args: Record<string, unknown>): Promise<unknown>;
+  build(): { items: readonly MenuItem[]; flags: MenuFlags };
+  subscribe(changed: () => void): () => void;
+  onPick(listener: (id: string) => void): () => void;
+  pick(id: string): void;
+  focused(): boolean;
+  onFocus(listener: () => void): () => void;
+  timeout(run: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+  report?(error: unknown): void;
+};
+
+export function createNativeMenuBar(deps: NativeMenuBarDeps) {
+  if (!deps.supports(SET_MAIN_MENU_METHOD)) return { stop: () => {}, flush: () => {}, active: false };
+  const followsState = deps.supports(SET_MENU_STATE_METHOD);
+  let sentKey = "";
+  let pushed = false;
+  let timer: unknown = null;
+  let inFlight = false;
+  let again = false;
+  let stopped = false;
+
+  const flush = (forced = false) => {
+    timer = null;
+    if (stopped) return;
+    if (!forced && pushed && !deps.focused()) return;
+    if (inFlight) {
+      again = true;
+      return;
+    }
+    const { items, flags } = deps.build();
+    const spec = nativeMenuSpec(items, flags);
+    const key = JSON.stringify([followsState ? nativeMenuSpec(items) : spec]);
+    if (key === sentKey && !forced) return;
+    sentKey = key;
+    pushed = true;
+    inFlight = true;
+    void Promise.resolve()
+      .then(() => deps.invoke(SET_MAIN_MENU_METHOD, { items: spec }))
+      .catch((error) => {
+        sentKey = "";
+        deps.report?.(error);
+      })
+      .finally(() => {
+        inFlight = false;
+        if (again) {
+          again = false;
+          schedule();
+        }
+      });
+  };
+
+  const schedule = () => {
+    if (timer !== null || stopped) return;
+    timer = deps.timeout(() => flush(), NATIVE_MENU_SYNC_MS);
+  };
+
+  const stopChanges = deps.subscribe(schedule);
+  const stopFocus = deps.onFocus(() => {
+    if (timer !== null) deps.clearTimeout(timer);
+    timer = null;
+    flush(true);
+  });
+  const stopPicks = deps.onPick((id) => deps.pick(id));
+  flush(true);
+
+  return {
+    active: true,
+    flush: () => flush(true),
+    stop() {
+      stopped = true;
+      if (timer !== null) deps.clearTimeout(timer);
+      timer = null;
+      stopChanges();
+      stopFocus();
+      stopPicks();
+    },
+  };
+}

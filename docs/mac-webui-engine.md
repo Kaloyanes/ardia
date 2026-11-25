@@ -40,7 +40,16 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - `shell.glassRegions` (`apps/desktop/src/glassRegions.ts`) puts glass in a per-page under-glass slot. The slot is a
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
-  - A glass region over no page falls back behind the window.
+  - A glass region over no page falls back behind the window. The host advertises `shell.glassBehindWindow`, so
+    `glassRegions.ts` also sends regions over the sidebar, toolbar or empty space instead of dropping them.
+  - A region may carry `material` (`regular`, `clear`, `sidebar`, `header`, `menu`, `popover`, `hud`, `window`,
+    `underWindow`), `tint` (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`), `appearance` (`light` or `dark`)
+    and `group`. `<GlassEffect>` sends its style, tint, corner radius and appearance; `<VisualEffect>` and
+    `<PopoverBubble>` send their vibrancy material, so their opaque fallback fill drops once the native view is
+    presented. Regions sharing a `group` (from `<GlassGroup>`) join one `NSGlassEffectContainerView` on macOS 26+
+    and mount alone elsewhere.
+  - The bootstrap sets `ArdiaGlassEffect.isLiquidGlass` from `NSGlassEffectView`'s presence, so the shared UI picks
+    its Liquid Glass look on macOS 26+.
   - After a `shell.glassRegions` call's regions are committed, the host posts `ArdiaGlass` `presented {generation}`
     on a later main-thread turn, which `shellGlass.ts` waits for before dropping its opaque fallback. A reload clears
     the glass and drops any `presented` still pending. `accepted` lists only the glass regions that
@@ -50,20 +59,33 @@ that branch). It is a development tool and never runs in a release. Like Windows
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
     pass-through.
-- **Popovers** follow Wave 3B's contract, but `shell.popover.*` is not advertised and `shell.popover.open` is refused
-  until `apps/desktop` renders a `chrome://ardia/?popover=<id>` surface (`kPopoverRendererShipped`); until then
-  `popoverHost` uses DOM popovers.
+- **Popovers** follow Wave 3B's contract. `apps/desktop` renders the `chrome://ardia/?popover=<id>` surface
+  (`kPopoverRendererShipped`), so `shell.popover.*` is advertised and `popoverHost` opens native panels.
+  - `main.tsx` boots `PopoverRoot.tsx` instead of the browser shell when the bootstrap says `surface: "popover"`
+    (`popoverSurface.ts`); it draws only the requested route on a transparent page.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
     `chrome://ardia/?popover=<id>` page.
-  - That page's bridge may only close itself or send `shell.popoverMessage`.
+  - That page's bridge may only close itself, read its own props (`shell.popover.props`) or send
+    `shell.popoverMessage` (at most 64 KiB), which `popoverHost` hands to the popover's `onMessage`.
+  - `shell.popover.update` with `content.props` (at most 256 KiB) replaces the props and pushes them to the page as
+    `ArdiaPopover` `props`.
   - `rect` is in window CSS pixels and is clamped to the anchor screen's visible frame, or to the window when
     `beyondWindow` was false at open; an update without `beyondWindow` keeps the value from open.
   - With `ARDIA_BACKGROUND=1` a popover is logged and never shown.
   - Placement and lifecycle are in `ac_mac_popover_policy.h`.
-- **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu. `ArdiaShell.setMainMenu` replaces it.
-  Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
+- **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu until `apps/desktop`
+  (`nativeMenuBar.ts`) pushes the full Ardia, File, Edit, View, Tabs, Bookmarks, History, Extensions, Window and Help
+  menus with `ArdiaShell.setMainMenu`. It pushes again when profiles, windows, extensions or shortcuts change and when
+  a window takes focus. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
+  as `menu.pick`. Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs
+  the Services, Window and Help menus.
+  - `ArdiaShell.setMenuState` updates enabled, checked and titles in place by state id (`command` or
+    `command:arg`); a disabled command disables all its variants.
+  - `ArdiaShell.setMenuBookmarks` rebuilds the Bookmarks menu after its fixed items, as `appMenu.ts` builds it.
+  - The in-window `≡` app menu button is hidden on macOS (`platform/appMenuButton.mac.ts`), where the menu bar holds
+    those menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`

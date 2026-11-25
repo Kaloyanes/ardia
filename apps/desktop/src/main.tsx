@@ -103,6 +103,8 @@ import { setDownloadFlowOwner } from "../../browser/src/state/telemetry/download
 import { consentToken, stillValid } from "../../browser/src/state/telemetry/choice";
 import type { LeaderLocks } from "./telemetryLeader";
 import { liveOf } from "../../browser/src/state/tabs/tabLive";
+import { popoverBoot } from "./popoverSurface";
+import { startNativeMenuBar } from "./nativeMenuBarHost";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle }, sync: linuxSyncHooks, live: linuxLiveHooks, tabLive: { liveOf }, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField }, calendar: { state: useCalendar, connect: connectCalendar, refresh: refreshCalendar, hide: setCalendarHidden, alert: useMeetingAlert }, inputRegions, telemetry: linuxTelemetryHooks } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme, depart: (tabId) => ardiaHost && forgetDepartedPage(tabId, ardiaHost.bootstrap.windowId) });
@@ -197,6 +199,7 @@ async function start() {
     startTabPages();
     startReader();
     startNativeSync();
+    startNativeMenuBar(ardiaHost, windowId);
     listenForOpenUrls(ardiaHost);
     startHostDownloads(ardiaHost, useBrowser);
     watchUnclaimedTabs(ardiaHost, useBrowser);
@@ -235,7 +238,8 @@ async function start() {
   );
 }
 
-void start().catch((error) => {
+const popover = popoverBoot(ardiaHost);
+void (popover ? import("./PopoverRoot").then(({ startPopover }) => startPopover(ardiaHost!, popover)) : start()).catch((error) => {
   console.error("[ardia linux] startup failed", error);
   const root = document.getElementById("root");
   if (root) {

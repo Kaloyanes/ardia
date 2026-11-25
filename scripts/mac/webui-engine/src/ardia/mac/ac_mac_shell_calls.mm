@@ -7,6 +7,8 @@
 #include <string_view>
 #include <utility>
 
+#include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
@@ -61,10 +63,13 @@ constexpr std::string_view kPopoverCapabilities[] = {
 constexpr std::string_view kCapabilities[] = {
     "shell.inputRegions",
     "shell.glassRegions",
+    "shell.glassBehindWindow",
     "shell.backdropRegions",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
+    "ArdiaShell.setMenuState",
+    "ArdiaShell.setMenuBookmarks",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",
@@ -185,9 +190,12 @@ std::string ShellHostView::BootstrapJson() const {
   bootstrap.Set("windowId", window_id_);
   bootstrap.Set("startup", true);
   bootstrap.Set("profileId", "default");
-  bootstrap.Set("nativeModules",
-                base::DictValue().Set(
-                    "ArdiaApp", base::DictValue().Set("systemInfo", std::move(info))));
+  bootstrap.Set(
+      "nativeModules",
+      base::DictValue()
+          .Set("ArdiaApp", base::DictValue().Set("systemInfo", std::move(info)))
+          .Set("ArdiaGlassEffect",
+               base::DictValue().Set("isLiquidGlass", LiquidGlassAvailable())));
   bootstrap.Set("capabilities", std::move(capabilities));
   bootstrap.Set("glassPanels", true);
   bootstrap.Set("pageProfile", "");
@@ -268,7 +276,16 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.setMenuState" ||
       method == "ArdiaShell.setMenuBookmarks") {
-    return std::move(done).Run(true, base::Value());
+    if (!values || values->size() != 1) {
+      return std::move(done).Run(false, base::Value("One menu update is required"));
+    }
+    const std::optional<std::string> error =
+        method == "ArdiaShell.setMenuState" ? SetMenuState((*values)[0])
+                                            : SetMenuBookmarks((*values)[0]);
+    if (error) {
+      return std::move(done).Run(false, base::Value(*error));
+    }
+    return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));

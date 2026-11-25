@@ -365,6 +365,7 @@ test("the win build shares every desktop adapter, takes Windows terms, and leave
     ["shortcutFormat.ts", "platform/keyNames.win.ts"],
     ["credentialNotices.ts", "platform/secretWording.win.ts"],
     ["syncKeyStore.ts", "platform/secretWording.win.ts"],
+    ["appMenuPlacement.ts", "platform/appMenuButton.desktop.ts"],
   ];
   for (const [importer, seam] of seams) assert.ok(graph.get(`${desktop}${importer}`)?.importedIds.includes(`${desktop}${seam}`), `${importer} imports ${seam}`);
   assert.ok(graph.get(`${desktop}platform/win/hostUpdates.ts`)?.importedIds.includes(`${browser}platform/windowsUpdateCounts.win.ts`), "the Windows updater counts manifest checks in the same twin the hourly telemetry takes them from");
@@ -415,12 +416,13 @@ test("the mac build shares every desktop adapter, takes the Mac's own terms, and
     ["syncKeyStore.ts", "platform/secretWording.mac.ts"],
     ["hostImport.ts", "platform/importWording.mac.ts"],
     ["shims/shaders.tsx", "platform/windowGlass.mac.ts"],
+    ["appMenuPlacement.ts", "platform/appMenuButton.mac.ts"],
   ];
   for (const [importer, seam] of seams) assert.ok(graph.get(`${desktop}${importer}`)?.importedIds.includes(`${desktop}${seam}`), `${importer} imports ${seam}`);
   assert.ok(graph.get(`${desktop}platform/windowGlass.mac.ts`).importedIds.includes(`${desktop}platform/mac/macGlass.ts`), "vibrancy backdrops ask the Mac host for glass behind the window");
   const code = chunks.map((chunk) => chunk.code).join("\n");
   for (const other of ["Evolution Data Server", "yay -Syu", "(polkit)", "Super+", "File Explorer", "Windows Hello"]) assert.ok(!code.includes(other), `the mac bundle says ${other}`);
-  for (const mac of ["shell.backdropRegions", "Finder", "Touch ID or your login password"]) assert.ok(code.includes(mac), `the mac bundle lacks ${mac}`);
+  for (const mac of ["shell.backdropRegions", "Finder", "Touch ID or your login password", "ArdiaShell.setMainMenu", "shell.glassBehindWindow"]) assert.ok(code.includes(mac), `the mac bundle lacks ${mac}`);
 });
 
 test("the linux and win builds keep the Mac twins and Mac glass out", { timeout: 120000 }, async () => {

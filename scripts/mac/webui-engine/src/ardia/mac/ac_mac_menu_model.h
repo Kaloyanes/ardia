@@ -41,6 +41,7 @@ enum class Role {
   kBringAllToFront,
   kWindowMenu,
   kHelpMenu,
+  kBookmarksMenu,
 };
 
 inline constexpr std::uint32_t kShift = 1;
@@ -50,13 +51,16 @@ inline constexpr std::uint32_t kCommand = 8;
 
 struct Item {
   std::string title;
+  std::string default_title;
   std::string command;
   std::string argument;
   std::string key;
+  std::string state_id;
   std::uint32_t modifiers = 0;
   Role role = Role::kNone;
   bool enabled = true;
   bool checked = false;
+  bool fixed_check = false;
   std::vector<Item> children;
 };
 
@@ -70,7 +74,7 @@ struct RoleName {
   Role role;
 };
 
-inline constexpr std::array<RoleName, 21> kRoles = {{
+inline constexpr std::array<RoleName, 22> kRoles = {{
     {"separator", Role::kSeparator},
     {"about", Role::kAbout},
     {"services", Role::kServices},
@@ -92,6 +96,7 @@ inline constexpr std::array<RoleName, 21> kRoles = {{
     {"front", Role::kBringAllToFront},
     {"windowMenu", Role::kWindowMenu},
     {"helpMenu", Role::kHelpMenu},
+    {"bookmarksMenu", Role::kBookmarksMenu},
 }};
 
 inline std::optional<Role> RoleNamed(std::string_view name) {
@@ -143,6 +148,7 @@ inline std::string_view SelectorFor(Role role) {
     case Role::kServices:
     case Role::kWindowMenu:
     case Role::kHelpMenu:
+    case Role::kBookmarksMenu:
       return {};
   }
   return {};
@@ -157,6 +163,10 @@ inline bool ContextMenuLive(bool host_alive,
                             std::uint64_t live_generation,
                             bool document_current) {
   return host_alive && requested_generation != 0 && requested_generation == live_generation && document_current;
+}
+
+inline bool HoldsSubmenu(Role role) {
+  return role == Role::kServices || role == Role::kWindowMenu || role == Role::kHelpMenu || role == Role::kBookmarksMenu;
 }
 
 inline bool ValidCommand(std::string_view command) {
@@ -210,16 +220,24 @@ inline void Check(const Item& item,
     problems.push_back({path, "too deep"});
     return;
   }
-  if (!ValidTitle(item.title)) problems.push_back({path, "title"});
+  if (!ValidTitle(item.title) || !ValidTitle(item.default_title)) problems.push_back({path, "title"});
   if (!ValidCommand(item.command)) problems.push_back({path, "command"});
   if (item.argument.size() > kMaxArgument) problems.push_back({path, "argument"});
+  if (!item.state_id.empty() &&
+      (item.state_id.size() > kMaxCommand + 1 + kMaxArgument ||
+       std::any_of(item.state_id.begin(), item.state_id.end(), [](char c) {
+         const auto byte = static_cast<unsigned char>(c);
+         return byte < 0x20 || byte == 0x7f;
+       })))
+    problems.push_back({path, "id"});
   if (!ValidKey(item.key)) problems.push_back({path, "key"});
   if (item.modifiers & ~(kShift | kControl | kOption | kCommand)) problems.push_back({path, "modifiers"});
   if (item.role == Role::kSeparator && (!item.children.empty() || !item.command.empty()))
     problems.push_back({path, "separator"});
   if (item.role != Role::kSeparator && item.role != Role::kServices && item.title.empty() && depth > 0)
     problems.push_back({path, "untitled"});
-  if (!item.children.empty() && !item.command.empty()) problems.push_back({path, "submenu with command"});
+  if ((!item.children.empty() || item.role == Role::kBookmarksMenu) && !item.command.empty())
+    problems.push_back({path, "submenu with command"});
   for (std::size_t index = 0; index < item.children.size(); ++index) {
     Check(item.children[index], depth + 1, path + "/" + std::to_string(index), count, problems);
     if (count > kMaxItems) return;

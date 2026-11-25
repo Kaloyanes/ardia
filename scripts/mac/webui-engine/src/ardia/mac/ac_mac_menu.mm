@@ -2,7 +2,9 @@
 
 #import <AppKit/AppKit.h>
 
+#include <algorithm>
 #include <memory>
+#include <set>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -32,6 +34,26 @@ MenuCommandHandler& MainHandler() {
   return *handler;
 }
 
+std::optional<menu::State>& KnownState() {
+  static base::NoDestructor<std::optional<menu::State>> state;
+  return *state;
+}
+
+std::optional<menu::Bookmarks>& KnownBookmarks() {
+  static base::NoDestructor<std::optional<menu::Bookmarks>> bookmarks;
+  return *bookmarks;
+}
+
+struct BookmarksSlot {
+  NSMenu* menu = nil;
+  NSInteger fixed = 0;
+};
+
+BookmarksSlot& MainBookmarks() {
+  static base::NoDestructor<BookmarksSlot> slot;
+  return *slot;
+}
+
 std::string StringOf(const base::DictValue& dict, std::string_view key) {
   const std::string* found = dict.FindString(key);
   return found ? *found : std::string();
@@ -48,8 +70,11 @@ menu::Item ItemOf(const base::Value& value,
     return item;
   }
   item.title = StringOf(*dict, "title");
+  item.default_title = StringOf(*dict, "defaultTitle");
   item.command = StringOf(*dict, "command");
   item.key = StringOf(*dict, "key");
+  item.state_id = StringOf(*dict, "id");
+  item.fixed_check = dict->FindBool("fixedCheck").value_or(false);
   if (const base::Value* argument = dict->Find("arg")) {
     if (argument->is_string()) {
       item.argument = argument->GetString();
@@ -134,14 +159,17 @@ NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target, bool a
   entry.keyEquivalentModifierMask = item.key.empty() ? 0 : Modifiers(item.modifiers);
   entry.state = item.checked ? NSControlStateValueOn : NSControlStateValueOff;
   entry.enabled = item.enabled;
-  if (!item.children.empty() || item.role == menu::Role::kServices ||
-      item.role == menu::Role::kWindowMenu || item.role == menu::Role::kHelpMenu) {
+  if (!item.children.empty() || menu::HoldsSubmenu(item.role)) {
     NSMenu* submenu = BuildMenu(item, target, app_menus);
     entry.submenu = submenu;
     if (menu::InstallsAppMenu(item.role, app_menus)) {
       if (item.role == menu::Role::kServices) NSApp.servicesMenu = submenu;
       if (item.role == menu::Role::kWindowMenu) NSApp.windowsMenu = submenu;
       if (item.role == menu::Role::kHelpMenu) NSApp.helpMenu = submenu;
+    }
+    if (app_menus && item.role == menu::Role::kBookmarksMenu) {
+      MainBookmarks().menu = submenu;
+      MainBookmarks().fixed = submenu.numberOfItems;
     }
     return entry;
   }
@@ -154,12 +182,96 @@ NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target, bool a
   if (!item.command.empty()) {
     entry.action = @selector(perform:);
     entry.target = target;
-    entry.representedObject = @{
+    NSMutableDictionary* represented = [@{
       @"command" : base::SysUTF8ToNSString(item.command),
       @"arg" : base::SysUTF8ToNSString(item.argument),
-    };
+    } mutableCopy];
+    if (!item.state_id.empty()) {
+      represented[@"state"] = base::SysUTF8ToNSString(item.state_id);
+      represented[@"title"] =
+          base::SysUTF8ToNSString(item.default_title.empty() ? item.title : item.default_title);
+      represented[@"fixed"] = @(item.fixed_check);
+      represented[@"checked"] = @(item.checked);
+    }
+    entry.representedObject = represented;
   }
   return entry;
+}
+
+void ApplyState(NSMenu* built, const menu::State& state, std::size_t depth) {
+  if (!built || depth > menu::kMaxBookmarkDepth + menu::kMaxDepth) return;
+  for (NSMenuItem* item in built.itemArray) {
+    if (item.submenu) {
+      ApplyState(item.submenu, state, depth + 1);
+    }
+    NSDictionary* represented = item.representedObject;
+    if (![represented isKindOfClass:NSDictionary.class]) continue;
+    NSString* state_id = represented[@"state"];
+    NSString* title = represented[@"title"];
+    if (![state_id isKindOfClass:NSString.class] || ![title isKindOfClass:NSString.class]) continue;
+    const menu::Shown shown =
+        menu::Resolve(base::SysNSStringToUTF8(state_id), [represented[@"fixed"] boolValue],
+                      [represented[@"checked"] boolValue], base::SysNSStringToUTF8(title), state);
+    item.enabled = shown.enabled;
+    item.state = shown.checked ? NSControlStateValueOn : NSControlStateValueOff;
+    NSString* shown_title = base::SysUTF8ToNSString(shown.title);
+    if (![item.title isEqualToString:shown_title]) {
+      item.title = shown_title;
+    }
+  }
+}
+
+void FillBookmarks() {
+  NSMenu* bookmarks = MainBookmarks().menu;
+  if (!bookmarks || !KnownBookmarks()) return;
+  const NSInteger fixed = std::min(MainBookmarks().fixed, bookmarks.numberOfItems);
+  while (bookmarks.numberOfItems > fixed) {
+    [bookmarks removeItemAtIndex:bookmarks.numberOfItems - 1];
+  }
+  const std::vector<menu::Item> items = menu::BookmarkMenuItems(*KnownBookmarks());
+  if (!items.empty() && fixed > 0) {
+    [bookmarks addItem:[NSMenuItem separatorItem]];
+  }
+  for (const menu::Item& item : items) {
+    [bookmarks addItem:BuildItem(item, MainTarget(), false)];
+  }
+  if (KnownState()) {
+    ApplyState(bookmarks, *KnownState(), 1);
+  }
+}
+
+std::optional<menu::Bookmark> BookmarkOf(const base::Value& value, std::size_t depth, std::size_t& nodes) {
+  const base::DictValue* dict = value.GetIfDict();
+  if (!dict || depth > menu::kMaxBookmarkDepth + 1 || nodes >= menu::kMaxBookmarkNodes) return std::nullopt;
+  ++nodes;
+  menu::Bookmark node;
+  node.id = StringOf(*dict, "id");
+  node.title = StringOf(*dict, "title");
+  node.url = StringOf(*dict, "url");
+  if (node.url.size() > menu::kMaxUrl) node.url.clear();
+  if (const base::ListValue* children = dict->FindList("children")) {
+    node.folder = true;
+    for (const base::Value& child : *children) {
+      if (nodes >= menu::kMaxBookmarkNodes) break;
+      if (std::optional<menu::Bookmark> parsed = BookmarkOf(child, depth + 1, nodes)) {
+        node.children.push_back(std::move(*parsed));
+      }
+    }
+  }
+  return node;
+}
+
+std::vector<menu::Bookmark> BookmarkList(const base::DictValue& dict, std::string_view key, std::size_t& nodes) {
+  std::vector<menu::Bookmark> list;
+  const base::ListValue* values = dict.FindList(key);
+  if (!values) return list;
+  for (const base::Value& value : *values) {
+    if (nodes >= menu::kMaxBookmarkNodes) break;
+    if (std::optional<menu::Bookmark> node = BookmarkOf(value, 1, nodes)) {
+      list.push_back(std::move(*node));
+    }
+  }
+  return list;
 }
 
 NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool app_menus) {
@@ -205,8 +317,61 @@ ParsedMenu ParseMenu(const base::Value& spec) {
   return parsed;
 }
 
+std::optional<menu::State> ParseMenuState(const base::Value& update) {
+  const base::DictValue* dict = update.GetIfDict();
+  if (!dict) return std::nullopt;
+  menu::State state;
+  const auto read = [dict](std::string_view key, std::set<std::string>& into) {
+    const base::ListValue* list = dict->FindList(key);
+    if (!list) return;
+    for (const base::Value& value : *list) {
+      if (value.is_string()) menu::AddStateEntry(into, value.GetString());
+    }
+  };
+  read("disabled", state.disabled);
+  read("checked", state.checked);
+  if (const base::DictValue* titles = dict->FindDict("titles")) {
+    for (const auto [state_id, title] : *titles) {
+      if (title.is_string()) menu::AddStateTitle(state, state_id, title.GetString());
+    }
+  }
+  return state;
+}
+
+std::optional<menu::Bookmarks> ParseMenuBookmarks(const base::Value& update) {
+  const base::DictValue* dict = update.GetIfDict();
+  if (!dict) return std::nullopt;
+  menu::Bookmarks bookmarks;
+  std::size_t nodes = 0;
+  bookmarks.recent = BookmarkList(*dict, "recentBookmarks", nodes);
+  bookmarks.bar = BookmarkList(*dict, "bookmarksBar", nodes);
+  bookmarks.other = BookmarkList(*dict, "otherBookmarks", nodes);
+  for (menu::Bookmark& recent : bookmarks.recent) {
+    recent.folder = false;
+    recent.children.clear();
+  }
+  return bookmarks;
+}
+
+std::optional<std::string> SetMenuState(const base::Value& update) {
+  std::optional<menu::State> state = ParseMenuState(update);
+  if (!state) return "Menu state must be an object";
+  KnownState() = std::move(*state);
+  ApplyState(NSApp.mainMenu, *KnownState(), 0);
+  return std::nullopt;
+}
+
+std::optional<std::string> SetMenuBookmarks(const base::Value& update) {
+  std::optional<menu::Bookmarks> bookmarks = ParseMenuBookmarks(update);
+  if (!bookmarks) return "Menu bookmarks must be an object";
+  KnownBookmarks() = std::move(*bookmarks);
+  FillBookmarks();
+  return std::nullopt;
+}
+
 void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler) {
   MainHandler() = std::move(handler);
+  MainBookmarks() = BookmarksSlot();
   NSMenu* bar = [[NSMenu alloc] initWithTitle:@""];
   for (const menu::Item& top : root.children) {
     NSMenuItem* entry = BuildItem(top, MainTarget(), true);
@@ -216,6 +381,10 @@ void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler) {
     [bar addItem:entry];
   }
   NSApp.mainMenu = bar;
+  FillBookmarks();
+  if (KnownState()) {
+    ApplyState(bar, *KnownState(), 0);
+  }
 }
 
 void InstallDefaultMainMenu(MenuCommandHandler handler) {

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_menu_state.h"
 #include "base/functional/callback.h"
 #include "base/values.h"
 #include "ui/gfx/geometry/point.h"
@@ -28,9 +29,13 @@ struct ParsedMenu {
 };
 
 ParsedMenu ParseMenu(const base::Value& spec);
+std::optional<menu::State> ParseMenuState(const base::Value& update);
+std::optional<menu::Bookmarks> ParseMenuBookmarks(const base::Value& update);
 
 void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler);
 void InstallDefaultMainMenu(MenuCommandHandler handler);
+std::optional<std::string> SetMenuState(const base::Value& update);
+std::optional<std::string> SetMenuBookmarks(const base::Value& update);
 
 void ShowContextMenu(LiveMenuView live_view,
                      const gfx::Point& point,

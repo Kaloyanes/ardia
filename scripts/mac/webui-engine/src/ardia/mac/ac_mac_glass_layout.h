@@ -65,6 +65,16 @@ enum class Effect { kLiquidGlass, kVibrancy };
 
 enum class Source { kGlass, kBackdrop };
 
+enum class Appearance { kAuto, kLight, kDark };
+
+struct Color {
+  double red = 0;
+  double green = 0;
+  double blue = 0;
+  double alpha = 1;
+  bool operator==(const Color&) const = default;
+};
+
 struct Region {
   std::string id;
   Rect rect;
@@ -74,6 +84,9 @@ struct Region {
   Layer layer = Layer::kAuto;
   Material material = Material::kLiquid;
   Source source = Source::kGlass;
+  std::optional<Color> tint;
+  std::string group;
+  Appearance appearance = Appearance::kAuto;
 };
 
 struct Page {
@@ -94,6 +107,9 @@ struct Placement {
   std::size_t order = 0;
   Source source = Source::kGlass;
   Radii radii;
+  std::optional<Color> tint;
+  std::string group;
+  Appearance appearance = Appearance::kAuto;
   bool operator==(const Placement&) const = default;
 };
 
@@ -152,6 +168,87 @@ inline std::optional<Material> MaterialNamed(std::string_view name) {
   return std::nullopt;
 }
 
+inline std::optional<Appearance> AppearanceNamed(std::string_view name) {
+  if (name.empty() || name == "auto") return Appearance::kAuto;
+  if (name == "light") return Appearance::kLight;
+  if (name == "dark") return Appearance::kDark;
+  return std::nullopt;
+}
+
+inline std::optional<double> ColorNumber(std::string_view text) {
+  while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+  while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+  if (text.empty() || text.size() > 16) return std::nullopt;
+  double whole = 0;
+  double fraction = 0;
+  double scale = 1;
+  bool dot = false;
+  bool digits = false;
+  for (const char c : text) {
+    if (c == '.' && !dot) {
+      dot = true;
+      continue;
+    }
+    if (c < '0' || c > '9') return std::nullopt;
+    digits = true;
+    if (dot) {
+      scale /= 10;
+      fraction += (c - '0') * scale;
+    } else {
+      whole = whole * 10 + (c - '0');
+    }
+  }
+  if (!digits) return std::nullopt;
+  return whole + fraction;
+}
+
+inline std::optional<int> HexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return std::nullopt;
+}
+
+inline std::optional<Color> ColorFrom(std::string_view text) {
+  if (text.empty() || text.size() > 64) return std::nullopt;
+  if (text.front() == '#') {
+    const std::string_view hex = text.substr(1);
+    if (hex.size() != 3 && hex.size() != 6 && hex.size() != 8) return std::nullopt;
+    double channels[4] = {0, 0, 0, 1};
+    const bool short_form = hex.size() == 3;
+    const std::size_t count = short_form ? 3 : hex.size() / 2;
+    for (std::size_t index = 0; index < count; ++index) {
+      const std::optional<int> high = HexDigit(hex[short_form ? index : index * 2]);
+      const std::optional<int> low = HexDigit(hex[short_form ? index : index * 2 + 1]);
+      if (!high || !low) return std::nullopt;
+      channels[index] = (*high * 16 + *low) / 255.0;
+    }
+    return Color{channels[0], channels[1], channels[2], channels[3]};
+  }
+  const bool alpha = text.starts_with("rgba(");
+  if ((!alpha && !text.starts_with("rgb(")) || text.back() != ')') return std::nullopt;
+  std::string_view inner = text.substr(alpha ? 5 : 4);
+  inner.remove_suffix(1);
+  double channels[4] = {0, 0, 0, 1};
+  std::size_t count = 0;
+  while (true) {
+    const std::size_t comma = inner.find(',');
+    if (count >= 4) return std::nullopt;
+    const std::optional<double> value = ColorNumber(inner.substr(0, comma));
+    if (!value) return std::nullopt;
+    channels[count++] = *value;
+    if (comma == std::string_view::npos) break;
+    inner.remove_prefix(comma + 1);
+  }
+  if (count != (alpha ? 4u : 3u)) return std::nullopt;
+  for (std::size_t index = 0; index < 3; ++index) {
+    if (channels[index] > 255) return std::nullopt;
+    channels[index] /= 255.0;
+  }
+  if (channels[3] > 1) return std::nullopt;
+  return Color{channels[0], channels[1], channels[2], channels[3]};
+}
+
 inline Effect EffectFor(Material material, bool liquid_glass_available) {
   const bool liquid = material == Material::kLiquid || material == Material::kLiquidClear;
   return liquid && liquid_glass_available ? Effect::kLiquidGlass : Effect::kVibrancy;
@@ -163,6 +260,10 @@ inline bool ValidId(std::string_view id) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
            c == '_' || c == ':' || c == '.';
   });
+}
+
+inline bool ValidGroup(std::string_view group) {
+  return group.empty() || ValidId(group);
 }
 
 inline bool ValidRect(const Rect& rect) {
@@ -280,6 +381,10 @@ inline Layout Lay(const std::vector<Region>& regions,
       reject("style");
       continue;
     }
+    if (!ValidGroup(region.group)) {
+      reject("group");
+      continue;
+    }
     const Rect rect = Scaled(region.rect, scale);
     const std::optional<Radii> radii = SanitizedRadii(region.radii, rect.width, rect.height, scale);
     if (!radii) {
@@ -296,7 +401,8 @@ inline Layout Lay(const std::vector<Region>& regions,
       layout.placements.push_back(Placement{region.id, plane, page, Offset(rect, origin.x, origin.y),
                                             Offset(visible, origin.x, origin.y), UniformRadius(*radii),
                                             CornerMask(*radii), opacity, region.material, order,
-                                            region.source, *radii});
+                                            region.source, *radii, region.tint, region.group,
+                                            region.appearance});
       return true;
     };
     bool on_page = false;
@@ -378,6 +484,30 @@ class PresentedGate {
  private:
   std::uint64_t epoch_ = 0;
 };
+
+struct GroupKey {
+  Plane plane = Plane::kBehindWindow;
+  int page = 0;
+  std::string group;
+  auto operator<=>(const GroupKey&) const = default;
+};
+
+inline bool Grouped(const Placement& placement, bool groups_glass) {
+  return groups_glass && !placement.group.empty() && placement.source == Source::kGlass &&
+         EffectFor(placement.material, true) == Effect::kLiquidGlass;
+}
+
+inline GroupKey GroupOf(const Placement& placement) {
+  return GroupKey{placement.plane, placement.page, placement.group};
+}
+
+inline std::set<GroupKey> LiveGroups(const std::vector<Placement>& placements, bool groups_glass) {
+  std::set<GroupKey> live;
+  for (const Placement& placement : placements) {
+    if (Grouped(placement, groups_glass)) live.insert(GroupOf(placement));
+  }
+  return live;
+}
 
 inline SlotKey KeyOf(const Placement& placement) {
   return SlotKey{placement.plane, placement.page, placement.source, placement.id};

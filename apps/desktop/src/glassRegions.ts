@@ -2,6 +2,7 @@ import type { CornerRadii } from "./hostExtensionView.ts";
 import { intersection, type Rect } from "./inputRegions.ts";
 
 export const GLASS_METHOD = "shell.glassRegions";
+export const GLASS_BEHIND_WINDOW = "shell.glassBehindWindow";
 export const GLASS_MODULE = "ArdiaGlass";
 const GLASS_BLUR = 24;
 export const GLASS_MAX_REGIONS = 64;
@@ -9,7 +10,10 @@ export const STABLE_FRAMES = 2;
 export const AFTERIMAGE_MS = 250;
 
 export type GlassGeometry = { rect: Rect; radii: CornerRadii; opacity: number; scale?: number };
-type GlassRegion = { id: string; rect: Rect; radii: CornerRadii; blur: number; opacity: number };
+export type GlassMaterial = "regular" | "clear" | "sidebar" | "header" | "menu" | "popover" | "hud" | "window" | "underWindow";
+export type GlassLook = { material?: GlassMaterial; tint?: string; group?: string; appearance?: "light" | "dark" };
+type GlassRegion = { id: string; rect: Rect; radii: CornerRadii; blur: number; opacity: number } & GlassLook;
+export type GlassOptions = { behindWindow?: boolean };
 type GlassUpdate = { generation: number; regions: GlassRegion[] };
 export type GlassApplied = { generation: number; available: boolean; accepted: string[] };
 
@@ -34,6 +38,7 @@ type Afterimage = { generation: number; remove: () => void; timer: unknown };
 type Entry = {
   id: string;
   blur: number;
+  look: GlassLook;
   geometry: GlassGeometry | null;
   key: string;
   stable: number;
@@ -54,8 +59,14 @@ const keyOf = (geometry: GlassGeometry | null) =>
         geometry.scale ?? 1,
       ])
     : "";
+const lookOf = (look: GlassLook): GlassLook => ({
+  ...(look.material ? { material: look.material } : {}),
+  ...(look.tint ? { tint: look.tint } : {}),
+  ...(look.group ? { group: look.group } : {}),
+  ...(look.appearance ? { appearance: look.appearance } : {}),
+});
 
-export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean) {
+export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean, options: GlassOptions = {}) {
   const entries = new Map<Element, Entry>();
   const afterimages = new Set<Afterimage>();
   let available = initiallyAvailable;
@@ -81,8 +92,9 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean)
     return false;
   };
 
+  const overSurface = (rect: Rect) => options.behindWindow === true || pages.some((page) => intersection(rect, page));
   const eligible = (element: Element, entry: Entry) =>
-    !!entry.geometry && entry.geometry.opacity > 0 && pages.some((page) => intersection(entry.geometry!.rect, page)) && !nested(element);
+    !!entry.geometry && entry.geometry.opacity > 0 && overSurface(entry.geometry.rect) && !nested(element);
 
   const setTranslucent = (element: Element, entry: Entry, translucent: boolean) => {
     if (entry.translucent === translucent) return;
@@ -191,7 +203,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean)
     for (const [element, entry] of entries) {
       if (!eligible(element, entry) || regions.length >= GLASS_MAX_REGIONS) continue;
       const { rect, radii, opacity } = entry.geometry!;
-      regions.push({ id: entry.id, rect, radii, blur: entry.blur, opacity });
+      regions.push({ id: entry.id, rect, radii, blur: entry.blur, opacity, ...entry.look });
       included.push(entry);
     }
     for (const [element, entry] of entries) {
@@ -224,8 +236,8 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean)
   };
 
   return {
-    add(element: Element, blur = GLASS_BLUR) {
-      const entry: Entry = { id: `g${++nextId}`, blur, geometry: null, key: "", stable: 0, moving: false, pending: null, applied: null, translucent: false, stop: () => {} };
+    add(element: Element, blur = GLASS_BLUR, look: GlassLook = {}) {
+      const entry: Entry = { id: `g${++nextId}`, blur, look: lookOf(look), geometry: null, key: "", stable: 0, moving: false, pending: null, applied: null, translucent: false, stop: () => {} };
       entries.set(element, entry);
       deps.apply(element, false);
       entry.stop = deps.watch(element, nextFrame);
@@ -239,6 +251,14 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean)
         nextFrame();
         syncActivity();
       };
+    },
+    restyle(element: Element, look: GlassLook) {
+      const entry = entries.get(element);
+      if (!entry) return;
+      const next = lookOf(look);
+      if (JSON.stringify(next) === JSON.stringify(entry.look)) return;
+      entry.look = next;
+      nextFrame();
     },
     setPages(rects: readonly Rect[]) {
       pages = rects;
@@ -263,6 +283,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean)
     available: () => available,
     refresh: nextFrame,
     flushNow: flush,
+    behindWindow: () => options.behindWindow === true,
     status: () => ({
       available,
       generation,

@@ -469,6 +469,51 @@ TEST(unequal_positive_radii_are_a_layout_change) {
   CHECK(!shape.uniform && shape.radii == (glass::Radii{4, 12, 12, 12}));
 }
 
+TEST(tints_parse_from_hex_and_rgba) {
+  CHECK(glass::ColorFrom("#ff0000") == (glass::Color{1, 0, 0, 1}));
+  CHECK(glass::ColorFrom("#00ff0080") == (glass::Color{0, 1, 0, 128 / 255.0}));
+  CHECK(glass::ColorFrom("#fff") == (glass::Color{1, 1, 1, 1}));
+  CHECK(glass::ColorFrom("rgba(255, 0, 0, 0.5)") == (glass::Color{1, 0, 0, 0.5}));
+  CHECK(glass::ColorFrom("rgb(0,0,255)") == (glass::Color{0, 0, 1, 1}));
+  for (const char* bad : {"", "red", "#ff", "#gg0000", "rgba(1,2,3)", "rgb(1,2,3,4)", "rgba(256,0,0,1)",
+                          "rgba(0,0,0,2)", "rgba(-1,0,0,1)", "rgba(1e3,0,0,1)", "rgba(0,0,0,1", "rgba(,,,)"}) {
+    CHECK(!glass::ColorFrom(bad));
+  }
+}
+
+TEST(groups_and_appearance_reach_the_placement) {
+  Region region = Make("pin", {10, 10, 30, 30});
+  region.group = "pins";
+  region.tint = glass::Color{1, 1, 1, 0.2};
+  region.appearance = glass::Appearance::kDark;
+  const auto layout = glass::Lay({region}, {}, kWindow, 1);
+  CHECK(layout.placements.size() == 1);
+  CHECK(layout.placements[0].group == "pins" && layout.placements[0].tint == region.tint);
+  CHECK(layout.placements[0].appearance == glass::Appearance::kDark);
+  CHECK(glass::Grouped(layout.placements[0], true));
+  CHECK(!glass::Grouped(layout.placements[0], false));
+  CHECK(glass::LiveGroups(layout.placements, true).size() == 1);
+  CHECK(glass::LiveGroups(layout.placements, false).empty());
+  Region vibrant = region;
+  vibrant.material = Material::kSidebar;
+  CHECK(!glass::Grouped(glass::Lay({vibrant}, {}, kWindow, 1).placements[0], true));
+  Region bad = region;
+  bad.group = "no spaces";
+  const auto refused = glass::Lay({bad}, {}, kWindow, 1);
+  CHECK(refused.placements.empty() && refused.rejected.size() == 1 && refused.rejected[0].reason == "group");
+  CHECK(glass::AppearanceNamed("dark") == glass::Appearance::kDark && !glass::AppearanceNamed("sepia"));
+}
+
+TEST(tint_and_group_changes_update_the_same_view) {
+  Region region = Make("pin", {10, 10, 30, 30});
+  const auto before = glass::Lay({region}, {}, kWindow, 1);
+  region.tint = glass::Color{0, 0, 0, 0.1};
+  region.group = "pins";
+  const auto after = glass::Lay({region}, {}, kWindow, 1);
+  const auto diff = glass::DiffPlacements(before.placements, after.placements, true);
+  CHECK(diff.update.size() == 1 && diff.create.empty() && diff.remove.empty());
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

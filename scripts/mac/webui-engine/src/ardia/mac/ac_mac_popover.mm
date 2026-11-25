@@ -207,6 +207,7 @@ struct PopoverHost::Panel : public content::WebContentsDelegate,
   popover::Rect frame;
   std::string route;
   base::Value props;
+  Sink sink;
   std::unique_ptr<content::WebContents> contents;
   ArdiaMacPopoverPanel* panel = nil;
   NSMutableArray* observers = [NSMutableArray array];
@@ -255,12 +256,29 @@ std::optional<std::string> PopoverHost::BootstrapJson(
   bootstrap.Set("startup", false);
   bootstrap.Set("capabilities", base::ListValue()
                                     .Append("shell.popover.close")
-                                    .Append("shell.popover.message"));
+                                    .Append("shell.popover.message")
+                                    .Append("shell.popover.props"));
   bootstrap.Set("popover", base::DictValue()
                                .Set("id", panel.key)
                                .Set("route", panel.route)
                                .Set("props", panel.props.Clone()));
   return base::WriteJson(bootstrap);
+}
+
+std::optional<base::Value> PopoverHost::PropsFor(
+    const content::WebContents* contents) const {
+  const std::optional<std::string> key = IdFor(contents);
+  if (!key) {
+    return std::nullopt;
+  }
+  return panels_.at(*key)->props.Clone();
+}
+
+void PopoverHost::Connect(const content::WebContents* contents, Sink sink) {
+  const std::optional<std::string> key = IdFor(contents);
+  if (key) {
+    panels_.at(*key)->sink = std::move(sink);
+  }
 }
 
 std::optional<std::string> PopoverHost::Place(Panel& panel,
@@ -401,6 +419,10 @@ std::optional<std::string> PopoverHost::Open(const base::DictValue& args,
   auto panel = std::make_unique<Panel>(this, key);
   panel->route = route;
   const base::Value* props = content->Find("props");
+  if (props && props->is_dict() &&
+      !popover::PropsFit(base::WriteJson(*props).value_or(std::string()).size())) {
+    return "Popover props are too large";
+  }
   panel->props = props && props->is_dict() ? props->Clone() : base::Value(base::DictValue());
   panel->options.takes_focus = args.FindBool("takesFocus").value_or(true);
   panel->panel = [[ArdiaMacPopoverPanel alloc]
@@ -461,6 +483,22 @@ std::optional<std::string> PopoverHost::Update(const base::DictValue& args,
   const popover::Transition transition =
       popover::Step(panel.state, popover::Event::kUpdate, panel.options);
   if (!transition.reposition) {
+    return std::nullopt;
+  }
+  const base::DictValue* content = args.FindDict("content");
+  if (const base::Value* props = content ? content->Find("props") : nullptr) {
+    if (!props->is_dict() ||
+        !popover::PropsFit(base::WriteJson(*props).value_or(std::string()).size())) {
+      return "Popover props must be a small object";
+    }
+    panel.props = props->Clone();
+    if (panel.sink) {
+      panel.sink.Run("props", base::Value(base::DictValue()
+                                              .Set("id", panel.key)
+                                              .Set("props", panel.props.Clone())));
+    }
+  }
+  if (!args.FindDict("rect") && !args.FindDict("anchor")) {
     return std::nullopt;
   }
   return Place(panel, args, shell_view, shell_zoom);

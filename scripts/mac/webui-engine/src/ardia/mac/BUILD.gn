@@ -34,6 +34,7 @@ if (is_official_build) {
       "ac_mac_menu.h",
       "ac_mac_menu.mm",
       "ac_mac_menu_model.h",
+      "ac_mac_menu_state.h",
       "ac_mac_popover.h",
       "ac_mac_popover.mm",
       "ac_mac_popover_policy.h",
