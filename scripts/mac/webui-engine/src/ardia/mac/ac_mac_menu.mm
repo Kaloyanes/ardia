@@ -8,6 +8,7 @@
 #include <set>
 #include <utility>
 
+#include "ardia/mac/ac_mac_share.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
@@ -24,6 +25,10 @@
 - (void)perform:(NSMenuItem*)item;
 @end
 
+@interface ArdiaMacShareMenuFiller : NSObject <NSMenuDelegate>
+- (void)openSharingSettings:(id)sender;
+@end
+
 namespace ardia_mac {
 
 namespace {
@@ -31,6 +36,13 @@ namespace {
 ArdiaMacMenuTarget* MainTarget() {
   static ArdiaMacMenuTarget* target = [[ArdiaMacMenuTarget alloc] init];
   return target;
+}
+
+constexpr NSInteger kShareServiceTag = 0x41534853;
+
+ArdiaMacShareMenuFiller* ShareMenuFiller() {
+  static ArdiaMacShareMenuFiller* filler = [[ArdiaMacShareMenuFiller alloc] init];
+  return filler;
 }
 
 MenuCommandHandler& MainHandler() {
@@ -193,6 +205,9 @@ NSMenuItem* BuildItem(const menu::Item& item, ArdiaMacMenuTarget* target, bool a
   if (!item.children.empty() || menu::HoldsSubmenu(item.role)) {
     NSMenu* submenu = BuildMenu(item, target, app_menus);
     entry.submenu = submenu;
+    if (menu::FillsShareServices(item.role, app_menus)) {
+      submenu.delegate = ShareMenuFiller();
+    }
     if (menu::InstallsAppMenu(item.role, app_menus)) {
       if (item.role == menu::Role::kServices) NSApp.servicesMenu = submenu;
       if (item.role == menu::Role::kWindowMenu) NSApp.windowsMenu = submenu;
@@ -551,6 +566,48 @@ void ShowContextMenu(LiveMenuView live_view,
 }
 
 }
+
+@implementation ArdiaMacShareMenuFiller
+
+- (NSMenuItem*)shareItem:(NSString*)title service:(std::string_view)service {
+  NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:@selector(perform:) keyEquivalent:@""];
+  item.target = ardia_mac::MainTarget();
+  item.tag = ardia_mac::kShareServiceTag;
+  item.representedObject = @{
+    @"command" : base::SysUTF8ToNSString(std::string(ardia_mac::menu::kShareCommand)),
+    @"arg" : base::SysUTF8ToNSString(ardia_mac::menu::ShareArgument(service)),
+  };
+  return item;
+}
+
+- (void)openSharingSettings:(id)sender {
+  ardia_mac::share::OpenSharingSettingsFromMenu();
+}
+
+- (void)menuNeedsUpdate:(NSMenu*)menu {
+  for (NSInteger index = menu.numberOfItems - 1; index >= 0; --index) {
+    if ([menu itemAtIndex:index].tag == ardia_mac::kShareServiceTag) {
+      [menu removeItemAtIndex:index];
+    }
+  }
+  const std::vector<ardia_mac::share::Service> services = ardia_mac::share::LinkServices();
+  NSInteger at = 0;
+  for (const ardia_mac::share::Service& service : services) {
+    [menu insertItem:[self shareItem:base::SysUTF8ToNSString(service.menu_title) service:service.title] atIndex:at++];
+  }
+  if (!services.empty()) {
+    NSMenuItem* gap = [NSMenuItem separatorItem];
+    gap.tag = ardia_mac::kShareServiceTag;
+    [menu insertItem:gap atIndex:at];
+  }
+  NSMenuItem* more = [[NSMenuItem alloc] initWithTitle:@"More\u2026" action:@selector(openSharingSettings:) keyEquivalent:@""];
+  more.target = self;
+  more.tag = ardia_mac::kShareServiceTag;
+  more.image = [NSImage imageWithSystemSymbolName:@"ellipsis.circle" accessibilityDescription:nil];
+  [menu addItem:more];
+}
+
+@end
 
 @implementation ArdiaMacMainMenu
 

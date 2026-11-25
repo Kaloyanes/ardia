@@ -18,6 +18,8 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
+#include "ardia/mac/ac_mac_share_policy.h"
+#include "ardia/mac/ac_mac_shared_folders_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_system_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
@@ -313,6 +315,77 @@ TEST(launch_environment) {
   }
   CHECK(ardia_mac::webui_policy::Active(
       ardia_mac::webui_policy::Decide(ardia_mac::webui_policy::Build::kDevelopment, "webui", std::nullopt)));
+}
+
+TEST(share_guards) {
+  namespace share = ardia_mac::share_policy;
+  for (const std::string& text : Load().strings) {
+    const share::UrlKind kind = share::ClassifyUrl(text);
+    if (kind != share::UrlKind::kRefused) {
+      CHECK(NoControls(text) && text.size() <= share::kMaxUrlBytes);
+      CHECK(text.find(':') != std::string::npos);
+      const std::string scheme = ardia_mac::shared_folders_policy::LowerAscii(text.substr(0, text.find(':')));
+      CHECK(kind == share::UrlKind::kWeb ? (scheme == "http" || scheme == "https") : scheme == "file");
+      if (kind == share::UrlKind::kFile) CHECK(text.substr(5, 3) == "///");
+    }
+    if (share::ValidServiceName(text)) CHECK(NoControls(text) && !text.empty() && text.size() <= share::kMaxServiceBytes);
+    if (share::InsideDirectory(text, "/tmp/ardia-images")) {
+      CHECK(text.starts_with("/tmp/ardia-images/") && text.find("..") == std::string::npos && NoControls(text));
+      CHECK(text.find('/', 18) == std::string::npos);
+    }
+  }
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      const double values[] = {a, b, a, b};
+      if (const auto anchor = share::AnchorFrom(4, values)) {
+        CHECK(std::isfinite(anchor->x) && std::isfinite(anchor->y) && anchor->width >= 0 && anchor->height >= 0);
+        const auto scaled = share::Scaled(*anchor, b);
+        CHECK(std::isfinite(scaled.x) && std::isfinite(scaled.height));
+      }
+    }
+  }
+  for (const std::string& text : Load().strings) {
+    if (const auto pid = share::InstancePid(text)) {
+      CHECK(*pid > 0 && text.starts_with(std::to_string(*pid) + "-") && Charset(text, "-"));
+      CHECK(text.find('/') == std::string::npos && text.find("..") == std::string::npos);
+    }
+    if (const auto name = share::InstanceDirectoryName(1, text)) CHECK(Charset(*name, "-") && name->find('/') == std::string::npos);
+    share::IssuedFiles<std::string> issued;
+    issued.Reserve("/tmp/ardia-images/1-a/image.png", "w1");
+    issued.Publish("/tmp/ardia-images/1-a/image.png");
+    if (const auto staging = share::StagingPid(text)) CHECK(*staging > 0 && text.front() == '.' && text.ends_with(".staging"));
+    const auto window = [&text](const std::string& owner) { return owner == text; };
+    CHECK(!issued.Take(text, [](const std::string& owner) { return owner == "w1"; }) ||
+          text == "/tmp/ardia-images/1-a/image.png");
+    CHECK(!issued.Take("/tmp/ardia-images/1-a/image.png", window) || text == "w1");
+    if (share::SweepsInstance(share::InstancePid(text).has_value(), false, share::InstanceLock::kFree, true)) {
+      CHECK(share::InstancePid(text).has_value());
+    }
+  }
+  CHECK(share::ClassifyUrl("https://ardia.dev/") == share::UrlKind::kWeb);
+}
+
+TEST(shared_folder_guards) {
+  namespace folders = ardia_mac::shared_folders_policy;
+  for (const std::string& text : Load().strings) {
+    if (const auto parts = folders::RelativeParts(text)) {
+      CHECK(!parts->empty() && parts->size() <= folders::kMaxParts);
+      for (const std::string& part : *parts) {
+        CHECK(!part.empty() && part != "." && part != ".." && part.find('/') == std::string::npos);
+        CHECK(part.find('\0') == std::string::npos && part.size() <= folders::kMaxNameBytes);
+      }
+    }
+    const std::string name = folders::FolderName(text);
+    CHECK(!name.empty() && name.size() <= folders::kMaxFolderNameBytes && NoControls(name));
+    CHECK(name.find('/') == std::string::npos && name.find(':') == std::string::npos && name.front() != '.');
+    if (folders::ValidAbsolutePath(text)) CHECK(text.front() == '/' && text.find('\0') == std::string::npos);
+    if (folders::WritableName(text)) CHECK(folders::IsManifest(text) || folders::IsLinkName(text));
+    CHECK(folders::OpNamed(text) == folders::OpKind::kUnknown || Charset(text, ""));
+  }
+  for (double a : Load().numbers) {
+    if (const auto identity = folders::IdentityFrom(a, a)) CHECK(identity->device >= 0 && identity->inode >= 0);
+  }
+  CHECK(folders::RelativeParts("Reading/Essay.webloc").has_value());
 }
 
 TEST(system_files_and_links) {

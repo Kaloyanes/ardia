@@ -9,7 +9,7 @@ import { afterFirstWindow } from "../../browser/src/lib/afterFirstWindow";
 import { diagnostics } from "../../browser/src/state/commands/appCommands";
 import { openReport } from "./reportProblem.ts";
 import { PLATFORM_TERMS } from "../../browser/src/lib/platformTerms";
-import { finishOnboarding, maybeStartOnboarding, onboardingCompletedAt, startOnboarding, useOnboarding } from "../../browser/src/state/onboarding/onboarding";
+import { finishOnboarding, maybeStartOnboarding, onboardingCompletedAt, redoOnboarding, useOnboarding } from "../../browser/src/state/onboarding/onboarding";
 import { offerDefaultBrowserAgain } from "../../browser/src/state/onboarding/defaultBrowserOffer";
 import { openVideoTour, startToolTour, videoTourUrl } from "../../browser/src/state/onboarding/tour";
 import { trackAppVersion } from "../../browser/src/state/releaseNotes/releaseNotes";
@@ -188,7 +188,7 @@ export function runAppCommand(windowId: string, command: CommandEvent["command"]
       void diagnostics().then(copyText, report);
       return true;
     case "showOnboarding":
-      startOnboarding(windowId);
+      redoOnboarding(windowId);
       return true;
     case "toolTour":
       void startToolTour(windowId).catch(report);

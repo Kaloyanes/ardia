@@ -1,5 +1,6 @@
 export const BACKDROP_METHOD = "shell.backdropRegions";
-export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow"] as const;
+export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow", "windowTreatment"] as const;
+export const WINDOW_TREATMENT_CAPABILITY = "shell.backdropRegions.windowTreatment";
 export const BACKDROP_RETRY_MS = 250;
 export const BACKDROP_RETRY_MAX_MS = 4000;
 export type BackdropMaterial = (typeof BACKDROP_MATERIALS)[number];
@@ -17,12 +18,19 @@ type BackdropDeps = {
   animating: (layers: readonly Element[]) => boolean;
 };
 
-export type AnimationLike = { playState: string; effect: { target?: Element | null } | null };
+export type AnimationLike = { playState: string; effect: { target?: Element | null; getKeyframes?: () => readonly Record<string, unknown>[] } | null };
+
+const TIMING_KEYS = new Set(["offset", "computedOffset", "easing", "composite"]);
+
+export const fadesOnly = (animation: AnimationLike): boolean => {
+  const frames = animation.effect?.getKeyframes?.();
+  return !!frames && frames.every((frame) => Object.keys(frame).every((key) => key === "opacity" || TIMING_KEYS.has(key)));
+};
 
 export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[]): boolean =>
   animations.some((animation) => {
     const target = animation.playState === "running" ? animation.effect?.target : null;
-    return !!target && layers.some((layer) => target === layer || target.contains(layer));
+    return !!target && !fadesOnly(animation) && layers.some((layer) => target === layer || target.contains(layer));
   });
 
 const HIDDEN_VISIBILITY = new Set(["hidden", "collapse"]);
@@ -35,6 +43,8 @@ export function measureBackdrop(element: Element, style: (element: Element) => {
   return { x: r.x, y: r.y, width: r.width, height: r.height };
 }
 
+export const windowBackdropMaterial = (supports: (method: string) => boolean): BackdropMaterial => (supports(WINDOW_TREATMENT_CAPABILITY) ? "windowTreatment" : "liquid");
+
 export function createMacBackdrops(deps: BackdropDeps) {
   const layers = new Map<Element, { material: BackdropMaterial; stop: () => void }>();
   let frameQueued = false;
@@ -46,9 +56,14 @@ export function createMacBackdrops(deps: BackdropDeps) {
   let stopMotion: (() => void) | null = null;
 
   const measured = () => {
+    const seen = new Set<string>();
     const regions = [...layers].flatMap(([element, { material }]) => {
       const rect = deps.measure(element);
-      return rect ? [{ rect, material }] : [];
+      if (!rect) return [];
+      const key = JSON.stringify([rect, material]);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ rect, material }];
     });
     return { regions, text: JSON.stringify(regions) };
   };

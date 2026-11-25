@@ -110,6 +110,42 @@ that branch). It is a development tool and never runs in a release. Like Windows
     those menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Share** (`ac_mac_share.mm`, rules in `ac_mac_share_policy.h`), as `packages/shell/ios/SharePicker.swift` does.
+  - `ArdiaApp.share` and `ArdiaApp.shareText` open `NSSharingServicePicker` beside their anchor (CSS pixels in the
+    shell, scaled by its zoom), or centred under the toolbar without one. They settle when the picker closes.
+  - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
+    `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
+    `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
+  - The menu bar's File › Share lists the same services, then Copy Link, Email Link and More… (the `shareServices`
+    role, filled each time the submenu opens). The in-window app menu adds them once the host lists them.
+  - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
+    and a shell reload or window close closes that window's pickers.
+  - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
+    binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
+    deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
+    into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
+    delete finishes), or that have no lock and whose process is gone, never anything else. An image reserves its slot
+    before its bytes are copied; a write for a retired window or a released, closed or rebound tab, or before
+    the instance folder is claimed, is skipped, and the write's reply alone cleans it up. A removed image stops
+    being shareable at once but keeps its slot until the unlink is done: at most five tries (four retries,
+    500 ms doubling), then the slot is given back. A share whose service the user already
+    chose keeps its file through a window close until the service finishes. The Share… items use command
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, which opens System Settings › Sharing directly on any page, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
+    button cancels an older open, and a services request that stalls for 5 s is replaced.
+  - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
+    places them, through a dev-only `RenderViewContextMenuObserver` hook in
+    `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
+    share ends, or when the window's shell reloads or closes.
+  - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
+- **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
+  `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`; Add Shared Folder… picks its
+  folder through the host's `ArdiaShell.pickFolder`. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
+  as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
+  its own queue. Finder is never shown in background mode.
 - **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses

@@ -327,3 +327,21 @@ test("on the Mac, New Tab, Close Tab, the command bar and Settings show Command,
     assert.deepEqual([command, item?.key, item?.modifiers], [command, key, 8], `${command} is Command-${key}`);
   }
 });
+
+test("the menu bar's File › Share keeps Copy Link and Email Link and leaves the system services and More… to the host", () => {
+  const items = [
+    { id: "menu:File", title: "File", children: [
+      { id: "menu:Share", title: "Share", children: [
+        { id: "share:via:copy", title: "Copy Link" },
+        { id: "share:via:email", title: "Email Link" },
+        { separator: true },
+        { id: "share:via:AirDrop", title: "AirDrop" },
+        { id: "share:via:ardia.more", title: "More…" },
+      ] },
+    ] },
+  ];
+  const [file] = nativeMenuSpec(items);
+  const [share] = file.children;
+  assert.equal(share.role, "shareServices");
+  assert.deepEqual(share.children.map((child) => [child.command, child.arg]), [["share", "via:copy"], ["share", "via:email"]]);
+});
