@@ -10,3 +10,4 @@ export * from "./scope.ts";
 export { covered } from "./applied.ts";
 export * from "./scopeState.ts";
 export * from "./sharedFolders.ts";
+export * from "./vaultApproval.ts";
