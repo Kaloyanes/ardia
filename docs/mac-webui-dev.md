@@ -26,8 +26,10 @@ Or by hand, on a Debug app: `ARDIA_SHELL=webui` or `--ardia-shell=webui`.
   and stays on the React Native shell.
 - `scripts/release/archive.sh` runs `scripts/release/no-debug-build.sh` before it archives: it refuses
   `RELEASE_BUILD_SETTINGS` that define `DEBUG` or name the WebUI shell. It also reads the app's and the pods' effective
-  Release settings, using the archive's own destination, architecture, signing xcconfig and extra settings. Each dump is
-  checked on its own and must list its targets, and the check fails if any target defines `DEBUG`.
+  Release settings with the archive's own architecture, signing xcconfig and extra settings: the app with the archive's
+  destination, the pods with `-sdk macosx`. Each dump is checked on its own. It fails if xcodebuild couldn't read a
+  target or dropped the destination, if a target lists no settings or isn't a macOS Release build, if a required target
+  is missing, or if any target defines `DEBUG`.
 
 ## Pieces
 

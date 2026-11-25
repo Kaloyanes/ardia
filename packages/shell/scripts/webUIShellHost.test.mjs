@@ -115,7 +115,8 @@ test("no release path builds, bundles or turns on the Mac WebUI", () => {
 });
 
 const guard = repo("scripts/release/no-debug-build.sh");
-const settingsDump = (target, lines) => [`Build settings for action build and target ${target}:`, ...lines.map((line) => `    ${line}`), ""].join("\n");
+const settingsDump = (target, lines, base = ["CONFIGURATION = Release", "SDK_NAME = macosx27.2", "ARCHS = arm64"]) =>
+  [`Build settings for action build and target ${target}:`, ...[...base, ...lines].map((line) => `    ${line}`), ""].join("\n");
 
 test("a release refuses build settings that would define DEBUG or name the WebUI shell", () => {
   const settings = (...args) => spawnSync(guard, ["--settings", ...args], { encoding: "utf8" }).status;
@@ -142,11 +143,11 @@ test("a release fails when the effective Release settings of the app or any pod 
 
 test("the archive step checks the app's and the pods' effective Release settings apart, with the archive's own settings, before it archives", () => {
   const archive = read("scripts/release/archive.sh");
-  assert.match(archive, /release_settings=\(-configuration Release -destination 'generic\/platform=macOS' ARCHS=arm64\n\s+ARDIACORE_STAGE_DIR="\$build\/ArdiaCoreFramework" "\$@" "\$\{archive_signing\[@\]\}"\)/);
-  assert.match(archive, /xcodebuild "\$@" "\$\{release_settings\[@\]\}" -showBuildSettings\) > "\$dist\/release-settings-\$name\.txt"/, "each query is saved on its own");
+  assert.match(archive, /build_settings=\(-configuration Release ARCHS=arm64 ARDIACORE_STAGE_DIR="\$build\/ArdiaCoreFramework" "\$@" "\$\{archive_signing\[@\]\}"\)\nrelease_settings=\(-destination 'generic\/platform=macOS' "\$\{build_settings\[@\]\}"\)/);
+  assert.match(archive, /xcodebuild "\$@" "\$\{build_settings\[@\]\}" -showBuildSettings\) > "\$dist\/release-settings-\$name\.txt" 2>&1/, "each query is saved on its own, with what xcodebuild says on stderr");
   assert.match(archive, /no-debug-build\.sh" --effective --require-targets "\$required" < "\$dist\/release-settings-\$name\.txt"/, "each dump is checked on its own");
-  assert.match(archive, /^check_release_settings app Ardia-macOS -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS$/m);
-  assert.match(archive, /^check_release_settings pods ArdiaCore,ArdiaShell -project macos\/Pods\/Pods\.xcodeproj -alltargets$/m);
+  assert.match(archive, /^check_release_settings app Ardia-macOS -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS -destination 'generic\/platform=macOS'$/m);
+  assert.match(archive, /^check_release_settings pods ArdiaCore,ArdiaShell -project macos\/Pods\/Pods\.xcodeproj -alltargets -sdk macosx$/m, "the pods query names the macOS SDK, since xcodebuild drops a destination without a scheme");
   assert.match(archive, /xcodebuild -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS \\\n\s+"\$\{release_settings\[@\]\}" -derivedDataPath "\$build" -archivePath "\$dist\/Ardia\.xcarchive" archive\)/, "the archive builds with exactly the settings checked");
   const checks = archive.indexOf('no-debug-build.sh" --settings "$@"');
   const app = archive.indexOf("check_release_settings app ");
@@ -256,4 +257,26 @@ test("ArdiaIsolation never installs itself on a refused WebUI data dir", (t) => 
     rmSync(dir, { recursive: true, force: true });
   }
   assert.match(read("packages/shell/ios/ArdiaIsolation.m"), /ArdiaLaunchConfig \*config = ArdiaLaunchConfig\.shared;\n\s+if \(config\.webUIRefusedDataDirectory\) return;/);
+});
+
+test("a dump xcodebuild couldn't fill, or one that isn't a macOS Release build, never passes", () => {
+  const effective = (input) => spawnSync(guard, ["--effective", "--require-targets", "ArdiaCore,ArdiaShell"], { input, encoding: "utf8" });
+  const good = settingsDump("ArdiaCore", ["GCC_PREPROCESSOR_DEFINITIONS = POD_CONFIGURATION_RELEASE=1"]) + settingsDump("ArdiaShell", ["SWIFT_ACTIVE_COMPILATION_CONDITIONS = "]);
+  assert.equal(effective(good).status, 0, effective(good).stderr);
+  const unreadable = "Build settings for action build and target ArdiaCore:\nCould not get build settings for target ArdiaCore\n\n" + settingsDump("ArdiaShell", []);
+  const failed = effective(unreadable);
+  assert.equal(failed.status, 1, "xcodebuild exiting 0 with a target it couldn't read");
+  assert.match(failed.stderr, /did not give every setting: Could not get build settings/);
+  assert.match(failed.stderr, /target ArdiaCore lists no settings/);
+  const headersOnly = "Build settings for action build and target ArdiaCore:\n\nBuild settings for action build and target ArdiaShell:\n\n";
+  const empty = effective(headersOnly);
+  assert.equal(empty.status, 1, "target headers without a single KEY = VALUE line");
+  assert.match(empty.stderr, /target ArdiaCore lists no settings/);
+  assert.match(empty.stderr, /target ArdiaShell lists no settings/);
+  assert.equal(effective(good + settingsDump("ArdiaSync", [], [])).status, 1, "any target without settings fails, not just the required ones");
+  assert.match(effective(settingsDump("ArdiaCore", [], ["CONFIGURATION = Debug", "SDK_NAME = macosx27.2"]) + settingsDump("ArdiaShell", [])).stderr, /configured Debug, not Release/);
+  assert.match(effective(settingsDump("ArdiaCore", [], ["CONFIGURATION = Release", "SDK_NAME = iphoneos27.2"]) + settingsDump("ArdiaShell", [])).stderr, /builds for iphoneos27\.2, not macOS/);
+  const dropped = effective("--- xcodebuild: WARNING: Ignoring provided run destination because no scheme was passed.\n" + good);
+  assert.equal(dropped.status, 1, "a destination xcodebuild ignored means the settings aren't the archive's");
+  assert.equal(effective("xcodebuild: error: The project named \"Pods\" does not contain a scheme\n" + good).status, 1);
 });
