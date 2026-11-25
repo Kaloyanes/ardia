@@ -13,12 +13,17 @@ export function travelRange(position: number, home: number): TravelRange | null 
   return { lo: Math.floor(Math.min(position, home)), hi: Math.ceil(Math.max(position, home)) };
 }
 
-export function widenTravel(range: TravelRange | null, position: number, home: number): TravelRange | null {
+export function widenTravel(range: TravelRange | null, position: number, home: number, span = Infinity): TravelRange | null {
   const next = travelRange(position, home);
   if (!next) return null;
-  if (!range) return next;
-  return { lo: Math.min(range.lo, next.lo), hi: Math.max(range.hi, next.hi) };
+  const merged = range ? { lo: Math.min(range.lo, next.lo), hi: Math.max(range.hi, next.hi) } : next;
+  const lo = Math.max(0, merged.lo);
+  const hi = Math.min(span - 1, merged.hi);
+  if (lo > hi) return null;
+  return range && range.lo === lo && range.hi === hi ? range : { lo, hi };
 }
+
+export const sameTravel = (a: TravelRange | null, b: TravelRange | null) => a === b || (!!a && !!b && a.lo === b.lo && a.hi === b.hi);
 
 export function neighbourPages<Page extends TrackPage>(pages: readonly Page[], current: string, held: string | null = null, travel: TravelRange | null = null): Page[] {
   const home = pages.find((page) => page.id === current);

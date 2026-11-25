@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { WindowBackdrop } from "../../browser/src/components/ui";
 import { spaceLookSource } from "../../browser/src/lib/profileLook";
@@ -7,15 +7,16 @@ import { useProfileLooks } from "../../browser/src/state/profiles/hooks";
 import { useWindowId } from "../../browser/src/state/browser/hooks";
 import { usePagerPages } from "../../browser/src/state/windows/profilePager";
 import { useBrowser } from "../../browser/src/state/browser/store";
-import { scrollTimelineConstructor, seededPosition, supportsScrollTimeline, tintFallbackOpacity, tintKeyframes, watchPagerTrack } from "./pagerTrack";
+import { scrollTimelineConstructor, seededPosition, supportsScrollTimeline, tintFallbackOpacity, tintKeyframes, tintOpacity, watchPagerTrack } from "./pagerTrack";
 
 export const PAGER_POSITION_VARIABLE = "--ardia-pager-position";
 
 function TintLayer({ windowId, slot, children }: { windowId: string; slot: number; children: ReactNode }) {
   const layer = useRef<HTMLElement | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = layer.current;
     if (!element || slot <= 0) return;
+    element.style.opacity = String(tintOpacity(selectedSlot(windowId), slot));
     let animation: Animation | null = null;
     const stop = watchPagerTrack(windowId, (track) => {
       animation?.cancel();
@@ -50,7 +51,7 @@ function selectedSlot(windowId: string) {
 
 function usePositionVariable(windowId: string, host: React.RefObject<HTMLElement | null>, paging: boolean) {
   const { pager } = usePagerPages(windowId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = host.current;
     if (!element || !paging) return;
     const write = (value: number) => element.style.setProperty(PAGER_POSITION_VARIABLE, String(value));

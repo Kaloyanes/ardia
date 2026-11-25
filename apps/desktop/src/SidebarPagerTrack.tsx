@@ -10,7 +10,7 @@ import { GLOW_ROOM, type PageSpot } from "../../browser/src/components/sidebar/p
 import { SCROLL_EDGE } from "../../browser/src/components/sidebar/ScrollEdge";
 import { SidebarPage } from "../../browser/src/components/sidebar/SidebarPage";
 import type { SidebarPagesProps } from "../../browser/src/components/sidebar/SidebarPages";
-import { coversTravel, neighbourPages, RevealQueue, revealRow, setPagerTrack, trackScrollLeft, trackSpan, trackWidth, widenTravel, type RevealAttempt, type RevealTarget, type TravelRange } from "./pagerTrack";
+import { coversTravel, sameTravel, neighbourPages, RevealQueue, revealRow, setPagerTrack, trackScrollLeft, trackSpan, trackWidth, widenTravel, type RevealAttempt, type RevealTarget, type TravelRange } from "./pagerTrack";
 
 const MAX_REVEAL_FRAMES = 120;
 
@@ -47,10 +47,9 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
   const home = pages.find((page) => page.id === current)?.slot ?? 0;
   const position = useRef<number | null>(null);
   position.current ??= (pager.pos as unknown as ReadableValue).__getValue?.() ?? home;
-  const renderTravel = paging ? widenTravel(travel, position.current, home) : null;
+  const renderTravel = paging ? widenTravel(travel, position.current, home, span) : null;
   const mounted = neighbourPages(pages, current, shown, renderTravel).filter((page) => neighbours || renderTravel || page.id === current || page.id === shown);
   const live = useRef({ home, mounted, travel: renderTravel });
-  live.current = { home, mounted, travel: renderTravel };
   const selected = useBrowser((s) => mounted.map((page) => activeTabId(s, windowId, page.id) ?? "").join("\n"));
 
   useLayoutEffect(() => {
@@ -69,6 +68,10 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
     geometry.current.laidOut?.();
   });
 
+  useLayoutEffect(() => {
+    live.current = { home, mounted, travel: renderTravel };
+  });
+
   useEffect(() => {
     const frame = requestAnimationFrame(() => startTransition(() => setNeighbours(true)));
     return () => cancelAnimationFrame(frame);
@@ -83,10 +86,10 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
       if (Math.abs(element.scrollLeft - left) >= 0.5) element.scrollLeft = left;
       if (!paging) return;
       const now = live.current;
-      const next = widenTravel(now.travel, value, now.home);
-      if (!next) {
-        if (now.travel) setTravel(null);
-      } else if (!coversTravel(now.mounted, next)) setTravel(next);
+      const next = widenTravel(now.travel, value, now.home, span);
+      if (sameTravel(next, now.travel)) return;
+      if (!next) setTravel(null);
+      else if (!coversTravel(now.mounted, next)) setTravel(next);
     };
     place(paging ? (position.current ?? home) : home);
     setPagerTrack(windowId, paging && width > 0 ? { scroller: element, span } : null);

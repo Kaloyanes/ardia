@@ -92,9 +92,10 @@ export class PagerSpring {
   private settledFlag = false;
   private detentCrossedFlag = false;
 
-  configure(count: number, selected: number, ack: number, order: readonly string[] | null = null) {
+  configure(count: number, selected: number, ack: number, order: readonly string[] | null = null): boolean {
     const clamped = Math.max(1, Math.trunc(count) || 1);
-    this.propSelected = clamp(Math.trunc(selected) || 0, 0, clamped - 1);
+    const current = !this.configuredFlag || ack >= this.selectionSequenceValue;
+    this.propSelected = clamp(current ? Math.trunc(selected) || 0 : this.selectedValue, 0, clamped - 1);
     this.propAck = Math.max(this.propAck, ack);
     this.sequences.atLeast(this.propAck);
     if (!this.configuredFlag) {
@@ -105,7 +106,7 @@ export class PagerSpring {
       this.positionValue = this.selectedValue;
       this.sequenceValue = this.next();
       this.movedFlag = true;
-      return;
+      return false;
     }
     const reordered = !!order && (!this.order || !sameOrder(order, this.order));
     if (clamped !== this.countValue || reordered) {
@@ -119,9 +120,10 @@ export class PagerSpring {
       }
       this.cancelMotion();
       this.jump(clamp(index, 0, this.countValue - 1));
-      return;
+      return true;
     }
     this.reconcile();
+    return false;
   }
 
   input(input: PagerInput, distance: number, direction: number, pageWidth: number, timestamp: number) {

@@ -51,7 +51,7 @@ let motions = 0;
 const sequences = sequenceSource();
 const pagers = new Map<string, Pager>();
 
-type SettleStats = { last: number; frames: number; long: number; worst: number };
+type SettleStats = { last: number | null; frames: number; long: number; worst: number };
 
 export class Pager {
   private areas = new Set<PagerArea>();
@@ -108,8 +108,11 @@ export class Pager {
 
   configure({ selected, count, ack, order }: NativePagerConfig) {
     const first = !this.spring.configured;
-    this.spring.configure(count, selected, ack ?? 0, order ?? null);
-    if (this.spring.phase === "idle") this.releaseNative();
+    const remapped = this.spring.configure(count, selected, ack ?? 0, order ?? null);
+    if (remapped && this.owner === "native") {
+      this.releaseNative();
+      this.revokedSelection = this.nativeSelection;
+    } else if (this.spring.phase === "idle") this.releaseNative();
     this.flush(first ? { quiet: true } : undefined);
   }
 
@@ -142,6 +145,7 @@ export class Pager {
   }
 
   select(profileId: string, order: readonly string[]) {
+    if (!this.spring.configured || !order.includes(profileId)) return false;
     this.revokeNative();
     if (!this.spring.select(profileId, order)) return false;
     this.dragArea = null;
@@ -152,7 +156,7 @@ export class Pager {
 
   applyNativeFrame(native: NativePagerFrame) {
     if (!this.spring.configured || native.frame <= this.nativeFrameSeen) return false;
-    this.nativeFrameSeen = native.frame;
+    if (this.dragArea !== null && this.spring.phase === "tracking") return false;
     if (native.count !== this.spring.count || !Number.isFinite(native.position) || !Number.isFinite(native.velocity)) return false;
     if (native.profileId !== undefined && native.profileId !== null) {
       const index = this.spring.orderIndex(native.profileId);
@@ -171,9 +175,11 @@ export class Pager {
       this.revokedSelection = null;
     }
     if (!this.spring.mirror(native)) return false;
+    this.nativeFrameSeen = native.frame;
     this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
     this.dragArea = null;
     this.stopFrames();
+    this.sampleNative(native.phase, native.settled);
     if (native.phase === "settling" && this.spring.reduceMotion) {
       this.owner = "native";
       this.revokeNative();
@@ -185,6 +191,32 @@ export class Pager {
     }
     this.flush();
     return true;
+  }
+
+  private sampleNative(phase: NativePagerFrame["phase"], settled: boolean) {
+    if (settled && this.stats && this.stats.last !== null) {
+      this.sampleGap(this.stats, clock.now());
+      return;
+    }
+    if (phase !== "settling") {
+      if (this.stats) this.stats.last = null;
+      return;
+    }
+    this.stats ??= { last: null, frames: 0, long: 0, worst: 0 };
+    this.sampleGap(this.stats, clock.now());
+  }
+
+  private sampleGap(stats: SettleStats, now: number) {
+    if (stats.last === null) {
+      stats.last = now;
+      return;
+    }
+    const gap = now - stats.last;
+    if (!(gap > 0)) return;
+    stats.worst = Math.max(stats.worst, gap);
+    if (gap > LONG_FRAME) stats.long++;
+    stats.frames++;
+    stats.last = now;
   }
 
   get drivenNatively() {
@@ -263,16 +295,7 @@ export class Pager {
       this.frameId = 0;
       if (this.owner !== "js" || this.spring.phase !== "settling") return;
       const now = Number.isFinite(timestampMs) ? timestampMs / 1000 : clock.now();
-      const stats = this.stats;
-      if (stats) {
-        const gap = now - stats.last;
-        if (gap > 0) {
-          stats.worst = Math.max(stats.worst, gap);
-          if (gap > LONG_FRAME) stats.long++;
-          stats.frames++;
-          stats.last = now;
-        }
-      }
+      if (this.stats) this.sampleGap(this.stats, now);
       this.emit(this.spring.stepFrame(now), {});
       if (this.spring.phase === "settling") this.frameId = clock.request(step);
     };

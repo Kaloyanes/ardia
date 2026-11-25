@@ -370,10 +370,14 @@ test("producer to receiver: successive frames, then a reorder and a count change
   assert.ok(Number.isFinite(pager.snapshot().position));
   native.spring.configure(3, 0, 0, ["work", "personal", "side"]);
   native.spring.drain();
-  assert.equal(native.step((at += FRAME), { profile_id: native.spring.selectedId() }), true, "once the engine has the same order its frames agree again");
+  assert.equal(native.step((at += FRAME), { profile_id: native.spring.selectedId() }), false, "the motion from before the reorder stays revoked");
   fake.pump();
   assert.equal(pager.snapshot().position, 0);
   assert.equal(pager.snapshot().profileId, "work");
+  native.spring.input("began", 0, -1, WIDTH, at);
+  assert.equal(native.step((at += FRAME), { profile_id: native.spring.selectedId() }), true, "a fresh gesture in the new order drives the pager");
+  native.spring.input("cancelled", 0, -1, WIDTH, at);
+  while (native.spring.phase !== "idle") native.step((at += FRAME));
   pager.configure({ key: pager.key, selected: 0, count: 4, ack: 0, order: ["work", "personal", "side", "new"] });
   native.spring.input("began", 0, -1, WIDTH, at);
   assert.equal(native.step((at += FRAME)), false, "a frame counting three profiles never drives four");
@@ -855,4 +859,126 @@ test("a short list that is fully laid out reveals its last row without waiting",
   const spot = { viewport: 600, scrollY: 0, regions: { list: 0 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => scrolled.push(to.y) } };
   assert.equal(track.revealRow(spot, () => ({ section: "list", top: 324, height: 32, listHeight: 356 }), 0), "done");
   assert.deepEqual(scrolled, []);
+});
+
+test("a same-count reorder during a native settle revokes it, so a continuation without profileId can't pick the stale slot", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager } = driven(t);
+  const native = engine(pager.key);
+  native.spring.switchTo(1);
+  let at = 0;
+  assert.equal(native.step((at += FRAME)), true);
+  assert.equal(pager.drivenNatively, true);
+  pager.configure({ key: pager.key, selected: 0, count: 3, ack: 0, order: ["side", "work", "personal"] });
+  assert.equal(pager.drivenNatively, false);
+  assert.equal(pager.snapshot().profileId, "work");
+  assert.equal(native.step((at += FRAME)), false);
+  assert.equal(pager.snapshot().profileId, "work");
+  native.spring.configure(3, 1, 0, ["side", "work", "personal"]);
+  native.spring.drain();
+  native.spring.input("began", 0, -1, WIDTH, at);
+  assert.equal(native.step((at += FRAME)), true, "a fresh gesture is still accepted");
+});
+
+test("selecting an unknown profile during a native settle leaves the native motion and its watchdog running", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { pager } = driven(t);
+  onPagerFrame(nativeFrame(pager.key, { position: 0.4, selected_changed: true }));
+  assert.equal(pager.select("gone", ORDER), false);
+  assert.equal(pager.drivenNatively, true);
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { position: 0.6 })), true);
+  fake.advance(NATIVE_FRAME_TIMEOUT + 0.01);
+  t.mock.timers.tick(NATIVE_FRAME_TIMEOUT * 1000 + 30);
+  assert.equal(pager.drivenNatively, false);
+  fake.pump();
+  assert.equal(pager.snapshot().position, 1);
+});
+
+test("a rejected native frame never moves the frame watermark", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager } = driven(t);
+  const base = frameNumbers;
+  assert.equal(onPagerFrame({ ...nativeFrame(pager.key, { count: 2, selected: 1 }), frame: base + 20 }), false);
+  assert.equal(onPagerFrame({ ...nativeFrame(pager.key, { profileId: "gone" }), frame: base + 21 }), false);
+  assert.equal(onPagerFrame({ ...nativeFrame(pager.key, { position: 0.3 }), frame: base + 11 }), true);
+  assert.equal(pager.snapshot().position, 0.3);
+  frameNumbers = base + 30;
+});
+
+test("a configure carrying an ack older than the pager's selection keeps that selection, even when the count changes", () => {
+  const s = configured();
+  s.switchTo(2);
+  settleFrames(s, 0);
+  const selection = s.selectionSequence;
+  s.configure(4, 0, selection - 1, null);
+  assert.equal(s.selected, 2);
+  assert.equal(s.position, 2);
+  s.configure(4, 0, selection - 1, null);
+  assert.equal(s.selected, 2);
+  s.configure(4, 0, s.selectionSequence, null);
+  assert.equal(s.selected, 0, "an ack that has caught up moves the pager");
+});
+
+test("a native frame arriving during a local drag is refused and the drag finishes normally", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, area, positions } = driven(t);
+  pager.input(area, "began", 0, -1, 0);
+  pager.input(area, "changed", 120, -1, 0.05);
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { began: true, phase: "tracking", position: 0.9, selected: 0 })), false);
+  assert.equal(pager.drivenNatively, false);
+  pager.input(area, "changed", 360, -1, 0.5);
+  assert.equal(positions.at(-1), (360 * 0.5) / WIDTH);
+  pager.input(area, "ended", 360, -1, 1);
+  fake.pump();
+  assert.equal(pager.snapshot().selected, 1);
+  assert.equal(pager.snapshot().position, 1);
+});
+
+test("a native-driven settle reports its frame arrival statistics when it settles", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, states } = driven(t);
+  const native = engine(pager.key);
+  native.spring.switchTo(1);
+  let at = 0;
+  native.step((at += FRAME));
+  let gaps = 0;
+  while (native.spring.phase !== "idle") {
+    const gap = gaps === 3 ? 0.05 : FRAME;
+    fake.advance(gap);
+    native.step((at += gap));
+    gaps++;
+  }
+  const settled = states.at(-1);
+  assert.equal(settled.phase, "settled");
+  assert.equal(settled.frames, gaps);
+  assert.equal(settled.longFrames, 1);
+  assert.equal(settled.worstGapMs, 50);
+});
+
+test("overscroll past either end never asks to mount a slot that doesn't exist", () => {
+  assert.deepEqual(track.widenTravel(null, -0.1, 0, 3), { lo: 0, hi: 0 });
+  assert.equal(track.widenTravel(null, -2, -1, 3), null);
+  const edge = track.widenTravel(null, 2.2, 2, 3);
+  assert.deepEqual(edge, { lo: 2, hi: 2 });
+  assert.equal(track.widenTravel(edge, 2.4, 2, 3), edge, "unchanged endpoints reuse the same range, so no re-render");
+  assert.ok(track.sameTravel(edge, { lo: 2, hi: 2 }));
+  const pages = ["a", "b", "c"].map((id, slot) => ({ id, slot }));
+  assert.ok(track.coversTravel(track.neighbourPages(pages, "a"), track.widenTravel(null, -0.3, 0, 3)));
+});
+
+test("tint layers are set before paint and the track's live ref is written in a layout effect, not during render", async () => {
+  const { readFileSync } = await import("node:fs");
+  const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
+  const trackSource = readFileSync(new URL("./SidebarPagerTrack.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(tint, /\buseEffect\b/);
+  assert.match(tint, /element\.style\.opacity = String\(tintOpacity\(selectedSlot\(windowId\), slot\)\)/);
+  assert.match(trackSource, /useLayoutEffect\(\(\) => \{\n\s*live\.current = \{ home, mounted, travel: renderTravel \};\n\s*\}\);/);
+  assert.equal(trackSource.match(/live\.current = /g)?.length, 1);
+  assert.ok(trackSource.indexOf("live.current = {") < trackSource.indexOf("const place = "));
 });
