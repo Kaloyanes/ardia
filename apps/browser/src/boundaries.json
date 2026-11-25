@@ -996,6 +996,14 @@
    ]
   },
   {
+   "id": "sync-adapter:pinnedLettersAdapter.ts#pinnedLettersAdapter",
+   "source": "sync",
+   "guard": "cleanTileLetters keeps at most two visible characters of a string, no control or line-break characters, and drops anything else",
+   "checks": [
+    "apps/browser/src/lib/tileLetter.ts#cleanTileLetters"
+   ]
+  },
+  {
    "id": "plugin-method:apply",
    "source": "plugin",
    "guard": "parseOps with pluginUrlRule: http(s) only for open and group.create (D4); permissions re-checked",

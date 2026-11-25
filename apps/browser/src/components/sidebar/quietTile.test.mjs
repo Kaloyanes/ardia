@@ -17,21 +17,21 @@ function all(node, keep, out = []) {
 
 const isJsx = (node) => ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node);
 const tagsIn = (file, node) => all(node, isJsx).map((n) => (ts.isJsxElement(n) ? n.openingElement : n).tagName.getText(file));
+const fn = (file, name) => all(file, (n) => ts.isFunctionDeclaration(n) && n.name?.getText(file) === name)[0];
 
-test("a Minimalism mode Top Apps tile draws the site's favicon, not its first letter (#3609)", () => {
+test("a Minimalism mode Top Apps tile draws letters by default, its own letters when set, and the site's logo only with Site Logos (#3609)", () => {
   const file = source("./TileFace.tsx");
-  const quiet = all(file, (n) => ts.isFunctionDeclaration(n) && n.name?.getText(file) === "QuietTile")[0];
-  assert.ok(quiet, "QuietTile is gone");
-  const tags = tagsIn(file, quiet);
-  assert.ok(tags.includes("TabIcon"), tags.join(", "));
-  assert.ok(!tags.includes("Text"), tags.join(", "));
-  const face = all(file, (n) => ts.isVariableDeclaration(n) && n.name.getText(file) === "TileFace")[0];
-  assert.deepEqual([...new Set(tagsIn(file, face))].sort(), ["QuietTile", "RichTileFace"]);
+  const tile = fn(file, "LetterTile");
+  assert.ok(tile, "LetterTile is gone");
+  const text = tile.getText(file);
+  assert.match(text, /logos \? \(\s*<LogoFace/, "the logo only when the setting asks for it");
+  assert.match(text, /tileLettersOf\(\{ url, title, tileLetters \}\)/, "custom letters first, then the site's letter");
+  assert.deepEqual(tagsIn(file, fn(file, "LogoFace")), ["TabIcon"]);
+  assert.match(file.getText(), /useSettings\(\(s\) => s\.minimalismPinnedIcons === "logos"\)/);
 });
 
-test("a Minimalism mode pinned tab in the top strip draws the site's favicon too", () => {
-  const file = source("../tabstrip/PinnedFace.tsx");
-  const tags = tagsIn(file, file);
-  assert.ok(tags.includes("TabIcon"), tags.join(", "));
-  assert.ok(!tags.includes("Text"), tags.join(", "));
+test("a Minimalism mode pinned tab in the top strip follows the same choice", () => {
+  const text = readFileSync(new URL("../tabstrip/PinnedFace.tsx", import.meta.url), "utf8");
+  assert.match(text, /minimal && letters \?/);
+  assert.match(text, /\{tileLettersOf\(tab\)\}/);
 });

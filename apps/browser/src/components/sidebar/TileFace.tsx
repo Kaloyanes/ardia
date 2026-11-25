@@ -1,9 +1,9 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { Animated, StyleSheet, View } from "react-native";
-import { DockSelection, HoverFill, HoverSwap, radius, Surface } from "../ui";
+import { DockSelection, HoverFill, HoverSwap, radius, Surface, Text, withAlpha } from "../ui";
 import { hex, layout, useTheme } from "../ui/theme";
 import { useTileTheme, type TileTheme } from "../../state/favicons/tileTheme";
-import { useTab } from "../../state/browser/hooks";
+import { useSettings, useTab } from "../../state/browser/hooks";
 import { GlassFill, useGlass } from "../ui/Glass";
 import { SLIDE } from "../tabstrip/tokens";
 import { TabBadges } from "../media/TabBadges";
@@ -12,6 +12,8 @@ import { sidebarTokens, TILE_GLOW, TILE_RIM, useSidebarTokens } from "./tokens";
 import { useSelectedTopApp } from "../../state/app/theme";
 import type { Settings } from "../../state/settings/settings";
 import { useQuietRows } from "./rowLook";
+import { useIsSleeping } from "../../state/tabs/sleepingTabs";
+import { tileLettersOf } from "../../lib/tileLetter";
 import { useTabState } from "../../state/tabs/tabStateWatch";
 import { isClosedTopApp } from "../../state/sidebar/rowState";
 
@@ -22,19 +24,28 @@ type FaceState = { width: number; active: boolean; selected: boolean; hovered: b
 type TopAppLook = Settings["selectedTopApp"];
 
 export const TileFace = memo(function TileFace({ tabId, badge, ...state }: FaceState & { tabId: string; badge?: ReactNode }) {
-  return useQuietRows() ? <QuietTile tabId={tabId} badge={badge} {...state} /> : <RichTileFace tabId={tabId} badge={badge} {...state} />;
+  const quiet = useQuietRows();
+  const logos = useSettings((s) => s.minimalismPinnedIcons === "logos");
+  return quiet ? <LetterTile tabId={tabId} badge={badge} logos={logos} {...state} /> : <RichTileFace tabId={tabId} badge={badge} {...state} />;
 });
 
-function QuietTile({ tabId, badge, width, active, selected, hovered, pressed }: FaceState & { tabId: string; badge?: ReactNode }) {
+const LETTER_SCALE = 12 / 34;
+const ASLEEP_LETTER = 0.45;
+
+function LetterTile({ tabId, badge, logos, width, active, selected, hovered, pressed }: FaceState & { tabId: string; badge?: ReactNode; logos: boolean }) {
+  const theme = useTheme();
   const tokens = useSidebarTokens();
-  const tab = useTab(tabId);
-  if (!tab) return null;
+  const url = useTab(tabId, (t) => t?.url ?? "");
+  const title = useTab(tabId, (t) => t?.customTitle ?? t?.title ?? "");
+  const tileLetters = useTab(tabId, (t) => t?.tileLetters);
+  const asleep = useIsSleeping(tabId);
+  const height = layout.pinnedHeight;
   return (
     <View
-      accessibilityLabel={tab.customTitle ?? tab.title}
+      accessibilityLabel={title}
       style={{
         width,
-        height: layout.pinnedHeight,
+        height,
         borderRadius: radius.pinned,
         borderWidth: selected && !active ? 1 : 0,
         borderColor: tokens.dragBorder,
@@ -44,12 +55,25 @@ function QuietTile({ tabId, badge, width, active, selected, hovered, pressed }: 
     >
       <HoverSwap shown={!active && (pressed || hovered || selected)} instant={active || selected} rest={active ? tokens.quietTileLive : tokens.quietTile} color={pressed ? tokens.quietPressed : tokens.quietWash} radius={radius.pinned} underBorder={selected && !active ? 1 : 0} />
       <View>
-        <TabIcon tabId={tab.id} url={tab.url} favicon={tab.favicon} icon={tab.customIcon} />
+        {logos ? (
+          <LogoFace tabId={tabId} />
+        ) : (
+          <Text size="small" weight="medium" style={{ fontSize: Math.round(Math.min(width, height) * LETTER_SCALE * 2) / 2, opacity: asleep && !active ? ASLEEP_LETTER : 1 }} color={hex(withAlpha(theme.textTab, active ? tokens.quietActiveText : tokens.quietText))}>
+            {tileLettersOf({ url, title, tileLetters })}
+          </Text>
+        )}
         <TabBadges tabId={tabId} />
       </View>
       {badge}
     </View>
   );
+}
+
+function LogoFace({ tabId }: { tabId: string }) {
+  const url = useTab(tabId, (t) => t?.url ?? "");
+  const favicon = useTab(tabId, (t) => t?.favicon ?? null);
+  const icon = useTab(tabId, (t) => t?.customIcon ?? null);
+  return <TabIcon tabId={tabId} url={url} favicon={favicon} icon={icon} />;
 }
 
 const RichTileFace = memo(function RichTileFace({ tabId, badge, ...state }: FaceState & { tabId: string; badge?: ReactNode }) {

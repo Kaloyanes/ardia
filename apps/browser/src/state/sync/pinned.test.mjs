@@ -83,10 +83,10 @@ function seed(device) {
   });
 }
 
-test("the pinned area syncs tile folders, then rows, the row order, pinned groups' None colour and pinned group tabs' homes, then the pins themselves", () => {
+test("the pinned area syncs tile folders, then rows, the row order, pinned groups' None colour and pinned group tabs' homes, then the pins themselves, then the tiles' letters", () => {
   assert.deepEqual(
     pinnedArea.pinnedAreaAdapters("default").map((a) => a.prefix),
-    ["tilefold:", "pinrow:", "pord:g:", "pgc:", "pgh:", "pin"],
+    ["tilefold:", "pinrow:", "pord:g:", "pgc:", "pgh:", "pin", "plet:"],
   );
 });
 
@@ -280,4 +280,27 @@ test("a None group's copy in a second window stays None through a rename from an
   await syncAll([b, a]);
   assert.deepEqual(copies().map((x) => [x.name, x.color]), [["Read later", "none"], ["Read later", "none"]], "both copies keep None");
   assert.equal(pinnedGroupOf(a, "Read later")?.color, "none", "and None isn't deleted for everyone");
+});
+
+test("a tile's custom letters reach the other Mac with the pin, change there, clear there, and an older Mac keeps them unapplied", async () => {
+  const folder = new Folder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  const old = new Device("devOld", folder, previousVersion);
+  seed(a);
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  old.with(() => S().createWindow({ url: "https://old-home.example/" }));
+  const letters = (device, h) => device.with(() => S().tabs[tabOf(h)]?.tileLetters);
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await syncAll([a, b, old]);
+  assert.equal(letters(b, "mail"), "MA", "the letters come with the new pin");
+  assert.equal(letters(b, "cal"), undefined);
+  const key = a.with(() => `plet:${S().tabs[tabOf("mail")].pinKey ?? tabOf("mail")}`);
+  assert.ok(old.scope.unapplied.includes(key), "the previous version keeps the record unapplied");
+  b.with(() => S().updateTab(tabOf("mail"), { tileLetters: "GM" }));
+  await syncAll([b, a]);
+  assert.equal(letters(a, "mail"), "GM");
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: undefined }));
+  await syncAll([a, b]);
+  assert.equal(letters(b, "mail"), undefined, "clearing them clears them everywhere");
 });

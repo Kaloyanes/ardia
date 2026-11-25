@@ -722,3 +722,26 @@ test("windows webui native update policy keeps every hostile input and call argu
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("a synced pinned tile's letters are at most two visible characters, whatever the record holds", async () => {
+  const { pinnedLettersAdapter } = await import("./state/sync/pinnedLettersAdapter.ts");
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const w = S().createWindow({ url: "https://tile.example/" });
+  const id = S().windows[w].tabIds[0];
+  S().pinTabs([id], true);
+  const profileId = S().tabs[id].profileId;
+  const adapter = pinnedLettersAdapter(profileId);
+  const key = `plet:${S().tabs[id].pinKey ?? id}`;
+  const apply = (value) => adapter.apply(new Map([[key, value]]), new Set([key]), () => undefined, new Map());
+  apply("Ab");
+  assert.equal(S().tabs[id].tileLetters, "AB", "positive control: plain letters land");
+  for (const { value } of HOSTILE_VALUES) {
+    apply(value);
+    const letters = S().tabs[id].tileLetters;
+    if (letters === undefined) continue;
+    assert.equal(typeof letters, "string");
+    assert.ok([...letters].length <= 2, JSON.stringify(letters));
+    assert.ok(!/[\p{C}\s]/u.test(letters), JSON.stringify(letters));
+  }
+});
