@@ -293,7 +293,7 @@ final class LiquidGlassSurface: UIView {
 
   func noteLensShown(now: CFTimeInterval, consentWindow: Int?) {
     if withheld.note(path: choice.path, showsLens: showsLens, now: now, privately: privately, consentWindow: consentWindow) {
-      PendingCounts.add(PendingCounts.glassLensWithheld)
+      PendingCounts.add(PendingCounts.glassLensWithheld, sampledWindow: consentWindow)
       if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ lens withheld over %.1f s: %@", label, LiquidGlassRules.lensWithheldAfter, clearReason) }
     }
   }

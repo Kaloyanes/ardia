@@ -254,6 +254,9 @@ final class GlassFrames: NSObject {
     let web: WKWebView?
     if sourceWhole {
       web = method == .auto ? GlassSources.page(in: space) : nil
+      if capture.presence.note(present: web != nil) {
+        for surface in members where surface.overlay { surface.dropLensNow() }
+      }
       if method == .auto, web == nil, GlassSources.holdsPage(in: space) || members.contains(where: \.waitsForPage) {
         capture.drop()
         return

@@ -215,6 +215,25 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.shadowFade(from: 0, to: 1, animated: false) == .settle)
   }
 
+  @Test func `a count lands only in the consent window the frame sampled`() {
+    #expect(LiquidGlassRules.countsIn(sampledWindow: 3, currentWindow: 3))
+    #expect(!LiquidGlassRules.countsIn(sampledWindow: 3, currentWindow: 5), "sharing turned off and on again after the frame read it")
+    #expect(!LiquidGlassRules.countsIn(sampledWindow: 3, currentWindow: nil), "sharing turned off after the frame read it")
+    #expect(!LiquidGlassRules.countsIn(sampledWindow: nil, currentWindow: 4))
+  }
+
+  @Test func `an overlay drops its lens when the page under it goes missing, not when there was none`() {
+    var presence = LiquidGlassRules.PagePresence()
+    let firstPage = presence.note(present: true)
+    let samePage = presence.note(present: true)
+    let pageGone = presence.note(present: false)
+    let stillGone = presence.note(present: false)
+    let pageBack = presence.note(present: true)
+    #expect(!firstPage && !samePage)
+    #expect(pageGone, "a tab change whose new WebKit view is missing for a frame drops the old page's lens at once")
+    #expect(!stillGone && !pageBack)
+  }
+
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {
     let light = LiquidGlassRules.light(LiquidGlassParams.defaults.lightAngle)
     #expect(light.x < 0 && light.y < 0)

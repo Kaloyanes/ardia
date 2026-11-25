@@ -1652,8 +1652,13 @@ Metal.
   layout the page names no glass source, so a link's press menu keeps its solid panel there. Still frost: the
   search panel, whose morph and per-corner shape the native `Glass` doesn't draw yet. A live glass that shows clear
   glass instead of its lens for over 3 s is counted once in `glass_lens_withheld`. No glass count is taken while the
-  glass is private (`privately`, set from the bar's, the menus' and the overlays' Incognito state, or the Incognito
-  look), and the stretch starts again when privacy or the sharing consent changes, or the lens shows. Measured on the same simulator, the
+  glass is private (`privately`): it is set from the surface's own tab (the bar, the menus, Reader opened from a
+  private tab, whose glass keeps Reader's look), from the Incognito look, and for every glass while Incognito is on or
+  a private tab is selected (`useBrowsingPrivately`). The stretch starts again when privacy or the sharing consent
+  changes, or the lens shows, and a count lands only in the consent window the frame read, checked under the same lock
+  as the write, so sharing turned off and on again mid-frame can't carry an old stretch into the new window. A menu's
+  glass also drops its lens at once when the page under it goes missing for a frame (a tab change before the new
+  WebKit view is there), not only when it changes (`LiquidGlassRules.PagePresence`). Measured on the same simulator, the
   lab's 26 s scroll of Wikipedia's Glass, 18 s windows, two runs each, alternating: main 0 and 0 late frames of 1,080,
   main-thread work at most 0.80 and 0.86 ms, tick 0.34 and 0.36 ms (p50); now 1 and 0 of 1,079 and 1,080, at most 0.71
   and 0.76 ms, tick 0.36 and 0.31 ms; the lens on every frame of both.

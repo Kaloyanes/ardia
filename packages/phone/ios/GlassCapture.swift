@@ -101,6 +101,7 @@ final class GlassCapture {
   var isChanging: Bool { settle > 0 }
   var motion = GlassMotionHold()
   var wasHeld = false
+  var presence = LiquidGlassRules.PagePresence()
 
   func drop() {
     token += 1

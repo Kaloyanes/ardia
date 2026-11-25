@@ -298,6 +298,19 @@ public enum LiquidGlassRules {
 
   public static func countsGlass(privately: Bool, consentWindow: Int?) -> Bool { !privately && consentWindow != nil }
 
+  public static func countsIn(sampledWindow: Int?, currentWindow: Int?) -> Bool { sampledWindow != nil && sampledWindow == currentWindow }
+
+  public struct PagePresence: Equatable, Sendable {
+    public private(set) var present = false
+
+    public init() {}
+
+    public mutating func note(present: Bool) -> Bool {
+      defer { self.present = present }
+      return self.present && !present
+    }
+  }
+
   public struct LensWithheld: Equatable, Sendable {
     public private(set) var since: TimeInterval?
     public private(set) var counted = false

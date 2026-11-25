@@ -26,6 +26,7 @@ import {
 import { Backdrop } from "./Backdrop";
 import type { ChromeStyle } from "../../lib/appearance";
 import { useChromeStyle } from "../../state/settings/appearance";
+import { useBrowsingPrivately } from "../../state/tabs/hooks";
 import { useReduceTransparency } from "./contrast";
 import { useIncognitoLook, useProfileLook, useTheme } from "./theme";
 import { usePressStyle } from "./pressFeedback";
@@ -248,6 +249,7 @@ export function LookFrost({
   const look = useProfileLook();
   const theme = useTheme();
   const privateContext = useIncognitoLook();
+  const browsingPrivately = useBrowsingPrivately();
   const reduceTransparency = useReduceTransparency();
   const nativeLook = useNativeLook();
   if (!nativeLook || solid)
@@ -267,7 +269,7 @@ export function LookFrost({
         shape="rounded"
         cornerRadius={cornerRadius}
         interactive={false}
-        privately={incognito || privately || privateContext}
+        privately={incognito || privately || privateContext || browsingPrivately}
         overlay={overlay}
         {...lookColors(look, incognito, shade)}
         dark={shade}
@@ -305,6 +307,7 @@ export function ChromeSurface({
   cornerRadius,
   incognito: incognitoChosen,
   barShadow = false,
+  privately = false,
   interactive = true,
   tinted = false,
   dark,
@@ -320,6 +323,7 @@ export function ChromeSurface({
   cornerRadius: number;
   incognito?: boolean;
   barShadow?: boolean;
+  privately?: boolean;
   interactive?: boolean;
   tinted?: boolean;
   dark?: boolean;
@@ -335,6 +339,7 @@ export function ChromeSurface({
   const theme = useTheme();
   const surface = useChromeStyle();
   const privateContext = useIncognitoLook();
+  const browsingPrivately = useBrowsingPrivately();
   const incognito = incognitoChosen ?? privateContext;
   const source = useContext(GlassSourceContext);
   const branch = useContext(GlassBranchContext);
@@ -342,7 +347,7 @@ export function ChromeSurface({
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was && was.x === layout.x && was.y === layout.y && was.width === layout.width && was.height === layout.height ? was : layout));
   if (glassIsNative()) {
     const shade = dark ?? (incognito || theme.dark);
-    const glassProps = { source, name: testID, shape, cornerRadius, tint: incognito ? undefined : lookGlassTint(look), interactive, tinted, surface, barShadow, shown, shownMs, sampleHold, privately: incognito, classicChrome: nativeClassicChrome, ...lookColors(look, incognito, shade), dark: shade };
+    const glassProps = { source, name: testID, shape, cornerRadius, tint: incognito ? undefined : lookGlassTint(look), interactive, tinted, surface, barShadow, shown, shownMs, sampleHold, privately: privately || incognito || privateContext || browsingPrivately, classicChrome: nativeClassicChrome, ...lookColors(look, incognito, shade), dark: shade };
     const split = splitsGlassFromFace(Platform.OS, true, branch);
     const glass = split ? (
       <View testID={testID ? `${testID}Face` : undefined} collapsable={false} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
@@ -389,6 +394,8 @@ export function LookGlass({
 }: FrostProps & { shape: GlassShape }) {
   const look = useProfileLook();
   const theme = useTheme();
+  const privateContext = useIncognitoLook();
+  const browsingPrivately = useBrowsingPrivately();
   if (!glassIsNative()) return <LookFrost {...frost} />;
   const shade = (frost.incognito ?? false) || (frost.dark ?? theme.dark);
   return (
@@ -398,6 +405,7 @@ export function LookGlass({
       name={frost.name ?? "deckGlass"}
       shape={shape}
       tint={frost.incognito ? undefined : lookGlassTint(look)}
+      privately={(frost.incognito ?? false) || (frost.privately ?? false) || privateContext || browsingPrivately}
       classicChrome={nativeClassicChrome}
       {...lookColors(look, frost.incognito ?? false, shade)}
       dark={shade}
