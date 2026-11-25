@@ -61,6 +61,12 @@ async function browser() {
 const shell = await connect(port);
 const viewport = await shell.evaluate("({ w: innerWidth, h: innerHeight, sidebar: document.querySelector('.ardia-mac-pager')?.getBoundingClientRect().toJSON() })");
 shell.close();
+const block = flag("block", 0);
+if (block) {
+  const blocker = await connect(port);
+  await blocker.evaluate(`setTimeout(() => { performance.mark("ardia-block-start"); const t = performance.now(); while (performance.now() - t < ${block}); performance.mark("ardia-block-end"); }, 450 + ${flag("block-at", 150)}), 1`);
+  blocker.close();
+}
 const cdp = await browser();
 await cdp.send("Tracing.start", { traceConfig: { includedCategories: CATEGORIES.split(","), recordMode: "recordAsMuchAsPossible" }, transferMode: "ReportEvents" });
 await new Promise((resolve) => setTimeout(resolve, 300));
@@ -76,6 +82,13 @@ const marks = cdp.events.filter((e) => e.cat?.includes("blink.user_timing") && S
 const moving = marks.find((e) => e.name === "ardia-pager-moving");
 const rest = marks.filter((e) => e.name === "ardia-pager-rest").at(-1);
 const reporters = cdp.events.filter((e) => e.name === "PipelineReporter" && e.ph === "b");
+const byPid = {};
+for (const r of reporters) {
+  const report = r.args?.frame_reporter ?? {};
+  if (!(moving && rest && r.ts >= moving.ts && r.ts <= rest.ts)) continue;
+  const key = `${r.pid} ${report.scroll_state} ${report.state}`;
+  byPid[key] = (byPid[key] ?? 0) + 1;
+}
 const states = {};
 const scrolling = {};
 const within = (e) => moving && rest && e.ts >= moving.ts && e.ts <= rest.ts;
@@ -108,6 +121,7 @@ const result = {
   restMs: rest ? Math.round((rest.ts - origin) / 100) / 10 : null,
   pipeline: states,
   scrollFrames: scrolling,
+  byPid,
   metrics: metrics && { ...metrics, fresh: undefined },
 };
 writeFileSync(join(out, "result.json"), JSON.stringify({ ...result, times, fresh: metrics?.fresh }, null, 1));
