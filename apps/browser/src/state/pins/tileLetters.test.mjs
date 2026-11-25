@@ -60,3 +60,41 @@ test("switching Minimalism tiles between letters and logos is counted; a value i
   assert.equal(counts.minimalism_pinned_icons_logos, 1);
   assert.equal(counts.minimalism_pinned_icons_letters, 1);
 });
+
+test("Change Letters… opens the in-app letters panel, with no system dialog, on every platform", async () => {
+  const { useSidebarUi } = await import("../sidebar/sidebarUi.ts");
+  const { readFileSync } = await import("node:fs");
+  const { w, id } = tile();
+  S().updateSettings({ minimalismMode: true, minimalismPinnedIcons: "letters" });
+  const { openTabMenu } = await import("../sidebar/tabMenu.ts");
+  const { shellNativeModules } = await import("../../test-native/shell.ts");
+  const shell = shellNativeModules.ArdiaMenus;
+  const real = shell.showMenu;
+  shell.showMenu = (shown) => Promise.resolve(shown.find((i) => i.id === "customize").children.find((i) => i.title === "Change Letters…").id);
+  try {
+    await openTabMenu(w, S().tabs[id]);
+  } finally {
+    shell.showMenu = real;
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(useSidebarUi.getState().tileLetters && { windowId: useSidebarUi.getState().tileLetters.windowId, tabId: useSidebarUi.getState().tileLetters.tabId }, { windowId: w, tabId: id });
+  for (const file of ["./tileLetters.ts", "../../components/sidebar/TileLetters.tsx"]) assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), "utf8"), /platform\/dialogs|prompt\(/, file);
+});
+
+test("in the letters panel, Done with an empty field goes back to the site's letter, Cancel leaves the letters as they were", async () => {
+  const { commitTileLetters, closeTileLetters, openTileLetters } = await import("./tileLetters.ts");
+  const { useSidebarUi } = await import("../sidebar/sidebarUi.ts");
+  const { w, id } = tile();
+  setTileLetters(id, "GM", undefined);
+  await openTileLetters(w, id);
+  closeTileLetters();
+  assert.equal(S().tabs[id].tileLetters, "GM", "Cancel keeps them");
+  assert.equal(useSidebarUi.getState().tileLetters, null);
+  await openTileLetters(w, id);
+  commitTileLetters(id, "", undefined);
+  assert.equal(S().tabs[id].tileLetters, undefined, "an empty Done resets them");
+  assert.equal(useSidebarUi.getState().tileLetters, null, "and closes the panel");
+  await openTileLetters(w, id);
+  commitTileLetters(id, "xy", undefined);
+  assert.equal(S().tabs[id].tileLetters, "XY");
+});

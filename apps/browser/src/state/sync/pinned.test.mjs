@@ -304,3 +304,23 @@ test("a tile's custom letters reach the other Mac with the pin, change there, cl
   await syncAll([a, b]);
   assert.equal(letters(b, "mail"), undefined, "clearing them clears them everywhere");
 });
+
+test("a tile's letters stay synced while it is a pinned row, so moving it back to Top Apps on another Mac brings them back", async () => {
+  const folder = new Folder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  seed(a);
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await syncAll([a, b]);
+  a.with(() => S().pinTabs([tabOf("mail")], true, true));
+  await syncAll([a, b]);
+  assert.equal(b.with(() => S().tabs[tabOf("mail")]?.pin?.as), "row", "the move reached B");
+  assert.equal(b.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "B keeps the letters on the row");
+  const key = a.with(() => `plet:${S().tabs[tabOf("mail")].pinKey ?? tabOf("mail")}`);
+  assert.equal(a.scope.records[key]?.v, "MA", "the record is still there");
+  b.with(() => S().pinTabs([tabOf("mail")], true, false));
+  await syncAll([b, a]);
+  assert.equal(a.with(() => S().tabs[tabOf("mail")]?.pin?.as), "tile");
+  assert.equal(a.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "back in Top Apps with its letters");
+});

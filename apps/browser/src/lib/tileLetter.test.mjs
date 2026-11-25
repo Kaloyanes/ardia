@@ -31,3 +31,21 @@ test("custom tile letters keep at most two visible characters, upper-cased, and 
   assert.equal(tileLettersOf({ url: "https://mail.google.com/", title: "Inbox" }), "G");
   assert.equal(tileLettersOf({ url: "https://mail.google.com/", title: "Inbox", tileLetters: "GM" }), "GM");
 });
+
+test("tile letters count what you see: a letter that upper-cases to two counts as two, an emoji sequence or an accented letter counts as one, and cleaning twice changes nothing", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  assert.equal(cleanTileLetters("aß"), "AS", "ß upper-cases to SS before the limit");
+  assert.equal(cleanTileLetters("👩‍💻"), "👩‍💻", "a ZWJ sequence is one");
+  assert.equal(cleanTileLetters("👩‍💻x"), "👩‍💻X");
+  assert.equal(cleanTileLetters("👍🏽a"), "👍🏽A", "a skin tone stays with its emoji");
+  assert.equal(cleanTileLetters("🇫🇷🇩🇪x"), "🇫🇷🇩🇪", "a flag is one");
+  assert.equal(cleanTileLetters("éx"), "ÉX", "a combining accent joins its letter");
+  assert.equal(cleanTileLetters("q̣̇z"), "Q̣̇Z".normalize("NFC"));
+  assert.equal(cleanTileLetters("́a"), "A", "a mark with nothing before it goes");
+  assert.equal(cleanTileLetters("a‮b"), "AB", "a direction override goes");
+  const samples = ["aß", "ß", "👩‍💻", "👩‍💻👩‍💻x", "🇫🇷🇩🇪", "é", "ǆ", "ﬃ", "İi", "ŉ", "́́", "a‍", "‍a", "x\u{E0067}"];
+  for (const s of samples) {
+    const once = cleanTileLetters(s);
+    assert.equal(cleanTileLetters(once ?? ""), once, `cleaning ${JSON.stringify(s)} twice`);
+  }
+});

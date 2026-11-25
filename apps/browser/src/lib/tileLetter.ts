@@ -24,12 +24,29 @@ export function tileLetterOf(url: string, title: string): string {
 
 export const TILE_LETTERS_MAX = 2;
 
-const CONTROL = /\p{C}/u;
+const UNSEEN = /[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\s]|(?![\u200D\u{E0020}-\u{E007F}])\p{Cf}/gu;
+const EXTENDS = /[\p{M}\u200D\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u;
+const REGIONAL = /[\u{1F1E6}-\u{1F1FF}]/u;
+const ZWJ = "\u200D";
+
+function graphemes(text: string): string[] {
+  const out: string[] = [];
+  let joinNext = false;
+  for (const char of text) {
+    const last = out[out.length - 1];
+    const pairsFlag = last !== undefined && REGIONAL.test(char) && [...last].length === 1 && REGIONAL.test(last);
+    if (last !== undefined && (joinNext || EXTENDS.test(char) || pairsFlag)) out[out.length - 1] = last + char;
+    else if (!EXTENDS.test(char)) out.push(char);
+    joinNext = char === ZWJ;
+  }
+  return out;
+}
 
 export function cleanTileLetters(input: unknown): string | null {
   if (typeof input !== "string") return null;
-  const kept = [...input.normalize("NFC")].filter((char) => !CONTROL.test(char) && char.trim()).slice(0, TILE_LETTERS_MAX).join("");
-  return kept ? kept.toLocaleUpperCase() : null;
+  const shown = input.normalize("NFC").toLocaleUpperCase().normalize("NFC").replace(UNSEEN, "");
+  const kept = graphemes(shown).slice(0, TILE_LETTERS_MAX).join("");
+  return kept || null;
 }
 
 export const tileLettersOf = (t: { url: string; title: string; customTitle?: string | null; tileLetters?: string | null }): string =>

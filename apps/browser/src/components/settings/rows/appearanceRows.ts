@@ -157,9 +157,10 @@ export const appearanceRows = {
         minimalismPinnedIcons: {
           title: "Minimalism tiles",
           explained: true,
-          description: "Letters, or each site’s logo, on Top Apps. Right-click a tile to change its letters.",
-          keywords: ["minimalism", "minimal", "letters", "letter", "initials", "logos", "logo", "favicons", "favicon", "site icons", "icons", "top apps", "tiles"],
+          description: "Letters or each site’s logo on Top Apps. With Letters, right-click a tile to change its letters.",
+          keywords: ["minimalism", "minimal", "letters", "letter", "initials", "logos", "logo", "site logos", "favicons", "favicon", "site icons", "icons", "top apps", "tiles"],
           shown: (s) => s.minimalismMode,
+          needs: "Turn on Minimalism mode to use this",
         },
         bookmarksBar: {
           title: "Bookmarks bar",

@@ -34,7 +34,7 @@ import { urlParts } from "../../lib/urlParts";
 import { ALL_UNREAD_TITLE, canChooseSiteUnread, isUnreadSiteHidden, showUnreadCounts, toggleSiteUnread, unreadSiteTitle } from "../tabs/unreadSites";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { userClose } from "../tabs/closeActivation";
-import { changeTileLetters, setTileLetters, showsTileLetters } from "../pins/tileLetters";
+import { openTileLetters, setTileLetters, showsTileLetters } from "../pins/tileLetters";
 
 const store = () => useBrowser.getState();
 
@@ -290,7 +290,7 @@ function runTabChoice(windowId: string, tab: Tab, f: Facts, choice: string | Des
   else if (choice === "resetName") s.updateTab(tab.id, { customTitle: null });
   else if (choice === "icon") void openIconPicker(windowId, t);
   else if (choice === "resetIcon") s.updateTab(tab.id, { customIcon: null });
-  else if (choice === "letters") void changeTileLetters(windowId, tab.id, consent);
+  else if (choice === "letters") void openTileLetters(windowId, tab.id);
   else if (choice === "resetLetters") setTileLetters(tab.id, null, consent);
   else if (choice === "pin") s.togglePin(tab.id);
   else if (choice === "unpinMember") s.placeTabs([tab.id], { pinned: false, groupId: null });
