@@ -1,6 +1,7 @@
 #include "ardia/mac/ac_mac_webui.h"
 
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 
 #include <memory>
 #include <optional>
@@ -311,6 +312,13 @@ bool WebUIShellRequested() {
 void StartWebUIShell() {
   if (BackgroundInstance()) {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    if (Method occluded = class_getInstanceMethod(
+            NSWindow.class, NSSelectorFromString(@"isOccluded"))) {
+      method_setImplementation(occluded,
+                               imp_implementationWithBlock(^BOOL(id) {
+                                 return NO;
+                               }));
+    }
   }
   g_ardia_browser_window_factory = nullptr;
   g_ardia_viewless_browsers = false;
