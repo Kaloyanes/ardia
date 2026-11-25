@@ -17,11 +17,6 @@ namespace {
 
 constexpr size_t kRequestIdLimit = 256;
 
-std::string Text(const base::DictValue& value, std::string_view key) {
-  const std::string* found = value.FindString(key);
-  return found ? *found : std::string();
-}
-
 }
 
 ShellBridge::ShellBridge(content::WebContents* shell,
