@@ -11,6 +11,8 @@ import { DOWNLOADS_BUTTON } from "./tokens";
 import { noteDownloadsPanelToggle } from "../../state/telemetry/downloadsPanelCauses";
 import { openDownloadsMenu } from "../../state/downloads/downloadsMenu";
 
+export const DOWNLOADS_BUTTON_TEST_ID = "ardia-downloads-button";
+
 const downloadsButtons = new Map<string, Set<View>>();
 
 export function measureInWindow(view: View): Promise<Rect | null> {
@@ -49,7 +51,7 @@ export function DownloadsButton({ windowId }: { windowId: string }) {
       pressedAt.current = press.nativeEvent.timestamp;
       return false;
     }}>
-      <ContextMenuArea onContextMenu={() => void openDownloadsMenu(windowId)}>
+      <ContextMenuArea testID={DOWNLOADS_BUTTON_TEST_ID} onContextMenu={() => void openDownloadsMenu(windowId)}>
         <Button variant="icon"
           icon="arrow.down.circle"
           glyph={DOWNLOADS_BUTTON.icon}

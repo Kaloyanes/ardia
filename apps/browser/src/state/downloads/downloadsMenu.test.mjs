@@ -46,3 +46,30 @@ test("Show Downloads from the menu opens the panel and leaves an open one open",
   runDownloadsMenuChoice(w, null, null);
   assert.equal(S().windowUi[w]?.downloadsOpen, true);
 });
+
+test("a Clear Downloads picked after the window switched profiles while its menu was open clears nothing", async () => {
+  const { shellNativeModules } = await import("../../test-native/shell.ts");
+  const { engineProfile } = await import("../browser/model.ts");
+  const { openDownloadsMenu } = await import("./downloadsMenu.ts");
+  const w = oneWindow();
+  const work = S().createProfile({ name: "Work" });
+  S().upsertDownload(download({ id: "personal", profile: engineProfile(S(), "default") }));
+  S().upsertDownload(download({ id: "work", profile: engineProfile(S(), work) }));
+  const shell = shellNativeModules.ArdiaMenus;
+  const real = shell.showMenu;
+  const pick = async (during) => {
+    shell.showMenu = () => {
+      during();
+      return Promise.resolve("downloads:clear");
+    };
+    try {
+      await openDownloadsMenu(w);
+    } finally {
+      shell.showMenu = real;
+    }
+  };
+  await pick(() => S().switchProfile(w, work));
+  assert.deepEqual(S().downloads.map((d) => d.id).sort(), ["personal", "work"], "Work's list stays as it was");
+  await pick(() => {});
+  assert.deepEqual(S().downloads.map((d) => d.id), ["personal"], "without a switch, Clear clears the profile on screen");
+});

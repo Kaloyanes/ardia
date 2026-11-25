@@ -27,7 +27,13 @@ export function runDownloadsMenuChoice(windowId: string, choice: string | null, 
   }
 }
 
+const shownProfileOf = (windowId: string) => useBrowser.getState().windows[windowId]?.profileId;
+
 export async function openDownloadsMenu(windowId: string) {
   const consent = consentToken();
-  runDownloadsMenuChoice(windowId, await showMenu(downloadsMenuItems(useBrowser.getState(), windowId)), consent);
+  const profileId = shownProfileOf(windowId);
+  if (!profileId) return;
+  const choice = await showMenu(downloadsMenuItems(useBrowser.getState(), windowId));
+  if (shownProfileOf(windowId) !== profileId) return;
+  runDownloadsMenuChoice(windowId, choice, consent);
 }
