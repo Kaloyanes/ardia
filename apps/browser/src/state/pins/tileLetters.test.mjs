@@ -98,3 +98,18 @@ test("in the letters panel, Done with an empty field goes back to the site's let
   commitTileLetters(id, "xy", undefined);
   assert.equal(S().tabs[id].tileLetters, "XY");
 });
+
+test("with tabs on top, the letters panel anchors to the clicked pinned tab in the top strip", async () => {
+  const { openTileLetters, registerStripTile } = await import("./tileLetters.ts");
+  const { useSidebarUi } = await import("../sidebar/sidebarUi.ts");
+  const { w, id } = tile();
+  S().updateSettings({ tabLayout: "top" });
+  const cell = { measureInWindow: (done) => done(212, 6, 40, 30) };
+  registerStripTile(w, id, cell);
+  await openTileLetters(w, id);
+  assert.deepEqual(useSidebarUi.getState().tileLetters?.anchor, { x: 212, y: 6, width: 40, height: 30 });
+  registerStripTile(w, id, null);
+  await openTileLetters(w, id);
+  assert.equal(useSidebarUi.getState().tileLetters?.anchor, null, "an unmounted cell leaves no stale anchor");
+  assert.match((await import("node:fs")).readFileSync(new URL("../../components/tabstrip/PinnedDock.tsx", import.meta.url), "utf8"), /ref=\{\(v\) => registerStripTile\(windowId, tabId, v\)\}/);
+});

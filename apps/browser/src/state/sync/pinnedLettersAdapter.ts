@@ -17,6 +17,7 @@ function localPinKeys(profileId: string): Set<string> {
 
 export function pinnedLettersAdapter(profileId: string): Adapter {
   const keyOf = (k: string) => k.slice(PIN_LETTERS.length);
+  let unpinned: (key: string) => boolean = () => false;
   return {
     prefix: PIN_LETTERS,
     extract: (base, _queued, _now, recorded, remote) => {
@@ -37,15 +38,15 @@ export function pinnedLettersAdapter(profileId: string): Adapter {
         }
       }
       for (const p of s.parkedPins[profileId]?.tabs ?? []) if (!p.groupId) offer(p.id, p.tileLetters);
-      const unpinned = unpinnedRemotely(recorded, remote);
+      unpinned = unpinnedRemotely(recorded, remote);
       return {
         values,
         ignore: (k) => !known.has(keyOf(k)) && base(`${PIN_TAB}${keyOf(k)}`) === undefined && !unpinned(keyOf(k)),
       } satisfies Extraction;
     },
-    apply: (visible, changed, base, records) => {
+    apply: (visible, changed, _base, records) => {
       const pins = localPinKeys(profileId);
-      const gone = (key: string) => records.known(`${PIN_TAB}${key}`) && base(`${PIN_TAB}${key}`) === undefined;
+      const gone = (key: string) => unpinned(key);
       const incoming = new Map<string, string | undefined>();
       for (const k of changed) {
         const letters = cleanTileLetters(visible.get(k)) ?? undefined;

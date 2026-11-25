@@ -374,3 +374,21 @@ test("unpinning a tile with letters removes its letters' record on both Macs", a
   assert.equal(a.scope.records[key]?.v, null, "A tombstones the letters with the pin");
   assert.equal(b.scope.records[key]?.v, null, "and so does B");
 });
+
+test("a Mac that syncs before it has a window keeps the letters waiting for their pins, and opening a window clears them nowhere", async () => {
+  const folder = new Folder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  seed(a);
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await a.sync();
+  await b.sync();
+  await b.sync();
+  assert.equal(b.with(() => tabOf("mail")), undefined, "no window, so no pin yet on B");
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  await syncAll([b, a, b, a]);
+  assert.equal(b.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "the letters land with the pin");
+  assert.equal(a.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "and A keeps them");
+  const key = a.with(() => `plet:${S().tabs[tabOf("mail")].pinKey ?? tabOf("mail")}`);
+  assert.equal(a.scope.records[key]?.v, "MA");
+});
