@@ -290,14 +290,13 @@ ShellHostView* HostForShell(content::WebContents* contents) {
 
 MenuCommandHandler MainMenuHandler() {
   return base::BindRepeating([](const MenuChoice& choice) {
-    NSWindow* key = NSApp.keyWindow ?: NSApp.mainWindow;
+    const std::optional<std::string> key = KeyMenuWindowId();
     ShellHostView* target = nullptr;
     for (ShellHostView* host : Hosts()) {
-      views::Widget* widget = host->GetWidget();
       if (!target) {
         target = host;
       }
-      if (widget && widget->GetNativeWindow().GetNativeNSWindow() == key) {
+      if (key && host->window_id() == *key) {
         target = host;
         break;
       }
@@ -307,6 +306,19 @@ MenuCommandHandler MainMenuHandler() {
     } else if (choice.command == "quit") {
       QuitWithoutShell();
     }
+  });
+}
+
+MenuWindowResolver ShellMenuWindows() {
+  return base::BindRepeating([](gfx::NativeWindow window) -> std::optional<std::string> {
+    NSWindow* wanted = window.GetNativeNSWindow();
+    for (ShellHostView* host : Hosts()) {
+      views::Widget* widget = host->GetWidget();
+      if (wanted && widget && widget->GetNativeWindow().GetNativeNSWindow() == wanted) {
+        return host->window_id();
+      }
+    }
+    return std::nullopt;
   });
 }
 
@@ -559,6 +571,7 @@ void ShellHostView::DetachBrowser() {
   closing_ = true;
   recording_keys_.reset();
   RetireRenderer();
+  ForgetWindowMenu(window_id_);
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
   pip_.reset();
@@ -926,6 +939,7 @@ void ShellHostView::RetireRenderer() {
   ++renderer_generation_;
   shared_folder_watcher_.reset();
   share::Retire(window_id_);
+  SetMenuKeysSuppressed(window_id_, false);
   if (!had_document) {
     return;
   }
@@ -1438,7 +1452,7 @@ void ShellHostView::OnMenuCommand(const std::string& command,
   if (command.empty() || shortcut_recording_) {
     return;
   }
-  if (command == "quit" && !RendererLive()) {
+  if (command == "quit" && !shell_policy::ShellTakesQuit(RendererLive(), shell_ready_generation_, renderer_generation_)) {
     return QuitWithoutShell();
   }
   if (command == "focusCommandBar" || command == "newTab") {
@@ -1463,7 +1477,7 @@ void ShellHostView::SetMainMenu(const base::DictValue& args, Done done) {
         false, base::Value("Invalid menu at " + parsed.problems[0].path + ": " +
                            parsed.problems[0].reason));
   }
-  InstallMainMenu(parsed.root, MainMenuHandler());
+  SetWindowMainMenu(window_id_, std::move(parsed.root), MainMenuHandler());
   std::move(done).Run(true, base::Value());
 }
 

@@ -417,6 +417,7 @@ void StartWebUIShell() {
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<ShellConfig>());
   InstallDefaultMainMenu(MainMenuHandler());
+  SetMenuWindowResolver(ShellMenuWindows());
   InstallOpenUrlsHook();
   WithProfile("", base::BindOnce(&OpenLaunchWindow));
 }
