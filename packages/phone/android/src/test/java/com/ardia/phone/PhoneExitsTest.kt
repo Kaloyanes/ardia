@@ -19,6 +19,8 @@ class PhoneExitsTest {
         assertEquals(mapOf("kind" to "crash", "reason" to "native_crash", "foreground" to "yes", "at" to (now - hour).toDouble()), record)
         assertEquals("anr", PhoneExits.describe(seen(ApplicationExitInfo.REASON_ANR, now))!!["reason"])
         assertEquals("no", PhoneExits.describe(seen(ApplicationExitInfo.REASON_LOW_MEMORY, now, foreground = false))!!["foreground"])
+        val service = ExitSeen(ApplicationExitInfo.REASON_CRASH, RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE, now, true)
+        assertEquals("a foreground service isn't Ardia on screen", "no", PhoneExits.describe(service)!!["foreground"])
     }
 
     @Test

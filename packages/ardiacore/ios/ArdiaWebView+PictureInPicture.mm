@@ -271,6 +271,7 @@ BOOL TracingPictureInPicture() {
 - (void)tab:(ArdiaCoreTab *)tab didChangePictureInPicture:(NSDictionary<NSString *, id> *)state {
   ArdiaConsentStamp *stamp = _pictureInPictureRequestStamp ?: ArdiaConsentStamp.begin;
   if ([state[@"active"] boolValue]) _pictureInPictureRequestStamp = nil;
+  if ([state[@"active"] boolValue]) _reports.autoPictureInPictureWatch++;
   const BOOL active = [state[@"active"] boolValue];
   NSMutableDictionary *payload = [@{@"kind" : [state[@"kind"] isEqual:@"document"] ? @"document" : @"video", @"active" : @(active)} mutableCopy];
   ardia_pip::NoteGesture(@"pip %@ kind=%@ by=%@ auto=%d appActive=%d seenByUser=%d", active ? @"opened" : @"closed", payload[@"kind"],

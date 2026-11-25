@@ -194,6 +194,7 @@ public final class AppUpdater: NSObject {
   private var firstCheckPending = false
   private var started = false
   private var downloading = false
+  private var downloadStamp: ArdiaConsentStamp?
 
   public var isConfigured: Bool {
     guard !Self.isOff else { return false }
@@ -320,16 +321,21 @@ extension AppUpdater: SPUUpdaterDelegate {
 
   public func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
     downloading = true
-    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "downloadStarted"]))
+    let stamp = ArdiaConsentStamp.begin()
+    downloadStamp = stamp
+    ShellEvents.send(.app, stamp.onto(["type": "updateStep", "step": "downloadStarted"]))
   }
 
   public func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
     downloading = false
-    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "downloadFinished"]))
+    let stamp = downloadStamp ?? ArdiaConsentStamp.begin()
+    downloadStamp = nil
+    ShellEvents.send(.app, stamp.onto(["type": "updateStep", "step": "downloadFinished"]))
   }
 
   public func userDidCancelDownload(_ updater: SPUUpdater) {
     downloading = false
+    downloadStamp = nil
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
@@ -339,10 +345,12 @@ extension AppUpdater: SPUUpdaterDelegate {
   public func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     let nsError = error as NSError
     let failure = SparkleFailure.of(domain: nsError.domain, code: nsError.code, downloading: downloading)
+    let stamp = failure?.stage == .download ? downloadStamp ?? ArdiaConsentStamp.begin() : ArdiaConsentStamp.begin()
     downloading = false
+    downloadStamp = nil
     guard let failure else { return }
     NSLog("Ardia: update failed while \(failure.stage == .download ? "downloading" : "installing") (\(failure.reason))")
-    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(failure.event))
+    ShellEvents.send(.app, stamp.onto(failure.event))
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {

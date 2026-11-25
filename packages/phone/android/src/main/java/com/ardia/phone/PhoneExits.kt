@@ -24,7 +24,7 @@ object PhoneExits {
             ApplicationExitInfo.REASON_SIGNALED -> "killed" to "signaled"
             else -> return null
         }
-        val foreground = if (seen.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) "yes" else "no"
+        val foreground = if (seen.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND || seen.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) "yes" else "no"
         return mapOf("kind" to kind, "reason" to reason, "foreground" to foreground, "at" to seen.at.toDouble())
     }
 

@@ -25,6 +25,7 @@
 
   const flush = () => {
     flushing = false;
+    if (burst) endBurst(burst);
     const t = tally;
     tally = fresh();
     if (!epoch || (!t.errors.some(Boolean) && !t.frames && !t.scrolls)) return;
@@ -110,6 +111,7 @@
         burst.last = at;
         return;
       }
+      if (burst) endBurst(burst);
       burst = { start: at, last: at, frameAt: at, frames: 0 };
       countFrames(burst);
     },
