@@ -14,6 +14,7 @@ source_set("policies") {
     "ac_desktop_status_geometry.h",
     "ac_desktop_suggest_policy.h",
     "ac_desktop_switcher_keys.h",
+    "ac_desktop_tab_reveal.h",
     "ac_desktop_telemetry_policy.h",
     "ac_desktop_window_commands.h",
     "ac_desktop_window_corners.h",
