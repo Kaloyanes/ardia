@@ -487,7 +487,7 @@ writes `/Applications/Ardia.app`): `brew audit --cask --online ardia-browser/tap
 
 The Release workflow builds it in its `linux` job (`scripts/linux/release.sh <version> --engine exact`, smoke gate
 included, then the `.deb` installed and purged on Debian 13 and Ubuntu 24.04, the `.rpm` installed, upgraded and
-removed on Fedora 43 and openSUSE Tumbleweed, and the Flatpak installed and run on Ubuntu 24.04 and Fedora 43), and
+removed on Fedora 43, AlmaLinux 9 and openSUSE Tumbleweed, and the Flatpak installed and run on Ubuntu 24.04 and Fedora 43), and
 `publish.sh` attaches `Ardia-<version>-linux-x64.tar.xz`, `.deb`, `.rpm`, `.AppImage` and `.flatpak`,
 `ardia-bin-<version>.src.tar.gz` (the Arch PKGBUILD), `ardia-cli-<version>-linux-x64.tar.gz` (the pinned `ardia`
 command, renamed for this version) and their `.sha256` files to the release, nightly or stable. A `.deb`, `.rpm` or

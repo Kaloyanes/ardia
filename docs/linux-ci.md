@@ -19,7 +19,7 @@ Hosted CI never runs `gclient sync`, GN or a Chromium build.
 | [`scripts/linux/release.sh`](../scripts/linux/release.sh) | Builds a versioned Linux release with the CLI, smoke-tests it and prints the upload command; the Release workflow's `linux` job runs it |
 | [`scripts/linux/linux_formats.py`](../scripts/linux/linux_formats.py) | Builds the `.deb` (its `Depends` read from the binaries), the `.rpm` (rpm's own dependency generator) and the AppImage from package.py's staged tree, and the Flatpak bundle and its Flathub manifest from the tarball |
 | [`scripts/linux/deb-install-test.sh`](../scripts/linux/deb-install-test.sh) | Installs and purges a `.deb` in Debian 13 and Ubuntu 24.04 containers |
-| [`scripts/linux/rpm-install-test.sh`](../scripts/linux/rpm-install-test.sh) | Installs, upgrades and removes an `.rpm` in Fedora 43 (dnf) and openSUSE Tumbleweed (zypper) containers |
+| [`scripts/linux/rpm-install-test.sh`](../scripts/linux/rpm-install-test.sh) | Installs, upgrades and removes an `.rpm` in Fedora 43 and AlmaLinux 9 (dnf) and openSUSE Tumbleweed (zypper) containers |
 | [`scripts/linux/flatpak-install-test.sh`](../scripts/linux/flatpak-install-test.sh) | Installs, runs and uninstalls the Flatpak bundle in Ubuntu 24.04 and Fedora 43 containers |
 | [`scripts/linux/arch/`](../scripts/linux/arch) | The Arch package `ardia-bin`: PKGBUILD and `.SRCINFO`, `update-pkgbuild.sh` to point them at a release, `publish-aur.sh` to push them to the AUR |
 

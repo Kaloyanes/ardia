@@ -70,7 +70,7 @@ if [ -z "$older" ]; then
   "$engine" run --rm -v "$rpm_file:/pkg/new.rpm:ro" -v "$here:/scripts:ro" -v "$work:/out" "$builder" bash -c '
     set -euo pipefail
     echo "retries=5" >> /etc/dnf/dnf.conf
-    dnf install -y -q rpm-build python3 cpio binutils >/dev/null 2>&1
+    dnf install -y -q rpm-build python3 cpio binutils >/tmp/older-deps.log 2>&1 || { tail -30 /tmp/older-deps.log; exit 1; }
     version=$(rpm -qp --qf "%{VERSION}" /pkg/new.rpm 2>/dev/null)
     version=${version/\~/-}
     if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-nightly\.([0-9]+)$ ]]; then
