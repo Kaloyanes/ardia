@@ -178,6 +178,30 @@ final class LinkActivationHoldTests: XCTestCase {
     XCTAssertEqual(refreshes, 1)
   }
 
+  func testAShrunkRefreshedSnapshotStillWalksPastSkippedOverlaysToMissionControl() {
+    let overlayLayer = Int(CGWindowLevelForKey(.assistiveTechHighWindow))
+    let old1 = window(601, layer: overlayLayer, clickable: screen)
+    let old2 = window(602, layer: overlayLayer, clickable: screen)
+    let old3 = window(603, layer: overlayLayer, clickable: screen)
+    let freshOverlay = window(604, layer: overlayLayer, clickable: screen)
+    let missionControl = window(dock, layer: 20, clickable: screen)
+    let ardia = window(own, clickable: screen)
+    let stale = [old1, old2, old3, missionControl, ardia]
+    let refreshed = [freshOverlay, missionControl, ardia]
+    let refreshedListed = refreshed.map(\.listed)
+    let sequence = [old1, old2, old3, freshOverlay, missionControl]
+    var index = 0
+    XCTAssertTrue(
+      LinkActivationHold.leftToWindowManager(
+        own: own, windowManagers: managers, frontToBack: stale.map(\.listed),
+        refresh: { refreshedListed },
+        clickedBelow: { _ in
+          guard index < sequence.count else { return 0 }
+          defer { index += 1 }
+          return sequence[index].listed.number
+        }))
+  }
+
   func testAHitTestThatRepeatsItselfEnds() {
     let scene = [window(windowServer, layer: 25, clickable: screen)]
     let number = scene[0].listed.number

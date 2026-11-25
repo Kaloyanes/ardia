@@ -33,9 +33,7 @@ enum LinkActivationHold {
     var refreshed = false
     var below = 0
     var seen: Set<Int> = []
-    var steps = 0
-    while steps <= current.count {
-      steps += 1
+    while true {
       let number = clickedBelow(below)
       guard number > 0, seen.insert(number).inserted else { return (nil, current) }
       var hit = current.first { $0.number == number }
@@ -51,6 +49,5 @@ enum LinkActivationHold {
       if !hit.windowServer && (0..<overlayLayer).contains(hit.layer) { return (hit, current) }
       below = number
     }
-    return (nil, current)
   }
 }
