@@ -144,11 +144,11 @@ test("page metrics from native keep only the known counters, rounded", () => {
 });
 
 test("native messaging host health is sent as small counts only", () => {
-  assert.deepEqual(nativeMessagingProperties({ found: 2, registered: 1, keptTheirs: 1, writeFailures: 0, unusable: 99 }), {
+  assert.deepEqual(nativeMessagingProperties({ found: 2, registered: 1, keptTheirs: 1, missing: 0, unusable: 99 }), {
     native_messaging_hosts: 2,
     native_messaging_registered: 1,
     native_messaging_kept_theirs: 1,
-    native_messaging_write_failures: 0,
+    native_messaging_missing: 0,
     native_messaging_unusable: 16,
   });
   assert.deepEqual(nativeMessagingProperties(undefined), {});
@@ -177,6 +177,16 @@ test("a download that was interrupted and resumed keeps its first token and isn'
   downloads.noteDownloadSeen({ id: "r", state: "finished", received: 8 * MB, startTime: 1_000 }, 61_000);
   const taken = downloads.takeDownloadWork(62_000);
   assert.deepEqual([taken.downloads_started, taken.downloads_failed, taken.downloads_finished, taken.downloads_timed], [1, 1, 1, 0]);
+});
+
+test("a download is credited once, to the newest open approval, never to every approval at once", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteMultipleDownloadsAnswered("accept", client.consentNow(), 1_000);
+  downloads.noteMultipleDownloadsAnswered("accept", client.consentNow(), 2_000);
+  downloads.noteDownloadSeen({ id: "n1", state: "downloading", received: 0 }, 3_000);
+  downloads.noteDownloadSeen({ id: "n2", state: "downloading", received: 0 }, 4_000);
+  const taken = downloads.takeDownloadWork(30_000);
+  assert.deepEqual([taken.multiple_download_allows, taken.multiple_download_follow_ups, taken.multiple_download_single_follow_ups], [2, 1, 0]);
 });
 
 test("each approval to download several files keeps its own follow-up", () => {

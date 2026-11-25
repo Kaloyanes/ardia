@@ -72,7 +72,8 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
     const consent = consentOrNow(undefined);
     tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
     bump("downloads_started", consent);
-    for (const f of followUps) f.started++;
+    const newest = followUps.at(-1);
+    if (newest) newest.started++;
     return;
   }
   if (before.state === d.state) return;

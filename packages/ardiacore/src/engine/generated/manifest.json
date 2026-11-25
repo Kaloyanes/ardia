@@ -247,6 +247,11 @@
           "windows": "custom",
           "routeField": "tasks"
         },
+        "nativeMessagingHosts": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
         "childProcessCpu": {
           "mac": "custom",
           "desktop": "custom",

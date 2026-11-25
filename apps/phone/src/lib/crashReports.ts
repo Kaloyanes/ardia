@@ -11,7 +11,7 @@ type CrashKind = (typeof CRASH_KINDS)[number];
 type CrashReason = (typeof CRASH_REASONS)[number];
 type CrashAge = (typeof CRASH_AGES)[number];
 export type PreviousSession = (typeof PREVIOUS_SESSIONS)[number];
-export type SessionMark = "open" | "open_unshared" | "closed";
+export type SessionMark = "open" | "closed";
 
 const ERROR_REASONS: Record<string, CrashReason> = {
   TypeError: "type_error",
@@ -35,7 +35,7 @@ export function previousSession(mark: string | null): PreviousSession {
   return "unknown";
 }
 
-export const sessionMark = (active: boolean, sharing: boolean): SessionMark => (!active ? "closed" : sharing ? "open" : "open_unshared");
+export const sessionMark = (active: boolean, sharing: boolean): SessionMark | null => (!sharing ? null : active ? "open" : "closed");
 
 const isOneOf = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === "string" && (values as readonly string[]).includes(value);
 

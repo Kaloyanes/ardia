@@ -39,6 +39,7 @@ object PhoneExits {
     fun take(context: Context, now: Long = System.currentTimeMillis()): List<Map<String, Any>> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
         val app = context.applicationContext ?: context
+        val since = UsageConsent.sharingSince(app) ?: return emptyList()
         val manager = app.getSystemService(ActivityManager::class.java) ?: return emptyList()
         val infos: List<ApplicationExitInfo> = runCatching { manager.getHistoricalProcessExitReasons(app.packageName, 0, 0) }.getOrDefault(emptyList())
         val preferences = app.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -48,7 +49,6 @@ object PhoneExits {
             if (newest > lastSeen) preferences.edit().putLong(LAST_SEEN, newest).commit()
             infos.map { ExitSeen(it.reason, it.importance, it.timestamp, it.processName == app.packageName) } to lastSeen
         }
-        val since = UsageConsent.sharingSince(app) ?: return emptyList()
         return pick(exits, lastSeen, since, now)
     }
 }

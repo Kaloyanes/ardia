@@ -36,16 +36,22 @@ final class PhoneExits: NSObject, MXMetricManagerSubscriber {
   private static let defaults = UserDefaults(suiteName: suite) ?? .standard
   private var started = false
 
-  func start() {
-    let first = UsageConsent.lock.withLock { () -> Bool in
-      guard !started else { return false }
-      started = true
+  func follow(sharing: Bool) {
+    let change = UsageConsent.lock.withLock { () -> Bool in
+      guard started != sharing else { return false }
+      started = sharing
       return true
     }
-    if first { MXMetricManager.shared.add(self) }
+    guard change else { return }
+    if sharing { MXMetricManager.shared.add(self) } else { MXMetricManager.shared.remove(self) }
+  }
+
+  private static var sharing: Bool {
+    UsageConsent.lock.withLock { UsageConsent.sharingSinceLocked() != nil }
   }
 
   func didReceive(_ payloads: [MXDiagnosticPayload]) {
+    guard Self.sharing else { return }
     for payload in payloads {
       var found: [[String: Any]] = []
       let at = payload.timeStampEnd.timeIntervalSince1970 * 1000
@@ -56,6 +62,7 @@ final class PhoneExits: NSObject, MXMetricManagerSubscriber {
   }
 
   func didReceive(_ payloads: [MXMetricPayload]) {
+    guard Self.sharing else { return }
     for payload in payloads {
       var found: [[String: Any]] = []
       guard let exits = payload.applicationExitMetrics else { continue }

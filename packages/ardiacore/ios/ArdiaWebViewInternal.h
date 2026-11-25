@@ -183,8 +183,8 @@ struct ArdiaPageFocusState {
   id _interfaceScaleObserver;
 }
 - (ArdiaWindowController *)controller;
-- (void)notePageMetrics:(NSDictionary *)metrics;
-- (void)sendMetricsEpochTo:(NSString *)frameId;
+- (void)notePageMetrics:(NSDictionary *)metrics main:(BOOL)main;
+- (void)sendMetricsGenerationTo:(NSString *)frameId;
 - (void)emit:(NSString *)name payload:(NSDictionary *)payload;
 @end
 

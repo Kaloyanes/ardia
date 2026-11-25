@@ -40,7 +40,7 @@ const gate = createGate({
   },
 });
 
-let lastMark: string | null = null;
+let lastMark: string | null | undefined;
 let launchPrevious: PreviousSession = "unknown";
 let crashesLeft = MOST_CRASHES_PER_LAUNCH;
 
@@ -55,8 +55,8 @@ function reportCrashes() {
   const db = browserDatabase();
   const pending = readPreferences(db)[PENDING_CRASH_KEY] ?? null;
   if (pending !== null) writePreference(db, PENDING_CRASH_KEY, null);
-  const exits = takeExits();
   if (!gate.isSharing() || isDemoSession()) return;
+  const exits = takeExits();
   const now = Date.now();
   const js = readPendingCrash(pending, now);
   const crashes = [...(js ? [js.props] : []), ...crashesToSend(exits, now, js?.at ?? null)].slice(0, crashesLeft);

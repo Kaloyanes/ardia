@@ -194,7 +194,14 @@ public final class AppUpdater: NSObject {
   private var firstCheckPending = false
   private var started = false
   private var downloading = false
-  private var downloadStamp: ArdiaConsentStamp?
+  private var updateStamp: ArdiaConsentStamp?
+
+  private var currentUpdateStamp: ArdiaConsentStamp {
+    if let stamp = updateStamp { return stamp }
+    let stamp = ArdiaConsentStamp.begin()
+    updateStamp = stamp
+    return stamp
+  }
 
   public var isConfigured: Bool {
     guard !Self.isOff else { return false }
@@ -311,6 +318,7 @@ extension AppUpdater: SPUUpdaterDelegate {
     let noUpdate = (error as NSError?).map { $0.domain == SUSparkleErrorDomain && $0.code == Int(SUError.noUpdateError.rawValue) } ?? false
     switchCheck.handle(.finished(failed: error != nil && !noUpdate))
     userDriver.quietCheck = false
+    updateStamp = nil
   }
 
   public func feedParameters(for updater: SPUUpdater, sendingSystemProfile sendingProfile: Bool) -> [[String: String]] {
@@ -321,33 +329,30 @@ extension AppUpdater: SPUUpdaterDelegate {
 
   public func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
     downloading = true
-    let stamp = ArdiaConsentStamp.begin()
-    downloadStamp = stamp
-    ShellEvents.send(.app, stamp.onto(["type": "updateStep", "step": "downloadStarted"]))
+    updateStamp = ArdiaConsentStamp.begin()
+    ShellEvents.send(.app, currentUpdateStamp.onto(["type": "updateStep", "step": "downloadStarted"]))
   }
 
   public func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
     downloading = false
-    let stamp = downloadStamp ?? ArdiaConsentStamp.begin()
-    downloadStamp = nil
-    ShellEvents.send(.app, stamp.onto(["type": "updateStep", "step": "downloadFinished"]))
+    ShellEvents.send(.app, currentUpdateStamp.onto(["type": "updateStep", "step": "downloadFinished"]))
   }
 
   public func userDidCancelDownload(_ updater: SPUUpdater) {
     downloading = false
-    downloadStamp = nil
+    updateStamp = nil
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
-    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "updateStep", "step": "installing"]))
+    ShellEvents.send(.app, currentUpdateStamp.onto(["type": "updateStep", "step": "installing"]))
   }
 
   public func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     let nsError = error as NSError
     let failure = SparkleFailure.of(domain: nsError.domain, code: nsError.code, downloading: downloading)
-    let stamp = failure?.stage == .download ? downloadStamp ?? ArdiaConsentStamp.begin() : ArdiaConsentStamp.begin()
+    let stamp = currentUpdateStamp
     downloading = false
-    downloadStamp = nil
+    updateStamp = nil
     guard let failure else { return }
     NSLog("Ardia: update failed while \(failure.stage == .download ? "downloading" : "installing") (\(failure.reason))")
     ShellEvents.send(.app, stamp.onto(failure.event))

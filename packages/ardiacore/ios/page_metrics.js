@@ -2,49 +2,74 @@
   "use strict";
   if (!/^(https?|file):$/.test(location.protocol) || window !== window.top) return;
   const apply = Reflect.apply;
+  const create = Object.create;
+  const { floor, min, round } = Math;
+  const isFiniteNumber = Number.isFinite;
   const raf = window.requestAnimationFrame;
   const perfNow = Performance.prototype.now;
   const now = () => apply(perfNow, performance, []);
   const every = setInterval;
   const after = setTimeout;
   const listen = EventTarget.prototype.addEventListener;
-  const { stringify: toJSON, parse: fromJSON } = JSON;
+  const byTag = Document.prototype.getElementsByTagName;
+  const visibility = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState").get;
+  const MediaElement = HTMLMediaElement;
+  const fromJSON = JSON.parse;
   const FLUSH_MS = 60000;
   const SAMPLE_MS = 10000;
   const SCROLL_IDLE_MS = 150;
   const SOON_MS = 5000;
   const MOST = 1000000;
-  const MAX_EPOCH = 64;
-  const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0 });
-  let epoch = "";
+  const MAX_GENERATION = 2147483647;
+  const count = (value) => (typeof value === "number" && isFiniteNumber(value) && value >= 0 ? min(MOST, floor(value)) : 0);
+  const fresh = () => {
+    const t = create(null);
+    t.e0 = 0;
+    t.e1 = 0;
+    t.e2 = 0;
+    t.e3 = 0;
+    t.e4 = 0;
+    t.dropped = 0;
+    t.frames = 0;
+    t.scrolls = 0;
+    t.scrollFrames = 0;
+    t.scrollMs = 0;
+    return t;
+  };
+  let generation = 0;
   let tally = fresh();
   let quality = new WeakMap();
   let burst = null;
   let flushing = false;
-  const handlers = Object.create(null);
+  const handlers = create(null);
+  const visible = () => apply(visibility, document, []) === "visible";
+
+  const encode = (t) =>
+    `{"generation":${generation},"errors":[${t.e0},${t.e1},${t.e2},${t.e3},${t.e4}],"dropped":${t.dropped},"frames":${t.frames},"scrolls":${t.scrolls},"scrollFrames":${t.scrollFrames},"scrollMs":${t.scrollMs}}`;
 
   const flush = () => {
     flushing = false;
     if (burst) endBurst(burst);
     const t = tally;
     tally = fresh();
-    if (!epoch || (!t.errors.some(Boolean) && !t.frames && !t.scrolls)) return;
+    if (!generation || !(t.e0 || t.e1 || t.e2 || t.e3 || t.e4 || t.frames || t.scrolls)) return;
     try {
-      post("pageMetrics", toJSON({ ...t, epoch }));
+      post("pageMetrics", encode(t));
     } catch (e) {}
   };
 
-  handlers.metricsEpoch = (message) => {
-    const next = message && typeof message.epoch === "string" && message.epoch.length <= MAX_EPOCH ? message.epoch : "";
-    if (next === epoch) return;
-    epoch = next;
+  handlers.metricsGeneration = (message) => {
+    const value = message && typeof message === "object" ? message.generation : 0;
+    const next = typeof value === "number" && isFiniteNumber(value) && value >= 0 && value <= MAX_GENERATION ? floor(value) : 0;
+    if (next === generation) return;
+    generation = next;
     tally = fresh();
     quality = new WeakMap();
     burst = null;
   };
 
   const soon = () => {
-    if (flushing || !epoch) return;
+    if (flushing || !generation) return;
     flushing = true;
     after(flush, SOON_MS);
   };
@@ -53,28 +78,32 @@
     "error",
     (e) => {
       const target = e.target;
-      if (!epoch || !(target instanceof HTMLMediaElement) || !target.error) return;
+      if (!generation || !(target instanceof MediaElement) || !target.error) return;
       const code = target.error.code;
-      tally.errors[code >= 1 && code <= 4 ? code : 0]++;
+      const slot = typeof code === "number" && code >= 1 && code <= 4 ? floor(code) : 0;
+      tally["e" + slot] = min(MOST, tally["e" + slot] + 1);
       soon();
     },
     { capture: true, passive: true },
   ]);
 
   const sampleVideos = () => {
-    if (!epoch || document.visibilityState !== "visible") return;
-    for (const video of document.getElementsByTagName("video")) {
+    if (!generation || !visible()) return;
+    const videos = apply(byTag, document, ["video"]);
+    for (let i = 0; i < videos.length; i++) {
+      const video = videos[i];
       if (video.paused || video.ended || typeof video.getVideoPlaybackQuality !== "function") continue;
       const q = video.getVideoPlaybackQuality();
       const at = now();
       const before = quality.get(video);
-      quality.set(video, { dropped: q.droppedVideoFrames, total: q.totalVideoFrames, at });
+      const seen = { dropped: count(q && q.droppedVideoFrames), total: count(q && q.totalVideoFrames), at };
+      quality.set(video, seen);
       if (!before || at - before.at > 2 * SAMPLE_MS) continue;
-      const total = q.totalVideoFrames - before.total;
-      const dropped = q.droppedVideoFrames - before.dropped;
+      const total = seen.total - before.total;
+      const dropped = seen.dropped - before.dropped;
       if (total > 0 && dropped >= 0 && dropped <= total) {
-        tally.frames = Math.min(MOST, tally.frames + total);
-        tally.dropped = Math.min(MOST, tally.dropped + dropped);
+        tally.frames = min(MOST, tally.frames + total);
+        tally.dropped = min(MOST, tally.dropped + dropped);
         soon();
       }
     }
@@ -82,11 +111,11 @@
 
   const endBurst = (b) => {
     if (burst === b) burst = null;
-    const ms = Math.round(b.frameAt - b.start);
+    const ms = round(b.frameAt - b.start);
     if (b.frames < 2 || ms <= 0) return;
-    tally.scrolls++;
-    tally.scrollFrames = Math.min(MOST, tally.scrollFrames + b.frames);
-    tally.scrollMs = Math.min(MOST, tally.scrollMs + ms);
+    tally.scrolls = min(MOST, tally.scrolls + 1);
+    tally.scrollFrames = min(MOST, tally.scrollFrames + b.frames);
+    tally.scrollMs = min(MOST, tally.scrollMs + ms);
     soon();
   };
 
@@ -105,7 +134,7 @@
   apply(listen, window, [
     "scroll",
     () => {
-      if (!epoch) return;
+      if (!generation) return;
       const at = now();
       if (burst && at - burst.last <= SCROLL_IDLE_MS) {
         burst.last = at;
@@ -121,7 +150,7 @@
   apply(listen, document, [
     "visibilitychange",
     () => {
-      if (document.visibilityState === "hidden") flush();
+      if (!visible()) flush();
     },
   ]);
   apply(listen, window, ["pagehide", flush]);
@@ -130,6 +159,9 @@
 
   return (kind, json) => {
     const handler = handlers[kind];
-    if (handler) handler(fromJSON(json));
+    if (!handler) return;
+    try {
+      handler(fromJSON(json));
+    } catch (e) {}
   };
 })

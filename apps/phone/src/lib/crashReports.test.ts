@@ -9,7 +9,9 @@ const HOUR = 3_600_000;
 test("a session left open while sharing reads as unclean at the next launch, and one closed by going to the background reads as clean", () => {
   assert.equal(previousSession(sessionMark(true, true)), "unclean");
   assert.equal(previousSession(sessionMark(false, true)), "clean");
-  assert.equal(previousSession(sessionMark(true, false)), "unknown");
+  assert.equal(sessionMark(true, false), null);
+  assert.equal(sessionMark(false, false), null);
+  assert.equal(previousSession("open_unshared"), "unknown");
   assert.equal(previousSession(null), "none");
   assert.equal(previousSession("something else"), "unknown");
 });

@@ -362,7 +362,7 @@ void StartEarlyWindow() {
 }
 
 + (NSDictionary<NSString *, NSNumber *> *)nativeMessagingHosts {
-  return ardia_native_messaging::LastSync();
+  return gDataDirectory.length ? ardia_native_messaging::ProbeHosts(gDataDirectory) : @{};
 }
 
 + (NSDictionary<NSString *, NSNumber *> *)launchMarks {

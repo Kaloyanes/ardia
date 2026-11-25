@@ -9,6 +9,7 @@ export function probeKeyringAfterLaunch(host: ArdiaHost, wait: (run: () => void,
   if (!hostSupports("ArdiaPasswords.status", host) || host.bootstrap.privateWindow) return;
   wait(() => {
     const consent = consentToken();
+    if (!consent) return;
     void passwordStatus(host).then(
       (status) => noteKeyringCheck(status, consent),
       () => noteKeyringCheck({ protection: "unknown", passwords: { reason: "storeFailed" } }, consent),

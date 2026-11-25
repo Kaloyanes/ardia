@@ -54,7 +54,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["previous_session"],
       },
       {
-        text: "When Ardia stopped unexpectedly while sharing was on: what kind of stop it was (an error in Ardia’s own code, a crash, a hang, running out of memory, using too much of the phone, the system ending it, or a watchdog timeout), its cause from a fixed list (the error type, like TypeError, never its message; the signal, like SIGSEGV; or the reason Android or iOS gave), whether Ardia was on screen, and roughly how long ago it was. Sent at the next launch, at most 10 at a time. Never what you were doing, which page was open, or any part of a crash log",
+        text: "When Ardia stopped unexpectedly while sharing was on: what kind of stop it was (an error in Ardia’s own code, a crash, a hang, running out of memory, using too much of the phone, the system ending it, or a watchdog timeout), its cause from a fixed list (the error type, like TypeError, never its message; the signal, like SIGSEGV; or the reason Android or iOS gave), whether Ardia was on screen, and roughly how long ago it was. Sent when Ardia next opens or comes back to the front once the phone has reported it, which can take up to a day, at most 10 per launch. Never what you were doing, which page was open, or any part of a crash log",
         fields: ["app_crashed", "kind", "reason", "foreground", "ago"],
       },
       {

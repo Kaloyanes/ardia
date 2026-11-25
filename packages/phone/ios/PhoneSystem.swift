@@ -131,7 +131,7 @@ public final class SystemModule: Module {
     Name("ArdiaPhoneSystem")
 
     OnCreate {
-      PhoneExits.shared.start()
+      PhoneExits.shared.follow(sharing: UsageConsent.state().sharing)
     }
 
     Events("onSystemLink")
@@ -161,6 +161,7 @@ public final class SystemModule: Module {
 
     Function("setUsageConsent") { (sharing: Bool) in
       UsageConsent.set(sharing: sharing)
+      PhoneExits.shared.follow(sharing: sharing)
     }
 
     Function("takePendingCounts") { () -> [String: Int] in

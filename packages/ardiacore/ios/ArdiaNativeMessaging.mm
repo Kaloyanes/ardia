@@ -101,23 +101,23 @@ NSDictionary<NSString *, NSData *> *InstalledHosts(NSUInteger *unusable) {
   return hosts;
 }
 
-NSLock *gSyncLock = [[NSLock alloc] init];
-NSDictionary<NSString *, NSNumber *> *gLastSync;
-
-void Record(NSUInteger found, NSUInteger registered, NSUInteger kept, NSUInteger writeFailures, NSUInteger unusable) {
-  NSDictionary *health = @{@"found" : @(found), @"registered" : @(registered), @"keptTheirs" : @(kept), @"writeFailures" : @(writeFailures), @"unusable" : @(unusable)};
-  [gSyncLock lock];
-  gLastSync = health;
-  [gSyncLock unlock];
 }
 
-}
-
-NSDictionary<NSString *, NSNumber *> *LastSync() {
-  [gSyncLock lock];
-  NSDictionary *last = gLastSync ?: @{};
-  [gSyncLock unlock];
-  return last;
+NSDictionary<NSString *, NSNumber *> *ProbeHosts(NSString *userDataDir) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSString *dir = [userDataDir stringByAppendingPathComponent:@"NativeMessagingHosts"];
+  NSData *listData = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:kManagedList]];
+  NSArray *listed = listData ? [NSJSONSerialization JSONObjectWithData:listData options:0 error:nil] : nil;
+  NSSet<NSString *> *managed = [listed isKindOfClass:NSArray.class] ? [NSSet setWithArray:listed] : [NSSet set];
+  NSUInteger unusable = 0, registered = 0, kept = 0, missing = 0;
+  NSDictionary<NSString *, NSData *> *hosts = InstalledHosts(&unusable);
+  for (NSString *name in hosts) {
+    const bool present = [fm fileExistsAtPath:ManifestPath(dir, name)];
+    if (present && [managed containsObject:name]) registered++;
+    else if (present) kept++;
+    else missing++;
+  }
+  return @{@"found" : @(hosts.count), @"registered" : @(registered), @"keptTheirs" : @(kept), @"missing" : @(missing), @"unusable" : @(unusable)};
 }
 
 void SyncHosts(NSString *userDataDir) {
@@ -129,24 +129,18 @@ void SyncHosts(NSString *userDataDir) {
   NSArray *previous = listData ? [NSJSONSerialization JSONObjectWithData:listData options:0 error:nil] : nil;
   NSSet<NSString *> *managed = [previous isKindOfClass:NSArray.class] ? [NSSet setWithArray:previous] : [NSSet set];
 
-  NSUInteger unusable = 0, kept = 0, writeFailures = 0;
+  NSUInteger unusable = 0;
   NSDictionary<NSString *, NSData *> *hosts = InstalledHosts(&unusable);
   NSMutableSet<NSString *> *nowManaged = [NSMutableSet set];
   for (NSString *name in hosts) {
     NSString *path = ManifestPath(dir, name);
     bool ours = [managed containsObject:name];
-    if (!ours && [fm fileExistsAtPath:path]) {
-      kept++;
-      continue;
-    }
+    if (!ours && [fm fileExistsAtPath:path]) continue;
     if (![[NSData dataWithContentsOfFile:path] isEqualToData:hosts[name]] &&
-        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:nil]) {
-      writeFailures++;
+        ![hosts[name] writeToFile:path options:NSDataWritingAtomic error:nil])
       continue;
-    }
     [nowManaged addObject:name];
   }
-  Record(hosts.count, nowManaged.count, kept, writeFailures, unusable);
   for (NSString *name in managed)
     if (![nowManaged containsObject:name]) [fm removeItemAtPath:ManifestPath(dir, name) error:nil];
 
