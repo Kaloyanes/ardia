@@ -10,6 +10,7 @@ export type EngineInfo = {
   chromeWindows: number;
   focus?: string;
   pictureInPictureCloses?: string;
+  pictureInPictureGestures?: string;
 };
 
 export type EngineComponent = {
@@ -102,7 +103,7 @@ export type HoverLostEpisode = {
 
 export type WindowUnpaintedRecord = {
   window: "regular" | "private";
-  trigger: "seen" | "key";
+  trigger: "seen" | "key" | "profileSwitch";
   seen: boolean;
   occlusion: "visible" | "occluded";
   overruled: boolean;
