@@ -398,3 +398,36 @@ test("the page watcher leaves counting a refused viewport to the tab that sent i
     s.restore();
   }
 });
+
+test("a page inside a moving Peek stage is hidden once and published once at its settled rect, not every frame", async () => {
+  let x = 200;
+  let moving = false;
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(x, 47, 763, 900), contains: (node) => node === page, closest: (selector) => (moving && selector.includes("data-ardia-peek-moving") ? {} : null) };
+  let running = false;
+  const s = stage({ width: 1280, height: 1000, elementFromPoint: () => page, getAnimations: () => (running ? [{ playState: "running", effect: { target: page } }] : []) });
+  try {
+    const updates = [];
+    const stop = watchTabViewport(page, () => true, (update) => updates.push(update), cover());
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].visible, true);
+    moving = true;
+    running = true;
+    document.dispatchEvent(new Event("animationstart"));
+    for (const next of [180, 160, 140, 120]) {
+      x = next;
+      s.frames.shift()?.();
+      document.dispatchEvent(new Event("animationstart"));
+    }
+    assert.equal(updates.length, 2);
+    assert.deepEqual(updates[1], { rect: { x: 200, y: 47, width: 763, height: 900 }, visible: false });
+    moving = false;
+    running = false;
+    x = 100;
+    s.mutate();
+    assert.equal(updates.length, 3);
+    assert.deepEqual(updates[2], { rect: { x: 100, y: 47, width: 763, height: 900 }, visible: true });
+    stop();
+  } finally {
+    s.restore();
+  }
+});

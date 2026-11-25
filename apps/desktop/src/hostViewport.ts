@@ -1,5 +1,6 @@
 import type { TabViewport } from "./hostTab";
 import { PAGE_STACK_ATTRIBUTE } from "./pageHoles.ts";
+import { createBoundsCommit, PEEK_MOVING_ATTRIBUTE } from "./peekStageMotion.ts";
 
 export type { TabViewport };
 
@@ -10,6 +11,7 @@ export const STACKED_PAGE = `[${PAGE_STACK_ATTRIBUTE}] [data-ardia-native-tab]`;
 const MOTION_EVENTS = ["transitionrun", "transitionend", "transitioncancel", "animationstart", "animationend", "animationcancel"] as const;
 const CLIPS_OVERFLOW = new Set(["hidden", "clip", "scroll", "auto"]);
 const CONTENT_RECT_EPSILON = 0.01;
+const MOVING_STAGE = `[${PEEK_MOVING_ATTRIBUTE}]`;
 
 const boxOf = (element: Element): Bounds => {
   const { x, y, width, height } = element.getBoundingClientRect();
@@ -99,8 +101,20 @@ type OverlayCover = { overlayAt: (x: number, y: number) => boolean; overlayEleme
 export function watchTabViewport(element: HTMLElement, visible: () => boolean, report: (viewport: TabViewport, covered: boolean) => void, cover: OverlayCover, clipToAncestors = true) {
   let frame = 0;
   let stopped = false;
+  type Reported = { visible: boolean; viewport: TabViewport; covered: boolean };
+  const commit = createBoundsCommit<Reported>(
+    ({ viewport, covered }) => report(viewport, covered),
+    ({ viewport }) => ({ visible: false, covered: false, viewport: { ...viewport, visible: false } }),
+    () => false,
+  );
   const measure = () => {
     if (stopped) return;
+    const held = !!element.closest?.(MOVING_STAGE);
+    if (held) {
+      if (!commit.held()) commit.hold();
+      commit.offer({ visible: false, covered: false, viewport: { rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false } });
+      return;
+    }
     const raw = boxOf(element);
     const rect = clipToAncestors ? clipBoxOf(element, raw) : raw;
     const viewport = tabViewport(rect, { width: window.innerWidth, height: window.innerHeight }, visible() && !document.hidden && element.isConnected);
@@ -108,7 +122,8 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
     const reported = plain.viewport.visible && [raw.x, raw.y, raw.width, raw.height].every(Number.isFinite) && raw.width > 0 && raw.height > 0 && !sameRect(raw, plain.viewport.rect)
       ? { ...plain.viewport, contentRect: raw }
       : plain.viewport;
-    report(reported, plain.covered);
+    commit.offer({ visible: reported.visible, viewport: reported, covered: plain.covered });
+    if (commit.held()) commit.release();
     if (animating()) measureNextFrame();
   };
   const animating = () => !!document.getAnimations?.().some((animation) => {
