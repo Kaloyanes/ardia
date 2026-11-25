@@ -8,7 +8,7 @@ import { splitTabIds } from "../splits/splits";
 import { lastUsedOf, restoredAtOf, sharedLastUsed, sharedRestoredAt } from "../tabs/tabShare";
 import type { ClosedTab, Tab } from "../browser/types";
 import { withoutFragment } from "../../lib/url";
-import { syncGroupOrder, withParent } from "../groups/groups";
+import { orderSections, syncGroupOrder, withParent } from "../groups/groups";
 import { cleanedTabsFor, closedEntries, closeQuietly, keptCleanedTabs, regroupRestored, restoreSnapshots, restoreTarget } from "./closedTabs";
 import { activated, apply, removeTabs } from "../tabs/tabs";
 import { shownLiveOf } from "../tabs/tabLive";
@@ -214,7 +214,7 @@ export type CleanUpSlice = {
   cleanUpTabs(windowId: string, options?: { inactiveForMs?: number; allProfiles?: boolean; hiddenProfilesUpTo?: number }): number;
   restoreCleaned(entryIds?: string | string[], windowId?: string): void;
   clearUnpinnedTabs(windowId: string, options?: CloseOptions): ClearedTabs | null;
-  undoClearTabs(cleared: ClearedTabs): void;
+  undoClearTabs(cleared: ClearedTabs, hasLiveFolder?: (folderId: string) => boolean): void;
   removeClosedPin(id: string): ClearedTabs | null;
   closeAbandonedNewTabs(): void;
 };
@@ -292,7 +292,7 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
     return undoable(s, get(), windowId, s.windows[windowId]!.profileId, entries, blankPanes);
   },
 
-  undoClearTabs(cleared) {
+  undoClearTabs(cleared, hasLiveFolder) {
     const s = get();
     if (!canUndoClear(s, cleared)) return;
     const { windowId } = cleared;
@@ -305,21 +305,37 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
     );
     const renamed = new Map(entries.map((e, i) => [e.tabId, ids[i]]));
     const now = (id: string) => renamed.get(id) ?? id;
-    const ofProfile = (id: string) => restored.tabs[id]?.profileId === cleared.profileId;
-    const back = cleared.tabIds.map(now).filter((id) => restored.tabs[id]?.windowId === windowId && ofProfile(id));
+    const tabs = { ...restored.tabs };
+    for (const [oldId, liveItem] of Object.entries(cleared.liveItems ?? {})) {
+      const id = now(oldId);
+      const t = tabs[id];
+      if (!t || t.pin || (hasLiveFolder && !hasLiveFolder(liveItem.folderId))) continue;
+      const taken = Object.values(tabs).some((other) => other.id !== id && other.windowId === windowId && other.profileId === cleared.profileId && other.liveItem?.folderId === liveItem.folderId && other.liveItem?.itemId === liveItem.itemId);
+      if (!taken) tabs[id] = { ...t, liveItem };
+    }
+    const ofProfile = (id: string) => tabs[id]?.profileId === cleared.profileId;
     const w = restored.windows[windowId]!;
-    const window = { ...w, tabIds: [...w.tabIds.filter((id) => !ofProfile(id)), ...back, ...w.tabIds.filter((id) => ofProfile(id) && !back.includes(id))] };
+    const merged = w.tabIds.filter((id) => !ofProfile(id));
+    const placed = new Set<string>();
+    cleared.tabIds.forEach((oldId, i) => {
+      const id = now(oldId);
+      if (tabs[id]?.windowId !== windowId || !ofProfile(id)) return;
+      merged.splice(Math.min(cleared.tabIndexes[i] ?? merged.length, merged.length), 0, id);
+      placed.add(id);
+    });
+    for (const id of w.tabIds) if (ofProfile(id) && !placed.has(id)) merged.push(id);
     const groups = Object.fromEntries(Object.entries(restored.groups).filter(([, g]) => g.windowId !== windowId || g.profileId !== cleared.profileId));
     for (const g of cleared.groups) {
-      const tabIds = g.tabIds.map(now).filter((id) => restored.tabs[id]);
+      const tabIds = g.tabIds.map(now).filter((id) => tabs[id]);
       const current = restored.groups[g.id];
       groups[g.id] = current ? withParent({ ...current, pinned: g.pinned, tabIds }, g.parentId) : { ...g, tabIds };
     }
+    const window = { ...w, tabIds: orderSections(merged, tabs, groups) };
     const closedTabs = restored.closedTabs.map((c) => {
       const moved = c.tabId ? renamed.get(c.tabId) : undefined;
       return moved ? { ...c, tabId: moved, restoreFrom: c.restoreFrom ?? c.tabId } : c;
     });
-    const joined = { ...restored, closedTabs, groups: syncGroupOrder(groups, window), windows: { ...restored.windows, [windowId]: window } };
+    const joined = { ...restored, tabs, closedTabs, groups: syncGroupOrder(groups, window), windows: { ...restored.windows, [windowId]: window } };
     const split = { ...joined, splits: rejoinedSplits(joined, cleared, now) };
     const blanks = (cleared.blankTabIds ?? []).filter((id) => split.tabs[id] && !split.tabs[id]!.url && !hasPage(split.tabs[id]!));
     const next = blanks.length ? removeTabs(split, blanks, false) : split;

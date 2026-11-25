@@ -889,6 +889,50 @@ test("Clear on a lone selected tab closes it and leaves the window open", () => 
   assert.deepEqual(S().windows[w].tabIds.map((id) => S().tabs[id].url), ["https://a.com"], "the blank tab Clear left goes with the undo");
 });
 
+test("Undo of Clear in one profile keeps another profile's Recently Closed reopen index intact", () => {
+  reset();
+  const [w, p1] = setup("p1", "p2");
+  const work = S().createProfile({ name: "Work" });
+  S().switchProfile(w, work);
+  const a = S().newTab(w, { url: "a.com" });
+  const b = S().newTab(w, { url: "b.com" });
+  const c = S().newTab(w, { url: "c.com" });
+  const blank = model.viewTabIds(S(), w, work).find((id) => !S().tabs[id].url);
+  if (blank) S().closeTabs([blank]);
+  S().closeTabs([b]);
+  S().switchProfile(w, "default");
+  S().activate(p1);
+  const cleared = S().clearUnpinnedTabs(w);
+  S().undoClearTabs(cleared);
+  S().switchProfile(w, work);
+  S().reopenClosedTab(w);
+  assert.deepEqual(model.viewTabIds(S(), w, work).map((id) => short(S().tabs[id].url)), ["a", "b", "c"]);
+  assert.ok(S().tabs[a] && S().tabs[c]);
+});
+
+test("Undo of a second Clear keeps a Live Folder tab attached to its folder", async () => {
+  reset();
+  const { createFolder, removeFolder } = await import("../live/store.ts");
+  const { openLiveItem } = await import("../live/engine.ts");
+  const [w] = setup("a");
+  const folderId = createFolder("default", "pullRequests", ["github"]);
+  try {
+    const item = { id: "pr-1", title: "PR 1", url: "https://github.com/org/repo/pull/1", source: "github", updatedAt: 1 };
+    const liveTab = openLiveItem(w, folderId, item);
+    S().activate(liveTab);
+    S().clearUnpinnedTabs(w);
+    const second = S().clearUnpinnedTabs(w);
+    assert.ok(second);
+    S().undoClearTabs(second);
+    const restored = model.activeTabId(S(), w);
+    assert.deepEqual(S().tabs[restored].liveItem, { folderId, itemId: item.id });
+    const reopened = openLiveItem(w, folderId, item);
+    assert.equal(reopened, restored, "clicking the item in the folder focuses the restored tab instead of duplicating it");
+  } finally {
+    removeFolder(folderId);
+  }
+});
+
 test("a tab opened behind joins the ⌃Tab order only once it is shown, so ⌃Tab still returns to the tab before (#1190)", (t) => {
   reset();
   let now = Date.now();

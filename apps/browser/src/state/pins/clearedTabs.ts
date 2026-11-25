@@ -1,6 +1,6 @@
 import type { BrowserState } from "../browser/store";
 import { activeTabId, inPinnedContainer, pinSection, viewTabIds } from "../browser/model";
-import type { ClosedTab, SplitView, TabGroup } from "../browser/types";
+import type { ClosedTab, SplitView, Tab, TabGroup } from "../browser/types";
 import { splitOf, splitTabIds, splitTabIdsOf, withPaneIds } from "../splits/splits";
 import { hasPage } from "../tabs/pageSession";
 import { shownLiveOf } from "../tabs/tabLive";
@@ -12,6 +12,7 @@ export type ClearedTabs = {
   entries: ClosedTab[];
   closedEntryIds: string[];
   tabIds: string[];
+  tabIndexes: number[];
   groups: TabGroup[];
   fingerprint: string;
   profileId: string;
@@ -20,6 +21,7 @@ export type ClearedTabs = {
   blankTabIds?: string[];
   splits?: SplitView[];
   blankPanes?: ClosedTab[];
+  liveItems?: Record<string, NonNullable<Tab["liveItem"]>>;
 };
 
 const remotePinDeletions = new Map<string, number>();
@@ -83,20 +85,42 @@ function windowFingerprint(s: BrowserState, windowId: string, profileId: string)
 }
 
 export function undoable(before: BrowserState, after: BrowserState, windowId: string, profileId: string, entries: ClosedTab[], blankPanes: ClosedTab[] = []): ClearedTabs {
+  const tabIds: string[] = [];
+  const tabIndexes: number[] = [];
+  before.windows[windowId]!.tabIds.forEach((id, index) => {
+    if (before.tabs[id]?.profileId === profileId) {
+      tabIds.push(id);
+      tabIndexes.push(index);
+    }
+  });
+  const allEntries = [...entries, ...blankPanes];
+  const liveItems = clearedLiveItems(before, allEntries);
   return {
     windowId,
     entries,
     closedEntryIds: newClosedEntryIds(before, after),
-    tabIds: before.windows[windowId]!.tabIds.filter((id) => before.tabs[id]?.profileId === profileId),
+    tabIds,
+    tabIndexes,
     groups: Object.values(before.groups).filter((g) => g.windowId === windowId && g.profileId === profileId),
     fingerprint: windowFingerprint(after, windowId, profileId),
     profileId,
     remoteDeletions: remotePinDeletions.get(profileId) ?? 0,
-    selectedTabId: selectedAmong(before, windowId, [...entries, ...blankPanes]),
+    selectedTabId: selectedAmong(before, windowId, allEntries),
     blankTabIds: (after.windows[windowId]?.tabIds ?? []).filter((id) => !before.tabs[id]),
-    splits: clearedSplits(before, [...entries, ...blankPanes]),
+    splits: clearedSplits(before, allEntries),
     ...(blankPanes.length ? { blankPanes } : {}),
+    ...(liveItems ? { liveItems } : {}),
   };
+}
+
+function clearedLiveItems(before: BrowserState, entries: ClosedTab[]): Record<string, NonNullable<Tab["liveItem"]>> | undefined {
+  const out: Record<string, NonNullable<Tab["liveItem"]>> = {};
+  for (const e of entries) {
+    if (!e.tabId) continue;
+    const item = before.tabs[e.tabId]?.liveItem;
+    if (item) out[e.tabId] = item;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function clearedSplits(before: BrowserState, entries: ClosedTab[]): SplitView[] {
