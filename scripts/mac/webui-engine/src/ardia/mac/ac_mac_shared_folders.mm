@@ -397,8 +397,9 @@ Coordinated CoordinateMoving(const std::string& from, const std::string& to, Bod
                                      return;
                                    }
                                    [coordinator itemAtURL:moving willMoveToURL:replacing];
-                                   (*run)();
-                                   [coordinator itemAtURL:moving didMoveToURL:replacing];
+                                   const bool renamed = (*run)();
+                                   [coordinator itemAtURL:moving
+                                             didMoveToURL:policy::MovedTo(renamed) ? replacing : moving];
                                  }];
     return error;
   });
@@ -757,15 +758,16 @@ Step Move(const Folder& source,
   }
   bool moved = false;
   int failure = 0;
-  auto body = [&] {
+  auto body = [&]() -> bool {
     if (KindIn(destination, target) != Kind::kMissing) {
-      return;
+      return false;
     }
     if (renameatx_np(source.fd(), name.c_str(), destination.fd(), target.c_str(), RENAME_EXCL) == 0) {
       moved = true;
     } else if (errno != EEXIST) {
       failure = errno;
     }
+    return moved;
   };
   if (std::optional<std::string> failed =
           Uncoordinated(CoordinateMoving(source.Child(name), destination.Child(target), body), source.path())) {

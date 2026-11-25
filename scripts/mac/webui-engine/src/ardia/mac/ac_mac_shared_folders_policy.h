@@ -235,6 +235,10 @@ class CoordinationGate {
   std::atomic<int> state_{kPending};
 };
 
+inline bool MovedTo(bool renamed) {
+  return renamed;
+}
+
 enum class Coordination { kRan, kTimedOut, kFailed };
 
 inline Coordination CoordinationOutcome(bool body_ran, const CoordinationGate& gate) {

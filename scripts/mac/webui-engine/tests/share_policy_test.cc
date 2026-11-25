@@ -160,47 +160,90 @@ TEST(each_context_menu_owns_its_observer_until_it_is_destroyed) {
 TEST(only_issued_images_are_taken_and_only_by_their_window) {
   policy::IssuedFiles<std::string> issued;
   const auto by = [](std::string window) { return [window](const std::string& owner) { return owner == window; }; };
-  CHECK(issued.Issue("/tmp/i/1-a/one.png", "w1").issued);
-  CHECK(issued.Issue("/tmp/i/1-a/two.png", "w2").issued);
-  CHECK(!issued.Issue("/tmp/i/1-a/one.png", "w2").issued);
+  CHECK(issued.Reserve("/tmp/i/1-a/one.png", "w1").issued);
+  CHECK(issued.Reserve("/tmp/i/1-a/two.png", "w2").issued);
+  CHECK(!issued.Reserve("/tmp/i/1-a/one.png", "w2").issued);
+  CHECK(!issued.Take("/tmp/i/1-a/one.png", by("w1")));
+  CHECK(issued.Publish("/tmp/i/1-a/one.png") && !issued.Publish("/tmp/i/1-a/one.png"));
   CHECK(!issued.Take("/tmp/i/1-a/one.png", by("w2")));
   CHECK(issued.Shareable("/tmp/i/1-a/one.png"));
   CHECK(issued.Take("/tmp/i/1-a/one.png", by("w1")));
   CHECK(!issued.Take("/tmp/i/1-a/one.png", by("w1")));
-  CHECK(!issued.Shareable("/tmp/i/1-a/one.png") && issued.Holds("/tmp/i/1-a/one.png"));
+  CHECK(issued.SlotOf("/tmp/i/1-a/one.png") == policy::Slot::kTaken);
   CHECK(!issued.Take("/tmp/i/1-a/never.png", by("w1")));
-  CHECK(!issued.Take("/tmp/i/1-a/two.png", [](const std::string&) { return false; }));
-  CHECK((issued.RevokeIf([](const std::string& owner) { return owner == "w2"; }) ==
-         std::vector<std::string>{"/tmp/i/1-a/two.png"}));
-  CHECK(!issued.Take("/tmp/i/1-a/two.png", by("w2")));
-  CHECK(issued.Holds("/tmp/i/1-a/two.png"));
-  CHECK(issued.Release("/tmp/i/1-a/two.png") && issued.Release("/tmp/i/1-a/one.png"));
+  CHECK(issued.Release("/tmp/i/1-a/one.png") && issued.Release("/tmp/i/1-a/two.png"));
   CHECK(issued.size() == 0);
+}
+
+TEST(a_retired_window_cancels_its_reserved_and_issued_images_but_not_one_a_service_holds) {
+  policy::IssuedFiles<std::string> issued;
+  CHECK(issued.Reserve("/tmp/i/1-a/writing.png", "w1").issued);
+  CHECK(issued.Reserve("/tmp/i/1-a/ready.png", "w1").issued && issued.Publish("/tmp/i/1-a/ready.png"));
+  CHECK(issued.Reserve("/tmp/i/1-a/held.png", "w1").issued && issued.Publish("/tmp/i/1-a/held.png"));
+  CHECK(issued.Take("/tmp/i/1-a/held.png", [](const std::string&) { return true; }));
+  CHECK(issued.Reserve("/tmp/i/1-a/other.png", "w2").issued);
+  std::vector<std::string> cancelled;
+  const auto revoked = issued.RevokeUnheld([&cancelled](const std::string& owner) {
+    if (owner != "w1") return false;
+    cancelled.push_back(owner);
+    return true;
+  });
+  CHECK((revoked == std::vector<std::string>{"/tmp/i/1-a/ready.png", "/tmp/i/1-a/writing.png"}));
+  CHECK(cancelled.size() == 2);
+  CHECK(issued.SlotOf("/tmp/i/1-a/held.png") == policy::Slot::kTaken);
+  CHECK(issued.SlotOf("/tmp/i/1-a/other.png") == policy::Slot::kReserved);
+  CHECK(!issued.Publish("/tmp/i/1-a/writing.png"));
+  CHECK(issued.Holds("/tmp/i/1-a/writing.png") && issued.size() == 4);
+  CHECK(policy::KeepsServiceAfterRetire(true) && !policy::KeepsServiceAfterRetire(false));
 }
 
 TEST(taken_images_hold_their_slot_until_the_file_is_deleted) {
   policy::IssuedFiles<std::string> issued;
   const auto anyone = [](const std::string&) { return true; };
   for (std::size_t index = 0; index < policy::kMaxIssuedFiles; ++index) {
-    CHECK(issued.Issue("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1").issued);
+    const std::string path = "/tmp/i/1-a/" + std::to_string(index) + ".png";
+    CHECK(issued.Reserve(path, "w1").issued && issued.Publish(path));
   }
   CHECK(issued.Take("/tmp/i/1-a/0.png", anyone));
-  const auto full = issued.Issue("/tmp/i/1-a/next.png", "w1");
+  const auto full = issued.Reserve("/tmp/i/1-a/next.png", "w1");
   CHECK(!full.issued && full.evicted == std::optional<std::string>("/tmp/i/1-a/1.png"));
-  CHECK(!issued.Shareable("/tmp/i/1-a/1.png") && issued.Holds("/tmp/i/1-a/1.png"));
-  CHECK(issued.size() == policy::kMaxIssuedFiles);
+  CHECK(issued.SlotOf("/tmp/i/1-a/1.png") == policy::Slot::kRevoked && issued.size() == policy::kMaxIssuedFiles);
   CHECK(issued.Release("/tmp/i/1-a/1.png"));
-  CHECK(issued.Issue("/tmp/i/1-a/next.png", "w1").issued);
+  CHECK(issued.Reserve("/tmp/i/1-a/next.png", "w1").issued);
   for (std::size_t index = 2; index < policy::kMaxIssuedFiles; ++index) {
     CHECK(issued.Take("/tmp/i/1-a/" + std::to_string(index) + ".png", anyone));
   }
-  CHECK(issued.Take("/tmp/i/1-a/next.png", anyone));
-  const auto refused = issued.Issue("/tmp/i/1-a/later.png", "w1");
+  const auto refused = issued.Reserve("/tmp/i/1-a/later.png", "w1");
   CHECK(!refused.issued && !refused.evicted && !issued.Holds("/tmp/i/1-a/later.png"));
   CHECK(issued.Revoke("/tmp/i/1-a/0.png") && issued.Holds("/tmp/i/1-a/0.png"));
-  CHECK(!issued.Issue("/tmp/i/1-a/later.png", "w1").issued);
+  CHECK(!issued.Reserve("/tmp/i/1-a/later.png", "w1").issued);
   CHECK(issued.Release("/tmp/i/1-a/0.png"));
-  CHECK(issued.Issue("/tmp/i/1-a/later.png", "w1").issued);
+  CHECK(issued.Reserve("/tmp/i/1-a/later.png", "w1").issued);
+}
+
+TEST(unlinks_retry_with_backoff_and_then_give_up) {
+  CHECK(policy::NextUnlinkStep(0, true) == policy::UnlinkStep::kRelease);
+  CHECK(policy::NextUnlinkStep(3, true) == policy::UnlinkStep::kRelease);
+  for (int attempt = 0; attempt + 1 < policy::kMaxUnlinkAttempts; ++attempt) {
+    CHECK(policy::NextUnlinkStep(attempt, false) == policy::UnlinkStep::kRetry);
+    CHECK(policy::UnlinkRetryDelayMs(attempt + 1) == 2 * policy::UnlinkRetryDelayMs(attempt));
+  }
+  CHECK(policy::NextUnlinkStep(policy::kMaxUnlinkAttempts - 1, false) == policy::UnlinkStep::kGiveUp);
+  CHECK(policy::UnlinkRetryDelayMs(0) == policy::kFirstUnlinkRetryMs);
+  CHECK(policy::UnlinkRetryDelayMs(1000) == policy::UnlinkRetryDelayMs(policy::kMaxUnlinkAttempts));
+  CHECK(policy::UnlinkRetryDelayMs(-5) == policy::kFirstUnlinkRetryMs);
+}
+
+TEST(leftover_staging_folders_are_reaped_only_for_dead_unlocked_processes) {
+  CHECK(policy::StagingPid(".42-0f3a.staging") == 42);
+  CHECK(!policy::StagingPid("42-0f3a.staging"));
+  CHECK(!policy::StagingPid(".42-0f3a"));
+  CHECK(!policy::StagingPid(".x.staging"));
+  CHECK(!policy::StagingPid(".staging"));
+  CHECK(policy::SweepsStaging(false, false, false));
+  CHECK(!policy::SweepsStaging(false, false, true));
+  CHECK(!policy::SweepsStaging(false, true, false));
+  CHECK(!policy::SweepsStaging(true, false, false));
 }
 
 TEST(a_chosen_service_survives_either_callback_order) {

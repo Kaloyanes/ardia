@@ -225,55 +225,64 @@ struct Issuance {
 inline constexpr int kShareCommandFirst = 54100;
 inline constexpr int kShareCommandLast = kShareCommandFirst + static_cast<int>(kMaxPageShares) - 1;
 
+enum class Slot { kReserved, kIssued, kTaken, kRevoked };
+
 template <typename Owner>
 class IssuedFiles {
  public:
-  Issuance Issue(std::string path, Owner owner) {
+  Issuance Reserve(std::string path, Owner owner) {
     if (entries_.contains(path)) return Issuance{};
     if (entries_.size() >= kMaxIssuedFiles) {
-      const auto waiting = std::find_if(order_.begin(), order_.end(), [this](const std::string& held) {
-        const Entry& entry = entries_.at(held);
-        return !entry.taken && !entry.revoked;
-      });
+      const auto waiting = std::find_if(order_.begin(), order_.end(),
+                                        [this](const std::string& held) { return entries_.at(held).slot == Slot::kIssued; });
       if (waiting == order_.end()) return Issuance{};
-      entries_.at(*waiting).revoked = true;
+      entries_.at(*waiting).slot = Slot::kRevoked;
       return Issuance{false, *waiting};
     }
     order_.push_back(path);
-    entries_.emplace(std::move(path), Entry{std::move(owner), false, false});
+    entries_.emplace(std::move(path), Entry{std::move(owner), Slot::kReserved});
     return Issuance{true, std::nullopt};
+  }
+
+  bool Publish(std::string_view path) {
+    const auto found = entries_.find(std::string(path));
+    if (found == entries_.end() || found->second.slot != Slot::kReserved) return false;
+    found->second.slot = Slot::kIssued;
+    return true;
   }
 
   template <typename Accept>
   bool Take(std::string_view path, Accept accept) {
     const auto found = entries_.find(std::string(path));
-    if (found == entries_.end() || found->second.taken || found->second.revoked || !accept(found->second.owner)) {
+    if (found == entries_.end() || found->second.slot != Slot::kIssued || !accept(found->second.owner)) {
       return false;
     }
-    found->second.taken = true;
+    found->second.slot = Slot::kTaken;
     return true;
   }
 
   bool Holds(std::string_view path) const { return entries_.contains(std::string(path)); }
 
-  bool Shareable(std::string_view path) const {
+  std::optional<Slot> SlotOf(std::string_view path) const {
     const auto found = entries_.find(std::string(path));
-    return found != entries_.end() && !found->second.taken && !found->second.revoked;
+    return found == entries_.end() ? std::nullopt : std::optional(found->second.slot);
   }
+
+  bool Shareable(std::string_view path) const { return SlotOf(path) == Slot::kIssued; }
 
   bool Revoke(std::string_view path) {
     const auto found = entries_.find(std::string(path));
     if (found == entries_.end()) return false;
-    found->second.revoked = true;
+    found->second.slot = Slot::kRevoked;
     return true;
   }
 
   template <typename Match>
-  std::vector<std::string> RevokeIf(Match match) {
+  std::vector<std::string> RevokeUnheld(Match match) {
     std::vector<std::string> revoked;
     for (auto& [path, entry] : entries_) {
-      if (!entry.revoked && match(entry.owner)) {
-        entry.revoked = true;
+      if ((entry.slot == Slot::kIssued || entry.slot == Slot::kReserved) && match(entry.owner)) {
+        entry.slot = Slot::kRevoked;
         revoked.push_back(path);
       }
     }
@@ -291,13 +300,31 @@ class IssuedFiles {
  private:
   struct Entry {
     Owner owner;
-    bool taken = false;
-    bool revoked = false;
+    Slot slot = Slot::kReserved;
   };
 
   std::map<std::string, Entry> entries_;
   std::deque<std::string> order_;
 };
+
+inline constexpr int kMaxUnlinkAttempts = 5;
+inline constexpr int kFirstUnlinkRetryMs = 500;
+
+enum class UnlinkStep { kRelease, kRetry, kGiveUp };
+
+inline UnlinkStep NextUnlinkStep(int attempt, bool gone) {
+  if (gone) return UnlinkStep::kRelease;
+  return attempt + 1 < kMaxUnlinkAttempts ? UnlinkStep::kRetry : UnlinkStep::kGiveUp;
+}
+
+inline int UnlinkRetryDelayMs(int attempt) {
+  const int bounded = std::clamp(attempt, 0, kMaxUnlinkAttempts);
+  return kFirstUnlinkRetryMs << bounded;
+}
+
+inline bool KeepsServiceAfterRetire(bool service_chosen) {
+  return service_chosen;
+}
 
 inline bool SameChoice(bool service_known, bool same_service) {
   return !service_known || same_service;
@@ -337,6 +364,16 @@ inline std::optional<long> InstancePid(std::string_view name) {
     return std::nullopt;
   }
   return pid;
+}
+
+inline std::optional<long> StagingPid(std::string_view name) {
+  constexpr std::string_view suffix = ".staging";
+  if (name.size() <= 1 + suffix.size() || name.front() != '.' || !name.ends_with(suffix)) return std::nullopt;
+  return InstancePid(name.substr(1, name.size() - 1 - suffix.size()));
+}
+
+inline bool SweepsStaging(bool own, bool lock_held, bool process_alive) {
+  return !own && !lock_held && !process_alive;
 }
 
 }

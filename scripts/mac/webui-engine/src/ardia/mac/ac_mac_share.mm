@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -34,6 +35,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
@@ -165,6 +167,7 @@ struct PageOrigin {
 struct ImageOwner {
   PageOrigin origin;
   base::WeakPtr<content::WebContents> contents;
+  std::shared_ptr<std::atomic<bool>> cancelled;
 };
 
 ShellHostView* StillBound(const PageOrigin& origin, content::WebContents* contents, PageBinding** binding);
@@ -179,6 +182,16 @@ scoped_refptr<base::SequencedTaskRunner> ImageRunner() {
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
   return *runner;
+}
+
+bool& InstanceClaimed() {
+  static bool claimed = false;
+  return claimed;
+}
+
+base::ScopedFD& InstanceLock() {
+  static base::NoDestructor<base::ScopedFD> lock;
+  return *lock;
 }
 
 share_policy::IssuedFiles<ImageOwner>& Issued() {
@@ -212,21 +225,42 @@ bool InInstanceDirectory(const std::string& path) {
   return share_policy::InsideDirectory(path, StandardPath(InstanceDirectory().value()));
 }
 
+void ScheduleUnlink(base::FilePath path, std::string standard, int attempt, base::TimeDelta delay);
+
+void Unlinked(base::FilePath path, std::string standard, int attempt, bool gone) {
+  switch (share_policy::NextUnlinkStep(attempt, gone)) {
+    case share_policy::UnlinkStep::kRelease:
+      Issued().Release(standard);
+      return;
+    case share_policy::UnlinkStep::kRetry:
+      return ScheduleUnlink(std::move(path), std::move(standard), attempt + 1,
+                            base::Milliseconds(share_policy::UnlinkRetryDelayMs(attempt)));
+    case share_policy::UnlinkStep::kGiveUp:
+      Trace("a shared image could not be deleted; a later instance sweeps it");
+      Issued().Release(standard);
+      return;
+  }
+}
+
+void ScheduleUnlink(base::FilePath path, std::string standard, int attempt, base::TimeDelta delay) {
+  ImageRunner()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](scoped_refptr<base::SequencedTaskRunner> reply, base::FilePath path, std::string standard, int attempt) {
+            const bool gone = base::DeleteFile(path);
+            reply->PostTask(FROM_HERE, base::BindOnce(&Unlinked, std::move(path), std::move(standard), attempt, gone));
+          },
+          base::SequencedTaskRunner::GetCurrentDefault(), std::move(path), std::move(standard), attempt),
+      delay);
+}
+
 void RemoveTemporary(const base::FilePath& path) {
-  const std::string standard = StandardPath(path.value());
+  std::string standard = StandardPath(path.value());
   if (!InInstanceDirectory(standard)) {
     return;
   }
   Issued().Revoke(standard);
-  ImageRunner()->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce([](base::FilePath path) { return base::DeleteFile(path); }, path),
-      base::BindOnce(
-          [](std::string standard, bool gone) {
-            if (gone) {
-              Issued().Release(standard);
-            }
-          },
-          standard));
+  ScheduleUnlink(path, std::move(standard), 0, base::TimeDelta());
 }
 
 void Settle(Request& request) {
@@ -659,11 +693,7 @@ void Deliver(const PageOrigin& origin,
   }
   if (file) {
     const std::string issued = StandardPath(file->value());
-    const share_policy::Issuance issuance = Issued().Issue(issued, ImageOwner{origin, contents->GetWeakPtr()});
-    if (issuance.evicted) {
-      RemoveTemporary(base::FilePath(*issuance.evicted));
-    }
-    if (issuance.issued) {
+    if (Issued().Shareable(issued)) {
       share.Set("fileUrl",
                 base::SysNSStringToUTF8([NSURL fileURLWithPath:base::SysUTF8ToNSString(issued)].absoluteString));
     } else {
@@ -711,25 +741,39 @@ void DeliverImage(PageOrigin origin,
   }
   const base::FilePath path = InstanceDirectory().Append(base::Uuid::GenerateRandomV4().AsLowercaseString() + "." +
                                                          std::string(share_policy::ImageExtension(mime_type)));
+  const std::string standard = StandardPath(path.value());
+  auto cancelled = std::make_shared<std::atomic<bool>>(false);
+  const share_policy::Issuance reservation =
+      Issued().Reserve(standard, ImageOwner{origin, contents, cancelled});
+  if (reservation.evicted) {
+    RemoveTemporary(base::FilePath(*reservation.evicted));
+  }
+  if (!reservation.issued) {
+    return Deliver(origin, contents.get(), std::move(share), point, std::nullopt);
+  }
   ImageRunner()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(
-          [](base::FilePath path, std::vector<uint8_t> bytes) {
-            return base::CreateDirectory(path.DirName()) && base::WriteFile(path, bytes);
+          [](base::FilePath path, std::vector<uint8_t> bytes, std::shared_ptr<std::atomic<bool>> cancelled) {
+            if (cancelled->load() || !InstanceClaimed()) {
+              return false;
+            }
+            return base::WriteFile(path, bytes);
           },
-          path, image),
+          path, std::vector<uint8_t>(image), cancelled),
       base::BindOnce(
           [](PageOrigin origin, base::WeakPtr<content::WebContents> contents, base::DictValue share,
-             gfx::PointF point, base::FilePath path, bool written) {
-            if (!contents) {
-              return RemoveTemporary(path);
-            }
-            Deliver(origin, contents.get(), std::move(share), point, written ? std::optional(path) : std::nullopt);
-            if (!written) {
+             gfx::PointF point, base::FilePath path, std::string standard, bool written) {
+            const bool published = written && contents && Issued().Publish(standard);
+            if (!published) {
               RemoveTemporary(path);
             }
+            if (contents) {
+              Deliver(origin, contents.get(), std::move(share), point,
+                      published ? std::optional(path) : std::nullopt);
+            }
           },
-          std::move(origin), contents, std::move(share), point, path));
+          std::move(origin), contents, std::move(share), point, path, standard));
 }
 
 void ShareFromMenu(content::RenderFrameHost& frame,
@@ -872,21 +916,23 @@ InstanceLockState LockOf(const base::FilePath& directory) {
   return InstanceLockState{share_policy::InstanceLock::kHeld, base::ScopedFD()};
 }
 
+base::FilePath StagingFor(const base::FilePath& root, const base::FilePath& own) {
+  return root.Append("." + own.BaseName().value() + ".staging");
+}
+
 bool ClaimInstance(const base::FilePath& root, const base::FilePath& own) {
-  const base::FilePath staging = root.Append("." + own.BaseName().value() + ".staging");
+  const base::FilePath staging = StagingFor(root, own);
   if (!base::CreateDirectory(staging)) {
     return false;
   }
-  const int fd = open(staging.Append(kInstanceLockName).value().c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
-                      0600);
-  if (fd < 0) {
-    return false;
-  }
-  if (flock(fd, LOCK_EX | LOCK_NB) != 0 || rename(staging.value().c_str(), own.value().c_str()) != 0) {
-    close(fd);
+  base::ScopedFD fd(open(staging.Append(kInstanceLockName).value().c_str(),
+                         O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600));
+  if (!fd.is_valid() || flock(fd.get(), LOCK_EX | LOCK_NB) != 0 ||
+      rename(staging.value().c_str(), own.value().c_str()) != 0) {
     base::DeletePathRecursively(staging);
     return false;
   }
+  InstanceLock() = std::move(fd);
   return true;
 }
 
@@ -895,14 +941,24 @@ bool ProcessAlive(long pid) {
 }
 
 void ClaimAndSweep(base::FilePath root, base::FilePath own) {
-  if (!ClaimInstance(root, own)) {
-    Trace("the shared-images folder could not be claimed");
+  InstanceClaimed() = ClaimInstance(root, own);
+  if (!InstanceClaimed()) {
+    Trace("the shared-images folder could not be claimed, so pages share images by link only");
   }
+  const base::FilePath own_staging = StagingFor(root, own);
   base::FileEnumerator entries(root, false, base::FileEnumerator::DIRECTORIES);
   for (base::FilePath entry = entries.Next(); !entry.empty(); entry = entries.Next()) {
-    const std::optional<long> pid = share_policy::InstancePid(entry.BaseName().value());
     struct stat info = {};
     const bool directory = lstat(entry.value().c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+    if (const std::optional<long> staging = share_policy::StagingPid(entry.BaseName().value()); staging && directory) {
+      InstanceLockState lock = LockOf(entry);
+      if (share_policy::SweepsStaging(entry == own_staging, lock.lock == share_policy::InstanceLock::kHeld,
+                                      ProcessAlive(*staging))) {
+        base::DeletePathRecursively(entry);
+      }
+      continue;
+    }
+    const std::optional<long> pid = share_policy::InstancePid(entry.BaseName().value());
     const bool recognized = pid.has_value() && directory;
     if (!recognized || entry == own) {
       continue;
@@ -977,14 +1033,22 @@ void Retire(const std::string& owner) {
     if (found == Requests().end()) {
       continue;
     }
+    if (share_policy::KeepsServiceAfterRetire(found->second.service != nil)) {
+      continue;
+    }
     NSSharingServicePicker* picker = found->second.chosen ? nil : found->second.picker;
     found->second.picker = nil;
     found->second.chosen = true;
     [picker close];
     EndRequest(id);
   }
-  for (const std::string& path :
-       Issued().RevokeIf([&owner](const ImageOwner& image) { return image.origin.window_id == owner; })) {
+  for (const std::string& path : Issued().RevokeUnheld([&owner](const ImageOwner& image) {
+         if (image.origin.window_id != owner) {
+           return false;
+         }
+         image.cancelled->store(true);
+         return true;
+       })) {
     RemoveTemporary(base::FilePath(path));
   }
 }

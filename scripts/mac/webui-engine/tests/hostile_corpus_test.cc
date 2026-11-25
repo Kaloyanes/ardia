@@ -351,7 +351,9 @@ TEST(share_guards) {
     }
     if (const auto name = share::InstanceDirectoryName(1, text)) CHECK(Charset(*name, "-") && name->find('/') == std::string::npos);
     share::IssuedFiles<std::string> issued;
-    issued.Issue("/tmp/ardia-images/1-a/image.png", "w1");
+    issued.Reserve("/tmp/ardia-images/1-a/image.png", "w1");
+    issued.Publish("/tmp/ardia-images/1-a/image.png");
+    if (const auto staging = share::StagingPid(text)) CHECK(*staging > 0 && text.front() == '.' && text.ends_with(".staging"));
     const auto window = [&text](const std::string& owner) { return owner == text; };
     CHECK(!issued.Take(text, [](const std::string& owner) { return owner == "w1"; }) ||
           text == "/tmp/ardia-images/1-a/image.png");

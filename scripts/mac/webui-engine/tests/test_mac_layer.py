@@ -854,6 +854,10 @@ class ContractTests(unittest.TestCase):
 
     def test_shared_folder_writes_match_the_swift_directory(self):
         folders = self.read('ac_mac_shared_folders.mm')
+        moving = folders.split('Coordinated CoordinateMoving(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('const bool renamed = (*run)();', moving)
+        self.assertIn('didMoveToURL:policy::MovedTo(renamed) ? replacing : moving', moving)
+        self.assertLess(moving.index('willMoveToURL:replacing'), moving.index('const bool renamed = (*run)();'))
         write = folders.split('Step Write(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('RENAME_EXCL', write)
         self.assertIn('NSFileCoordinatorWritingForReplacing', write)
@@ -881,7 +885,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('__weak NSWindow* window', share)
         retire = share.split('void Retire(const std::string& owner) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('[picker close];', retire)
-        self.assertIn('Issued().RevokeIf(', retire)
+        self.assertIn('Issued().RevokeUnheld(', retire)
+        self.assertIn('image.cancelled->store(true);', retire)
+        self.assertLess(retire.index('share_policy::KeepsServiceAfterRetire(found->second.service != nil)'), retire.index('[picker close];'))
         self.assertIn('found->second.chosen ? nil : found->second.picker', retire)
         shareable = share.split('std::optional<SharedFile> ShareableFile(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('lstat(', shareable)
@@ -892,8 +898,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('share_policy::InstanceDirectoryName(', share)
         sweep = share.split('void ClaimAndSweep(', 1)[1].split('\n}\n', 1)[0]
         claim = share.split('bool ClaimInstance(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('".staging"', claim)
-        self.assertLess(claim.index('flock(fd, LOCK_EX | LOCK_NB)'), claim.index('rename(staging.value().c_str(), own.value().c_str())'))
+        self.assertIn('".staging"', share)
+        self.assertLess(claim.index('flock(fd.get(), LOCK_EX | LOCK_NB)'), claim.index('rename(staging.value().c_str(), own.value().c_str())'))
+        self.assertIn('InstanceLock() = std::move(fd);', claim)
+        self.assertEqual(claim.count('base::DeletePathRecursively(staging);'), 1)
+        self.assertIn('InstanceClaimed() = ClaimInstance(root, own);', sweep)
+        self.assertIn('share_policy::StagingPid(', sweep)
+        self.assertIn('share_policy::SweepsStaging(', sweep)
         self.assertIn('InstanceLockState lock = LockOf(entry);', sweep)
         self.assertLess(sweep.index('InstanceLockState lock = LockOf(entry);'), sweep.index('base::DeletePathRecursively(entry);'))
         self.assertIn('share_policy::SweepsInstance(', sweep)
@@ -908,11 +919,18 @@ class ContractTests(unittest.TestCase):
             self.assertIn('service', body)
         self.assertIn('return ardia_mac::share::PickerOwns(_request, picker, service) ? self : nil;', share)
         remove = share.split('void RemoveTemporary(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(remove.index('Issued().Revoke(standard);'), remove.index('ImageRunner()->PostTaskAndReplyWithResult('))
-        self.assertLess(remove.index('base::DeleteFile(path)'), remove.index('Issued().Release(standard);'))
+        self.assertLess(remove.index('Issued().Revoke(standard);'), remove.index('ScheduleUnlink('))
+        unlinked = share.split('void Unlinked(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('share_policy::NextUnlinkStep(attempt, gone)', unlinked)
+        self.assertIn('share_policy::UnlinkRetryDelayMs(attempt)', unlinked)
+        self.assertIn('base::DeleteFile(path)', share.split('void ScheduleUnlink(base::FilePath path, std::string standard, int attempt, base::TimeDelta delay) {', 1)[1].split('\n}\n', 1)[0])
         image = share.split('void DeliverImage(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(image.index('StillBound(origin, contents.get(), &binding)'), image.index('ImageRunner()->PostTaskAndReplyWithResult('))
-        self.assertIn('Issued().Issue(issued, ImageOwner{origin, contents->GetWeakPtr()})', share)
+        self.assertLess(image.index('StillBound(origin, contents.get(), &binding)'), image.index('Issued().Reserve('))
+        self.assertLess(image.index('Issued().Reserve('), image.index('std::vector<uint8_t>(image)'))
+        self.assertIn('if (cancelled->load() || !InstanceClaimed()) {', image)
+        self.assertIn('Issued().Publish(standard)', image)
+        self.assertNotIn('CreateDirectory', image)
+        self.assertNotIn('Issued().Issue(', share)
         self.assertIn('constexpr int kShareFirst = share_policy::kShareCommandFirst;', share)
         self.assertNotIn('IDC_CONTENT_CONTEXT_CUSTOM_FIRST +', share)
         owns = share.split('bool PickerOwns(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]

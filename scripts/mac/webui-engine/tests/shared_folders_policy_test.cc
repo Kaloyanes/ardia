@@ -138,6 +138,11 @@ TEST(a_coordinator_error_is_a_failure_not_a_timeout) {
   CHECK(policy::kCoordinationTimeoutSeconds == 20);
 }
 
+TEST(a_failed_rename_announces_no_move) {
+  CHECK(policy::MovedTo(true));
+  CHECK(!policy::MovedTo(false));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

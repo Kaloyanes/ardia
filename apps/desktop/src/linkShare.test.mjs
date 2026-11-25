@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { linkShareItems, mailtoLink, MORE_SHARE_SERVICE, refreshShareServices, openMailLink, setShareServices, setShareSurface, shareLink, shareLinkVia, shareServicesFrom, shareText, withShareMenus } from "./linkShare.ts";
-import { loadShareServices, shareModuleMethod } from "./hostShare.ts";
+import { loadShareServices, SHARE_SERVICES_STALL_MS, shareModuleMethod } from "./hostShare.ts";
 import { appModuleFallback } from "./appModuleFallbacks.ts";
 import { linuxModuleMethod } from "./hostSystem.ts";
 
@@ -142,4 +142,39 @@ test("opening a menu waits for the services macOS lists, but never longer than t
   assert.ok(Date.now() - started < 500, "a stalled host never holds the menu");
   setShareServices([], () => Promise.reject(new Error("host gone")));
   await refreshShareServices(20);
+});
+
+test("a stalled services request expires, and only the newest reply is kept", async () => {
+  let clock = 0;
+  const pending = [];
+  const mac = { bootstrap: { capabilities: ["ArdiaApp.shareServices"] }, invoke: () => new Promise((resolve) => pending.push(resolve)) };
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  loadShareServices(mac, () => clock);
+  await tick();
+  assert.equal(pending.length, 1);
+  await refreshShareServices(0);
+  await tick();
+  assert.equal(pending.length, 1, "a request still within its time is reused");
+  clock = SHARE_SERVICES_STALL_MS + 1;
+  await refreshShareServices(0);
+  await tick();
+  assert.equal(pending.length, 2, "a stalled request no longer holds the refresh");
+  pending[1]([{ title: "Messages", menuTitle: "Messages" }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  pending[0]([{ title: "AirDrop", menuTitle: "AirDrop" }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["Messages", "More…"], "the superseded reply is ignored");
+});
+
+test("a newer click supersedes an earlier app menu open, and a detached anchor never shows a menu", async () => {
+  const { beginAppMenuOpen, mayPublishAppMenu } = await import("./appMenuOpen.ts");
+  const first = beginAppMenuOpen("w1");
+  const other = beginAppMenuOpen("w2");
+  const second = beginAppMenuOpen("w1");
+  assert.equal(first(), false);
+  assert.equal(second(), true);
+  assert.equal(other(), true);
+  assert.equal(mayPublishAppMenu(second, { isConnected: true }), true);
+  assert.equal(mayPublishAppMenu(second, { isConnected: false }), false);
+  assert.equal(mayPublishAppMenu(first, { isConnected: true }), false);
 });

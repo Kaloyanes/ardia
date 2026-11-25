@@ -6,6 +6,7 @@ import { isLinkShareService, MORE_SHARE_SERVICE, setShareServices, shareLinkVia,
 export const SHARE_VIA = "ArdiaApp.shareVia";
 export const SHARE_SERVICES = "ArdiaApp.shareServices";
 export const OPEN_SHARING_SETTINGS = "ArdiaApp.openSharingSettings";
+export const SHARE_SERVICES_STALL_MS = 5000;
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 const windowOf = (value: unknown) => (typeof value === "string" ? value : null);
@@ -21,15 +22,23 @@ export function shareModuleMethod(host: ArdiaHost, name: string, method: string)
   };
 }
 
-export function loadShareServices(host: ArdiaHost | undefined) {
+export function loadShareServices(host: ArdiaHost | undefined, now: () => number = Date.now) {
   if (!host || !hostSupports(SHARE_SERVICES, host)) return;
-  let loading: Promise<void> | null = null;
+  let latest = 0;
+  let loading: { id: number; started: number; promise: Promise<void> } | null = null;
   const refresh = (): Promise<void> => {
-    loading ??= invokeHost<unknown>(SHARE_SERVICES, { args: [] }, host)
-      .then((listed) => setShareServices(shareServicesFrom(listed), refresh))
+    if (loading && now() - loading.started < SHARE_SERVICES_STALL_MS) return loading.promise;
+    const id = ++latest;
+    const promise = invokeHost<unknown>(SHARE_SERVICES, { args: [] }, host)
+      .then((listed) => {
+        if (id === latest) setShareServices(shareServicesFrom(listed), refresh);
+      })
       .catch(reportHostError)
-      .finally(() => void (loading = null));
-    return loading;
+      .finally(() => {
+        if (loading?.id === id) loading = null;
+      });
+    loading = { id, started: now(), promise };
+    return promise;
   };
   setShareServices([], refresh);
   void refresh();
