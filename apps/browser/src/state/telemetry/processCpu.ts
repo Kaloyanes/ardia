@@ -6,7 +6,7 @@ type Kind = "browser" | "gpu" | "renderer" | "helper";
 
 const kindOf = (type: EngineTask["type"]): Kind => (type === "browser" || type === "gpu" || type === "renderer" ? type : "helper");
 
-export function processCpuFields(tasks: readonly Pick<EngineTask, "type" | "cpu" | "pid" | "id">[]) {
+export function processCpuFields(tasks: readonly Pick<EngineTask, "type" | "cpu" | "pid" | "id">[]): Record<string, number> {
   const processes = new Map<string, { kind: Kind; cpu: number }>();
   for (const t of tasks) {
     const used = Number.isFinite(t.cpu) ? Math.max(0, t.cpu) : 0;
@@ -15,6 +15,7 @@ export function processCpuFields(tasks: readonly Pick<EngineTask, "type" | "cpu"
     if (!seen) processes.set(key, { kind: kindOf(t.type), cpu: used });
     else seen.cpu = Math.max(seen.cpu, used);
   }
+  if (![...processes.values()].some(({ cpu }) => cpu > 0)) return {};
   const sum = { browser: 0, gpu: 0, renderer: 0, helper: 0 };
   let rendererMax = 0;
   for (const { kind, cpu } of processes.values()) {

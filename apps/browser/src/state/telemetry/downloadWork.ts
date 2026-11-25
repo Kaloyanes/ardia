@@ -5,6 +5,7 @@ type DownloadSeen = { id: string; state: string; received: number; startTime?: n
 
 const MAX_TRACKED = 200;
 const FOLLOW_UP_MS = 15_000;
+const MAX_FOLLOW_UPS = 20;
 const MIN_TIMED_BYTES = 1_048_576;
 const MIN_TIMED_MS = 1_000;
 const SPEED_BUCKETS = [
@@ -34,8 +35,8 @@ let progressUpdates = 0;
 let historyWrites = 0;
 let historyCharacters = 0;
 let flow = { ...NO_FLOW };
-const tracked = new Map<string, { state: string; firstSeen: number; consent: ConsentToken | null }>();
-let followUp: { until: number; started: number; consent: ConsentToken | null } | null = null;
+const tracked = new Map<string, { state: string; firstSeen: number; consent: ConsentToken | null; interrupted: boolean }>();
+let followUps: { until: number; started: number; consent: ConsentToken | null }[] = [];
 
 const bump = (field: keyof typeof NO_FLOW, consent?: ConsentToken | null) => countFor(consentOrNow(consent), () => void flow[field]++);
 
@@ -53,10 +54,13 @@ export function downloadSpeedBucket(bytes: number, ms: number): keyof typeof NO_
 }
 
 function settleFollowUp(now: number) {
-  if (!followUp || now < followUp.until) return;
-  if (followUp.started > 0) bump("multiple_download_follow_ups", followUp.consent);
-  if (followUp.started === 1) bump("multiple_download_single_follow_ups", followUp.consent);
-  followUp = null;
+  const due = followUps.filter((f) => now >= f.until);
+  if (!due.length) return;
+  followUps = followUps.filter((f) => now < f.until);
+  for (const f of due) {
+    if (f.started > 0) bump("multiple_download_follow_ups", f.consent);
+    if (f.started === 1) bump("multiple_download_single_follow_ups", f.consent);
+  }
 }
 
 export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
@@ -66,18 +70,22 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
     if (d.state !== "downloading") return;
     if (tracked.size >= MAX_TRACKED) tracked.delete(tracked.keys().next().value!);
     const consent = consentOrNow(undefined);
-    tracked.set(d.id, { state: d.state, firstSeen: now, consent });
+    tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
     bump("downloads_started", consent);
-    if (followUp) followUp.started++;
+    for (const f of followUps) f.started++;
     return;
   }
   if (before.state === d.state) return;
   before.state = d.state;
   if (d.state === "downloading") return;
+  if (d.state === "failed") {
+    before.interrupted = true;
+    return bump("downloads_failed", before.consent);
+  }
   tracked.delete(d.id);
-  if (d.state === "failed") return bump("downloads_failed", before.consent);
   if (d.state !== "finished") return;
   bump("downloads_finished", before.consent);
+  if (before.interrupted) return;
   const started = typeof d.startTime === "number" && Number.isFinite(d.startTime) && d.startTime > 0 && d.startTime <= now ? d.startTime : before.firstSeen;
   const speed = downloadSpeedBucket(d.received, now - started);
   if (!speed) return;
@@ -90,7 +98,7 @@ export function noteMultipleDownloadsAnswered(result: "accept" | "deny" | "dismi
   bump("multiple_download_asks", consent);
   if (result === "dismiss") return;
   bump(result === "accept" ? "multiple_download_allows" : "multiple_download_blocks", consent);
-  if (result === "accept") followUp = { until: now + FOLLOW_UP_MS, started: 0, consent };
+  if (result === "accept") followUps = [...followUps.slice(-(MAX_FOLLOW_UPS - 1)), { until: now + FOLLOW_UP_MS, started: 0, consent }];
 }
 
 export function takeDownloadWork(now = Date.now()) {

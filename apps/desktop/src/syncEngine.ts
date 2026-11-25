@@ -55,6 +55,22 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
 let keyringAskConsent: ConsentToken | null = null;
+let keyringCounted: string | null = null;
+
+function newKeyringFailure(status: SyncKeyStoreStatus | null): "locked" | "unavailable" | null {
+  const failed = status?.keyStore === "secretService" && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable") ? status.keyStoreStatus : null;
+  const counted = keyringCounted;
+  keyringCounted = failed;
+  return failed && failed !== counted ? failed : null;
+}
+
+function readKeyStore(host: ArdiaHost, consent: ConsentToken | null): Promise<SyncKeyStoreStatus> {
+  return syncKeyStoreStatus(host).then((status) => {
+    const failed = newKeyringFailure(status);
+    if (failed) noteKeyringFailure("sync", failed, consent);
+    return status;
+  });
+}
 let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
 
 function adoptHeldLogins() {
@@ -88,7 +104,8 @@ function resumeWhenKeyringOpens(host: ArdiaHost) {
       return syncKeyStoreStatus(host);
     },
     seen: (status) => {
-      if (status.keyStore === "secretService" && status.keyStoreStatus !== keyStore?.keyStoreStatus && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable")) noteKeyringFailure("sync", status.keyStoreStatus, keyringAskConsent);
+      const failed = newKeyringFailure(status);
+      if (failed) noteKeyringFailure("sync", failed, keyringAskConsent);
       const shown = keyringMessage(keyStore, false);
       keyStore = status;
       if (keyringMessage(status, false) !== shown) engine.useSync.setState({});
@@ -128,6 +145,7 @@ function remoteFor(host: ArdiaHost): SyncRemote {
     syncIdle: () => syncIdle(engine.syncNow),
     syncNowIfIdle: () => syncNowIfIdle(engine.syncNow),
     turnOnSync: async (folder: string, how?: TurnOnFolder) => {
+      const consent = consentToken();
       let result: Awaited<ReturnType<typeof engine.turnOnSync>>;
       try {
         result = await whileResettingHeldLogins(
@@ -140,7 +158,7 @@ function remoteFor(host: ArdiaHost): SyncRemote {
         throw error;
       }
       if ("error" in result && result.error === KEYCHAIN_ERROR) {
-        keyStore = await syncKeyStoreStatus(host).catch(() => keyStore);
+        keyStore = await readKeyStore(host, consent).catch(() => keyStore);
         return { error: keyringMessage(keyStore, true) ?? SYNC_KEY_NOT_SAVED };
       }
       return result;
@@ -172,6 +190,7 @@ function remoteFor(host: ArdiaHost): SyncRemote {
 }
 
 async function becomeAuthority(host: ArdiaHost) {
+  const consent = consentToken();
   try {
     await refreshSyncDocuments({ refresh: refreshDocument, remove: deleteDocument });
   } catch (error) {
@@ -179,7 +198,7 @@ async function becomeAuthority(host: ArdiaHost) {
     throw error;
   }
   await loadSyncDeviceName(host);
-  keyStore = await syncKeyStoreStatus(host).catch(() => null);
+  keyStore = await readKeyStore(host, consent).catch(() => null);
   adoptHeldLogins();
   dropDeletedProfiles();
   engine.startSync();

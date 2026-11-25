@@ -8,31 +8,42 @@
   const every = setInterval;
   const after = setTimeout;
   const listen = EventTarget.prototype.addEventListener;
-  const toJSON = JSON.stringify;
+  const { stringify: toJSON, parse: fromJSON } = JSON;
   const FLUSH_MS = 60000;
   const SAMPLE_MS = 10000;
   const SCROLL_IDLE_MS = 150;
   const SOON_MS = 5000;
   const MOST = 1000000;
-  const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0, oldest: now() });
+  const MAX_EPOCH = 64;
+  const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0 });
+  let epoch = "";
   let tally = fresh();
-  const quality = new WeakMap();
+  let quality = new WeakMap();
   let burst = null;
   let flushing = false;
+  const handlers = Object.create(null);
 
   const flush = () => {
     flushing = false;
     const t = tally;
-    if (!t.errors.some(Boolean) && !t.frames && !t.scrolls) return;
     tally = fresh();
-    const { oldest, ...counts } = t;
+    if (!epoch || (!t.errors.some(Boolean) && !t.frames && !t.scrolls)) return;
     try {
-      post("pageMetrics", toJSON({ ...counts, span: Math.max(0, Math.round(now() - oldest)) }));
+      post("pageMetrics", toJSON({ ...t, epoch }));
     } catch (e) {}
   };
 
+  handlers.metricsEpoch = (message) => {
+    const next = message && typeof message.epoch === "string" && message.epoch.length <= MAX_EPOCH ? message.epoch : "";
+    if (next === epoch) return;
+    epoch = next;
+    tally = fresh();
+    quality = new WeakMap();
+    burst = null;
+  };
+
   const soon = () => {
-    if (flushing) return;
+    if (flushing || !epoch) return;
     flushing = true;
     after(flush, SOON_MS);
   };
@@ -41,7 +52,7 @@
     "error",
     (e) => {
       const target = e.target;
-      if (!(target instanceof HTMLMediaElement) || !target.error) return;
+      if (!epoch || !(target instanceof HTMLMediaElement) || !target.error) return;
       const code = target.error.code;
       tally.errors[code >= 1 && code <= 4 ? code : 0]++;
       soon();
@@ -50,7 +61,7 @@
   ]);
 
   const sampleVideos = () => {
-    if (document.visibilityState !== "visible") return;
+    if (!epoch || document.visibilityState !== "visible") return;
     for (const video of document.getElementsByTagName("video")) {
       if (video.paused || video.ended || typeof video.getVideoPlaybackQuality !== "function") continue;
       const q = video.getVideoPlaybackQuality();
@@ -60,7 +71,6 @@
       if (!before || at - before.at > 2 * SAMPLE_MS) continue;
       const total = q.totalVideoFrames - before.total;
       const dropped = q.droppedVideoFrames - before.dropped;
-      tally.oldest = Math.min(tally.oldest, before.at);
       if (total > 0 && dropped >= 0 && dropped <= total) {
         tally.frames = Math.min(MOST, tally.frames + total);
         tally.dropped = Math.min(MOST, tally.dropped + dropped);
@@ -73,7 +83,6 @@
     if (burst === b) burst = null;
     const ms = Math.round(b.frameAt - b.start);
     if (b.frames < 2 || ms <= 0) return;
-    tally.oldest = Math.min(tally.oldest, b.start);
     tally.scrolls++;
     tally.scrollFrames = Math.min(MOST, tally.scrollFrames + b.frames);
     tally.scrollMs = Math.min(MOST, tally.scrollMs + ms);
@@ -95,6 +104,7 @@
   apply(listen, window, [
     "scroll",
     () => {
+      if (!epoch) return;
       const at = now();
       if (burst && at - burst.last <= SCROLL_IDLE_MS) {
         burst.last = at;
@@ -115,4 +125,9 @@
   apply(listen, window, ["pagehide", flush]);
   every(sampleVideos, SAMPLE_MS);
   every(flush, FLUSH_MS);
+
+  return (kind, json) => {
+    const handler = handlers[kind];
+    if (handler) handler(fromJSON(json));
+  };
 })

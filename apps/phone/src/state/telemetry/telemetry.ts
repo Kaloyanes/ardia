@@ -58,7 +58,7 @@ function reportCrashes() {
   if (!gate.isSharing() || isDemoSession()) return;
   const now = Date.now();
   const js = readPendingCrash(pending, now);
-  for (const props of [...(js ? [js] : []), ...crashesToSend(exits, now)].slice(0, MOST_CRASHES_PER_LAUNCH)) gate.capture("app_crashed", props);
+  for (const props of [...(js ? [js.props] : []), ...crashesToSend(exits, now, js?.at ?? null)].slice(0, MOST_CRASHES_PER_LAUNCH)) gate.capture("app_crashed", props);
 }
 
 type GlobalErrorHandler = (error: unknown, isFatal?: boolean) => void;

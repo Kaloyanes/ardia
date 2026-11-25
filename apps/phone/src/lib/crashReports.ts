@@ -52,19 +52,31 @@ export function pendingJsCrash(reason: CrashReason, at: number): string {
   return JSON.stringify({ kind: "js", reason, foreground: "yes", at });
 }
 
-export function readPendingCrash(raw: string | null, now: number): EventProps<"app_crashed"> | null {
+const SAME_EXIT_MS = 30_000;
+const JS_EXIT_REASONS = new Set(["java_crash", "native_crash"]);
+
+export function readPendingCrash(raw: string | null, now: number): { props: EventProps<"app_crashed">; at: number } | null {
   if (!raw) return null;
   try {
-    return crashProps(JSON.parse(raw), now);
+    const record = JSON.parse(raw) as { at?: unknown };
+    const props = crashProps(record, now);
+    return props && typeof record.at === "number" ? { props, at: record.at } : null;
   } catch {
     return null;
   }
 }
 
-export function crashesToSend(raw: unknown, now: number): EventProps<"app_crashed">[] {
+const sameExitAsJs = (record: unknown, jsAt: number | null) => {
+  if (jsAt === null || typeof record !== "object" || record === null) return false;
+  const { reason, at } = record as { reason?: unknown; at?: unknown };
+  return typeof reason === "string" && JS_EXIT_REASONS.has(reason) && typeof at === "number" && Math.abs(at - jsAt) <= SAME_EXIT_MS;
+};
+
+export function crashesToSend(raw: unknown, now: number, jsAt: number | null = null): EventProps<"app_crashed">[] {
   if (!Array.isArray(raw)) return [];
   const out: EventProps<"app_crashed">[] = [];
   for (const record of raw) {
+    if (sameExitAsJs(record, jsAt)) continue;
     const props = crashProps(record, now);
     if (props) out.push(props);
     if (out.length >= MOST_CRASHES_PER_LAUNCH) break;

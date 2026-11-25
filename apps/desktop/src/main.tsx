@@ -92,6 +92,7 @@ import { linuxTelemetryHooks, reportRecoverableRender, reportUncaughtRender, sta
 import { launchCommitted } from "../../browser/src/state/telemetry/journeys";
 import { markFirstWindow } from "../../browser/src/state/telemetry/track";
 import { probeKeyringAfterLaunch } from "./keyringProbe";
+import { measureLaunch } from "./launchMeasure";
 import type { LeaderLocks } from "./telemetryLeader";
 import { liveOf } from "../../browser/src/state/tabs/tabLive";
 
@@ -106,14 +107,14 @@ function FirstWindowCommitted({ typeahead, launch }: { typeahead: boolean; launc
   useLayoutEffect(() => {
     if (!launch) return;
     const committedAt = Date.now();
-    let contentAt: number | undefined;
-    requestAnimationFrame(() => setTimeout(() => (contentAt = Date.now()), 0));
-    whenTelemetryLeads(() => {
-      if (ardiaHost) probeKeyringAfterLaunch(ardiaHost);
-      if (Date.now() - committedAt > LAUNCH_LEAD_GRACE_MS) return;
-      launchCommitted(renderedAt, committedAt, contentAt);
-      markFirstWindow(committedAt);
-    });
+    measureLaunch(committedAt, (contentAt, usableAt) =>
+      whenTelemetryLeads(() => {
+        if (ardiaHost) probeKeyringAfterLaunch(ardiaHost);
+        if (Date.now() - Math.max(usableAt, committedAt) > LAUNCH_LEAD_GRACE_MS) return;
+        launchCommitted(renderedAt, committedAt, contentAt, usableAt);
+        markFirstWindow(committedAt);
+      }),
+    );
   }, []);
   useEffect(() => {
     firstWindowCommitted();

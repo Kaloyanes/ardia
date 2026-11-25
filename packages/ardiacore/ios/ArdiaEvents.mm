@@ -8,7 +8,6 @@ namespace {
 
 os_unfair_lock gConsentEpochLock = OS_UNFAIR_LOCK_INIT;
 NSString *gConsentEpoch = @"";
-NSTimeInterval gConsentEpochSince = 0;
 
 NSMutableDictionary<NSString *, void (^)(NSString *, NSDictionary *)> *Senders() {
   static NSMutableDictionary *senders = [NSMutableDictionary dictionary];
@@ -21,6 +20,8 @@ NSString *DomainOf(NSString *name) {
 }
 
 }
+
+NSNotificationName const ArdiaConsentEpochDidChangeNotification = @"ArdiaConsentEpochDidChange";
 
 @implementation ArdiaEvents
 
@@ -50,16 +51,13 @@ NSString *DomainOf(NSString *name) {
 + (void)setConsentEpoch:(NSString *)epoch {
   NSString *copied = [epoch copy] ?: @"";
   os_unfair_lock_lock(&gConsentEpochLock);
-  if (![gConsentEpoch isEqualToString:copied]) gConsentEpochSince = NSProcessInfo.processInfo.systemUptime;
+  const BOOL changed = ![gConsentEpoch isEqualToString:copied];
   gConsentEpoch = copied;
   os_unfair_lock_unlock(&gConsentEpochLock);
-}
-
-+ (NSTimeInterval)consentEpochSince {
-  os_unfair_lock_lock(&gConsentEpochLock);
-  const NSTimeInterval since = gConsentEpochSince;
-  os_unfair_lock_unlock(&gConsentEpochLock);
-  return since;
+  if (!changed) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [NSNotificationCenter.defaultCenter postNotificationName:ArdiaConsentEpochDidChangeNotification object:nil];
+  });
 }
 
 @end

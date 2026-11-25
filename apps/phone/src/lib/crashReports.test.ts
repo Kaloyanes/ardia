@@ -20,7 +20,7 @@ test("a JavaScript error is named only by its type, never its message", () => {
   assert.equal(jsErrorReason(Object.assign(new Error("x"), { name: "CustomThing" })), "other");
   assert.equal(jsErrorReason("a string"), "other");
   const pending = readPendingCrash(pendingJsCrash("type_error", NOW - 2 * HOUR), NOW);
-  assert.deepEqual(pending, { kind: "js", reason: "type_error", foreground: "yes", ago: "<1d" });
+  assert.deepEqual(pending, { props: { kind: "js", reason: "type_error", foreground: "yes", ago: "<1d" }, at: NOW - 2 * HOUR });
   assert.equal(readPendingCrash("not json", NOW), null);
 });
 
@@ -39,4 +39,15 @@ test("no more than ten crashes go out from one launch, and each makes a record t
   assert.deepEqual(crashesToSend("nope", NOW), []);
   const record = buildRecord("app_crashed", sent[0]!, { uuid: "00000000-0000-4000-8000-000000000001", installId: "00000000-0000-4000-8000-000000000002", sessionId: "00000000-0000-4000-8000-000000000003" }, { platform: "android", appVersion: "1.0.0", osVersion: "15", environment: "production" }, NOW);
   assert.deepEqual(recordProblems(record), []);
+});
+
+test("the Android exit a fatal JavaScript error caused isn't sent again beside the JavaScript crash", () => {
+  const jsAt = NOW - HOUR;
+  const exits = [
+    { kind: "crash", reason: "java_crash", foreground: "yes", at: jsAt + 400 },
+    { kind: "crash", reason: "java_crash", foreground: "yes", at: jsAt - 10 * 60_000 },
+    { kind: "hang", reason: "anr", foreground: "yes", at: jsAt + 100 },
+  ];
+  assert.deepEqual(crashesToSend(exits, NOW, jsAt).map((c) => c.reason), ["java_crash", "anr"]);
+  assert.equal(crashesToSend(exits, NOW).length, 3);
 });

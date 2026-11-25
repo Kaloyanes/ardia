@@ -22,14 +22,35 @@ NSMutableDictionary<NSString *, NSNumber *> *Metrics() {
 
 NSString *gEpoch;
 
-bool SameConsentPeriodLocked(double spanMs) {
-  NSString *epoch = ArdiaEvents.consentEpoch ?: @"";
+NSString *CurrentEpoch() {
+  return ArdiaEvents.consentEpoch ?: @"";
+}
+
+bool InCurrentPeriodLocked(NSString *sentEpoch) {
+  NSString *epoch = CurrentEpoch();
   if (!gEpoch || ![gEpoch isEqualToString:epoch]) {
     gEpoch = [epoch copy];
     [Metrics() removeAllObjects];
   }
-  const double inForceMs = (NSProcessInfo.processInfo.systemUptime - ArdiaEvents.consentEpochSince) * 1000;
-  return epoch.length && std::isfinite(spanMs) && spanMs >= 0 && spanMs <= inForceMs;
+  return epoch.length && [sentEpoch isEqualToString:epoch];
+}
+
+NSString *EpochJSON() {
+  NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"epoch" : CurrentEpoch()} options:0 error:nil];
+  return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"{}";
+}
+
+void WatchEpochChanges() {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    [NSNotificationCenter.defaultCenter addObserverForName:ArdiaConsentEpochDidChangeNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *) {
+                                                  NSString *json = EpochJSON();
+                                                  for (ArdiaWebView *view in ardia_web_view::LiveViews().allObjects) [view callFrame:@"" kind:@"metricsEpoch" json:json];
+                                                }];
+  });
 }
 
 double Count(id value) {
@@ -54,6 +75,11 @@ NSString *DisplayBucket(NSWindow *window) {
 
 @implementation ArdiaWebView (PageMetrics)
 
+- (void)sendMetricsEpochTo:(NSString *)frameId {
+  WatchEpochChanges();
+  [self callFrame:frameId kind:@"metricsEpoch" json:EpochJSON()];
+}
+
 - (void)notePageMetrics:(NSDictionary *)metrics {
   if (![metrics isKindOfClass:NSDictionary.class]) return;
   NSArray *errors = [metrics[@"errors"] isKindOfClass:NSArray.class] ? metrics[@"errors"] : @[];
@@ -63,10 +89,9 @@ NSString *DisplayBucket(NSWindow *window) {
   const double scrollFrames = Count(metrics[@"scrollFrames"]);
   const double scrollMs = Count(metrics[@"scrollMs"]);
   NSString *bucket = DisplayBucket(self.window);
-  double span = -1;
-  if (!ardia_web_view::Finite(metrics, @"span", &span)) return;
+  NSString *sentEpoch = ardia_web_view::Text(metrics, @"epoch", 64) ?: @"";
   [MetricsLock() lock];
-  if (!SameConsentPeriodLocked(span)) return [MetricsLock() unlock];
+  if (!InCurrentPeriodLocked(sentEpoch)) return [MetricsLock() unlock];
   for (NSUInteger i = 0; i < MIN(errors.count, kMediaErrorKinds); i++) Add(kMediaErrors[i], Count(errors[i]));
   Add([@"video_frames" stringByAppendingString:bucket], frames);
   Add([@"video_frames_dropped" stringByAppendingString:bucket], dropped);
@@ -80,7 +105,7 @@ NSString *DisplayBucket(NSWindow *window) {
 
 + (NSDictionary<NSString *, NSNumber *> *)takePageMetrics {
   [MetricsLock() lock];
-  SameConsentPeriodLocked(0);
+  InCurrentPeriodLocked(@"");
   NSDictionary *taken = [Metrics() copy];
   [Metrics() removeAllObjects];
   [MetricsLock() unlock];

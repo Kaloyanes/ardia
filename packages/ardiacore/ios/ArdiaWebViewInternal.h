@@ -184,6 +184,7 @@ struct ArdiaPageFocusState {
 }
 - (ArdiaWindowController *)controller;
 - (void)notePageMetrics:(NSDictionary *)metrics;
+- (void)sendMetricsEpochTo:(NSString *)frameId;
 - (void)emit:(NSString *)name payload:(NSDictionary *)payload;
 @end
 

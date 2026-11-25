@@ -114,9 +114,9 @@ test("automatic Picture in Picture misses count by what hid the tab", () => {
   misses.noteAutoPipMiss("missedTabSwitch", "");
   const taken = misses.takeAutoPipMisses();
   assert.equal(Object.values(taken).length, 7);
-  assert.equal(taken.auto_pip_missed_app_switch, 1);
+  assert.equal(taken.auto_pip_not_shown_app_switch, 1);
   assert.equal(taken.pip_left_on_space_switch_joining, 1);
-  assert.equal(taken.auto_pip_missed_tab_switch, 0);
+  assert.equal(taken.auto_pip_not_shown_tab_switch, 0);
 });
 
 test("process CPU sums each kind of process once per process and keeps the busiest page process", () => {
@@ -130,6 +130,7 @@ test("process CPU sums each kind of process once per process and keeps the busie
     { id: 7, type: "renderer", cpu: Number.NaN },
   ]);
   assert.deepEqual(fields, { browser_cpu_now_pct: 12.3, gpu_cpu_now_pct: 30, renderer_cpu_now_pct: 57.5, renderer_cpu_now_max_pct: 50, helper_cpu_now_pct: 1 });
+  assert.deepEqual(processCpuFields([{ id: 1, pid: 10, type: "browser", cpu: 0 }, { id: 2, pid: 11, type: "renderer", cpu: 0 }]), {}, "a sample with every process at zero is one the task manager hadn't taken yet");
 });
 
 test("page metrics from native keep only the known counters, rounded", () => {
@@ -166,4 +167,23 @@ test("an inline completion counts as missed only when the typing began a top sit
   assert.equal(inlineChance("github.com", "", history, false), "none");
   assert.equal(inlineChance("git hub", "", history, false), "none");
   assert.equal(inlineChance("zzz", "", history, false), "none");
+});
+
+test("a download that was interrupted and resumed keeps its first token and isn't timed", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteDownloadSeen({ id: "r", state: "downloading", received: 0, startTime: 1_000 }, 1_000);
+  downloads.noteDownloadSeen({ id: "r", state: "failed", received: MB }, 2_000);
+  downloads.noteDownloadSeen({ id: "r", state: "downloading", received: MB, startTime: 1_000 }, 60_000);
+  downloads.noteDownloadSeen({ id: "r", state: "finished", received: 8 * MB, startTime: 1_000 }, 61_000);
+  const taken = downloads.takeDownloadWork(62_000);
+  assert.deepEqual([taken.downloads_started, taken.downloads_failed, taken.downloads_finished, taken.downloads_timed], [1, 1, 1, 0]);
+});
+
+test("each approval to download several files keeps its own follow-up", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteMultipleDownloadsAnswered("accept", client.consentNow(), 1_000);
+  downloads.noteDownloadSeen({ id: "f1", state: "downloading", received: 0 }, 2_000);
+  downloads.noteMultipleDownloadsAnswered("accept", client.consentNow(), 3_000);
+  const taken = downloads.takeDownloadWork(30_000);
+  assert.deepEqual([taken.multiple_download_allows, taken.multiple_download_follow_ups, taken.multiple_download_single_follow_ups], [2, 1, 1]);
 });

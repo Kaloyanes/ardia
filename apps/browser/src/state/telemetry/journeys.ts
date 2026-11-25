@@ -198,7 +198,7 @@ type PreviousLaunch = { lastLaunchAt: number | null; lastQuitAt: number | null; 
 let previousLaunch: PreviousLaunch = { lastLaunchAt: null, lastQuitAt: null, firstOfVersion: null };
 let firstRootCommitted = false;
 
-export function launchCommitted(renderedAt?: number, committedAt = Date.now(), contentAt?: number) {
+export function launchCommitted(renderedAt?: number, committedAt = Date.now(), contentAt?: number, usableAt?: number) {
   if (firstRootCommitted) return;
   firstRootCommitted = true;
   if (launch || launchSent || !on) return;
@@ -212,7 +212,7 @@ export function launchCommitted(renderedAt?: number, committedAt = Date.now(), c
   }
   launch = { journey: "j1", t0: start, render: renderedAt, commit: committedAt, keys, tabs: Object.keys(s.tabs).length, windows: s.windowOrder.length };
   void (contentAt === undefined ? frame("launch", "content") : marks.set("launch", [...(marks.get("launch") ?? []), ["content", contentAt]]));
-  probeUsable(launch);
+  void (usableAt === undefined ? probeUsable(launch) : (launch.usable = usableAt));
   begin(launch);
 }
 

@@ -2,11 +2,11 @@ import { counted } from "./choice";
 import { nativeConsent } from "./nativeConsent";
 
 const MISS_FIELDS = {
-  missedTabSwitch: "auto_pip_missed_tab_switch",
-  missedAppSwitch: "auto_pip_missed_app_switch",
-  missedSpaceSwitch: "auto_pip_missed_space_switch",
-  missedOther: "auto_pip_missed_other",
-  missedSiteAsked: "auto_pip_missed_site_asked",
+  missedTabSwitch: "auto_pip_not_shown_tab_switch",
+  missedAppSwitch: "auto_pip_not_shown_app_switch",
+  missedSpaceSwitch: "auto_pip_not_shown_space_switch",
+  missedOther: "auto_pip_not_shown_other",
+  missedSiteAsked: "auto_pip_not_shown_site_asked",
   leftOnSpaceSwitch: "pip_left_on_space_switch",
   leftOnSpaceSwitchJoining: "pip_left_on_space_switch_joining",
 } as const;
