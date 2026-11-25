@@ -503,7 +503,7 @@ final class GlassTarget {
   }
 
   func forget() {
-    guard drawn != nil || drawnLive || needsRetry else { return }
+    guard drawn != nil || drawnLive || needsRetry || pending > 0 else { return }
     drawn = nil
     drawnLive = false
     needsRetry = false
