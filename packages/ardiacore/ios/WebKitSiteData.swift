@@ -14,6 +14,7 @@ final class WebKitSiteData: NSObject, WKHTTPCookieStoreObserver {
   private let observed = NSMapTable<WKHTTPCookieStore, NSString>.weakToStrongObjects()
   private var snapshots: [String: [String: Int]] = [:]
   private var refreshing: Set<String> = []
+  private var generations: [String: Int] = [:]
   let storage = WebKitSiteStorage()
 
   func setWatching(_ on: Bool) { watchingGate = on }
@@ -146,6 +147,7 @@ final class WebKitSiteData: NSObject, WKHTTPCookieStoreObserver {
       cookieStore.remove(self)
     }
     snapshots.removeValue(forKey: profile)
+    generations[profile, default: 0] += 1
     storage.close(profile: profile)
   }
 
@@ -174,15 +176,17 @@ final class WebKitSiteData: NSObject, WKHTTPCookieStoreObserver {
 
   private func refresh(_ profile: String, announce: Bool) {
     guard let store = store(profile) else { return }
+    let generation = generations[profile, default: 0]
     store.httpCookieStore.getAllCookies { [weak self] all in
       Self.fingerprintQueue.async {
         let now = Self.fingerprints(all)
-        DispatchQueue.main.async { self?.settle(profile, now, announce: announce) }
+        DispatchQueue.main.async { self?.settle(profile, now, generation: generation, announce: announce) }
       }
     }
   }
 
-  private func settle(_ profile: String, _ now: [String: Int], announce: Bool) {
+  private func settle(_ profile: String, _ now: [String: Int], generation: Int, announce: Bool) {
+    guard generations[profile, default: 0] == generation else { return }
     let was = snapshots[profile]
     snapshots[profile] = now
     guard announce, let was else { return }

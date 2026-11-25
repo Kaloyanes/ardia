@@ -81,7 +81,7 @@ struct CallReply {
   }
 
   static func engineError(_ json: String) -> String? {
-    guard (json as NSString).range(of: "\"error\":", options: .literal).location != NSNotFound else { return nil }
+    guard (json as NSString).range(of: "\"error\"", options: .literal).location != NSNotFound else { return nil }
     guard let reply = try? JSONSerialization.jsonObject(with: Data(json.utf8), options: [.fragmentsAllowed]) else { return "the engine's reply isn't JSON" }
     guard let dict = reply as? [String: Any], let error = dict["error"] else { return nil }
     return error as? String ?? "\(error)"

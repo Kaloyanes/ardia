@@ -79,6 +79,7 @@ int gKeptNext;
 Image gImages[kMaxImages];
 int gImageCount;
 uint64_t gCacheLow, gCacheHigh;
+char gCacheUuid[37];
 int gFd = -1;
 int gNextSlot;
 uint64_t gSeq;
@@ -134,12 +135,15 @@ bool TextRange(const mach_header_64 *header, uint64_t *low, uint64_t *high, char
   return *high > *low;
 }
 
-uint64_t SharedCacheBase() {
+uint64_t SharedCache(char *uuid) {
+  uuid[0] = 0;
   task_dyld_info_data_t info;
   mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
   if (task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&info, &count) != KERN_SUCCESS || !info.all_image_info_addr) return 0;
   const auto *images = (const dyld_all_image_infos *)info.all_image_info_addr;
-  return images->version >= 15 ? images->sharedCacheBaseAddress : 0;
+  if (images->version < 15 || !images->sharedCacheBaseAddress) return 0;
+  FormatUuid(images->sharedCacheUUID, uuid);
+  return images->sharedCacheBaseAddress;
 }
 
 void LoadImages() {
@@ -164,8 +168,12 @@ void LoadImages() {
     strlcpy(image.name, base, sizeof image.name);
     if (TextRange(header, &image.low, &image.high, image.uuid) && image.uuid[0]) gImages[gImageCount++] = image;
   }
-  const uint64_t cacheBase = SharedCacheBase();
-  gCacheLow = cacheBase && cacheBase <= cachedLow ? cacheBase : cachedLow;
+  const uint64_t cacheBase = SharedCache(gCacheUuid);
+  if (cacheBase && cacheBase <= cachedLow) gCacheLow = cacheBase;
+  else {
+    gCacheLow = cachedLow;
+    gCacheUuid[0] = 0;
+  }
 }
 
 int ImageOf(uint64_t pc, uint64_t *offset) {
@@ -234,6 +242,7 @@ void WriteSlot(const Capture &c) {
   t.num((uint64_t)c.thermal);
   t.put("\n");
   bool used[kMaxImages] = {};
+  bool usedSystem = false;
   for (int s = 0; s < c.count && t.used < kSlotBytes - kSlotTail; s++) {
     t.put("sample ");
     t.num((uint64_t)s + 1);
@@ -244,6 +253,7 @@ void WriteSlot(const Capture &c) {
       uint64_t offset;
       const int image = ImageOf(c.samples[s].frames[f], &offset);
       if (image >= 0) used[image] = true;
+      if (image == -1) usedSystem = true;
       t.put("  ");
       t.put(ImageName(image));
       t.put(" +");
@@ -259,6 +269,11 @@ void WriteSlot(const Capture &c) {
       t.put(gImages[i].uuid);
       t.put("\n");
     }
+  if (usedSystem && gCacheUuid[0]) {
+    t.put("image system ");
+    t.put(gCacheUuid);
+    t.put("\n");
+  }
   t.put("end\n");
   while (t.used < kSlotBytes - 1) gBuffer[t.used++] = ' ';
   gBuffer[kSlotBytes - 1] = '\n';
@@ -382,12 +397,14 @@ void Fire() {
 NSDictionary *Describe(const Capture &c) {
   NSMutableArray *samples = [NSMutableArray array];
   bool used[kMaxImages] = {};
+  bool usedSystem = false;
   for (int s = 0; s < c.count; s++) {
     NSMutableArray *frames = [NSMutableArray array];
     for (uint32_t f = 0; f < c.samples[s].count; f++) {
       uint64_t offset;
       const int image = ImageOf(c.samples[s].frames[f], &offset);
       if (image >= 0) used[image] = true;
+      if (image == -1) usedSystem = true;
       [frames addObject:@{@"image" : @(ImageName(image)), @"offset" : @(offset)}];
     }
     [samples addObject:@{@"state" : @(c.samples[s].runState), @"frames" : frames}];
@@ -395,6 +412,7 @@ NSDictionary *Describe(const Capture &c) {
   NSMutableArray *images = [NSMutableArray array];
   for (int i = 0; i < gImageCount; i++)
     if (used[i]) [images addObject:@{@"name" : @(gImages[i].name), @"uuid" : @(gImages[i].uuid)}];
+  if (usedSystem && gCacheUuid[0]) [images addObject:@{@"name" : @"system", @"uuid" : @(gCacheUuid)}];
   return @{
     @"id" : @(c.seq),
     @"thread" : @(kThreadNames[c.thread]),

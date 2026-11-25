@@ -38,6 +38,12 @@ final class IntroMusic {
     LaunchConfig.shared.background && !LaunchConfig.shared.instanceFlag("allowAudio")
   }()
 
+  private struct Prepared {
+    let engine: AVAudioEngine
+    let player: AVAudioPlayerNode
+    let buffer: AVAudioPCMBuffer
+  }
+
   func play(cues: [String: Double], muted: Bool) {
     if Self.silent { return }
     let requestedAt = CACurrentMediaTime()
@@ -47,17 +53,10 @@ final class IntroMusic {
     self.muted = muted
     let cues = Cues(cues)
     Self.audio.async { [weak self] in
-      guard let buffer = Self.synthesize(cues),
-            let engine = Self.started(buffer, offset: CACurrentMediaTime() - requestedAt, muted: muted, finished: { [weak self] in
-              DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                if self?.session == current { self?.stopNow() }
-              }
-            })
-      else { return }
+      guard let prepared = Self.synthesize(cues).flatMap(Self.prepared) else { return }
       DispatchQueue.main.async {
-        guard let self, self.session == current else { return Self.audio.async { engine.stop() } }
-        engine.mainMixerNode.outputVolume = self.muted ? 0 : Self.volume
-        self.engine = engine
+        guard let self, self.session == current else { return Self.audio.async { prepared.engine.stop() } }
+        self.begin(prepared, offset: CACurrentMediaTime() - requestedAt, session: current)
       }
     }
   }
@@ -78,22 +77,31 @@ final class IntroMusic {
     }
   }
 
-  private static func started(_ buffer: AVAudioPCMBuffer, offset: Double, muted: Bool, finished: @escaping () -> Void) -> AVAudioEngine? {
-    let frames = AVAudioFramePosition(max(0, offset) * sampleRate)
-    guard frames < AVAudioFramePosition(buffer.frameLength) else { return nil }
+  private static func prepared(_ buffer: AVAudioPCMBuffer) -> Prepared? {
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
     connect(engine, player, reverb(), format: buffer.format)
-    engine.mainMixerNode.outputVolume = muted ? 0 : volume
+    engine.mainMixerNode.outputVolume = 0
     do {
       try engine.start()
     } catch {
       NSLog("[IntroMusic] couldn't start audio: \(error)")
       return nil
     }
-    player.scheduleBuffer(slice(buffer, from: frames), at: nil, completionHandler: finished)
-    player.play()
-    return engine
+    return Prepared(engine: engine, player: player, buffer: buffer)
+  }
+
+  private func begin(_ prepared: Prepared, offset: Double, session current: Int) {
+    let frames = AVAudioFramePosition(max(0, offset) * Self.sampleRate)
+    guard frames < AVAudioFramePosition(prepared.buffer.frameLength) else { return Self.audio.async { prepared.engine.stop() } }
+    prepared.engine.mainMixerNode.outputVolume = muted ? 0 : Self.volume
+    prepared.player.scheduleBuffer(Self.slice(prepared.buffer, from: frames), at: nil) { [weak self] in
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        if self?.session == current { self?.stopNow() }
+      }
+    }
+    prepared.player.play()
+    engine = prepared.engine
   }
 
   private func stopNow() {

@@ -943,7 +943,7 @@ extension SystemNative {
   }
 
   static var launchAtLoginStatusFunction: AnyDefinition {
-    AsyncFunction("launchAtLoginStatus") { () -> String in Self.launchAtLoginStatus() }
+    AsyncFunction("launchAtLoginStatus") { () -> String in Self.launchAtLoginStatus() }.runOnQueue(DispatchQueue.global(qos: .utility))
   }
 
   static var setLaunchAtLoginFunction: AnyDefinition {
