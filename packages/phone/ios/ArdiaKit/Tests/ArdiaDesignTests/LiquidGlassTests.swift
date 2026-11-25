@@ -243,14 +243,14 @@ struct LiquidGlassTests {
     #expect(!LiquidGlassRules.overBudgetPublicly(afterSwitch, now: 2, frameMs: frameMs), "a private page's work, still landing after the switch to a public tab, isn't counted")
     let publicHeavy = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2, ms: 40) }
     #expect(LiquidGlassRules.overBudgetPublicly(publicHeavy, now: 2, frameMs: frameMs))
-    let privateDocument: [(start: TimeInterval, end: TimeInterval?, privately: Bool)] = [(start: 0.1, end: 1.9, privately: true), (start: 1.9, end: 2.0, privately: false)]
+    let privateDocument: [(start: TimeInterval, end: TimeInterval?, privately: Bool, consentWindow: Int?)] = [(start: 0.1, end: 1.9, privately: true, consentWindow: 0), (start: 1.9, end: 2.0, privately: false, consentWindow: 0)]
     #expect(GlassFlowRules.documentOverBudget(privateDocument.map { (start: $0.start, end: $0.end) }, now: 2))
-    #expect(!GlassFlowRules.documentOverBudgetPublicly(privateDocument, now: 2), "WebKit's PDF work for a private page stays out of the count")
+    #expect(!GlassFlowRules.documentOverBudgetPublicly(privateDocument, now: 2, consentWindow: 0), "WebKit's PDF work for a private page stays out of the count")
   }
 
   @Test func `a capture started on the Incognito deck charges its landing to private work, not to the public frame it lands in`() {
     let frameMs = 1000.0 / 60
-    let landingFrame = LiquidGlassRules.CaptureSample(at: 1.0, ms: 24, privateMs: 22)
+    let landingFrame = LiquidGlassRules.CaptureSample(at: 1.0, ms: 24, uncountedMs: 22)
     let slowPublicFrame = LiquidGlassRules.CaptureSample(at: 1.5, ms: 20)
     let frames = [landingFrame, slowPublicFrame]
     #expect(abs(landingFrame.publicMs - 2) < 1e-9)
@@ -259,7 +259,39 @@ struct LiquidGlassTests {
     let bothPublic = [LiquidGlassRules.CaptureSample(at: 1.0, ms: 24), slowPublicFrame]
     #expect(LiquidGlassRules.overBudgetPublicly(bothPublic, now: 1.6, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes))
     #expect(LiquidGlassRules.CaptureSample(at: 0, ms: 10, privately: true).publicMs == 0)
-    #expect(LiquidGlassRules.CaptureSample(at: 0, ms: 10, privateMs: 40).publicMs == 0)
+    #expect(LiquidGlassRules.CaptureSample(at: 0, ms: 10, uncountedMs: 40).publicMs == 0)
+  }
+
+  @Test func `capture work from before sharing was turned back on cools the glass but isn't counted in the new consent window`() {
+    let frameMs = 1000.0 / 60
+    let before = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2, ms: 40, consentWindow: 1) }
+    let after = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2 + 0.1, ms: 0.5, consentWindow: 2) }
+    #expect(LiquidGlassRules.overBudget(before + after, now: 2, frameMs: frameMs))
+    #expect(!LiquidGlassRules.overBudgetPublicly(before + after, now: 2, frameMs: frameMs, consentWindow: 2))
+    #expect(LiquidGlassRules.overBudgetPublicly(before + after, now: 2, frameMs: frameMs, consentWindow: 1))
+    #expect(!LiquidGlassRules.overBudgetPublicly(before, now: 2, frameMs: frameMs, consentWindow: nil), "nothing is counted while sharing is off")
+    let offSamples = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2, ms: 40, consentWindow: nil) }
+    #expect(!LiquidGlassRules.overBudgetPublicly(offSamples, now: 2, frameMs: frameMs, consentWindow: 2), "work done while sharing was off isn't counted once it is on")
+    let spans: [(start: TimeInterval, end: TimeInterval?, privately: Bool, consentWindow: Int?)] = [(start: 0.1, end: 1.9, privately: false, consentWindow: 1), (start: 1.9, end: 2.0, privately: false, consentWindow: 2)]
+    #expect(!GlassFlowRules.documentOverBudgetPublicly(spans, now: 2, consentWindow: 2), "a WebKit PDF asked for in the old window isn't counted in the new one")
+    #expect(GlassFlowRules.documentOverBudgetPublicly(spans, now: 2, consentWindow: 1))
+  }
+
+  @Test func `a lens that was private while it showed is never counted as bridged when it fades out on a public tab`() {
+    var incognitoLens = LiquidGlassRules.ShownPrivacy()
+    incognitoLens.shown(privately: true)
+    #expect(!incognitoLens.countsWhenHidden(privatelyNow: false), "leaving Incognito: the lens fading is the Incognito page's")
+    var publicLens = LiquidGlassRules.ShownPrivacy()
+    publicLens.shown(privately: false)
+    #expect(publicLens.countsWhenHidden(privatelyNow: false))
+    #expect(!publicLens.countsWhenHidden(privatelyNow: true))
+    var turnedPrivate = LiquidGlassRules.ShownPrivacy()
+    turnedPrivate.shown(privately: false)
+    turnedPrivate.seen(privately: true)
+    turnedPrivate.seen(privately: false)
+    #expect(!turnedPrivate.countsWhenHidden(privatelyNow: false), "a lens that showed a private page at any moment stays private until it shows again")
+    turnedPrivate.shown(privately: false)
+    #expect(turnedPrivate.countsWhenHidden(privatelyNow: false))
   }
 
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {

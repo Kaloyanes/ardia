@@ -423,11 +423,10 @@ export const voiceInk = {
   bar: "rgba(255,255,255,0.85)",
   glass: "rgba(255,255,255,0.18)",
   transcript: "rgba(0,0,0,0.18)",
-  logoShadow: "0px 6px 12px rgba(0, 0, 0, 0.15)",
 } as const;
 
 export const voiceLayout = {
-  logo: 128,
+  appIcon: 104,
   pill: 50,
   cancel: 44,
   icon: 17,

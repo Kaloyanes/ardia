@@ -188,21 +188,36 @@ public enum LiquidGlassRules {
     public var at: TimeInterval
     public var ms: Double
     public var cold: Bool
-    public var privateMs: Double
+    public var uncountedMs: Double
+    public var consentWindow: Int?
 
-    public init(at: TimeInterval, ms: Double, cold: Bool = false, privately: Bool = false, privateMs: Double = 0) {
+    public init(at: TimeInterval, ms: Double, cold: Bool = false, privately: Bool = false, uncountedMs: Double = 0, consentWindow: Int? = 0) {
       self.at = at
       self.ms = ms
       self.cold = cold
-      self.privateMs = privately ? ms : min(max(privateMs, 0), ms)
+      self.uncountedMs = privately ? ms : min(max(uncountedMs, 0), ms)
+      self.consentWindow = consentWindow
     }
 
-    public var publicMs: Double { ms - privateMs }
+    public var publicMs: Double { ms - uncountedMs }
   }
 
-  public static func overBudgetPublicly(_ samples: [CaptureSample], now: TimeInterval, frameMs: Double, strikes: Int = 1) -> Bool {
-    let publicWork = samples.compactMap { sample in sample.publicMs > 0 ? CaptureSample(at: sample.at, ms: sample.publicMs, cold: sample.cold) : nil }
-    return overBudget(publicWork, now: now, frameMs: frameMs, strikes: strikes)
+  public static func overBudgetPublicly(_ samples: [CaptureSample], now: TimeInterval, frameMs: Double, strikes: Int = 1, consentWindow: Int? = 0) -> Bool {
+    guard consentWindow != nil else { return false }
+    let counted = samples.compactMap { sample in sample.consentWindow == consentWindow && sample.publicMs > 0 ? CaptureSample(at: sample.at, ms: sample.publicMs, cold: sample.cold) : nil }
+    return overBudget(counted, now: now, frameMs: frameMs, strikes: strikes)
+  }
+
+  public struct ShownPrivacy: Equatable, Sendable {
+    public private(set) var privately = false
+
+    public init() {}
+
+    public mutating func shown(privately: Bool) { self.privately = privately }
+
+    public mutating func seen(privately: Bool) { if privately { self.privately = true } }
+
+    public func countsWhenHidden(privatelyNow: Bool) -> Bool { !privately && !privatelyNow }
   }
 
   public static func recentSamples(_ samples: [CaptureSample], now: TimeInterval) -> [CaptureSample] {

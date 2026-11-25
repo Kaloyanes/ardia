@@ -31,7 +31,7 @@ import { useReduceTransparency } from "./contrast";
 import { useIncognitoLook, useProfileLook, useTheme } from "./theme";
 import { usePressStyle } from "./pressFeedback";
 import { Symbol } from "./Symbol";
-import { chromeInk, chromeLayout, controlRadius, nativeClassicChrome, overlayInk, shadowCss, smoothCorners, space, startInk, tabsInk, voiceLayout } from "./tokens";
+import { capsule, chromeInk, chromeLayout, nativeClassicChrome, overlayInk, shadowCss, smoothCorners, space, startInk, tabsInk, voiceLayout } from "./tokens";
 import { useReduceMotion } from "./contrast";
 import { useDesign } from "./design";
 
@@ -443,7 +443,7 @@ export function OverlayCancelButton({ label, onPress, frostSource, buttonRef, te
   const pressStyle = usePressStyle("icon", { style: [overlayStyles.cancel, { top: insets.top + space.s, right: insets.right + space.l }] });
   return (
     <Pressable ref={buttonRef} testID={testID} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={pressStyle}>
-      <OverlayPlate frostSource={frostSource} cornerRadius={controlRadius(voiceLayout.cancel)} style={overlayStyles.cancelFace}>
+      <OverlayPlate frostSource={frostSource} cornerRadius={capsule(voiceLayout.cancel)} style={overlayStyles.cancelFace}>
         <Symbol name="xmark" size={voiceLayout.icon} color={overlayInk.label} />
       </OverlayPlate>
     </Pressable>

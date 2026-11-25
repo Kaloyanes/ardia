@@ -1614,7 +1614,10 @@ Metal.
   extension's Done) draw `LiquidGlassFill`: the flat frost fill, the edge and the rim as an angular gradient from the
   same rim maths. None of them has a source to refract. Since #4252 the React Native frost variant `glass` is the
   Metal `Glass` on iPhone as on Android (`LookFrost`), so voice search's Done, Search and Browse for Me and its Cancel
-  refract instead of drawing the flat fill.
+  refract instead of drawing the flat fill. Every voice action (Done, Search, Browse for Me, Try Again, Open Settings)
+  is a pill (`ActionButton`'s `capsule`) and Cancel a round glass button, as elsewhere in the app, and the screen's mark
+  is the app icon on the Welcome step's tile (`voiceLayout.appIcon`), scaled by the input level as the old mark was and
+  still under Reduce Motion.
 - **Interactive and shown.** A pressed interactive glass lightens by 8 % white on the press (60 ms in, 180 ms out,
   no bounce); `shown` fades the surface over `shownMs` as before. Classic's shadow fades with it (#4252): it is the
   `GlassView`'s own layer shadow, outside the faded surface, so until #4252 a bar collapsing to the host pill in
@@ -1660,7 +1663,11 @@ Metal.
   WebKit PDF or snapshot it asks for, and each off-main copy, whose installation is charged to the work that started
   it rather than to the frame it lands in), so work for a private page that lands after a switch to a public tab can still
   cool the glass down but never counts toward `glass_captures_over_budget`, which is taken only when the public work
-  alone crosses the budget. The stretch starts again when privacy or the sharing consent
+  alone crosses the budget. A lens that was private at any moment while it showed stays private until it shows
+  again, so leaving Incognito never counts `glass_lens_bridged` for the Incognito page's lens fading out
+  (`LiquidGlassRules.ShownPrivacy`). Capture samples, WebKit spans and off-main copies also carry the consent window
+  they started in: the cooldown uses all of them, and `glass_captures_over_budget` only those from the window it is
+  written in, checked under the consent lock. The stretch starts again when privacy or the sharing consent
   changes, or the lens shows, and a count lands only in the consent window the frame read, checked under the same lock
   as the write, so sharing turned off and on again mid-frame can't carry an old stretch into the new window. A menu's
   glass also drops its lens at once when the page under it goes missing for a frame (a tab change before the new

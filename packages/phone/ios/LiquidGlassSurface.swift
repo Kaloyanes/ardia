@@ -14,7 +14,9 @@ final class LiquidGlassSurface: UIView {
   var presentedRadius: (() -> CGFloat?)?
   var followsPresentation = false
   var label: String = "-"
-  var privately = false
+  var privately = false {
+    didSet { if lensOn == true { shownPrivacy.seen(privately: privately) } }
+  }
   var overlay = false
 
   private let fillLayer = CALayer()
@@ -44,6 +46,7 @@ final class LiquidGlassSurface: UIView {
   private var lensOn: Bool?
   private var lastBridge: CFTimeInterval = 0
   private var withheld = LiquidGlassRules.LensWithheld()
+  private var shownPrivacy = LiquidGlassRules.ShownPrivacy()
   private var toneDark: Bool?
   private var toneChangedAt: CFTimeInterval = -.infinity
 
@@ -301,8 +304,11 @@ final class LiquidGlassSurface: UIView {
   private func setLens(on: Bool, fades: Bool) {
     guard on != lensOn else { return }
     let now = CACurrentMediaTime()
-    if on { withheld.lensShown() }
-    if lensOn == true, !on, choice.path == .live, waitsForPage, !privately, now - lastBridge >= 1 {
+    if on {
+      withheld.lensShown()
+      shownPrivacy.shown(privately: privately)
+    }
+    if lensOn == true, !on, choice.path == .live, waitsForPage, shownPrivacy.countsWhenHidden(privatelyNow: privately), now - lastBridge >= 1 {
       lastBridge = now
       PendingCounts.add(PendingCounts.glassLensBridged)
     }
