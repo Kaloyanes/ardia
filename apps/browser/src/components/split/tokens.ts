@@ -1,5 +1,6 @@
 import { curve, duration, springs } from "../ui/motion";
-import { concentric, radius } from "../ui/tokens";
+import { concentric, radius, type ColorRoles } from "../ui/tokens";
+import { over } from "../../lib/color";
 
 const DARK = {
   emptyStateFill: "rgba(34,32,33,0.92)",
@@ -20,6 +21,8 @@ const LIGHT: typeof DARK = {
 type SplitColors = typeof DARK;
 
 export const splitColors = (dark: boolean): SplitColors => (dark ? DARK : LIGHT);
+
+export const emptyPaneFieldSurface = (roles: ColorRoles) => over(roles.rowHover, splitColors(roles.dark).emptyStateFill);
 
 export const ZONE_ACCENT_ALPHA = { dark: 0.16, light: 0.12 } as const;
 
