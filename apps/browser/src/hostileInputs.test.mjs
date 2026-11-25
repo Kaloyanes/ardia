@@ -727,7 +727,8 @@ test("windows webui native update policy keeps every hostile input and call argu
 
 test("a synced pinned tile's letters are at most two visible characters, whatever the record holds", async () => {
   const { pinnedLettersAdapter } = await import("./state/sync/pinnedLettersAdapter.ts");
-  const { cleanTileLetters } = await import("./lib/tileLetter.ts");
+  const { cleanTileLetters, TILE_LETTERS_MAX, TILE_LETTERS_MAX_LENGTH } = await import("./lib/tileLetter.ts");
+  const { graphemeClusters } = await import("./lib/graphemes.ts");
   const S = () => useBrowser.getState();
   S().hydrate({});
   const w = S().createWindow({ url: "https://tile.example/" });
@@ -746,6 +747,7 @@ test("a synced pinned tile's letters are at most two visible characters, whateve
     if (letters === undefined) continue;
     assert.equal(typeof letters, "string");
     assert.ok(!/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}\s]/u.test(letters.replace(/[\u200C\u200D\u{E0020}-\u{E007F}]/gu, "")) && !/(?![\u200C\u200D\u{E0020}-\u{E007F}])\p{Cf}/u.test(letters), JSON.stringify(letters));
+    assert.ok(letters.length <= TILE_LETTERS_MAX_LENGTH && graphemeClusters(letters).length <= TILE_LETTERS_MAX, JSON.stringify(letters));
     assert.equal(cleanTileLetters(letters), letters, "what lands is already clean, so it doesn't change on the next sync");
   }
 });
