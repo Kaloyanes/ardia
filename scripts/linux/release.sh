@@ -203,12 +203,12 @@ done
 if [ -n "$missing_rpm_tools" ]; then
   drop_rpm "building it needs${missing_rpm_tools}"
 else
-  python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --rpm "$out/$rpm_name" >"$out/rpm-build.log" 2>&1 \
-    || { tail -20 "$out/rpm-build.log" >&2; drop_rpm "building it failed (rpm-build.log)"; }
+  timeout 20m python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --rpm "$out/$rpm_name" >"$out/rpm-build.log" 2>&1 \
+    || { status=$?; tail -20 "$out/rpm-build.log" >&2; if [ "$status" = 124 ]; then drop_rpm "building it took over 20 minutes (rpm-build.log)"; else drop_rpm "building it failed (rpm-build.log)"; fi; }
 fi
 flatpak_built=1
-python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --flatpak "$out/$flatpak_name" >"$out/flatpak-build.log" 2>&1 \
-  || { flatpak_built=0; rm -f "$out/$flatpak_name"; tail -20 "$out/flatpak-build.log" >&2; warn "building the Flatpak failed ($out/flatpak-build.log): the release goes without it"; }
+timeout 30m python3 scripts/linux/linux_formats.py from-tarball --tarball "$out/$package_name" --version "$version" --flatpak "$out/$flatpak_name" >"$out/flatpak-build.log" 2>&1 \
+  || { [ $? = 124 ] && echo "release.sh: stopped after 30 minutes" >>"$out/flatpak-build.log"; flatpak_built=0; rm -f "$out/$flatpak_name"; tail -20 "$out/flatpak-build.log" >&2; warn "building the Flatpak failed ($out/flatpak-build.log): the release goes without it"; }
 srcpkg=$(mktemp -d)
 scripts/linux/arch/update-pkgbuild.sh "$version" --package "$out/$package_name" --out "$srcpkg/ardia-bin" >/dev/null \
   || { rm -rf "$srcpkg"; die "writing the Arch PKGBUILD for $package_name failed (above)"; }

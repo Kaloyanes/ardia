@@ -336,7 +336,7 @@ STUB_SHELL = {
 }
 
 REAL_TOOLS = ('bash', 'sh', 'env', 'node', 'python3', 'sha256sum', 'tar', 'xz', 'gzip', 'git', 'sed', 'awk', 'cut', 'grep', 'mktemp',
-              'dirname', 'basename', 'ls', 'rm', 'mkdir', 'find', 'du', 'cat', 'sort', 'head', 'tail', 'cp', 'mv', 'chmod', 'tr', 'wc', 'pwd')
+              'dirname', 'basename', 'ls', 'rm', 'mkdir', 'find', 'du', 'cat', 'sort', 'head', 'tail', 'cp', 'mv', 'chmod', 'tr', 'wc', 'pwd', 'timeout')
 RPM_TOOLS = ('rpmbuild', 'rpm', 'rpm2cpio', 'cpio')
 
 

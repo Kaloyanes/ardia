@@ -407,6 +407,7 @@ jobs:
       - name: RPM package installs
         id: rpm-install
         continue-on-error: true
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           if [ ! -f "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-x64.rpm" ]; then
@@ -426,6 +427,7 @@ jobs:
       - name: Flatpak installs
         id: flatpak-install
         continue-on-error: true
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           if [ ! -f "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-x64.flatpak" ]; then

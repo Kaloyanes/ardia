@@ -63,7 +63,7 @@ DEB_CLI_INSTALLER = ('curl',)
 DEB_UPDATER = ('openssl',)
 DEB_RECOMMENDS = ('polkitd | policykit-1', 'pkexec | policykit-1', 'libvulkan1')
 BROWSER_ALTERNATIVES = ('x-www-browser', 'gnome-www-browser')
-RPM_REQUIRES = ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'liberation-fonts', 'xdg-utils', 'curl', 'openssl', 'ca-certificates')
+RPM_REQUIRES = ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'liberation-fonts', 'xdg-utils', '/usr/bin/curl', 'openssl', 'ca-certificates')
 RPM_RECOMMENDS = ('polkit', '/usr/bin/pkexec')
 RPM_SHARED_FOLDERS = ('/usr/share/polkit-1', '/usr/share/polkit-1/actions', '/usr/share/icons/hicolor', '/usr/share/icons/hicolor/256x256',
                       '/usr/share/icons/hicolor/256x256/apps', '/usr/share/licenses')
@@ -614,7 +614,7 @@ def main():
             print(rpmbuild(args.tree.resolve(), args.destination.resolve(), args.version, 'w1T.zstdio' if args.fast else RPM_PAYLOAD))
         else:
             print(write_flatpak_manifest(args.out, args.version, {'url': release_tarball_url(args.version), 'sha256': args.sha256}))
-    except (ValueError, OSError) as error:
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.error(str(error))
 
 
