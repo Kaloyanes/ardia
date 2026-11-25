@@ -1168,12 +1168,13 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
   (`NoDisplay=true`, `StartupWMClass` set to the class, `Icon=ardia`) give the three classes Ardia's name and icon in
   bars and switchers; `install.sh` (so the tarball and the AUR package) and the `.deb` install them
   (`linux_formats.desktop_entries`). The AppImage carries them but installs nothing, so there the bars show the bare
-  class. A compositor rule can still match the class, for niri `window-rule { match app-id="^ardia-little$"
-  open-floating false }` to tile it again. Settings' app id was `chrome-ArdiaSettings-Default` before, so an existing
-  rule naming it needs the new id. A window that the shell turns into Little Ardia after it opened, or back
-  (`set_small`), keeps the class and the tiling it opened with: the host answers the class hook with the class the
-  window opened with. `usage_counts.little_ardia_opened_floating` and `utility_windows_opened_floating` count windows
-  that opened with Chromium reading the pin, once per window, in the first shell that loads in it.
+  class. A compositor rule can still match the class, for niri
+  `window-rule { match app-id="^ardia-little$"; open-floating false; }` to tile it again. Settings' app id was
+  `chrome-ArdiaSettings-Default` before, so an existing rule naming it needs the new id. A window that the shell turns
+  into Little Ardia after it opened, or back (`set_small`), keeps the class and the tiling it opened with: the host
+  answers the class hook with the class the window opened with. `usage_counts.little_ardia_opened_floating` and
+  `utility_windows_opened_floating` count windows that opened with Chromium reading the pin, once per window, in the
+  first shell that loads in it.
 - **Header drag and double-click.** Dragging the header moves the window (`DispatchHostWindowDragMovement`).
   Double-clicking it runs the desktop's titlebar action.
 - **Outer frame.** The host overlays Chromium's client view, and what happens to Chromium's frame around it depends on
