@@ -18,6 +18,8 @@
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_window_events.h"
+#include "ardia/mac/ac_mac_window_policy.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -48,7 +50,10 @@ class WebView;
 
 namespace ardia_mac {
 
+class DialogSheets;
 class GlassRegions;
+class PageCommands;
+class PageEvents;
 class PopoverHost;
 
 namespace shared_folders {
@@ -78,6 +83,9 @@ bool BackgroundInstance();
 std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
                                            const char* host_bootstrap);
 void Trace(const std::string& line);
+std::vector<std::string_view> LifecycleCapabilities();
+void QuitWithoutShell();
+void WriteSessionInBackground(base::DictValue session, base::OnceCallback<void(bool)> done);
 
 class PageBinding : public content::WebContentsObserver {
  public:
@@ -93,30 +101,40 @@ class PageBinding : public content::WebContentsObserver {
   const std::string& key() const { return key_; }
   const std::string& profile() const { return profile_; }
   content::WebContents* contents() const { return web_contents(); }
+  ShellHostView* host() const { return owner_; }
+  PageEvents* events() const { return events_.get(); }
+  PageCommands* commands() const { return commands_.get(); }
 
   std::string claim;
   uint64_t renderer_generation = 0;
   uint64_t sequence = 1;
+  uint64_t binding_generation = 1;
   raw_ptr<views::WebView> viewport = nullptr;
   bool visible = false;
   bool presented = false;
 
   base::DictValue NavigationEvent() const;
   base::DictValue Envelope(std::string_view type);
+  base::DictValue CreationState();
+  void Rebind(content::WebContents* contents);
   void ReportNavigation();
   void ReportClosed();
+  void Report(std::string_view name, base::Value data);
 
  private:
   void DidFinishNavigation(content::NavigationHandle* handle) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
+  void DidChangeThemeColor() override;
   void WebContentsDestroyed() override;
 
   raw_ptr<ShellHostView> owner_;
   int id_ = 0;
   std::string key_;
   std::string profile_;
+  std::unique_ptr<PageEvents> events_;
+  std::unique_ptr<PageCommands> commands_;
 };
 
 class ShellHostView : public views::View,
@@ -188,6 +206,12 @@ class ShellHostView : public views::View,
                                 uint64_t generation) const;
   void Note(const std::string& line) const;
 
+  bool HandlesLifecycleCall(const std::string& method) const;
+  void LifecycleCall(const std::string& method, const base::DictValue& args, Done done);
+  base::DictValue RequestWindowClose(std::uint64_t quit_generation);
+  bool RendererLive() const;
+  bool shortcut_recording() const { return shortcut_recording_; }
+
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   bool CanHandleAccelerators() const override;
   bool HandleKeyboardEvent(content::WebContents* source,
@@ -212,6 +236,9 @@ class ShellHostView : public views::View,
                    uint64_t generation,
                    Profile* profile);
   base::DictValue Identity(PageBinding* binding) const;
+  void ReplaceBinding(content::WebContents* old_contents,
+                      content::WebContents* contents);
+  void DropDetachedBinding(int id, base::WeakPtr<content::WebContents> contents);
   void SetViewport(const base::DictValue& args, Done done);
   void SetPresentations(const base::DictValue& args, Done done);
   void TabCommand(const base::DictValue& args, Done done);
@@ -232,6 +259,30 @@ class ShellHostView : public views::View,
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
   void StopWatchingWindowDrag();
+  void StartLifecycle();
+  void StopLifecycle();
+  void RetireLifecycle();
+  void DialogCall(const std::string& method, const base::ListValue* values, Done done);
+  void WindowCall(const std::string& method, const base::ListValue* values, Done done);
+  void KeyboardCall(const std::string& method, const base::ListValue* values, Done done);
+  void SidebarEdgeCall(const base::ListValue* values, bool left_only, Done done);
+  void BeginWindowCloseDrain(const base::DictValue& request, Done done);
+  void AcknowledgeWindowClose(const base::DictValue& request, Done done);
+  void RejectWindowClose(const base::DictValue& request, Done done);
+  void CancelWindowClose(const window_policy::CloseIdentity& identity, std::string_view reason);
+  void CloseAcknowledgedWindow(window_policy::CloseIdentity identity);
+  void SettleClose(window_policy::CloseIdentity identity);
+  bool ClosingEndsSession() const;
+  void OnWindowChanged(WindowEvents::Kind kind);
+  void OnPointerMoved(const WindowEvents::Pointer& pointer);
+  void ReportSidebarEdge(std::optional<window_policy::EdgeReport> report);
+  void ReconcilePointerPoll(const std::optional<WindowEvents::Pointer>& pointer);
+  void ReportWindowState();
+  base::DictValue WindowStateValue() const;
+  base::DictValue WindowGeometryValue() const;
+  void EmitWindowEvent(base::DictValue event);
+  void NoteSwitcherSource();
+  void RestoreSwitcherSource();
   void NoteUnclaimedTab(content::WebContents* contents, bool active);
   void AnnounceUnclaimedTab(int id, int tries);
   base::DictValue OfferTab(content::WebContents* contents, bool active);
@@ -274,6 +325,19 @@ class ShellHostView : public views::View,
   uint64_t renderer_generation_ = 1;
   base::WeakPtr<ShellBridge> request_handler_;
   uint64_t request_generation_ = 0;
+
+  std::unique_ptr<DialogSheets> dialogs_;
+  std::unique_ptr<WindowEvents> window_events_;
+  window_policy::CloseBook close_;
+  std::uint64_t quit_generation_ = 0;
+  std::map<std::string, std::uint64_t> close_dialogs_;
+  window_policy::EdgeWatch edge_;
+  std::string edge_id_;
+  std::optional<window_policy::WindowState> reported_state_;
+  bool full_screen_restored_ = false;
+  bool shortcut_recording_ = false;
+  bool switcher_capture_ = false;
+  base::WeakPtr<content::WebContents> switcher_source_;
 
   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
   std::map<ui::Accelerator, base::DictValue> shortcuts_;

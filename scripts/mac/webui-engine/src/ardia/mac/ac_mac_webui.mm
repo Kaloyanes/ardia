@@ -12,6 +12,7 @@
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_hooks.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_page_delegate.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_share.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
@@ -376,6 +377,7 @@ void StartWebUIShell() {
   g_ardia_keeps_window_without_tabs = &KeepsWindowWithoutTabs;
   g_ardia_mac_shell_passes_point = &PassesPoint;
   share::InstallPageMenu();
+  InstallPageDelegate();
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<ShellConfig>());
   InstallDefaultMainMenu(MainMenuHandler());

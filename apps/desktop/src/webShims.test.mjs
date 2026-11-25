@@ -269,3 +269,46 @@ test("the folder icon draws FolderIconView's back tab, interior and flap, and ti
   assert.equal(readFileSync(new URL("../../../packages/demo/src/shims/web/folderArt.ts", import.meta.url), "utf8"), readFileSync(new URL("./shims/web/folderArt.ts", import.meta.url), "utf8"), "the demo draws the same folder");
   assert.equal(readFileSync(new URL("../../../packages/demo/src/shims/web/FolderIcon.tsx", import.meta.url), "utf8"), icon, "the demo animates the same folder");
 });
+
+test("a repeating Retina tile keeps its 1x point size and other images pass through", async () => {
+  const { scaledSource, tiledBackground } = await import("./shims/web/scaledTile.ts");
+  const stripes = { uri: "/assets/dev-stripes-dark-ink@2x.png", width: 28, height: 28, scale: 2 };
+  assert.deepEqual(tiledBackground(stripes, "repeat", undefined), {
+    backgroundImage: 'url("/assets/dev-stripes-dark-ink@2x.png")',
+    backgroundPosition: "left top",
+    backgroundRepeat: "repeat",
+    backgroundSize: "28px 28px",
+  });
+  assert.equal(tiledBackground(stripes, "cover", undefined), null);
+  assert.equal(tiledBackground(stripes, undefined, undefined), null);
+  assert.equal(tiledBackground(stripes, "repeat", "#ff0000"), null);
+  assert.equal(tiledBackground("/assets/dev-stripes-dark-ink.png", "repeat", undefined), null);
+  assert.equal(tiledBackground({ uri: "/a.png", width: 28, height: 28, scale: 1 }, "repeat", undefined), null);
+  assert.equal(tiledBackground([stripes], "repeat", undefined), null);
+  assert.equal(scaledSource({ uri: "/a@3x.png", width: 0, height: 11, scale: 3 }), null);
+  assert.equal(scaledSource({ uri: "", width: 11, height: 11, scale: 3 }), null);
+  assert.deepEqual(scaledSource({ uri: "/a@3x.png", width: 11, height: 11, scale: 3, extra: 1 }), { uri: "/a@3x.png", width: 11, height: 11, scale: 3 });
+});
+
+test("a bordered view that clips its content draws its border as a ring above the content, the way React Native does", async () => {
+  const { borderBoxClip } = await import("./shims/web/motion/borderClip.ts");
+  const card = { overflow: "hidden", borderRadius: 12, borderWidth: 2, borderStyle: "solid", borderColor: "#0A84FF" };
+  const clip = borderBoxClip(card);
+  assert.equal(clip.style.overflow, "clip");
+  assert.equal(clip.style.overflowClipMargin, "border-box");
+  assert.equal(clip.style.borderTopColor, "transparent");
+  assert.equal(clip.style.isolation, "isolate");
+  assert.deepEqual(clip.ring, {
+    position: "absolute", top: -2, right: -2, bottom: -2, left: -2, boxSizing: "border-box",
+    borderStyle: "solid", borderWidth: 2, borderColor: "#0A84FF", pointerEvents: "none", zIndex: 2147483647,
+    borderTopLeftRadius: 12, borderTopRightRadius: 12, borderBottomRightRadius: 12, borderBottomLeftRadius: 12,
+  });
+  assert.equal(borderBoxClip({ ...card, borderStyle: "dashed", borderTopLeftRadius: 4 }).ring.borderTopLeftRadius, 4);
+  assert.equal(borderBoxClip({ ...card, borderStyle: "dashed" }).ring.borderStyle, "dashed");
+  assert.equal(borderBoxClip({ ...card, overflow: "visible" }), null);
+  assert.equal(borderBoxClip({ overflow: "hidden", borderRadius: 12 }), null);
+  assert.equal(borderBoxClip(undefined), null);
+  for (const uneven of [{ borderBottomWidth: 1 }, { borderTopColor: "#FF0000" }, { borderColor: undefined }, { borderTopStartRadius: 3 }]) {
+    assert.deepEqual(borderBoxClip({ ...card, ...uneven }), { style: { overflow: "clip", overflowClipMargin: "border-box" }, ring: null }, JSON.stringify(uneven));
+  }
+});

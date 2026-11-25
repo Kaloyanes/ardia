@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -8,14 +9,17 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_share_policy.h"
 #include "ardia/mac/ac_mac_shared_folders_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "ardia/mac/ac_mac_window_layout.h"
+#include "ardia/mac/ac_mac_window_policy.h"
 #include "check.h"
 #include "launch_args.h"
 
@@ -310,6 +314,144 @@ TEST(shared_folder_guards) {
     if (const auto identity = folders::IdentityFrom(a, a)) CHECK(identity->device >= 0 && identity->inode >= 0);
   }
   CHECK(folders::RelativeParts("Reading/Essay.webloc").has_value());
+}
+
+TEST(dialog_guards) {
+  namespace dialog = ardia_mac::dialog_policy;
+  for (const std::string& text : Load().strings) {
+    if (dialog::ValidDialogId(text)) CHECK(text.size() >= 16 && text.size() <= 96 && Charset(text, ":_-"));
+    if (dialog::ValidGeneration(text)) CHECK(text.front() != '0' && text.size() <= 20 && Charset(text, ""));
+    dialog::Request request;
+    request.dialog_id = {true, true, text};
+    request.kind = {true, true, text};
+    request.has_options = true;
+    request.title = {true, true, text};
+    request.message = {true, true, text};
+    request.confirm_title = {true, true, text};
+    request.window_id = {true, true, text};
+    if (const auto spec = dialog::Parse(request, "main")) {
+      CHECK(dialog::ValidDialogId(spec->dialog_id) && (text == "confirm" || text == "prompt"));
+    }
+    dialog::Request control;
+    control.dialog_id = {true, true, "dialog:0123456789abcdef:1"};
+    control.kind = {true, true, "prompt"};
+    control.has_options = true;
+    control.title = {true, true, text};
+    control.message = {true, true, text};
+    control.value = {true, true, text};
+    control.placeholder = {true, true, text};
+    control.suppression = {true, true, text};
+    const auto spec = dialog::Parse(control, "main");
+    CHECK(spec.has_value() == (text.size() <= dialog::kTitleLimit));
+    if (spec) {
+      CHECK(NoControls(dialog::ButtonTitle(spec->confirm_title, "OK")));
+      for (char c : dialog::Displayable(spec->title)) {
+        const auto byte = static_cast<unsigned char>(c);
+        CHECK(c == '\n' || c == '\t' || (byte >= 0x20 && byte != 0x7f));
+      }
+      const auto answer = dialog::Resolve(*spec, {.accepted = true, .text = text});
+      if (answer.text) CHECK(!answer.text->empty() && answer.text->size() <= dialog::kValueLimit);
+      dialog::Queue queue;
+      CHECK(queue.Admit(*spec, text, text) == dialog::Refusal::kNone || !dialog::ValidGeneration(text));
+    }
+  }
+  dialog::Request valid;
+  valid.dialog_id = {true, true, "dialog:0123456789abcdef:1"};
+  valid.kind = {true, true, "confirm"};
+  valid.has_options = true;
+  valid.title = {true, true, "Quit?"};
+  CHECK(dialog::Parse(valid, "main").has_value());
+}
+
+TEST(window_lifecycle_guards) {
+  namespace policy = ardia_mac::window_policy;
+  for (const std::string& text : Load().strings) {
+    if (policy::ValidWindowId(text)) CHECK(text.size() <= 128 && Charset(text, "_-"));
+    if (policy::ValidGeneration(text)) CHECK(text.front() != '0' && Charset(text, ""));
+    if (const auto title = policy::WindowTitle(text)) CHECK(NoControls(*title) && title->size() == text.size());
+    if (policy::AppearanceNamed(text)) CHECK(text == "auto" || text == "light" || text == "dark");
+    policy::CloseBook book;
+    const auto identity = book.Request(1);
+    CHECK(!book.BeginDrain(policy::CloseIdentity{text, text}, 1) || (text == "1"));
+    CHECK(identity.has_value());
+  }
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      if (const auto frame = policy::FrameFrom(a, b, a, b)) {
+        CHECK(std::isfinite(frame->x) && std::isfinite(frame->height));
+        CHECK(frame->width >= policy::kMinWidth && frame->height >= policy::kMinHeight);
+        CHECK(std::abs(frame->x) <= policy::kFrameLimit && frame->width <= policy::kFrameLimit);
+      }
+      policy::EdgeWatch watch;
+      watch.Watch(a, policy::Side::kLeft, false);
+      if (const auto report = watch.Moved(a, b, 1200, 800, false)) {
+        CHECK(!report->over || (std::isfinite(report->x) && std::isfinite(report->y)));
+      }
+      policy::CloseBook book;
+      const auto identity = book.Request(1);
+      book.BeginDrain(*identity, 1);
+      if (book.Acknowledge(*identity, 1, a)) CHECK(std::isfinite(a) && a >= 0 && std::floor(a) == a);
+    }
+  }
+  CHECK(policy::FrameFrom(0, 0, 1280, 800).has_value());
+}
+
+TEST(page_guards) {
+  namespace page = ardia_mac::page_policy;
+  const auto never = [](std::string_view) { return std::string("not-a-digest"); };
+  const std::array<page::Operation, 1> operations = {{{"plain", 5, "0", page::Arguments::kNone, ""}}};
+  for (const std::string& text : Load().strings) {
+    if (page::Handles(text)) {
+      CHECK(Charset(text, ""));
+    }
+    if (page::IsZoomRoute(text)) {
+      CHECK(text == "sites.zoomLevels" || text == "sites.setZoom");
+    }
+    if (const auto id = page::PopupId(text)) {
+      CHECK(*id >= 0 && Charset(text, "") && text == std::to_string(*id));
+    }
+    if (page::PageActionFor(text) != page::PageAction::kUnsupported) {
+      CHECK(text == "savePage" || text == "systemPrint" || text == "viewSource");
+    }
+    if (page::DevToolsPanelFor(text)) {
+      CHECK(text == "toggle" || text == "inspect" || text == "console");
+    }
+    if (page::ZoomHostShape(text)) {
+      CHECK(!text.empty() && text.size() <= 253 && NoControls(text) && text.find('/') == std::string::npos);
+    }
+    CHECK(!page::MatchOperation(text, never, operations).has_value());
+    const std::string quoted = page::JavaScriptString(text);
+    CHECK(quoted.size() >= 2 && quoted.front() == '"' && quoted.back() == '"' && NoControls(quoted));
+    CHECK(quoted.find('<') == std::string::npos && quoted.find('>') == std::string::npos);
+    for (size_t index = 1; index + 1 < quoted.size(); ++index) {
+      if (quoted[index] == '"') CHECK(quoted[index - 1] == '\\');
+    }
+    if (const auto replaced = page::ReplaceArguments(text, text, false)) {
+      CHECK(text.size() <= page::kReplaceTextMax && NoControls(*replaced));
+    }
+    const std::array<std::string_view, 1> fonts = {{"serif"}};
+    if (const auto look = page::LookArgument(true, 0, text, 5, fonts)) CHECK(text == "serif");
+    const std::array<std::string_view, 1> selectors = {{text}};
+    if (const auto picked = page::PickerSelectors(selectors)) {
+      CHECK(!text.empty() && text.size() <= page::kPickerSelectorMax && NoControls(*picked));
+    }
+  }
+  for (double a : Load().numbers) {
+    if (const auto whole = page::WholeNumber(a)) CHECK(static_cast<double>(*whole) == a);
+    if (const auto step = page::ZoomStep(a)) CHECK(*step >= -1 && *step <= 1);
+    if (const auto seconds = page::SleepSeconds(a)) {
+      CHECK(*seconds >= 0 && *seconds <= page::kSleepLongestHiddenSeconds);
+    }
+    if (page::ZoomFactorAllowed(a)) CHECK(a >= page::kZoomFactorMin && a <= page::kZoomFactorMax);
+    if (const auto factor = page::ReportedZoomFactor(a)) CHECK(std::isfinite(*factor) && *factor > 0);
+    for (double b : Load().numbers) {
+      if (const auto point = page::PickerPoint(a, b)) {
+        CHECK(std::isfinite(a) && std::isfinite(b) && NoControls(*point));
+        CHECK(point->find("nan") == std::string::npos && point->find("inf") == std::string::npos);
+      }
+    }
+  }
+  CHECK(page::Handles("find") && page::PopupId("7") == 7);
 }
 
 int main(int argc, char** argv) {

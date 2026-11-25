@@ -8,8 +8,13 @@
 #include <set>
 #include <utility>
 
+#include "ardia/mac/ac_mac_dialog.h"
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_delegate.h"
+#include "ardia/mac/ac_mac_page_events.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_share.h"
 #include "ardia/mac/ac_mac_shared_folders.h"
@@ -288,6 +293,8 @@ MenuCommandHandler MainMenuHandler() {
     }
     if (target) {
       target->OnMenuCommand(choice.command, choice.argument);
+    } else if (choice.command == "quit") {
+      QuitWithoutShell();
     }
   });
 }
@@ -309,9 +316,15 @@ PageBinding::PageBinding(ShellHostView* owner,
       owner_(owner),
       id_(TabId(contents)),
       key_(std::move(key)),
-      profile_(std::move(profile)) {}
+      profile_(std::move(profile)) {
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  commands_ = std::make_unique<PageCommands>(this);
+}
 
 PageBinding::~PageBinding() {
+  commands_.reset();
+  events_.reset();
   if (viewport && owner_) {
     viewport->SetWebContents(nullptr);
     owner_->RemoveChildViewT(viewport.get());
@@ -330,8 +343,9 @@ base::DictValue PageBinding::NavigationEvent() const {
     data.Set("isLoading", contents->IsLoading());
     data.Set("committedUrl", contents->GetLastCommittedURL().spec());
   }
-  data.Set("themeColor", base::Value());
-  data.Set("themeColorSource", base::Value());
+  const std::optional<std::string> theme = PageThemeColor(contents);
+  data.Set("themeColor", theme ? base::Value(*theme) : base::Value());
+  data.Set("themeColorSource", theme ? base::Value("meta") : base::Value());
   return base::DictValue().Set("name", "navigation").Set("data", std::move(data));
 }
 
@@ -340,9 +354,38 @@ base::DictValue PageBinding::Envelope(std::string_view type) {
       .Set("type", type)
       .Set("claim", claim)
       .Set("rendererGeneration", base::NumberToString(renderer_generation))
-      .Set("bindingGeneration", "1")
+      .Set("bindingGeneration", base::NumberToString(binding_generation))
       .Set("documentEpoch", "1")
       .Set("sequence", static_cast<double>(++sequence));
+}
+
+base::DictValue PageBinding::CreationState() {
+  base::DictValue lease;
+  lease.Set("claim", claim);
+  lease.Set("rendererGeneration", base::NumberToString(renderer_generation));
+  lease.Set("bindingGeneration", base::NumberToString(binding_generation));
+  lease.Set("documentEpoch", "1");
+  base::ListValue events = base::ListValue().Append(NavigationEvent());
+  if (events_) {
+    events_->AppendSnapshot(events);
+  }
+  base::DictValue snapshot;
+  snapshot.Set("watermark", static_cast<double>(sequence));
+  snapshot.Set("events", std::move(events));
+  return base::DictValue()
+      .Set("browserId", id_)
+      .Set("chromeTabId", id_)
+      .Set("lease", std::move(lease))
+      .Set("snapshot", std::move(snapshot));
+}
+
+void PageBinding::Rebind(content::WebContents* contents) {
+  commands_->Reset();
+  events_.reset();
+  Observe(contents);
+  id_ = TabId(contents);
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
 }
 
 void PageBinding::ReportNavigation() {
@@ -351,6 +394,16 @@ void PageBinding::ReportNavigation() {
   }
   base::DictValue delivery = Envelope("pageEvent");
   delivery.Set("event", NavigationEvent());
+  owner_->Emit("ArdiaWebView", base::NumberToString(id_),
+               base::Value(std::move(delivery)));
+}
+
+void PageBinding::Report(std::string_view name, base::Value data) {
+  if (!owner_ || claim.empty() || !web_contents()) {
+    return;
+  }
+  base::DictValue delivery = Envelope("pageEvent");
+  delivery.Set("event", PageEvent(name, std::move(data)));
   owner_->Emit("ArdiaWebView", base::NumberToString(id_),
                base::Value(std::move(delivery)));
 }
@@ -385,8 +438,14 @@ void PageBinding::DidStopLoading() {
   ReportNavigation();
 }
 
+void PageBinding::DidChangeThemeColor() {
+  ReportNavigation();
+}
+
 void PageBinding::WebContentsDestroyed() {
   ReportClosed();
+  commands_->Reset();
+  events_->Reset();
   if (viewport) {
     viewport->SetWebContents(nullptr);
   }
@@ -452,6 +511,7 @@ void ShellHostView::Initialize() {
                                  base::Value(std::move(data)));
           },
           GetWeakPtr()));
+  StartLifecycle();
   browser_->GetTabStripModel()->AddObserver(this);
   WatchWindowDrag();
   LayoutOverlay();
@@ -476,6 +536,7 @@ void ShellHostView::DetachBrowser() {
   StopWatchingWindowDrag();
   shared_folder_watcher_.reset();
   share::Retire(window_id_);
+  StopLifecycle();
   popovers_.reset();
   glass_.reset();
   if (focus_manager_) {
@@ -815,6 +876,7 @@ void ShellHostView::RetireRenderer() {
   }
   for (auto& [id, binding] : bindings_) {
     binding->claim.clear();
+    binding->commands()->CancelEvaluations();
     binding->renderer_generation = 0;
     binding->visible = false;
     if (binding->viewport) {
@@ -834,6 +896,7 @@ void ShellHostView::RetireRenderer() {
     focus_manager_->UnregisterAccelerators(this);
   }
   shortcuts_.clear();
+  RetireLifecycle();
 }
 
 void ShellHostView::DeliverReply(base::WeakPtr<ShellBridge> handler,
@@ -881,20 +944,50 @@ PageBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) const {
 }
 
 base::DictValue ShellHostView::Identity(PageBinding* binding) const {
-  base::DictValue lease;
-  lease.Set("claim", binding->claim);
-  lease.Set("rendererGeneration",
-            base::NumberToString(binding->renderer_generation));
-  lease.Set("bindingGeneration", "1");
-  lease.Set("documentEpoch", "1");
-  base::DictValue snapshot;
-  snapshot.Set("watermark", static_cast<double>(binding->sequence));
-  snapshot.Set("events", base::ListValue().Append(binding->NavigationEvent()));
-  return base::DictValue()
-      .Set("browserId", binding->id())
-      .Set("chromeTabId", binding->id())
-      .Set("lease", std::move(lease))
-      .Set("snapshot", std::move(snapshot));
+  return binding->CreationState();
+}
+
+void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
+                                   content::WebContents* contents) {
+  PageBinding* binding = BindingForContents(old_contents);
+  const int old_id = binding ? binding->id() : 0;
+  const int id = TabId(contents);
+  if (!binding || !contents ||
+      !page_policy::RebindAllowed(old_id, id, id != old_id && bindings_.contains(id))) {
+    return;
+  }
+  const std::optional<uint64_t> generation =
+      page_policy::NextBindingGeneration(binding->binding_generation);
+  if (!generation) {
+    return;
+  }
+  base::DictValue delivery = binding->Envelope("pageLifecycle");
+  binding->Rebind(contents);
+  binding->binding_generation = *generation;
+  if (id != old_id) {
+    std::unique_ptr<PageBinding> owned = std::move(bindings_[old_id]);
+    bindings_.erase(old_id);
+    bindings_[id] = std::move(owned);
+  }
+  if (binding->claim.empty()) {
+    return;
+  }
+  delivery.Set("action", "rebind");
+  delivery.Set("creation", binding->CreationState());
+  Emit("ArdiaWebView", base::NumberToString(old_id), base::Value(std::move(delivery)));
+}
+
+void ShellHostView::DropDetachedBinding(int id,
+                                        base::WeakPtr<content::WebContents> contents) {
+  const auto found = bindings_.find(id);
+  if (!contents || found == bindings_.end() ||
+      found->second->contents() != contents.get() ||
+      page_policy::StripExitFor(false, OwnerOf(contents.get()) != nullptr) !=
+          page_policy::StripExit::kDrop) {
+    return;
+  }
+  bindings_.erase(found);
+  ReattachViewports();
 }
 
 void ShellHostView::CreateTab(const base::DictValue& args, Done done) {
@@ -926,6 +1019,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
     return std::move(done).Run(
         false, base::Value("The shell document that asked for this tab is gone"));
   }
+  AssertPageHooks();
   if (!profile || !browser_) {
     return std::move(done).Run(
         false, Failure("ERR_PROFILE_UNAVAILABLE", "The tab's profile did not load"));
@@ -972,6 +1066,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
                                : "This tab can't be adopted"));
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
+    existing->commands()->CancelEvaluations();
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1080,12 +1175,21 @@ void ShellHostView::SetPresentations(const base::DictValue& args, Done done) {
 
 void ShellHostView::TabCommand(const base::DictValue& args, Done done) {
   PageBinding* binding = ClaimedBinding(args);
+  const std::string command = Text(args, "command");
   if (!binding) {
+    if (PageCommands::Handles(command)) {
+      return std::move(done).Run(
+          false, Failure("ERR_PAGE_STALE_TARGET", "No such live tab"));
+    }
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   content::WebContents* contents = binding->contents();
-  const std::string command = Text(args, "command");
   const base::ListValue* values = Arguments(args);
+  if (PageCommands::Handles(command)) {
+    static const base::NoDestructor<base::ListValue> kNoArguments;
+    return binding->commands()->Run(command, values ? *values : *kNoArguments,
+                                    std::move(done));
+  }
   content::NavigationController& controller = contents->GetController();
   if (command == "loadUrl") {
     const std::optional<GURL> url =
@@ -1151,6 +1255,7 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   binding->claim.clear();
+  binding->commands()->CancelEvaluations();
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {
@@ -1262,8 +1367,11 @@ std::optional<std::string> ShellHostView::PopoverBootstrapJson(
 
 void ShellHostView::OnMenuCommand(const std::string& command,
                                   const std::string& argument) {
-  if (command.empty()) {
+  if (command.empty() || shortcut_recording_) {
     return;
+  }
+  if (command == "quit" && !RendererLive()) {
+    return QuitWithoutShell();
   }
   if (command == "focusCommandBar" || command == "newTab") {
     FocusShell();
@@ -1447,7 +1555,20 @@ void ShellHostView::OnTabStripModelChanged(
       const int id = TabId(removed.contents);
       offered_.Forget(id);
       unclaimed_.erase(id);
+      const bool deleted =
+          removed.remove_reason == TabRemovedReason::kDeleted ||
+          removed.remove_reason == TabRemovedReason::kDeletedAndExpandSidePanel;
+      if (page_policy::StripExitFor(deleted, true) != page_policy::StripExit::kDestroyed &&
+          BindsContents(removed.contents)) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(&ShellHostView::DropDetachedBinding, GetWeakPtr(),
+                                      id, removed.contents->GetWeakPtr()));
+      }
     }
+  }
+  if (change.type() == TabStripModelChange::kReplaced) {
+    const TabStripModelChange::Replace* replace = change.GetReplace();
+    ReplaceBinding(replace->old_contents, replace->new_contents);
   }
   if (change.type() == TabStripModelChange::kInserted && !closing_) {
     for (const auto& inserted : change.GetInsert()->contents) {
@@ -1585,7 +1706,10 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
     return true;
   }
   const std::string command = Text(found->second, "command");
-  if (command == "focusCommandBar" || command == "newTab") {
+  if (command == "tabSwitcher" && !switcher_capture_) {
+    NoteSwitcherSource();
+  }
+  if (command == "focusCommandBar" || command == "newTab" || command == "tabSwitcher") {
     FocusShell();
   }
   base::DictValue payload;

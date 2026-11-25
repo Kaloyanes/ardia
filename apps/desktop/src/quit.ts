@@ -1,6 +1,7 @@
 import type { ConfirmOptions, DialogsNative } from "@ardia-real/shell";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
+import { PLATFORM_TERMS } from "../../browser/src/lib/platformTerms";
 
 export const QUIT_COMMAND = "quit";
 export const QUIT_LOCK = "ardia.linux.quit";
@@ -64,7 +65,7 @@ const QUIT_ROUTES = ["ArdiaShell.downloadsInProgress", "ArdiaShell.quit"];
 
 export function createHostQuit(host: ArdiaHost, ask: QuitAsk, locks: QuitLocks | undefined = browserLocks()) {
   if (!QUIT_ROUTES.every((method) => hostSupports(method, host)))
-    return () => Promise.reject(quitError("ERR_UNAVAILABLE", "Quitting isn't available in this Linux build"));
+    return () => Promise.reject(quitError("ERR_UNAVAILABLE", `Quitting isn't available in this ${PLATFORM_TERMS.os} build`));
   return createLinuxQuit({
     appName: () => "Ardia",
     warnBeforeQuitting: () => useBrowser.getState().settings.warnBeforeQuitting,

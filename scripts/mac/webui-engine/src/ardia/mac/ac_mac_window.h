@@ -11,6 +11,7 @@ namespace ardia_mac {
 
 void ApplyShellWindowStyle(views::Widget* widget);
 void SetTrafficLights(views::Widget* widget, const window::Lights& lights);
+void KeepMinimumSize(views::Widget* widget);
 
 }
 
