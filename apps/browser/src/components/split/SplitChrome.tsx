@@ -6,17 +6,17 @@ import { updateSplit } from "../../state/splits/actions";
 import { useDragFallbackPane } from "../../state/splits/hooks";
 import type { SplitView } from "../../state/browser/types";
 import { evenPair, resize, type Divider, type Rect } from "../window/geometry";
-import { capsule, OverPage, space, Symbol, Text, Toast, withAlpha } from "../ui";
+import { capsule, OverPage, space, Symbol, Text, Toast } from "../ui";
 import { hideToast, useToasts } from "../../state/app/toasts";
 import { noteSplit } from "../../state/telemetry/usage";
 import { useTab, useWindowId, useWindowProfileId } from "../../state/browser/hooks";
 import { useCardFrame } from "../window/cardFrame";
 import type { Size } from "../ui/useSettled";
 import { overPeek } from "../../state/windows/dockMotion";
-import { DROP_SIDES, isVerticalSplitSide, PANE_SIDES, zoneHit, zoneRect, type ZoneStage } from "./splitDrop";
+import { DROP_SIDES, isVerticalSplitSide, PANE_SIDES, zoneHit, zoneRect } from "./splitDrop";
 import { setDropTarget, setOnPage, setTargetResolver, useTabDrag, type PaneDropSide } from "../../state/drag/tabDrag";
 import { splitViewAvailable } from "../../state/splits/splits";
-import { FOCUS_RING, SPLIT_MOTION, splitColors, TOAST_ACTION_MS, TOAST_MS, ZONE_ACCENT_ALPHA, ZONE_DASH_INSET, ZONE_SLIDE_MS, zoneDashRadius, zoneRadius } from "./tokens";
+import { FOCUS_RING, SPLIT_MOTION, splitColors, TOAST_ACTION_MS, TOAST_MS, ZONE_DASH_INSET, ZONE_SLIDE_MS, zoneDashRadius, zoneRadius } from "./tokens";
 
 export function SplitDividers({ split, dividers, width, height }: { split: SplitView; dividers: Divider[]; width: number; height: number }) {
   return (
@@ -194,18 +194,18 @@ export function DropTargets({ panes, origin }: { panes: Record<string, Rect>; or
   const py = origin ? y - origin.y : -1;
   const overPage = !!origin && x >= 0 && !overPeek(windowId, x) && Object.values(panes).some((r) => px >= r.x && px <= r.x + r.width && py >= r.y && py <= r.y + r.height);
   const shown = !!dragging && !foreign && !!origin && !full && !outside && candidates.length > 0 && (lifted ?? overPage);
-  const [grown, setGrown] = useState(false);
+  const [settled, setSettled] = useState(false);
   useEffect(() => {
-    setGrown(false);
+    setSettled(false);
     if (!shown) return;
-    const timer = setTimeout(() => setGrown(true), ZONE_SLIDE_MS);
+    const timer = setTimeout(() => setSettled(true), ZONE_SLIDE_MS);
     return () => clearTimeout(timer);
   }, [shown]);
 
-  const hit = splitViewAvailable && shown && grown && overPage ? zoneHit(candidates, px, py, target, sides) : null;
+  const hit = splitViewAvailable && shown && settled && overPage ? zoneHit(candidates, px, py, target, sides) : null;
   const preview = shown && overPage;
   const resolver = useRef({ candidates, origin, panes, sides, ready: false });
-  resolver.current = { candidates, origin, panes, sides, ready: !!dragging && !foreign && !!origin && !full && candidates.length > 0 && grown && lifted !== false };
+  resolver.current = { candidates, origin, panes, sides, ready: !!dragging && !foreign && !!origin && !full && candidates.length > 0 && settled && lifted !== false };
   useEffect(() => {
     if (!dragging) return;
     setTargetResolver((x, y, current, outside) => {
@@ -243,9 +243,7 @@ export function DropTargets({ panes, origin }: { panes: Record<string, Rect>; or
             side={side}
             stacked={!!mounted.from && stackedPanes(mounted.from, rect)}
             shown={shown}
-            stage={target?.tabId === tabId && target.side === side ? "active" : grown ? "grown" : "rest"}
-            pointerX={px}
-            pointerY={py}
+            active={target?.tabId === tabId && target.side === side}
             onHidden={() => setMounted(NOTHING_MOUNTED)}
           />
         )),
@@ -267,13 +265,12 @@ const ZONE_COPY: Record<PaneDropSide, { symbol: string; label: string; shortLabe
   center: { symbol: "arrow.left.arrow.right", label: "Swap panes", shortLabel: "Swap" },
 };
 
-function DropZone({ pane, side, stacked, shown, stage, pointerX, pointerY, onHidden }: { pane: Rect; side: PaneDropSide; stacked: boolean; shown: boolean; stage: ZoneStage; pointerX: number; pointerY: number; onHidden(): void }) {
+function DropZone({ pane, side, stacked, shown, active, onHidden }: { pane: Rect; side: PaneDropSide; stacked: boolean; shown: boolean; active: boolean; onHidden(): void }) {
   const theme = useTheme();
-  const rect = zoneRect(pane, side, stage, pointerX, pointerY);
+  const rect = zoneRect(pane, side);
   const [anim] = useState(() => ({ x: new Animated.Value(rect.x), y: new Animated.Value(rect.y), w: new Animated.Value(rect.width), h: new Animated.Value(rect.height) }));
   const glow = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(0)).current;
-  const active = stage === "active";
   useEffect(() => {
     Animated.parallel([
       Animated.spring(anim.x, { toValue: rect.x, ...ZONE_SPRING }),
@@ -320,7 +317,7 @@ function DropZone({ pane, side, stacked, shown, stage, pointerX, pointerY, onHid
         borderRadius: zoneRadius(),
         borderWidth: 0.5,
         borderColor: colors.zoneBorder,
-        backgroundColor: glow.interpolate({ inputRange: [0, 1], outputRange: [colors.zoneFill, withAlpha(theme.accent, dark ? ZONE_ACCENT_ALPHA.dark : ZONE_ACCENT_ALPHA.light)] }),
+        backgroundColor: colors.zoneFill,
         flexDirection: vertical ? "row" : "column",
         alignItems: "center",
         justifyContent: "center",
@@ -330,7 +327,7 @@ function DropZone({ pane, side, stacked, shown, stage, pointerX, pointerY, onHid
       }}
     >
       <OverPage radius={zoneRadius()} />
-      <View
+      <Animated.View
         style={{
           position: "absolute",
           left: ZONE_DASH_INSET,
@@ -339,13 +336,13 @@ function DropZone({ pane, side, stacked, shown, stage, pointerX, pointerY, onHid
           bottom: ZONE_DASH_INSET,
           borderRadius: zoneDashRadius(),
           borderStyle: "dashed",
-          borderWidth: active ? 2.33 : 2,
-          borderColor: active ? theme.accent : colors.zoneDash,
+          borderWidth: 2,
+          borderColor: glow.interpolate({ inputRange: [0, 1], outputRange: [colors.zoneDash, colors.zoneDashActive] }),
         }}
       />
-      <Symbol name={symbol} size={18} color={active ? theme.accent : rest} style={{ width: 24, height: 20 }} />
+      <Symbol name={symbol} size={18} color={active ? colors.zoneLabelActive : rest} style={{ width: 24, height: 20 }} />
       {showLabel ? (
-        <Text weight="semibold" numberOfLines={1} color={active ? theme.accent : rest} style={vertical ? { marginLeft: space.m, flexShrink: 1 } : { marginTop: space.l }}>{text}</Text>
+        <Text weight="semibold" numberOfLines={1} color={active ? colors.zoneLabelActive : rest} style={vertical ? { marginLeft: space.m, flexShrink: 1 } : { marginTop: space.l }}>{text}</Text>
       ) : null}
     </Animated.View>
   );

@@ -7,6 +7,8 @@ const DARK = {
   zoneBorder: "rgba(255,255,255,0.08)",
   zoneFill: "rgba(255,236,214,0.04)",
   zoneDash: "rgba(255,255,255,0.1)",
+  zoneDashActive: "rgba(255,255,255,0.72)",
+  zoneLabelActive: "rgba(255,255,255,0.95)",
 };
 
 const LIGHT: typeof DARK = {
@@ -15,13 +17,13 @@ const LIGHT: typeof DARK = {
   zoneBorder: "rgba(0,0,0,0.08)",
   zoneFill: "rgba(255,255,255,0.45)",
   zoneDash: "rgba(0,0,0,0.1)",
+  zoneDashActive: "rgba(0,0,0,0.5)",
+  zoneLabelActive: "rgba(0,0,0,0.85)",
 };
 
 type SplitColors = typeof DARK;
 
 export const splitColors = (dark: boolean): SplitColors => (dark ? DARK : LIGHT);
-
-export const ZONE_ACCENT_ALPHA = { dark: 0.16, light: 0.12 } as const;
 
 export const emptyStateRadius = () => radius.sheet;
 export const EMPTY_STATE_WIDTH = 420;
