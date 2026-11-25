@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ardia/core/ac_hooks.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_page_events.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
@@ -24,10 +25,13 @@
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/javascript_dialog_manager.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/javascript_dialog_type.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace ardia_mac {
@@ -97,6 +101,41 @@ content::JavaScriptDialogManager* Dialogs() {
 class PageDelegate : public BrowserWebContentsDelegate {
  public:
   using BrowserWebContentsDelegate::BrowserWebContentsDelegate;
+
+  content::WebContents* OpenURLFromTab(
+      content::WebContents* source,
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)> navigation_handle_callback) override {
+    if (source && InterceptLinkOpen(source, params)) {
+      return nullptr;
+    }
+    return BrowserWebContentsDelegate::OpenURLFromTab(source, params,
+                                                      std::move(navigation_handle_callback));
+  }
+
+  content::WebContents* AddNewContents(content::WebContents* source,
+                                       std::unique_ptr<content::WebContents> new_contents,
+                                       const GURL& target_url,
+                                       WindowOpenDisposition disposition,
+                                       const blink::mojom::WindowFeatures& window_features,
+                                       bool user_gesture,
+                                       bool* was_blocked) override {
+    if (OpensNewTabLinkInPlace(source, target_url, disposition, user_gesture)) {
+      return nullptr;
+    }
+    return BrowserWebContentsDelegate::AddNewContents(
+        source, std::move(new_contents), target_url, PopupDisposition(source, disposition),
+        window_features, user_gesture, was_blocked);
+  }
+
+  void CanDownload(const GURL& url,
+                   const std::string& request_method,
+                   base::OnceCallback<void(bool)> callback) override {
+    if (InterceptLinkDownload(url)) {
+      return std::move(callback).Run(false);
+    }
+    BrowserWebContentsDelegate::CanDownload(url, request_method, std::move(callback));
+  }
 
   void UpdateTargetURL(content::WebContents* source, const GURL& url) override {
     if (PageEvents* events = EventsFor(source); events && events->TargetURL(url)) {
@@ -245,6 +284,7 @@ void AssertPageHooks() {
 
 void InstallPageDelegate() {
   AssertPageHooks();
+  InstallCommandScrollZoom();
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([] {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

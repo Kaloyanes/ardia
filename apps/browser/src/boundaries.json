@@ -2550,6 +2550,24 @@
    "detected": false
   },
   {
+   "id": "mac-webui-links:gestures",
+   "source": "page",
+   "guard": "Mac WebUI host: a page's link clicks reach the shell only through Chromium's own browser-side hooks (OpenURLFromTab, AddNewContents, CanDownload and the primary main frame's DidStartNavigation), never through a page message. Each is matched against the last real left mouse-up the page's RenderWidgetHost saw (GestureGate): the release must be on that page, unused, not followed by another press, at most 10 s old and carry exactly the configured keys, and the page must be shown, so a page cannot open a peek, split, window or background tab by itself (RouteForOpening maps only renderer-initiated kNewWindow, kSaveToDisk and kNewSplitView to Shift, Option+Shift, Option and Option+Command). Only http(s) URLs of at most 32 KB go to the shell as openWindow, other-site peeks need a plain cross-site link click with a user gesture in a tab the shell listed (SitePeekCandidate), and the navigation is stopped only while it is still pending. The shell's webView.setPeekModifier and setSplitLinkModifier take a string of at most 16 bytes that collapses to alt, shift or off and alt or altShift, setPeekOtherSiteTabs takes at most 4096 non-empty string ids of at most 256 bytes (SiteTabKeys), and the boolean options take only a boolean enabled. The shared corpus runs through these guards in tests/hostile_corpus_test.cc.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#GestureGate",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#RouteForOpening",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SitePeekCandidate",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SiteTabKeys",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#InterceptLinkOpen",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#InterceptLinkDownload",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#LinkRouteCall",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#stale_pressed_foreign_or_hidden_releases_never_peek",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#chrome_dispositions_map_to_link_keys_only_for_renderer_clicks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#link_option_guards"
+   ],
+   "detected": false
+  },
+  {
    "id": "mac-webui-extensions:surfaces",
    "source": "frame",
    "guard": "Mac WebUI host: extensionView.create takes exactly kind (popup or sidePanel), url and profile; the URL must be chrome-extension://<32 letters a-p>[/...] of at most 2 KB with no control characters (ExtensionUrlHost), the extension must be enabled in that profile (and allowed in private profiles), and a window holds at most 4 surfaces (SurfaceBook); viewport, place, command and release act only on a surface this window's current renderer generation opened (SurfaceBook::Owns), rectangles and placements must be finite and within +/-1e6 and are clipped to the window (ViewportBox, PopupLimitsFor, PopupBoxFor), radii are capped at 64 and fades at 1000 ms, and evaluate is refused; a reload retires older surfaces (CloseOlderThan). extensions.actionStates (a tab key and at most 64 valid ids), sidePanelUrl (a tab key and an id), chooseFolder (no arguments; a background instance answers null), inspectUnpacked (a normalized absolute folder other than /, read off the UI thread, icons only from inside the folder via ResourcePath) and extensions.resolveInstallPrompt (a request id of 1-64 bytes and a boolean, resolved only by the window and profile it was shown to, at most 8 pending with Chrome keeping its own prompt when the ledger is full or the shell has no live document, and aborted when the shell reloads, PromptLedger) take one JSON object of at most 1 MiB with exactly those keys, and a tab must be this window's tab in the same profile; tab.command executeExtensionAction takes exactly one valid extension id of an enabled extension. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",

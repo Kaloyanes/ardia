@@ -77,6 +77,9 @@ class PureHeaderTests(unittest.TestCase):
     def test_extension_view_policy(self):
         compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
 
+    def test_link_policy(self):
+        compile_and_run(self, TESTS / 'link_policy_test.cc', self.out / 'link-policy')
+
     def test_pip_policy(self):
         compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
@@ -810,6 +813,41 @@ class ContractTests(unittest.TestCase):
         self.assertIn('kZoomRoutes[] = {"sites.zoomLevels",\n                                                   "sites.setZoom"}',
                       self.read('ac_mac_page_policy.h'))
         self.assertIn('ac_zoom_set', (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_history_zoom.cc').read_text())
+
+    def test_link_gestures_and_page_options_are_advertised_and_wired(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('AppendLinkCapabilities(capabilities);', calls)
+        call = calls.split('void ShellHostView::EngineCall(', 1)[1]
+        self.assertLess(call.index('HandlesLinkRoute(name)'), call.index('desktop_routes::FindRoute(name)'))
+        policy = self.read('ac_mac_link_policy.h')
+        capabilities = (REPO / 'apps/desktop/src/hostCapabilities.ts').read_text()
+        for route in ('setPeekOtherSiteTabs', 'setLittleArdiaOpensNewTabLinks', 'setPopupsOpenAsTabs', 'setCommandScrollZoom'):
+            self.assertIn(f'"webView.{route}"', policy)
+            self.assertIn(f'has("webView.{route}")', capabilities)
+        page_options = (REPO / 'apps/browser/src/platform/pageOptions.ts').read_text()
+        for route in ('setPeekModifier', 'setSplitLinkModifier'):
+            self.assertIn(f'"webView.{route}"', policy)
+            self.assertIn(f'"webView.{route}"', page_options)
+        delegate = self.read('ac_mac_page_delegate.mm')
+        for wired in ('InterceptLinkOpen(source, params)', 'OpensNewTabLinkInPlace(source, target_url, disposition, user_gesture)',
+                      'PopupDisposition(source, disposition)', 'InterceptLinkDownload(url)'):
+            self.assertIn(wired, delegate)
+        install = delegate.split('void InstallPageDelegate() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('InstallCommandScrollZoom();', install)
+        host = self.read('ac_mac_shell_host.mm')
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(rebind.index('links_.reset();'), rebind.index('Observe(contents);'))
+        self.assertIn('links_ = std::make_unique<PageLinks>(this, contents);', rebind)
+        destructor = host.split('PageBinding::~PageBinding() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertTrue(destructor.lstrip().startswith('links_.reset();'))
+        gesture = self.read('ac_mac_link_gesture.mm')
+        self.assertIn('"openWindow"', gesture)
+        self.assertNotIn('ExecuteJavaScript', gesture)
+        peek = gesture.split('void PageLinks::PeekInsteadOf(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(peek.index('navigation != site_navigation_'), peek.index('contents->Stop();'))
+        start = gesture.split('void PageLinks::DidStartNavigation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('PostTask(', start)
+        self.assertNotIn('->Stop()', start)
 
     def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
         delegate = self.read('ac_mac_page_delegate.mm')

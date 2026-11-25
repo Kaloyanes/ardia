@@ -28,6 +28,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
@@ -60,6 +61,7 @@ class ExtensionViews;
 class GlassRegions;
 class PageCommands;
 class PageEvents;
+class PageLinks;
 class PipPresenter;
 class PopoverHost;
 class SystemServices;
@@ -139,6 +141,7 @@ class PageBinding : public content::WebContentsObserver {
   ShellHostView* host() const { return owner_; }
   PageEvents* events() const { return events_.get(); }
   PageCommands* commands() const { return commands_.get(); }
+  PageLinks* links() const { return links_.get(); }
 
   std::string claim;
   uint64_t renderer_generation = 0;
@@ -170,6 +173,7 @@ class PageBinding : public content::WebContentsObserver {
   std::string profile_;
   std::unique_ptr<PageEvents> events_;
   std::unique_ptr<PageCommands> commands_;
+  std::unique_ptr<PageLinks> links_;
 };
 
 class ShellHostView : public views::View,
@@ -194,6 +198,9 @@ class ShellHostView : public views::View,
 
   const std::string& window_id() const { return window_id_; }
   bool is_utility() const { return shell_policy::UtilityKind(kind_); }
+  bool is_small() const { return kind_ == shell_policy::kSmallWindowKind; }
+  std::optional<gfx::PointF> ShellPointFor(const PageBinding* binding, gfx::PointF page_point) const;
+  PageBinding* BindingAtScreenPoint(const gfx::Point& screen, gfx::NativeWindow window) const;
   void NavigateUtility(base::DictValue utility);
   void ActivateWindow();
   void ForwardRecordedKey(const input::NativeWebKeyboardEvent& event);

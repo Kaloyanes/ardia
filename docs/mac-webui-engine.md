@@ -142,6 +142,22 @@ that branch). It is a development tool and never runs in a release. Like Windows
     each `tab.create`.
   - A tab whose contents Chromium replaces keeps its binding through a `pageLifecycle` rebind. A tab that leaves
     the window's tab strips loses its binding.
+- **Peek, split and link options** (`ac_mac_link_gesture.mm`, rules in `ac_mac_link_policy.h`, a port of Linux's
+  `ac_linux_link_gesture`). The host advertises and serves `webView.setPeekModifier`, `setSplitLinkModifier`,
+  `setPeekOtherSiteTabs`, `setLittleArdiaOpensNewTabLinks`, `setPopupsOpenAsTabs` and `setCommandScrollZoom`, so
+  Settings › Tabs shows its Peek and Little Ardia rows and Advanced shows ⌘-scroll zoom.
+  - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions in the page delegate:
+    a renderer `kNewWindow` (⇧-click, ⌥⇧-click), `kSaveToDisk` and the `CanDownload` check (⌥-click) and
+    `kNewSplitView` (⌥⌘-click). Each is matched against the last left mouse-up the page's `RenderWidgetHost` saw,
+    with Linux's gate (on that page, unused, no press since, at most 10 s old, exactly the configured keys), and sent as
+    `ArdiaWebView` `openWindow` with `peek` (and the click's `point`), `split`, `window` or `background`, as Linux does.
+  - Links to other sites: in a tab the shell listed with `setPeekOtherSiteTabs`, a plain cross-site link click with a
+    user gesture is peeked. The host decides when the navigation starts and stops it on the next task, only while it
+    is still pending; one that has committed by then just follows. The request has already gone out by then.
+  - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
+    (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a new-tab link opens in place
+    (`openWindow` `current`) instead of a new tab.
+  - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll; trackpad gestures scroll as usual.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 
