@@ -1,6 +1,7 @@
 import type { MenuItem, MenuState } from "@ardia-real/shell";
 import { appMenuChoice } from "./appMenu.ts";
 import { EDIT_ITEMS } from "./editCommands.ts";
+import { MODIFIER_FLAGS } from "@platform/shortcutKeys";
 
 export const SET_MAIN_MENU_METHOD = "ArdiaShell.setMainMenu";
 export const SET_MENU_STATE_METHOD = "ArdiaShell.setMenuState";
@@ -35,7 +36,10 @@ export type MenuFlags = Pick<MenuState, "disabled" | "checked" | "titles">;
 export const NO_MENU_FLAGS: MenuFlags = { disabled: [], checked: [], titles: {} };
 
 const APPKIT = { shift: 1, control: 2, option: 4, command: 8 } as const;
-const DESKTOP_MODIFIER_BITS: Record<string, number> = { shift: APPKIT.shift, option: APPKIT.option, command: APPKIT.control, control: APPKIT.command };
+const APPKIT_FOR_CHROMIUM: Readonly<Record<number, number>> = { 2: APPKIT.shift, 4: APPKIT.control, 8: APPKIT.option, 16: APPKIT.command };
+const DESKTOP_MODIFIER_BITS: Record<string, number> = Object.fromEntries(
+  Object.entries(MODIFIER_FLAGS).map(([modifier, flag]) => [modifier, APPKIT_FOR_CHROMIUM[flag] ?? 0]),
+);
 const SUBMENU_ROLES: Record<string, string> = { "menu:Window": "windowMenu", "menu:Help": "helpMenu", "menu:Bookmarks": "bookmarksMenu" };
 const ITEM_ROLES: Record<string, string> = {
   ...Object.fromEntries(EDIT_ITEMS.map((item) => [item.id, item.action])),

@@ -101,8 +101,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
     whatever the desktop shortcuts say.
   - Close Window goes through `ArdiaShell.requestWindowClose` when the host advertises it and AppKit's `performClose:`
     otherwise, in browser and utility windows alike.
-  - Desktop shortcuts keep the desktop convention, so `command` is the Control key and `control` the Command key, as
-    the host's accelerators read them; system items (Edit, Minimize, Close Window, Hide) use AppKit's standard keys.
+  - Each shortcut shows the key that presses it, read from `@platform/shortcutKeys`, so on the Mac `command` is ⌘ and
+    defaults like ⌘T, ⌘W, ⌘L and ⌘, show as such; system items (Edit, Minimize, Close Window, Hide) use AppKit's
+    standard keys.
   - `ArdiaShell.setShortcutRecording` stops the menu bar's key equivalents while that window records a shortcut.
   - ⌘Q goes to the shell's quit flow only once that renderer's shell has painted; before that Chromium quits directly.
   - The in-window `≡` app menu button is hidden on macOS (`platform/appMenuButton.mac.ts`), where the menu bar holds

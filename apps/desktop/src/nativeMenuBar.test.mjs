@@ -18,6 +18,8 @@ import {
   structuralMenuState,
 } from "./nativeMenuBar.ts";
 
+const MAC = (process.env.ARDIA_DESKTOP_MODE ?? "linux") === "mac";
+const PRIMARY = MAC ? 8 : 2;
 const DISABLED = ["back", "togglePin:tile", "reopenClosedWindow", "moveSplitPaneLeft"];
 const state = (overrides = {}) => ({
   checked: ["setAppearance:dark", "toggleFullUrl"],
@@ -96,9 +98,9 @@ test("edit, window, about and full-screen items use AppKit roles, and window act
 test("commands carry their state id, shortcut and current flags, and a renamed item keeps its default title", () => {
   const bar = spec();
   const newTab = find(bar, (item) => item.command === "newTab" && !item.arg);
-  assert.deepEqual([newTab.id, newTab.key, newTab.modifiers, newTab.enabled], ["newTab", "t", 2, true]);
+  assert.deepEqual([newTab.id, newTab.key, newTab.modifiers, newTab.enabled], ["newTab", "t", PRIMARY, true]);
   const back = find(bar, (item) => item.command === "back");
-  assert.deepEqual([back.enabled, back.key, back.modifiers], [false, "[", 2]);
+  assert.deepEqual([back.enabled, back.key, back.modifiers], [false, "[", PRIMARY]);
   assert.equal(find(bar, (item) => item.id === "setAppearance:dark").checked, true);
   assert.equal(find(bar, (item) => item.id === "setAppearance:light").checked, false);
   assert.equal(find(bar, (item) => item.id === "moveSplitPaneLeft").enabled, false);
@@ -106,7 +108,7 @@ test("commands carry their state id, shortcut and current flags, and a renamed i
   const bookmark = find(byTitle(bar, "Bookmarks").children, (item) => item.id === "bookmarkPage");
   assert.deepEqual([bookmark.title, bookmark.defaultTitle], ["Edit Bookmark…", "Bookmark This Page"]);
   assert.equal(find(bar, (item) => item.command === "nextTab").key, "Tab");
-  assert.deepEqual([find(bar, (item) => item.command === "zoomIn").key, find(bar, (item) => item.command === "zoomIn").modifiers], ["Up", 6]);
+  assert.deepEqual([find(bar, (item) => item.command === "zoomIn").key, find(bar, (item) => item.command === "zoomIn").modifiers], ["Up", PRIMARY | 4]);
   assert.equal(find(bar, (item) => item.command === "devTools").key, "F8");
   assert.equal(find(bar, (item) => item.command === "openExtension").arg, "ext");
   assert.equal(find(bar, (item) => item.command === "restoreClosed").arg, "c1");
@@ -271,7 +273,7 @@ test("a menu that fills the budget uses the native limit, which counts items but
   assert.ok(count <= NATIVE_MENU_MAX_ITEMS && count >= NATIVE_MENU_MAX_ITEMS - 4, String(count));
 });
 
-test("desktop shortcuts map to the keys that press them on the Mac: command is Control, control is Command", async () => {
+test("desktop shortcuts map to the keys that press them, so a recorded Command chord shows as Command", async () => {
   const { keyboardCombo } = await import("./shortcuts.ts");
   const recorded = keyboardCombo({ code: "KeyT", key: "t", ctrlKey: false, metaKey: true, altKey: false, shiftKey: true });
   const { items } = build();
@@ -286,7 +288,7 @@ test("desktop shortcuts map to the keys that press them on the Mac: command is C
     : menu);
   assert.equal(find(nativeMenuSpec(viaControl), (item) => item.command === "newTab" && !item.arg).modifiers, 2);
   const bar = spec();
-  assert.equal(find(bar, (item) => item.command === "newTab" && !item.arg).modifiers, 2, "the default Ctrl-T binding is Control-T on the Mac host");
+  assert.equal(find(bar, (item) => item.command === "newTab" && !item.arg).modifiers, PRIMARY, "the default New Tab binding shows the key that presses it: Command-T on the Mac");
   assert.deepEqual(byTitle(bar, "Edit").children.filter((item) => item.role).map((item) => [item.key, item.modifiers]), [["z", 8], ["z", 9], ["x", 8], ["c", 8], ["v", 8], ["v", 13], ["a", 8]]);
 });
 
@@ -312,4 +314,16 @@ test("Settings and Import get their own bar with Close Window, editing and the w
   let count = 0;
   walk(bar, () => count++);
   assert.ok(count < NATIVE_MENU_MAX_ITEMS);
+});
+
+test("on the Mac, New Tab, Close Tab, the command bar and Settings show Command, never Control", async () => {
+  if (!MAC) return;
+  const { linuxMenuShortcuts } = await import("./shortcuts.ts");
+  const real = new Map(linuxMenuShortcuts({}, [], {}).map((shortcut) => [shortcut.id, { key: shortcut.key, modifiers: shortcut.modifiers }]));
+  const shown = state();
+  const bar = nativeMenuSpec(appMenuItems(structuralMenuState(shown), real, new Set(), EDIT), { disabled: shown.disabled, checked: shown.checked, titles: shown.titles });
+  for (const [command, key] of [["newTab", "t"], ["closeTab", "w"], ["focusCommandBar", "l"], ["openSettings", ","]]) {
+    const item = find(bar, (candidate) => candidate.command === command && !candidate.arg);
+    assert.deepEqual([command, item?.key, item?.modifiers], [command, key, 8], `${command} is Command-${key}`);
+  }
 });
