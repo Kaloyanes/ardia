@@ -242,8 +242,21 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   take either form, row collection by row collection, so a file mixing the two (a native merge keeps an unchanged
   collection in the form it found) loads whole. The Mac app lists tables before its migrations and its row checks
   (`sessionWithListedRows`), and the WebUI keys lists before shaping, so shaping a second time changes nothing.
+  A file stamped with an older version runs the shared migrations from that version in both shells; only a file with
+  no stamp starts the WebUI at version 9. The WebUI's first write after shaping changed the file merges against the
+  file as read, so every collection is written back in its shaped form. It keeps what only the Mac app uses: a
+  sleeping tab's `page.wake` restore handle (left out of the WebUI's live tab, written back while the tab keeps its
+  address) and the early launch hints (`launchTab`, `launchBackdrop`, `linkProfile`), kept while the focused
+  window, its active tabs, the profiles and Restore Session are unchanged. Rows that aren't objects, rows filed under
+  a key that isn't their id, and ids the object prototype holds (`__proto__`, `constructor`, `toString`) are dropped
+  by both readers; the Mac app keeps such a file aside first.
+  Native startup prewarm reads only its own shell's form: on the first launch after switching shells, when the
+  collections are in the other form or mixed, `ArdiaSavedSession.mm` on the Mac and `ac_linux_startup_tab.cc` on
+  Linux find no launch tab and leave it to the JS session loader, which loads the file losslessly and saves it in
+  its own form, so the next launch prewarms again.
   `sessionShells.test.mjs` (desktop and browser) round-trips Mac → WebUI → Mac and WebUI → Mac → WebUI. Telemetry
-  counts launches on the other shell's form as `session_from_other_shell`.
+  counts launches whose file held collections in the other shell's form, before any migration, as
+  `session_from_other_shell`.
 
 ### Pages
 

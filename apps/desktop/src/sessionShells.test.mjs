@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initialLinuxSession } from "./session.ts";
-import { linuxSessionShape, snapshotHostSession } from "./hostSession.ts";
+import { linuxSessionShape, snapshotHostSession, startHostPersistence } from "./hostSession.ts";
 import { mergeSession } from "./hostSessionMerge.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { readSaved } from "../../browser/src/lib/savedDocument.ts";
@@ -79,33 +79,49 @@ function view(s = S()) {
   };
 }
 
-function macLaunch(json) {
+function macLaunch(json, { damaged = false } = {}) {
   const read = readSaved(json, SESSION_VERSION, SESSION_MIGRATIONS);
   assert.ok("doc" in read, "the Mac app reads the file");
   assert.ok(wholeSession(read.doc), "the Mac app doesn't set the file aside");
   const session = sessionFromSaved(read.doc);
-  assert.equal(droppedRows(read.doc, session), false, "the Mac app drops no rows");
+  assert.equal(droppedRows(read.doc, session), damaged, damaged ? "the Mac app keeps a damaged file aside" : "the Mac app drops no rows");
   hydrateFresh(session);
   const seen = view();
   return { seen, written: savedDocumentJson(SESSION_DOCUMENT, S()) };
 }
 
-function webuiLaunch(json, windowId = "w1") {
-  const disk = JSON.parse(json);
-  hydrateFresh(initialLinuxSession(launch(windowId), disk));
+globalThis.window ??= { addEventListener() {}, removeEventListener() {} };
+globalThis.document ??= { hidden: false, addEventListener() {}, removeEventListener() {} };
+
+async function webuiLaunch(json, windowId = "w1", edit = () => {}) {
+  let disk = JSON.parse(json);
+  const host = {
+    bootstrap: launch(windowId).bootstrap,
+    invoke: async (method, pair) => {
+      if (method !== "session.write") return {};
+      disk = JSON.parse(JSON.stringify(mergeSession(pair.base, pair.session, disk)));
+      return structuredClone(disk);
+    },
+    onEvent: () => () => {},
+  };
+  hydrateFresh(initialLinuxSession(host, JSON.parse(json)));
   const seen = view();
-  const written = mergeSession(linuxSessionShape(disk), snapshotHostSession(S()), disk);
-  return { seen, written: JSON.stringify(written) };
+  const live = S();
+  const persistence = startHostPersistence(host, useBrowser, JSON.parse(json));
+  edit();
+  await persistence.flush();
+  persistence();
+  return { seen, live, written: JSON.stringify(disk) };
 }
 
 const w1Tabs = () => macSession().windows[0].tabIds.map((id) => T(id));
-const tableFile = () => {
-  webuiLaunch(JSON.stringify(macSession()));
+const tableFile = async () => {
+  await webuiLaunch(JSON.stringify(macSession()));
   return JSON.stringify(snapshotHostSession(S()));
 };
 
-test("the Mac app's version-current list session loads whole in the WebUI, with every window, tab, pin, folder, group, split and selection", () => {
-  const { seen } = webuiLaunch(JSON.stringify(macSession()));
+test("the Mac app's version-current list session loads whole in the WebUI, with every window, tab, pin, folder, group, split and selection", async () => {
+  const { seen } = await webuiLaunch(JSON.stringify(macSession()));
   assert.deepEqual(seen.windows.w1.tabs, w1Tabs());
   assert.deepEqual(seen.windows.w1.active, { default: T("b"), "p-two": T("work") });
   assert.equal(seen.windows.w1.kind, "main");
@@ -121,16 +137,16 @@ test("the Mac app's version-current list session loads whole in the WebUI, with 
   assert.deepEqual(seen.profileOrder, ["default", "p-two"]);
 });
 
-test("the WebUI and the Mac app see the same session from the Mac app's file", () => {
+test("the WebUI and the Mac app see the same session from the Mac app's file", async () => {
   const json = JSON.stringify(macSession());
-  assert.deepEqual(webuiLaunch(json).seen, macLaunch(json).seen);
+  assert.deepEqual((await webuiLaunch(json)).seen, macLaunch(json).seen);
 });
 
-test("Mac → WebUI → Mac → WebUI → Mac keeps everything, whichever shell wrote the file last", () => {
+test("Mac → WebUI → Mac → WebUI → Mac keeps everything, whichever shell wrote the file last", async () => {
   const first = macLaunch(JSON.stringify(macSession()));
   let json = first.written;
   for (let round = 0; round < 3; round++) {
-    const webui = webuiLaunch(json);
+    const webui = await webuiLaunch(json);
     assert.deepEqual(webui.seen, first.seen, `WebUI launch ${round + 1}`);
     const mac = macLaunch(webui.written);
     assert.deepEqual(mac.seen, first.seen, `Mac launch ${round + 2}`);
@@ -138,29 +154,29 @@ test("Mac → WebUI → Mac → WebUI → Mac keeps everything, whichever shell 
   }
 });
 
-test("a Linux or Windows table session reads whole in the Mac app, and round-trips WebUI → Mac → WebUI → Mac", () => {
-  const json = tableFile();
+test("a Linux or Windows table session reads whole in the Mac app, and round-trips WebUI → Mac → WebUI → Mac", async () => {
+  const json = await tableFile();
   const tables = JSON.parse(json);
   for (const rows of ["windows", "tabs", "groups", "splits"]) assert.equal(Array.isArray(tables[rows]), false, rows);
-  const seeded = webuiLaunch(json);
+  const seeded = await webuiLaunch(json);
   let next = seeded.written;
   for (let round = 0; round < 3; round++) {
     const mac = macLaunch(next);
     assert.deepEqual(mac.seen, seeded.seen, `Mac launch ${round + 1}`);
-    const webui = webuiLaunch(mac.written);
+    const webui = await webuiLaunch(mac.written);
     assert.deepEqual(webui.seen, seeded.seen, `WebUI launch ${round + 2}`);
     next = webui.written;
   }
 });
 
-test("a file mixing list rows and table rows, as a merge onto an unchanged list leaves it, reads whole on both sides", () => {
+test("a file mixing list rows and table rows, as a merge onto an unchanged list leaves it, reads whole on both sides", async () => {
   const lists = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
   const table = (rows) => Object.fromEntries(lists[rows].map((row) => [row.id, row]));
   const mixes = [{ ...lists, tabs: table("tabs"), splits: table("splits") }, { ...lists, windows: table("windows"), groups: table("groups") }];
   for (const mixed of mixes) {
     const json = JSON.stringify(mixed);
     const mac = macLaunch(json);
-    assert.deepEqual(webuiLaunch(json).seen, mac.seen);
+    assert.deepEqual((await webuiLaunch(json)).seen, mac.seen);
     assert.deepEqual(mac.seen.windows.w1.tabs, w1Tabs());
   }
 });
@@ -182,25 +198,25 @@ function olderMacSession() {
   return older;
 }
 
-test("an older Mac list session migrates the same way in both shells", () => {
+test("an older Mac list session migrates the same way in both shells", async () => {
   const json = JSON.stringify(olderMacSession());
   const mac = macLaunch(json);
-  assert.deepEqual(webuiLaunch(json).seen, mac.seen);
+  assert.deepEqual((await webuiLaunch(json)).seen, mac.seen);
   assert.deepEqual(mac.seen, macLaunch(JSON.stringify(macSession())).seen);
 });
 
-test("an older table session migrates in the Mac app as it does in the WebUI", () => {
+test("an older table session migrates in the Mac app as it does in the WebUI", async () => {
   const older = olderMacSession();
   const tables = { ...older, ...Object.fromEntries(["windows", "tabs", "groups", "splits"].map((rows) => [rows, Object.fromEntries(older[rows].map((row) => [row.id, row]))])) };
   const json = JSON.stringify(tables);
   const mac = macLaunch(json);
-  assert.deepEqual(webuiLaunch(json).seen, mac.seen);
+  assert.deepEqual((await webuiLaunch(json)).seen, mac.seen);
   assert.deepEqual(mac.seen, macLaunch(JSON.stringify(macSession())).seen);
 });
 
-test("shaping is idempotent: a second and third pass over a list, table, mixed or older session change nothing", () => {
+test("shaping is idempotent: a second and third pass over a list, table, mixed or older session change nothing", async () => {
   const lists = macSession();
-  const tables = JSON.parse(tableFile());
+  const tables = JSON.parse(await tableFile());
   for (const saved of [lists, tables, { ...tables, windows: lists.windows }, olderMacSession()]) {
     const once = linuxSessionShape(structuredClone(saved));
     const twice = linuxSessionShape(once);
@@ -213,7 +229,7 @@ test("shaping is idempotent: a second and third pass over a list, table, mixed o
   assert.equal(linuxSessionShape(current), current);
 });
 
-test("a WebUI launch window that isn't the Mac window adopts it with all of its tabs", () => {
+test("a WebUI launch window that isn't the Mac window adopts it with all of its tabs", async () => {
   hydrateFresh(initialLinuxSession(launch("main"), macSession()));
   const s = S();
   assert.equal(s.windows.w1, undefined);
@@ -222,11 +238,11 @@ test("a WebUI launch window that isn't the Mac window adopts it with all of its 
   assert.ok(macSession().windows[0].tabIds.every((id) => s.tabs[id]?.windowId === "main"));
 });
 
-test("fields a reader doesn't know stay on their rows through both shells", () => {
+test("fields a reader doesn't know stay on their rows through both shells", async () => {
   const saved = macSession();
   saved.tabs.find((t) => t.id === "a").laterField = { kept: true };
   saved.windows[0].laterWindowField = 7;
-  const webui = webuiLaunch(JSON.stringify(saved));
+  const webui = await webuiLaunch(JSON.stringify(saved));
   const disk = linuxSessionShape(JSON.parse(webui.written));
   assert.deepEqual(disk.tabs.a.laterField, { kept: true });
   assert.equal(disk.windows.w1.laterWindowField, 7);
@@ -234,3 +250,96 @@ test("fields a reader doesn't know stay on their rows through both shells", () =
   assert.deepEqual(mac.tabs.find((t) => t.id === "a").laterField, { kept: true });
   assert.equal(mac.windows.find((w) => w.id === "w1").laterWindowField, 7);
 });
+
+test("an explicitly versioned v2 session runs every migration from v2 in the WebUI, as in the Mac app, before the WebUI stamps the current version", async () => {
+  const older = olderMacSession();
+  older.settings = { ...older.settings, cleanUpInactiveTabsAfterHours: 12, mutedSites: ["b.test"] };
+  const json = JSON.stringify(older);
+  const mac = macLaunch(json);
+  const macSettings = S().settings;
+  const webui = await webuiLaunch(json);
+  assert.deepEqual(webui.seen, mac.seen);
+  assert.equal(webui.live.settings.cleanUpInactiveTabsAfterMinutes, 720);
+  assert.equal(macSettings.cleanUpInactiveTabsAfterMinutes, 720);
+  assert.equal(webui.seen.tabs[T("b")].muted, false);
+  const written = JSON.parse(webui.written);
+  assert.equal(written.version, SESSION_VERSION);
+  assert.equal("cleanUpInactiveTabsAfterHours" in written.settings, false);
+  const again = macLaunch(webui.written);
+  assert.deepEqual(again.seen, mac.seen);
+  assert.equal(S().settings.cleanUpInactiveTabsAfterMinutes, 720);
+  assert.equal(linuxSessionShape(structuredClone(older)).settings.cleanUpInactiveTabsAfterMinutes, 720);
+});
+
+test("a sleeping Mac tab's restore handle survives Mac → WebUI → Mac, stays out of the WebUI's live tabs, and goes once the WebUI moves the tab", async () => {
+  const saved = macSession();
+  saved.tabs.find((t) => t.id === "right").page = { kind: "asleep", wake: "restore:right" };
+  const first = macLaunch(JSON.stringify(saved));
+  assert.equal(S().tabs.right.page.wake, "restore:right");
+  const touchSecond = () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, second: { ...s.tabs.second, title: "Touched" } } }));
+  const webui = await webuiLaunch(first.written, "w1", touchSecond);
+  assert.equal("wake" in webui.live.tabs.right.page, false);
+  assert.equal("wake" in S().tabs.right.page, false);
+  assert.deepEqual(linuxSessionShape(JSON.parse(webui.written)).tabs.right.page, { kind: "asleep", wake: "restore:right" });
+  macLaunch(webui.written);
+  assert.deepEqual(S().tabs.right.page, { kind: "asleep", wake: "restore:right" });
+  const moved = await webuiLaunch(first.written, "w1", () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, right: { ...s.tabs.right, url: "https://moved.test/" } } })));
+  assert.deepEqual(linuxSessionShape(JSON.parse(moved.written)).tabs.right.page, { kind: "asleep" });
+});
+
+test("the Mac app's launch hints pass through a WebUI save that leaves them true, and go once the focused window's tab changes", async () => {
+  const hinted = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+  Object.assign(hinted, { launchTab: { id: "b", url: "https://b.test/", profile: "Default" }, launchBackdrop: { dark: false, vibrancy: true }, linkProfile: "Default" });
+  const touchSecond = () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, second: { ...s.tabs.second, title: "Touched" } } }));
+  const kept = JSON.parse((await webuiLaunch(JSON.stringify(hinted), "w1", touchSecond)).written);
+  assert.equal(linuxSessionShape(kept).tabs.second.title, "Touched");
+  assert.deepEqual(kept.launchTab, hinted.launchTab);
+  assert.deepEqual(kept.launchBackdrop, hinted.launchBackdrop);
+  assert.equal(kept.linkProfile, "Default");
+  const switched = JSON.parse((await webuiLaunch(JSON.stringify(hinted), "w1", () => useBrowser.setState((s) => ({ windows: { ...s.windows, w1: { ...s.windows.w1, activeTabIds: { ...s.windows.w1.activeTabIds, default: "a" } } } })))).written);
+  assert.equal(switched.launchTab, undefined);
+  assert.equal(switched.launchBackdrop, undefined);
+  assert.equal(switched.linkProfile, undefined);
+});
+
+const hostileRow = (id) => ({ ...tab("x", "w1", "default"), id, url: `https://hostile-${id.replace(/_/g, "")}.test/` });
+function hostileTablesJson(tables) {
+  const { a, ...rest } = tables.tabs;
+  tables.tabs = { ...rest, misfiled: a, nothing: null, number: 7, toString: hostileRow("toString"), constructor: hostileRow("constructor"), stray: { ...tab("stray", "constructor", "toString") } };
+  tables.windows = { ...tables.windows, nothing: null, toString: { ...tables.windows.w1, id: "toString" } };
+  const evil = JSON.stringify(hostileRow("__proto__"));
+  return JSON.stringify(tables).replace('"tabs":{', `"tabs":{"__proto__":${evil},`);
+}
+function hostileListsJson(lists) {
+  lists.tabs = [...lists.tabs, null, 7, "text", hostileRow("toString"), hostileRow("constructor")];
+  const evil = JSON.stringify(hostileRow("__proto__"));
+  return JSON.stringify(lists).replace('"tabs":[', `"tabs":[${evil},`);
+}
+const hostileFree = (s) => {
+  assert.equal(Object.getPrototypeOf(s.tabs), Object.prototype);
+  assert.equal(Object.getPrototypeOf(s.windows), Object.prototype);
+  for (const id of ["__proto__", "constructor", "toString"]) {
+    assert.equal(Object.hasOwn(s.tabs, id), false, id);
+    assert.equal(Object.hasOwn(s.windows, id), false, id);
+  }
+  assert.equal(Object.values(s.tabs).some((t) => t.url.includes("hostile") || t.id === "stray"), false);
+  assert.equal(s.tabs.a.windowId, "w1");
+};
+
+test("null, numeric and text rows, rows under a key that isn't their id, and prototype ids never throw and never land in either shell", async () => {
+  const tables = JSON.parse(await tableFile());
+  const lists = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+  for (const json of [hostileTablesJson(tables), hostileListsJson(lists)]) {
+    const shaped = linuxSessionShape(JSON.parse(json));
+    assert.deepEqual(linuxSessionShape(structuredClone(shaped)), shaped);
+    for (const [key, row] of Object.entries(shaped.tabs)) assert.equal(row.id, key);
+    const webui = await webuiLaunch(json);
+    hostileFree(webui.live);
+    assert.deepEqual(webui.seen.windows.w1.tabs, w1Tabs());
+    macLaunch(json, { damaged: true });
+    hostileFree(S());
+    const mac = macLaunch(webui.written);
+    assert.deepEqual(mac.seen, webui.seen);
+  }
+});
+

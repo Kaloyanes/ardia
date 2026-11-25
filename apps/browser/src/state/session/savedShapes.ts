@@ -7,10 +7,14 @@ import type { AdoptId, SplitSlot, SplitView, Tab, TabPage, TabPin, TileFolder } 
 
 type SavedPage = Extract<TabPage, { kind: "idle" | "asleep" }>;
 export const SESSION_ROWS = ["windows", "tabs", "groups", "splits"] as const;
-export const sessionRowTables = (doc: SavedObject) => SESSION_ROWS.some((key) => isFields(doc[key]));
+export const isOwnId = (v: unknown): v is string => isString(v) && !(v in Object.prototype);
+const LISTED_FROM_TABLES = Symbol("listedFromTables");
+export const sessionRowTables = (doc: SavedObject) => (doc as { [LISTED_FROM_TABLES]?: true })[LISTED_FROM_TABLES] === true || SESSION_ROWS.some((key) => isFields(doc[key]));
 export const sessionRowLists = (doc: SavedObject) => SESSION_ROWS.some((key) => Array.isArray(doc[key]));
 export const sessionWithListedRows = (doc: SavedObject): SavedObject =>
-  sessionRowTables(doc) ? { ...doc, ...Object.fromEntries(SESSION_ROWS.filter((key) => isFields(doc[key])).map((key) => [key, Object.values(doc[key] as SavedObject)])) } : doc;
+  SESSION_ROWS.some((key) => isFields(doc[key]))
+    ? { ...doc, ...Object.fromEntries(SESSION_ROWS.filter((key) => isFields(doc[key])).map((key) => [key, Object.values(doc[key] as SavedObject)])), [LISTED_FROM_TABLES]: true }
+    : doc;
 const isRestoreId = (v: unknown): v is AdoptId => isString(v) && isAdoptKind(v, "restore");
 const LEGACY_PAGE_FIELDS = ["navigation", "adoptId", "pageIn", "unloaded", "wakeAdoptId"];
 export const sessionWithTabPages = (doc: SavedObject): SavedObject => ({

@@ -92,6 +92,9 @@ test("telemetry counts a launch on the other shell's table session, and not one 
     takeSessionWrites();
     (await launchOn(webuiTables()))();
     assert.equal(takeSessionWrites().session_from_other_shell, 1);
+    (await launchOn(webuiTables(10)))();
+    assert.equal(S().windows.main.tabIds.length, 5);
+    assert.equal(takeSessionWrites().session_from_other_shell, 1, "a table session that migrates still counts");
     const lists = webuiTables();
     for (const rows of ["windows", "tabs", "groups", "splits"]) lists[rows] = Object.values(lists[rows]);
     (await launchOn(lists))();

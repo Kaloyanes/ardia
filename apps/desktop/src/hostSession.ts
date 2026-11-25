@@ -20,14 +20,19 @@ import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
 import { noteSessionFromOtherShell } from "../../browser/src/state/telemetry/sessionWrites";
-import { SESSION_ROWS, sessionRowLists } from "../../browser/src/state/session/savedShapes";
+import { isOwnId, pageFromDisk, SESSION_ROWS, sessionRowLists, sessionWithListedRows } from "../../browser/src/state/session/savedShapes";
+import { isFields } from "../../browser/src/lib/decode";
 
 type StoredWindow = Partial<BrowserWindow> & { incognito?: unknown; originalProfileId?: unknown; sidebarOpen?: unknown };
 
 const windowKind = (w: StoredWindow): BrowserWindow["kind"] => w.kind === "small" || w.kind === "private" || w.kind === "main" ? w.kind : w.incognito === true ? "private" : "main";
 const shapedWindow = ({ incognito: _i, originalProfileId: _o, ...w }: StoredWindow) => ({ ...w, kind: windowKind(w) }) as BrowserWindow;
+const ROW_REFERENCES = ["windowId", "profileId"] as const;
+const savedRow = (v: unknown): v is Record<string, unknown> & { id: string } =>
+  isFields(v) && isOwnId(v.id) && ROW_REFERENCES.every((key) => !(key in v) || isOwnId(v[key]));
 const keyedById = <T,>(list: unknown): Record<string, T> | undefined =>
-  Array.isArray(list) ? Object.fromEntries(list.filter((v): v is T & { id: string } => !!v && typeof v === "object" && typeof (v as { id?: unknown }).id === "string").map((v) => [v.id, v])) : undefined;
+  Array.isArray(list) ? Object.fromEntries(list.filter(savedRow).map((v) => [v.id, v])) as Record<string, T> : undefined;
+const keyedTable = (table: Record<string, unknown>) => Object.entries(table).every(([key, row]) => savedRow(row) && row.id === key);
 
 function currentSessionShape(saved: HydrateData): HydrateData {
   const doc = { ...saved, tabs: Object.values(saved.tabs ?? {}), splits: Object.values(saved.splits ?? {}) } as unknown as SavedObject;
@@ -114,8 +119,9 @@ const withoutWindowTabsShown = (session: HydrateData): HydrateData => {
 };
 
 const withRowsKeyed = (saved: HydrateData): HydrateData => {
-  const lists = SESSION_ROWS.filter((key) => Array.isArray(saved[key]));
-  return lists.length ? { ...saved, ...Object.fromEntries(lists.map((key) => [key, keyedById(saved[key]) ?? {}])) } : saved;
+  const rowsOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : isFields(value) ? Object.values(value) : []);
+  const reshaped = SESSION_ROWS.filter((key) => saved[key] !== undefined && !(isFields(saved[key]) && keyedTable(saved[key])));
+  return reshaped.length ? { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key])) ?? {}])) } : saved;
 };
 
 const sniffedSessionShape = (saved: HydrateData): HydrateData => {
@@ -130,22 +136,24 @@ export const linuxSessionVersion = (saved: HydrateData): number | undefined => {
   return typeof version === "number" && Number.isSafeInteger(version) && version >= 0 ? version : undefined;
 };
 
-function migratedSession(session: HydrateData, from: number): HydrateData {
+function migratedSession(session: HydrateData, from: number): HydrateData | null {
   if (from >= SESSION_VERSION) return session;
-  const tables = SESSION_ROWS.filter((key) => !!session[key] && !Array.isArray(session[key]));
-  const disk = { ...session, ...Object.fromEntries(tables.map((key) => [key, Object.values(session[key]!)])), version: from } as unknown as SavedObject;
+  const disk = { ...sessionWithListedRows(session as unknown as SavedObject), version: from };
   const next = upgraded(disk, SESSION_VERSION, SESSION_MIGRATIONS);
-  if (!next) return session;
-  return withoutAbsent({ ...next, ...Object.fromEntries(tables.map((key) => [key, keyedById(next[key]) ?? {}])) } as unknown as HydrateData);
+  return next ? withoutAbsent(withRowsKeyed(next as unknown as HydrateData)) : null;
 }
 
 export const linuxSessionShape = (saved: HydrateData): HydrateData => {
   const stamped = linuxSessionVersion(saved);
   if (stamped !== undefined && stamped >= SESSION_VERSION) return sniffedSessionShape(saved);
-  return migratedSession(sniffedSessionShape(saved), Math.max(stamped ?? SNIFFED_SESSION_VERSION, SNIFFED_SESSION_VERSION));
+  if (stamped !== undefined) {
+    const migrated = migratedSession(withRowsKeyed(saved), stamped);
+    return sniffedSessionShape(migrated ?? saved);
+  }
+  const sniffed = sniffedSessionShape(saved);
+  return migratedSession(sniffed, SNIFFED_SESSION_VERSION) ?? sniffed;
 };
 
-const unmigratedSessionShape = (saved: HydrateData): HydrateData => sniffedSessionShape(saved);
 const sessionOnDisk = (saved: HydrateData): HydrateData => withPinChoicesOnDisk(linuxSessionShape(saved), saved);
 
 const inClosingOrder = <T extends { closedAt: number }>(entries: T[]) => [...entries].sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_CLOSED_WINDOWS);
@@ -213,7 +221,50 @@ function withLaunchWindowAdopted(saved: HydrateData, windowId: string): HydrateD
   });
 }
 
+export const withoutTabWakes = (session: HydrateData): HydrateData => {
+  const tabs = session.tabs;
+  if (!tabs || !Object.values(tabs).some((t) => isFields(t?.page) && "wake" in t.page)) return session;
+  return { ...session, tabs: Object.fromEntries(Object.entries(tabs).map(([id, t]) => [id, isFields(t?.page) && "wake" in t.page ? { ...t, page: { kind: t.page.kind } as Tab["page"] } : t])) };
+};
+
+type LaunchHints = { launchTab?: { id?: unknown; url?: unknown }; launchBackdrop?: unknown; linkProfile?: unknown };
+const LAUNCH_HINTS = ["launchTab", "launchBackdrop", "linkProfile"] as const;
+const focusedWindowOf = (session: HydrateData) => (session.focusedWindowId ? session.windows?.[session.focusedWindowId] : undefined);
+const activeTabOf = (session: HydrateData) => {
+  const w = focusedWindowOf(session);
+  return w ? session.tabs?.[w.activeTabIds[w.profileId] ?? ""] : undefined;
+};
+
+function launchHintsHold(snapshot: HydrateData, canonical: HydrateData): boolean {
+  const was = focusedWindowOf(canonical);
+  const now = focusedWindowOf(snapshot);
+  const hint = (canonical as LaunchHints).launchTab;
+  const active = activeTabOf(snapshot);
+  return !!was && !!now && snapshot.focusedWindowId === canonical.focusedWindowId && now.profileId === was.profileId &&
+    equalSessionValue(now.activeTabIds, was.activeTabIds) && snapshot.lastProfileId === canonical.lastProfileId &&
+    equalSessionValue(snapshot.profiles, canonical.profiles) && snapshot.settings?.restoreSession === canonical.settings?.restoreSession &&
+    (!hint || (hint.id === active?.id && hint.url === active?.url && active?.url === activeTabOf(canonical)?.url));
+}
+
+export function withSavedOnlyFields(snapshot: HydrateData, canonical: HydrateData): HydrateData {
+  let tabs = snapshot.tabs;
+  for (const [id, tab] of Object.entries(snapshot.tabs ?? {})) {
+    const saved = canonical.tabs?.[id];
+    const wake = saved && saved.url === tab.url && saved.profileId === tab.profileId ? pageFromDisk(saved.page).wake : undefined;
+    if (!wake || (tab.page.kind !== "idle" && tab.page.kind !== "asleep")) continue;
+    if (tabs === snapshot.tabs) tabs = { ...snapshot.tabs };
+    tabs![id] = { ...tab, page: { kind: tab.page.kind, wake } };
+  }
+  const hints = LAUNCH_HINTS.filter((key) => (canonical as LaunchHints)[key] !== undefined);
+  const kept = hints.length && launchHintsHold(snapshot, canonical) ? Object.fromEntries(hints.map((key) => [key, (canonical as LaunchHints)[key]])) : {};
+  return tabs === snapshot.tabs && !Object.keys(kept).length ? snapshot : { ...snapshot, tabs, ...kept };
+}
+
 export function initialHostSession(host: ArdiaHost, saved: HydrateData | null | undefined, now = Date.now(), onRestored?: (windowId: string) => void): HydrateData {
+  return withoutTabWakes(initialSessionWithWakes(host, saved, now, onRestored));
+}
+
+function initialSessionWithWakes(host: ArdiaHost, saved: HydrateData | null | undefined, now: number, onRestored?: (windowId: string) => void): HydrateData {
   const { windowId } = host.bootstrap;
   const profileId = seedProfile(host.bootstrap);
   if (!windowId || !profileId || /[\\/\0]/.test(windowId + profileId)) throw new Error("Invalid Ardia host bootstrap IDs");
@@ -427,8 +478,8 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   if (host.bootstrap.startup === true && sessionRowLists(stored as SavedObject)) noteSessionFromOtherShell();
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
-  const snapshotOf = (state: BrowserState) => snapshot(withoutStandIn(state, standIn), canonical);
-  const written = withPinChoicesOnDisk(linuxSessionVersion(stored) === linuxSessionVersion(initial) ? initial : unmigratedSessionShape(stored), stored);
+  const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical);
+  const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : stored, stored);
   const writer = createSessionWriter(host, written, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(equalSessionValue({ ...initial, version: undefined }, { ...written, version: undefined }) ? initial : written)!;
@@ -462,7 +513,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     canonical = session;
     const merged = mergeSession(base, local, session);
     if (standIn && merged.windows?.[standIn.windowId]) standIn = undefined;
-    const runtime = { ...merged, ...(merged.closedWindows && { closedWindows: inClosingOrder(merged.closedWindows) }), settings: { ...state.settings, ...merged.settings } };
+    const runtime = withoutTabWakes({ ...merged, ...(merged.closedWindows && { closedWindows: inClosingOrder(merged.closedWindows) }), settings: { ...state.settings, ...merged.settings } });
     const patch = sessionStatePatch(state, snapshotHostSession(withoutStandIn(state, standIn)), runtime);
     applying = true;
     try {
