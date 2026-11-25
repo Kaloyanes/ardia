@@ -23,9 +23,9 @@ public struct LiquidGlassParams: Equatable, Sendable {
     lightAngle: -Double.pi / 4,
     specularWidth: 1.25,
     specularStrength: 1,
-    oppositeStrength: 0.7,
+    oppositeStrength: 0.5,
     specularFalloff: 0.6,
-    specularSharpness: 2,
+    specularSharpness: 6,
     specularOpacity: 0.5
   )
 }
@@ -292,6 +292,33 @@ public enum LiquidGlassRules {
   }
 
   public static func acceptsCapture(_ path: Path) -> Bool { path == .live }
+
+  public static let lensWithheldAfter: TimeInterval = 3
+  public static let lensWithheldGap: TimeInterval = 0.25
+
+  public struct LensWithheld: Equatable, Sendable {
+    public private(set) var since: TimeInterval?
+    public private(set) var counted = false
+    private var notedAt = -Double.infinity
+
+    public init() {}
+
+    public mutating func note(path: Path, showsLens: Bool, now: TimeInterval) -> Bool {
+      defer { notedAt = now }
+      guard path == .live, !showsLens else {
+        since = nil
+        counted = false
+        return false
+      }
+      if since == nil || now - notedAt > lensWithheldGap {
+        since = now
+        counted = false
+      }
+      guard !counted, let since, now - since >= lensWithheldAfter else { return false }
+      counted = true
+      return true
+    }
+  }
 
   public static let captureRetryBase: TimeInterval = 0.05
   public static let captureRetryLongest: TimeInterval = 1

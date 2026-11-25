@@ -262,7 +262,7 @@ const iPhoneMenuLook = {
   labelLines: 3,
   iconSide: "leading" as "leading" | "trailing",
   disabledOpacity: 0.4,
-  frost: "thin" as const,
+  frost: "glass" as "thin" | "glass",
   frosted: true,
   shadow: "0px 10px 40px rgba(0,0,0,0.12)",
 };

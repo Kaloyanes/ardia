@@ -114,6 +114,45 @@ struct LiquidGlassTests {
     #expect(abs(LiquidGlassRules.blurSigma(radius: 6) - 3.9641) < 1e-3)
   }
 
+  @Test func `a live glass that shows clear glass for over three seconds is counted once per stretch, and a page loading is not`() {
+    var withheld = LiquidGlassRules.LensWithheld()
+    let frame = 1.0 / 60
+    var counts = 0
+    var now = 0.0
+    while now < 2.9 {
+      if withheld.note(path: .live, showsLens: false, now: now) { counts += 1 }
+      now += frame
+    }
+    #expect(counts == 0, "the bar waits about a second and a quarter for a new page's first picture")
+    while now < 6 {
+      if withheld.note(path: .live, showsLens: false, now: now) { counts += 1 }
+      now += frame
+    }
+    #expect(counts == 1)
+    let shown = withheld.note(path: .live, showsLens: true, now: now)
+    #expect(!shown)
+    now += frame
+    var early = 0
+    for _ in 0..<30 {
+      if withheld.note(path: .live, showsLens: false, now: now) { early += 1 }
+      now += frame
+    }
+    #expect(early == 0)
+    now += 2
+    let afterGap = withheld.note(path: .live, showsLens: false, now: now)
+    #expect(!afterGap, "a glass seen again after a gap starts a new stretch")
+    var again = 0
+    for _ in 0..<200 {
+      now += frame
+      if withheld.note(path: .live, showsLens: false, now: now) { again += 1 }
+    }
+    #expect(again == 1)
+    var cooling = LiquidGlassRules.LensWithheld()
+    let first = cooling.note(path: .clear, showsLens: false, now: 0)
+    let later = cooling.note(path: .clear, showsLens: false, now: 5)
+    #expect(!first && !later, "over-budget glass is counted by glass_captures_over_budget instead")
+  }
+
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {
     let light = LiquidGlassRules.light(LiquidGlassParams.defaults.lightAngle)
     #expect(light.x < 0 && light.y < 0)
@@ -121,8 +160,11 @@ struct LiquidGlassTests {
     let bottomRight = LiquidGlassRules.rimAlpha(normalAngle: 0.25 * Double.pi, dark: false)
     let side = LiquidGlassRules.rimAlpha(normalAngle: 0.75 * Double.pi, dark: false)
     #expect(abs(topLeft - 0.5) < 1e-9)
-    #expect(abs(bottomRight - 0.35) < 1e-9)
+    #expect(abs(bottomRight - 0.25) < 1e-9)
     #expect(side < 1e-9)
+    let topEdge = LiquidGlassRules.rimAlpha(normalAngle: 1.5 * Double.pi, dark: false)
+    let bottomEdge = LiquidGlassRules.rimAlpha(normalAngle: 0.5 * Double.pi, dark: false)
+    #expect(topEdge < topLeft / 5 && bottomEdge < bottomRight / 5, "a capsule's long edges only catch a faint glint, so the rim reads as Safari's corners of light, not a ring")
     #expect(abs(LiquidGlassRules.rimAlpha(normalAngle: 1.25 * Double.pi, dark: true) - 0.35) < 1e-9)
     #expect(LiquidGlassRules.rimStops(dark: false).count == 25)
   }

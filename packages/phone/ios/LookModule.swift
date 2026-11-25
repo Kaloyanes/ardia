@@ -385,7 +385,9 @@ final class GlassView: ExpoView {
       glass.alpha = shown ? 1 : 0
     }
     if turning, PhoneTestBuild.isOn { traceShown("turning") }
-    if turning, window != nil, shownDuration > 0, !UIAccessibility.isReduceMotionEnabled {
+    let shadowWas = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
+    let fades = turning && window != nil && shownDuration > 0 && !UIAccessibility.isReduceMotionEnabled
+    if fades {
       UIView.animate(withDuration: shownDuration, delay: 0, options: [shown ? .curveEaseOut : .curveEaseIn, .beginFromCurrentState], animations: surface) { [weak self] finished in
         guard PhoneTestBuild.isOn else { return }
         MainActor.assumeIsolated {
@@ -396,6 +398,21 @@ final class GlassView: ExpoView {
       surface()
     }
     applyShape()
+    fadeShadow(from: shadowWas, animated: fades)
+  }
+
+  private func fadeShadow(from: Float, animated: Bool) {
+    let target = layer.shadowOpacity
+    guard animated, from != target else {
+      if !animated { layer.removeAnimation(forKey: "shownShadow") }
+      return
+    }
+    let fade = CABasicAnimation(keyPath: "shadowOpacity")
+    fade.fromValue = from
+    fade.toValue = target
+    fade.duration = shownDuration
+    fade.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
+    layer.add(fade, forKey: "shownShadow")
   }
 
   private func pressed(_ down: Bool) {
@@ -444,7 +461,7 @@ final class GlassView: ExpoView {
     classicView.layer.borderWidth = classic ? CGFloat(classicChrome.edgeWidth) : 0
     classicView.layer.borderColor = classic ? classicChrome.edge?.resolvedColor(with: traitCollection).cgColor : nil
     let shadows = classic && barShadow && classicChrome.shadow != nil
-    layer.shadowOpacity = shadows ? 1 : 0
+    layer.shadowOpacity = shadows && shown ? 1 : 0
     guard shadows else {
       layer.shadowPath = nil
       return

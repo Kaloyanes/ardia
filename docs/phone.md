@@ -1403,7 +1403,10 @@ look surface: it has no frost source to refract.
   a glass with no source still asks for one, so a replacement records on its first draw; registering a name also
   asks the source itself to draw, so one named after its first draw records.
 - **The rim.** liquid-dom's white specular: two lights, from the top left and the opposite side, a 1.25 dp band fading
-  inward, power 2, added at 50 % (35 % in dark). It is drawn at full resolution over the glass's clip, after the tint,
+  inward, power 6, the opposite light at half strength, added at 50 % (35 % in dark). Since #4252 (power 2 and 0.7
+  before) the light gathers where the outline faces it, the top-left and bottom-right curves, and a capsule's long
+  edges keep only a faint line, as Safari's edge glint reads; before, a capsule's top and bottom edges caught half the
+  light and the rim read as a ring all the way round. iPhone shares these numbers. It is drawn at full resolution over the glass's clip, after the tint,
   as a second `RuntimeShader`, so it stays sharp, and it draws on every glass from Android 13, lens or not, except
   where the glass draws the flat fill: Classic, `ArdiaFlatGlass`, the look switched off and a phone over the look
   budget.
@@ -1607,11 +1610,45 @@ Metal.
   `ArdiaGlassProbe` logs whether each capture applies a view's own alpha (both do). Each lab build logs
   `PAGELAB look glass … path=…` and, once a second while any glass captures, `PAGELAB glass frames` with late and
   dropped frames, failures, WebKit snapshots and their latency, pieces per capture and capture and tick times.
-- **SwiftUI.** `chromeSurface`, `LookFrost`'s glass variant and the glass button styles (Settings, the share sheet's
-  close button, the action extension's Done) draw `LiquidGlassFill`: the flat frost fill, the edge and the rim as an
-  angular gradient from the same rim maths. None of them has a source to refract.
+- **SwiftUI.** `chromeSurface` and the glass button styles (Settings, the share sheet's close button, the action
+  extension's Done) draw `LiquidGlassFill`: the flat frost fill, the edge and the rim as an angular gradient from the
+  same rim maths. None of them has a source to refract. Since #4252 the React Native frost variant `glass` is the
+  Metal `Glass` on iPhone as on Android (`LookFrost`), so voice search's Done, Search and Browse for Me and its Cancel
+  refract instead of drawing the flat fill.
 - **Interactive and shown.** A pressed interactive glass lightens by 8 % white on the press (60 ms in, 180 ms out,
-  no bounce); `shown` fades the surface over `shownMs` as before.
+  no bounce); `shown` fades the surface over `shownMs` as before. Classic's shadow fades with it (#4252): it is the
+  `GlassView`'s own layer shadow, outside the faded surface, so until #4252 a bar collapsing to the host pill in
+  Classic left the tabs circle's, the address capsule's and the `+`'s shadows behind as dark smudges around the pill
+  (a tester's screenshot; reproduced on the simulator in light and dark). The shadow now follows `shown`, eased over
+  the same `shownMs`. The default glass had no smudge: it casts no shadow.
+- **Every surface, one look** (#4252). Each lab build logs the path every glass takes. The page bar, host pill,
+  start page and deck rows were read from those logs on the iPhone 17 Pro simulator, light and dark, before and after;
+  the menus' rows from `menuGlass.render.test.tsx` and the screens; the rest from the code:
+
+  | Surface | Source | Path on main | Path now |
+  | --- | --- | --- | --- |
+  | Page bar: tabs circle, address capsule, `+` | `page` | live, lens and rim | the same |
+  | Host pill (bar collapsed) | `page` | live, lens and rim | the same |
+  | Start page's tabs, `+`, Settings | `start` | live | the same |
+  | Deck's switcher, `···`, Incognito, Search Tabs, `+` | `deck` | live | the same |
+  | Toasts, Reader's buttons, the Duo toolbar | `surfaces`, `reader` | live | the same |
+  | Drawn menus (VoiceOver's Recent Tabs, a link's press menu) | none (`frost={null}`) | a solid panel with a ring | live, from `page` (`glassSource`) |
+  | Drawn menus over the app's own surfaces | `surfaces` | SwiftUI thin material, fill and ring | live |
+  | Voice search's buttons and Cancel (frost variant `glass`) | `voice` | SwiftUI flat fill | live |
+  | Menus from a press or long press (tabs, `···`, the deck's) | | Apple's own context menu glass | the same |
+  | Search panel | `surfaces` | frost (`SEARCH_PANEL_FACE`) | the same |
+  | Classic, Reduce Transparency | | classic | the same |
+
+  The tabs, page and deck menus a press opens are UIKit context menus (`nativeMenus()`), so they already draw Apple's
+  glass, the same as Safari's. In normal use a live glass leaves its lens only while it waits for its first picture
+  (about 1.25 s when a page opens), past a fling's picture (`glass_lens_bridged`) or over budget
+  (`glass_captures_over_budget`). The page's menus take the page's picture as the bar does, so they add no capture
+  of their own; under Classic they keep their solid panel and the app's menus their thin frost. Still frost: the
+  search panel, whose morph and per-corner shape the native `Glass` doesn't draw yet. A live glass that shows clear
+  glass instead of its lens for over 3 s is counted once in `glass_lens_withheld`. Measured on the same simulator, the
+  lab's 26 s scroll of Wikipedia's Glass, 18 s windows, two runs each, alternating: main 0 and 0 late frames of 1,080,
+  main-thread work at most 0.80 and 0.86 ms, tick 0.34 and 0.36 ms (p50); now 1 and 0 of 1,079 and 1,080, at most 0.71
+  and 0.76 ms, tick 0.36 and 0.31 ms; the lens on every frame of both.
 - **A shader that fails** to compile is counted in `glass_shaders_failed` through the iPhone's new pending counts
   (`PendingCounts.swift`, kept only while sharing is on, as Android's are), the glass draws the flat fill and edge with
   `CALayer`, and the compile is tried again when the app returns to the foreground. `glass_render` now reports `lens`,
@@ -2088,6 +2125,7 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `material_back_swiped` | a predictive back swipe on Android's Material sheets, dialogs, menus and library | Whether people swipe back out of Material surfaces; zero across Android testers after a release means the swipe stopped reaching them, or Back goes to the wrong surface |
 | `glass_shaders_failed` | Liquid Glass on Android (CodeRabbit on #3759: a lens refused mid-session still reported `lens` at launch) | Counted natively and drained with the pending counts: each time Android refused to build the lens or rim shader, so that glass drew plain frost until the app next came back to the foreground and tried again. `app_launched.glass_render` can't see this, since it's read before any glass draws. Any count on Android 13+ phones means a GPU or driver rejects the AGSL; compare it with the `lens` launches. Since #3950 the iPhone counts its Metal shader failing to compile the same way |
 | `glass_lens_bridged` | Liquid Glass on iPhone, the lens over the page on every frame (#3950) | Counted natively and drained with the pending counts: each time the page bar or host pill faded from its lens to clear glass because its capture of the page ran out (a page scrolled past its picture, a capture that failed), at most once a second per glass; the deck's and other glass's fades aren't counted; over-budget glass is counted in `glass_captures_over_budget` instead. It should stay near zero: a rising count against `glass_render` `lens` launches means the page pictures don't keep up on those phones |
+| `glass_lens_withheld` | One Liquid Glass look on iPhone (#4252) | Counted natively and drained with the pending counts: each time an iPhone glass on screen, on the live path, showed clear glass instead of its lens for over 3 s in a row, once per stretch (a page's first picture takes about 1.25 s, so opening a page doesn't count; over-budget glass is counted in `glass_captures_over_budget` instead). It should stay near zero against the `glass_render` `lens` launches: a rising count means some glass draws a weaker look than the launch reports, so look for a surface whose capture never lands |
 | `glass_captures_over_budget` | Liquid Glass on iPhone, every glass refracting (#3950) | Counted natively and drained with the pending counts: each time an iPhone glass's capture of what lies under it went over budget (its main-thread work, from the walk to the capture, took longer than one frame once, or more than 12 % of the main thread over two seconds), so that glass showed clear glass for 3 s, doubling up to 30 s while it kept tripping within a minute. A rising count means capturing is too slow on those phones; compare it with the iPhone `lens` launches |
 | `drawn_menu_actions_chosen` | Android menu tap fix (#3463) | Watch Android selections against `drawn_menus_opened`. Steady opens and fewer selections can flag lost taps. Opens also include confirmations, so this is a trend, not a tap success rate |
 | `web_videos_floated`, `web_videos_kept_playing` | iPhone Picture in Picture fix (the app's `audio` background mode; a customer's PiP showed Ardia's squashed UI instead of the video) | Read `kept_playing` against `floated` on iPhone. `kept_playing` needs a live page to report playing media (`requestMediaPlaybackState`) 5 s after Ardia left, so a return within 5 s or a pause from the PiP window counts in `floated` only, and the two never match exactly. Without the `audio` mode the simulator showed the video paused at the home screen; with it the ratio should rise clearly. A ratio that falls back toward zero means web video stops in the background again: check `UIBackgroundModes` and WebKit's presentation window |

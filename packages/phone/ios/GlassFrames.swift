@@ -186,6 +186,7 @@ final class GlassFrames: NSObject {
       }
     }
     for surface in still { draws += surface.plan(with: nil, space: nil) }
+    for surface in live { surface.noteLensShown(now: now) }
     if PhoneTestBuild.isOn {
       for surface in live where surface.choice.path == .live {
         if surface.showsLens {

@@ -213,8 +213,6 @@ type FrostProps = {
   children?: ReactNode;
 };
 
-export const frostGlassIsNative = (os: string, nativeGlass: boolean) => os === "android" && nativeGlass;
-
 export const chromeIsSolid = (style: ChromeStyle, reduceTransparency: boolean, frostIsNative: boolean) => style === "classic" || reduceTransparency || !frostIsNative;
 
 export function useSolidChrome() {
@@ -256,7 +254,7 @@ export function LookFrost({
       </View>
     );
   const shade = incognito || (dark ?? theme.dark);
-  if (variant === "glass" && frostGlassIsNative(Platform.OS, glassIsNative()))
+  if (variant === "glass" && glassIsNative())
     return (
       <Glass
         source={source}
@@ -369,7 +367,7 @@ export function ChromeSurface({
           backgroundColor: tinted ? theme.canvas : ink.surface,
           borderWidth: chromeLayout.edge,
           borderColor: ink.edge,
-          boxShadow: barShadow ? shadowCss("control", dark ?? (incognito || theme.dark)) : undefined,
+          boxShadow: barShadow && shown !== false ? shadowCss("control", dark ?? (incognito || theme.dark)) : undefined,
         },
       ]}
     >

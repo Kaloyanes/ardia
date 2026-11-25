@@ -41,6 +41,7 @@ final class LiquidGlassSurface: UIView {
   private var lensWanted = false
   private var lensOn: Bool?
   private var lastBridge: CFTimeInterval = 0
+  private var withheld = LiquidGlassRules.LensWithheld()
   private var toneDark: Bool?
   private var toneChangedAt: CFTimeInterval = -.infinity
 
@@ -286,6 +287,13 @@ final class LiquidGlassSurface: UIView {
       CATransaction.commit()
     }
     setLens(on: on, fades: glassy)
+  }
+
+  func noteLensShown(now: CFTimeInterval) {
+    if withheld.note(path: choice.path, showsLens: showsLens, now: now) {
+      PendingCounts.add(PendingCounts.glassLensWithheld)
+      if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ lens withheld over %.1f s: %@", label, LiquidGlassRules.lensWithheldAfter, clearReason) }
+    }
   }
 
   private func setLens(on: Bool, fades: Bool) {

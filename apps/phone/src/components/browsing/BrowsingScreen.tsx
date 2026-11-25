@@ -544,6 +544,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
           items={tabsMenuItems(barOrder)}
           place={duoStrip ? { bottom: barCenterFromBottom(insets.bottom, design) - DUO_BAR.button / 2, ...besideStrip(duoStrip, width, tabsLayout.menuWidth, space.l) } : { bottom: barHeight(insets.bottom, design) + space.xs, left: space.l, width: Math.min(tabsLayout.menuWidth, width - space.l * 2) }}
           frost={null}
+          glassSource={PAGE_FROST}
           onDismiss={() => setTabsMenu(false)}
         />
       ) : null}

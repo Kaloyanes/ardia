@@ -146,6 +146,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["glass_lens_bridged"],
       },
       {
+        text: "In the same daily counts, on iPhone: how often a Liquid Glass surface on screen showed clear glass instead of its lens for over three seconds, at most once each time. Counts only",
+        fields: ["glass_lens_withheld"],
+      },
+      {
         text: "In the same daily counts: how often you opened one of the Settings panes, such as General or Tabs. Counts only, never which pane or what you changed",
         fields: ["settings_panes_opened"],
       },
