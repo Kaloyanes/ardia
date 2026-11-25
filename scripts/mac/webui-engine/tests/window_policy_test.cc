@@ -60,17 +60,36 @@ TEST(acknowledgments_carry_a_departure_only_with_base_and_session) {
 
 TEST(quit_waits_for_every_window_and_a_rejection_aborts_it) {
   policy::QuitBarrier barrier;
-  CHECK(barrier.Begin({"main", "second"}));
-  CHECK(!barrier.Begin({"main"}));
+  const auto first = barrier.Begin({"main", "second"});
+  CHECK(first == 1);
+  CHECK(barrier.Begin({"main"}) == 0);
   CHECK(barrier.Waits("main") && !barrier.Waits("other"));
-  CHECK(barrier.Acknowledged("main") == policy::QuitStep::kWait);
-  CHECK(barrier.Rejected("other") == policy::QuitStep::kWait);
-  CHECK(barrier.Acknowledged("second") == policy::QuitStep::kExit && !barrier.running());
-  CHECK(barrier.Begin({"main"}));
-  CHECK(barrier.Rejected("main") == policy::QuitStep::kAbort && !barrier.running());
-  CHECK(barrier.Expired() == policy::QuitStep::kWait);
-  CHECK(barrier.Begin({"main"}));
-  CHECK(barrier.Expired() == policy::QuitStep::kExit);
+  CHECK(barrier.Acknowledged("main", first) == policy::QuitStep::kWait);
+  CHECK(barrier.Rejected("other", first) == policy::QuitStep::kWait);
+  CHECK(barrier.Acknowledged("second", first) == policy::QuitStep::kExit && !barrier.running());
+  const auto second = barrier.Begin({"main"});
+  CHECK(second == 2);
+  CHECK(barrier.Rejected("main", second) == policy::QuitStep::kAbort && !barrier.running());
+  CHECK(barrier.Expired(second) == policy::QuitStep::kStale);
+  const auto third = barrier.Begin({"main"});
+  CHECK(barrier.Expired(third) == policy::QuitStep::kExit);
+}
+
+TEST(a_late_acknowledgment_after_the_quit_deadline_never_exits_again) {
+  policy::QuitBarrier barrier;
+  const auto expired = barrier.Begin({"main", "second"});
+  CHECK(barrier.Acknowledged("second", expired) == policy::QuitStep::kWait);
+  CHECK(barrier.Expired(expired) == policy::QuitStep::kExit);
+  CHECK(barrier.Acknowledged("main", expired) == policy::QuitStep::kStale);
+  CHECK(barrier.Rejected("main", expired) == policy::QuitStep::kStale);
+  CHECK(barrier.Expired(expired) == policy::QuitStep::kStale);
+  const auto next = barrier.Begin({"main"});
+  CHECK(next != expired && next != 0);
+  CHECK(barrier.Acknowledged("main", expired) == policy::QuitStep::kStale && barrier.running());
+  CHECK(barrier.Expired(expired) == policy::QuitStep::kStale && barrier.running());
+  CHECK(barrier.Acknowledged("main", 0) == policy::QuitStep::kStale);
+  CHECK(barrier.Acknowledged("main", next) == policy::QuitStep::kExit);
+  CHECK(barrier.Acknowledged("main", next) == policy::QuitStep::kStale);
 }
 
 TEST(window_state_reads_zoom_and_full_screen) {
@@ -118,6 +137,11 @@ TEST(the_sidebar_edge_reports_only_changes) {
   CHECK(watch.Moved(250, 120, 1200, 800, true)->over);
   watch.Watch(0, policy::Side::kRight, false);
   CHECK(watch.Moved(1197, 120, 1200, 800, false)->over);
+  CHECK(watch.Moved(1197, 130, 1200, 800, false) == std::nullopt);
+  const auto covered = watch.Covered();
+  CHECK(covered && !covered->over && covered->x == -1);
+  CHECK(!watch.Covered());
+  CHECK(watch.Moved(1197, 130, 1200, 800, false)->over);
   const auto resigned = watch.Resigned();
   CHECK(resigned && !resigned->over && resigned->x == -1);
   CHECK(!watch.Moved(std::numeric_limits<double>::quiet_NaN(), 0, 1200, 800, false));

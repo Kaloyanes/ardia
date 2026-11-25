@@ -114,44 +114,48 @@ inline bool ValidAcknowledgeShape(std::size_t size, bool has_departure) {
   return size == (has_departure ? 5u : 4u);
 }
 
-enum class QuitStep { kWait, kExit, kAbort };
+enum class QuitStep { kWait, kExit, kAbort, kStale };
 
 class QuitBarrier {
  public:
-  bool Begin(const std::vector<std::string>& windows) {
-    if (running_) return false;
+  std::uint64_t Begin(const std::vector<std::string>& windows) {
+    if (running_ || generation_ == std::numeric_limits<std::uint64_t>::max()) return 0;
     running_ = true;
     pending_ = std::set<std::string>(windows.begin(), windows.end());
-    return true;
+    return ++generation_;
   }
 
-  QuitStep Acknowledged(const std::string& window) {
-    if (!running_) return QuitStep::kWait;
+  QuitStep Acknowledged(const std::string& window, std::uint64_t generation) {
+    if (!Current(generation)) return QuitStep::kStale;
     pending_.erase(window);
     if (!pending_.empty()) return QuitStep::kWait;
     running_ = false;
     return QuitStep::kExit;
   }
 
-  QuitStep Rejected(const std::string& window) {
-    if (!running_ || !pending_.contains(window)) return QuitStep::kWait;
+  QuitStep Rejected(const std::string& window, std::uint64_t generation) {
+    if (!Current(generation)) return QuitStep::kStale;
+    if (!pending_.contains(window)) return QuitStep::kWait;
     running_ = false;
     pending_.clear();
     return QuitStep::kAbort;
   }
 
-  QuitStep Expired() {
-    if (!running_) return QuitStep::kWait;
+  QuitStep Expired(std::uint64_t generation) {
+    if (!Current(generation)) return QuitStep::kStale;
     running_ = false;
     pending_.clear();
     return QuitStep::kExit;
   }
 
+  bool Current(std::uint64_t generation) const { return running_ && generation != 0 && generation == generation_; }
   bool Waits(const std::string& window) const { return running_ && pending_.contains(window); }
   bool running() const { return running_; }
+  std::uint64_t generation() const { return generation_; }
 
  private:
   bool running_ = false;
+  std::uint64_t generation_ = 0;
   std::set<std::string> pending_;
 };
 
@@ -259,6 +263,11 @@ class EdgeWatch {
   }
 
   std::optional<EdgeReport> Resigned() {
+    known_ = false;
+    return Report(false);
+  }
+
+  std::optional<EdgeReport> Covered() {
     known_ = false;
     return Report(false);
   }

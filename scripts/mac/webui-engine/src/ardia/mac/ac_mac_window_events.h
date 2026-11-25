@@ -23,6 +23,7 @@ class WindowEvents {
     double width = 0;
     double height = 0;
     bool pressed = false;
+    bool covered = false;
   };
   using Changed = base::RepeatingCallback<void(Kind)>;
   using Moved = base::RepeatingCallback<void(const Pointer&)>;

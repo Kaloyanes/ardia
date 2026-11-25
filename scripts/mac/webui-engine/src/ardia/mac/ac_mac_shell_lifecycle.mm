@@ -91,9 +91,15 @@ base::OneShotTimer& QuitDeadline() {
   return *timer;
 }
 
-void ExitSoon() {
+void FinishShellQuit() {
+  DownloadCoreService::CancelAllDownloads(DownloadCoreService::CancelDownloadsTrigger::kShutdown);
+  chrome::AttemptExit();
+}
+
+void ExitSoon(bool shell_confirmed) {
   QuitDeadline().Stop();
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&chrome::AttemptExit));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit));
 }
 
 std::string StringAt(const base::ListValue* values, std::size_t index) {
@@ -144,15 +150,21 @@ void StartQuit() {
     }
   }
   if (windows.empty()) {
-    return ExitSoon();
+    return ExitSoon(true);
   }
-  Quit().Begin(windows);
-  QuitDeadline().Start(FROM_HERE, base::Seconds(window_policy::kQuitDeadlineSeconds), base::BindOnce([] {
-                         if (Quit().Expired() == window_policy::QuitStep::kExit) {
-                           Trace("quit went ahead after the windows missed the flush deadline");
-                           chrome::AttemptExit();
-                         }
-                       }));
+  const std::uint64_t generation = Quit().Begin(windows);
+  if (!generation) {
+    return;
+  }
+  QuitDeadline().Start(FROM_HERE, base::Seconds(window_policy::kQuitDeadlineSeconds),
+                       base::BindOnce(
+                           [](std::uint64_t generation) {
+                             if (Quit().Expired(generation) == window_policy::QuitStep::kExit) {
+                               Trace("quit went ahead after the windows missed the flush deadline");
+                               FinishShellQuit();
+                             }
+                           },
+                           generation));
   std::vector<base::WeakPtr<ShellHostView>> hosts;
   for (ShellHostView* host : Hosts()) {
     hosts.push_back(host->GetWeakPtr());
@@ -161,9 +173,9 @@ void StartQuit() {
     if (!host || !Quit().Waits(host->window_id())) {
       continue;
     }
-    if (host->RequestWindowClose(true).empty() &&
-        Quit().Acknowledged(host->window_id()) == window_policy::QuitStep::kExit) {
-      return ExitSoon();
+    if (host->RequestWindowClose(generation).empty() &&
+        Quit().Acknowledged(host->window_id(), generation) == window_policy::QuitStep::kExit) {
+      return ExitSoon(true);
     }
   }
 }
@@ -171,7 +183,7 @@ void StartQuit() {
 }
 
 void QuitWithoutShell() {
-  ExitSoon();
+  ExitSoon(false);
 }
 
 std::vector<std::string_view> LifecycleCapabilities() {
@@ -208,9 +220,11 @@ void ShellHostView::StopLifecycle() {
   window_events_.reset();
   dialogs_.reset();
   close_dialogs_.clear();
-  if (Quit().Waits(window_id_) && Quit().Acknowledged(window_id_) == window_policy::QuitStep::kExit) {
-    ExitSoon();
+  if (quit_generation_ && Quit().Waits(window_id_) &&
+      Quit().Acknowledged(window_id_, quit_generation_) == window_policy::QuitStep::kExit) {
+    ExitSoon(true);
   }
+  quit_generation_ = 0;
 }
 
 void ShellHostView::RetireLifecycle() {
@@ -222,7 +236,7 @@ void ShellHostView::RetireLifecycle() {
   }
   close_dialogs_.clear();
   close_.Retire();
-  close_quitting_ = false;
+  quit_generation_ = 0;
   if (shortcut_recording_ && focus_manager_) {
     focus_manager_->set_shortcut_handling_suspended(false);
   }
@@ -338,7 +352,7 @@ void ShellHostView::DialogCall(const std::string& method, const base::ListValue*
   std::move(done).Run(true, base::Value(base::DictValue().Set("accepted", true)));
 }
 
-base::DictValue ShellHostView::RequestWindowClose(bool quitting) {
+base::DictValue ShellHostView::RequestWindowClose(std::uint64_t quit_generation) {
   if (!RendererLive()) {
     return {};
   }
@@ -347,20 +361,22 @@ base::DictValue ShellHostView::RequestWindowClose(bool quitting) {
   if (!identity) {
     return {};
   }
-  close_quitting_ = fresh ? quitting : close_quitting_ || quitting;
+  if (fresh || quit_generation) {
+    quit_generation_ = quit_generation;
+  }
   base::DictValue request = CloseRequestValue(window_id_, *identity);
   if (close_.Deciding()) {
     Emit("ArdiaShell", "shell",
          base::Value(base::DictValue()
                          .Set("name", "shell.closeRequested")
                          .Set("data", request.Clone())
-                         .Set("quitting", close_quitting_)));
+                         .Set("quitting", quit_generation_ != 0)));
   }
   return request;
 }
 
 bool ShellHostView::ClosingEndsSession() const {
-  if (close_quitting_ || Quit().running()) {
+  if (quit_generation_ || Quit().running()) {
     return true;
   }
   for (const ShellHostView* host : Hosts()) {
@@ -420,13 +436,19 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue& request, Done 
       !close_.Acknowledge(*identity, renderer_generation_, watermark)) {
     return std::move(done).Run(false, Stale("Invalid close acknowledgment"));
   }
-  if (close_quitting_ || Quit().Waits(window_id_)) {
+  if (quit_generation_) {
+    const window_policy::QuitStep step = Quit().Acknowledged(window_id_, quit_generation_);
+    if (step == window_policy::QuitStep::kStale) {
+      CancelWindowClose(*identity, "its quit already ended");
+      return std::move(done).Run(
+          false, Failure("ERR_WINDOW_CLOSE_CANCELLED", "The quit this close belonged to already ended"));
+    }
     std::move(done).Run(true, base::Value());
     base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, base::BindOnce(&ShellHostView::SettleClose, GetWeakPtr(), *identity),
         base::Seconds(window_policy::kQuitDeadlineSeconds + window_policy::kCloseSettleSeconds));
-    if (!Quit().running() || Quit().Acknowledged(window_id_) == window_policy::QuitStep::kExit) {
-      ExitSoon();
+    if (step == window_policy::QuitStep::kExit) {
+      ExitSoon(true);
     }
     return;
   }
@@ -484,10 +506,10 @@ void ShellHostView::RejectWindowClose(const base::DictValue& request, Done done)
   if (request.size() != 3 || !identity || !close_.Open() || close_.identity() != *identity) {
     return std::move(done).Run(false, Stale("Invalid close rejection"));
   }
-  const bool quitting = close_quitting_ || Quit().Waits(window_id_);
+  const std::uint64_t quit_generation = quit_generation_;
   CancelWindowClose(*identity, "the shell kept the window");
   std::move(done).Run(true, base::Value());
-  if (quitting && Quit().Rejected(window_id_) == window_policy::QuitStep::kAbort) {
+  if (quit_generation && Quit().Rejected(window_id_, quit_generation) == window_policy::QuitStep::kAbort) {
     QuitDeadline().Stop();
     Note("quit cancelled by window " + window_id_);
     std::vector<base::WeakPtr<ShellHostView>> hosts;
@@ -495,7 +517,7 @@ void ShellHostView::RejectWindowClose(const base::DictValue& request, Done done)
       hosts.push_back(host->GetWeakPtr());
     }
     for (const auto& host : hosts) {
-      if (host && host.get() != this && host->close_quitting_ && host->close_.Open()) {
+      if (host && host.get() != this && host->quit_generation_ == quit_generation && host->close_.Open()) {
         host->CancelWindowClose(host->close_.identity(), "another window kept the app open");
       }
     }
@@ -514,7 +536,7 @@ void ShellHostView::CancelWindowClose(const window_policy::CloseIdentity& identi
       dialogs_->Resume(token);
     }
   }
-  close_quitting_ = false;
+  quit_generation_ = 0;
   Note("window " + window_id_ + " close cancelled: " + std::string(reason));
   EmitShellEvent("shell.closeCancelled", base::Value(CloseRequestValue(window_id_, cancelled)));
 }
@@ -567,7 +589,7 @@ void ShellHostView::WindowCall(const std::string& method, const base::ListValue*
     return std::move(done).Run(false, base::Value("No such utility renderer"));
   }
   if (method == "ArdiaShell.closeWindow" || method == "ArdiaShell.requestWindowClose") {
-    base::DictValue request = target->RequestWindowClose(false);
+    base::DictValue request = target->RequestWindowClose(0);
     if (request.empty()) {
       return std::move(done).Run(false, Failure("ERR_WINDOW_CLOSE_UNAVAILABLE", "Target renderer unavailable"));
     }
@@ -704,6 +726,9 @@ void ShellHostView::OnPointerMoved(const WindowEvents::Pointer& pointer) {
   if (!edge_.watching()) {
     return;
   }
+  if (pointer.covered) {
+    return ReportSidebarEdge(edge_.Covered());
+  }
   const double zoom = ShellZoom();
   ReportSidebarEdge(
       edge_.Moved(pointer.x / zoom, pointer.y / zoom, pointer.width / zoom, pointer.height / zoom, pointer.pressed));
@@ -795,7 +820,7 @@ void ShellHostView::OnWindowChanged(WindowEvents::Kind kind) {
       return;
     }
     case WindowEvents::Kind::kCloseButton:
-      if (RequestWindowClose(false).empty()) {
+      if (RequestWindowClose(0).empty()) {
         window_events_->PerformClose();
       }
       return;

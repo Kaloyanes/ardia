@@ -22,11 +22,48 @@
 }
 @end
 
+@interface ArdiaMacPointerExitTracker : NSObject
+@property(nonatomic, copy) void (^exited)(void);
+- (void)mouseExited:(NSEvent*)event;
+@end
+
+@implementation ArdiaMacPointerExitTracker
+@synthesize exited = _exited;
+- (void)mouseExited:(NSEvent*)event {
+  if (self.exited) {
+    self.exited();
+  }
+}
+@end
+
 namespace ardia_mac {
 
 namespace {
 
 const void* const kCloseTargetKey = &kCloseTargetKey;
+
+bool CoveredByAnotherWindow(NSWindow* target, NSPoint screen) {
+  const NSInteger under = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:0];
+  if (under == 0 || under == target.windowNumber) {
+    return false;
+  }
+  NSWindow* own = [NSApp windowWithWindowNumber:under];
+  return !own || own.parentWindow != target;
+}
+
+WindowEvents::Pointer PointerIn(NSWindow* target) {
+  const NSPoint screen = NSEvent.mouseLocation;
+  const NSPoint local = [target convertPointFromScreen:screen];
+  const NSRect content = [target contentRectForFrameRect:target.frame];
+  WindowEvents::Pointer pointer;
+  pointer.width = NSWidth(content);
+  pointer.height = NSHeight(content);
+  pointer.x = local.x;
+  pointer.y = NSHeight(content) - local.y;
+  pointer.pressed = (NSEvent.pressedMouseButtons & 1) != 0;
+  pointer.covered = !NSApp.isActive || CoveredByAnotherWindow(target, screen);
+  return pointer;
+}
 
 NSWindow* WindowOf(views::Widget* widget) {
   return widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
@@ -40,6 +77,9 @@ struct WindowEvents::Native {
   Moved moved;
   NSMutableArray* observers = [NSMutableArray array];
   id pointer_monitor = nil;
+  id pointer_resign = nil;
+  NSTrackingArea* pointer_area = nil;
+  ArdiaMacPointerExitTracker* pointer_tracker = nil;
   BOOL accepted_mouse_moves = NO;
   ArdiaMacCloseButtonTarget* close_target = nil;
 };
@@ -122,6 +162,16 @@ void WindowEvents::WatchPointer(bool on) {
         window.acceptsMouseMovedEvents = state_->accepted_mouse_moves;
       }
     }
+    if (state_->pointer_resign) {
+      [NSNotificationCenter.defaultCenter removeObserver:state_->pointer_resign];
+      state_->pointer_resign = nil;
+    }
+    if (state_->pointer_area) {
+      [window.contentView removeTrackingArea:state_->pointer_area];
+      state_->pointer_area = nil;
+    }
+    state_->pointer_tracker.exited = nil;
+    state_->pointer_tracker = nil;
     return;
   }
   if (state_->pointer_monitor || !window) {
@@ -136,21 +186,36 @@ void WindowEvents::WatchPointer(bool on) {
                                            NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp
                                    handler:^NSEvent*(NSEvent* event) {
                                      NSWindow* target = watched;
-                                     if (!target || !target.isKeyWindow) {
-                                       return event;
+                                     if (target && target.isKeyWindow) {
+                                       state->moved.Run(PointerIn(target));
                                      }
-                                     const NSPoint screen = NSEvent.mouseLocation;
-                                     const NSPoint local = [target convertPointFromScreen:screen];
-                                     const NSRect content = [target contentRectForFrameRect:target.frame];
-                                     Pointer pointer;
-                                     pointer.width = NSWidth(content);
-                                     pointer.height = NSHeight(content);
-                                     pointer.x = local.x;
-                                     pointer.y = NSHeight(content) - local.y;
-                                     pointer.pressed = (NSEvent.pressedMouseButtons & 1) != 0;
-                                     state->moved.Run(pointer);
                                      return event;
                                    }];
+  const auto report_covered = ^{
+    NSWindow* target = watched;
+    if (!target) {
+      return;
+    }
+    Pointer pointer = PointerIn(target);
+    if (!target.isKeyWindow) {
+      pointer.covered = true;
+    }
+    state->moved.Run(pointer);
+  };
+  state_->pointer_tracker = [[ArdiaMacPointerExitTracker alloc] init];
+  state_->pointer_tracker.exited = report_covered;
+  state_->pointer_area = [[NSTrackingArea alloc]
+      initWithRect:NSZeroRect
+           options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+             owner:state_->pointer_tracker
+          userInfo:nil];
+  [window.contentView addTrackingArea:state_->pointer_area];
+  state_->pointer_resign = [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidResignActiveNotification
+                                                                           object:NSApp
+                                                                            queue:nil
+                                                                       usingBlock:^(NSNotification*) {
+                                                                         report_covered();
+                                                                       }];
 }
 
 bool WindowEvents::Focused() const {

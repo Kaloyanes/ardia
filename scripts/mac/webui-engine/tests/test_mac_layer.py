@@ -359,9 +359,42 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((REPO / 'apps/desktop/src/quit.ts').read_text().count('export const QUIT_COMMAND = "quit";'), 1)
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         quit = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('RequestWindowClose(true)', quit)
+        self.assertIn('RequestWindowClose(generation)', quit)
         self.assertIn('window_policy::kQuitDeadlineSeconds', quit)
+        self.assertIn('Quit().Expired(generation)', quit)
         self.assertIn('DownloadCoreService::BlockingShutdownCountAllProfiles()', lifecycle)
+
+    def test_a_confirmed_quit_cancels_downloads_before_it_exits(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        finish = lifecycle.split('void FinishShellQuit() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('DownloadCoreService::CancelAllDownloads('), finish.index('chrome::AttemptExit();'))
+        exit_soon = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit)', exit_soon)
+        self.assertIn('ExitSoon(false);', lifecycle.split('void QuitWithoutShell() {', 1)[1].split('\n}\n', 1)[0])
+        quit = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('ExitSoon(false)', quit)
+        self.assertNotIn('chrome::AttemptExit()', quit)
+        self.assertIn('FinishShellQuit();', quit)
+        self.assertEqual(lifecycle.count('chrome::AttemptExit();'), 1)
+
+    def test_a_late_quit_acknowledgment_cancels_its_close_instead_of_exiting(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        acknowledge = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('Quit().Acknowledged(window_id_, quit_generation_)', acknowledge)
+        stale = acknowledge.split('if (step == window_policy::QuitStep::kStale) {', 1)[1].split('}', 1)[0]
+        self.assertIn('CancelWindowClose(*identity', stale)
+        self.assertNotIn('ExitSoon', stale)
+        self.assertNotIn('!Quit().running()', acknowledge)
+        self.assertNotIn('close_quitting_', lifecycle + self.read('ac_mac_shell_host.h'))
+
+    def test_the_sidebar_edge_lets_go_when_another_window_covers_the_pointer(self):
+        events = self.read('ac_mac_window_events.mm')
+        self.assertIn('NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect', events)
+        self.assertIn('NSApplicationDidResignActiveNotification', events)
+        self.assertIn('windowNumberAtPoint:screen belowWindowWithWindowNumber:0', events)
+        self.assertIn('removeTrackingArea:state_->pointer_area', events)
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        self.assertIn('return ReportSidebarEdge(edge_.Covered());', lifecycle)
 
     def test_window_close_runs_the_shared_close_protocol(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')

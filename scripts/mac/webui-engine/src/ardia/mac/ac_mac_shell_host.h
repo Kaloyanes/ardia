@@ -188,7 +188,7 @@ class ShellHostView : public views::View,
 
   bool HandlesLifecycleCall(const std::string& method) const;
   void LifecycleCall(const std::string& method, const base::DictValue& args, Done done);
-  base::DictValue RequestWindowClose(bool quitting);
+  base::DictValue RequestWindowClose(std::uint64_t quit_generation);
   bool RendererLive() const;
   bool shortcut_recording() const { return shortcut_recording_; }
 
@@ -304,7 +304,7 @@ class ShellHostView : public views::View,
   std::unique_ptr<DialogSheets> dialogs_;
   std::unique_ptr<WindowEvents> window_events_;
   window_policy::CloseBook close_;
-  bool close_quitting_ = false;
+  std::uint64_t quit_generation_ = 0;
   std::map<std::string, std::uint64_t> close_dialogs_;
   window_policy::EdgeWatch edge_;
   std::string edge_id_;
