@@ -311,64 +311,117 @@ std::optional<std::string> BoundedRead(int directory, const std::string& name, s
   }
 }
 
-template <typename Body>
-bool CoordinateReading(const std::string& path, Body& body) {
+struct Coordinated {
+  policy::Coordination outcome = policy::Coordination::kFailed;
+  std::string error;
+};
+
+template <typename Call>
+Coordinated RunCoordinated(Call&& call) {
   NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-  NSError* error = nil;
+  auto gate = std::make_shared<policy::CoordinationGate>();
+  dispatch_block_t expire = dispatch_block_create(static_cast<dispatch_block_flags_t>(0), ^{
+    if (gate->Expire()) {
+      [coordinator cancel];
+    }
+  });
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(policy::kCoordinationTimeoutSeconds) *
+                                                      static_cast<int64_t>(NSEC_PER_SEC)),
+                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), expire);
   __block bool ran = false;
-  Body* run = &body;
-  [coordinator coordinateReadingItemAtURL:UrlFor(path)
-                                  options:NSFileCoordinatorReadingWithoutChanges
-                                    error:&error
-                               byAccessor:^(NSURL*) {
-                                 ran = true;
-                                 (*run)();
-                               }];
-  return ran;
+  NSError* error = call(coordinator, ^bool {
+    if (!gate->Begin()) {
+      return false;
+    }
+    ran = true;
+    return true;
+  });
+  dispatch_block_cancel(expire);
+  Coordinated result;
+  result.outcome = policy::CoordinationOutcome(ran, *gate);
+  if (result.outcome == policy::Coordination::kFailed && error) {
+    result.error = base::SysNSStringToUTF8(error.localizedDescription);
+  }
+  return result;
 }
 
 template <typename Body>
-bool CoordinateWriting(const std::string& path, NSFileCoordinatorWritingOptions options, Body& body) {
-  NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-  NSError* error = nil;
-  __block bool ran = false;
+Coordinated CoordinateReading(const std::string& path, Body& body) {
   Body* run = &body;
-  [coordinator coordinateWritingItemAtURL:UrlFor(path)
-                                  options:options
-                                    error:&error
-                               byAccessor:^(NSURL*) {
-                                 ran = true;
-                                 (*run)();
-                               }];
-  return ran;
+  NSURL* url = UrlFor(path);
+  return RunCoordinated([run, url](NSFileCoordinator* coordinator, bool (^begin)(void)) {
+    NSError* error = nil;
+    [coordinator coordinateReadingItemAtURL:url
+                                    options:NSFileCoordinatorReadingWithoutChanges
+                                      error:&error
+                                 byAccessor:^(NSURL*) {
+                                   if (begin()) {
+                                     (*run)();
+                                   }
+                                 }];
+    return error;
+  });
 }
 
 template <typename Body>
-bool CoordinateMoving(const std::string& from, const std::string& to, Body& body) {
-  NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-  NSError* error = nil;
-  __block bool ran = false;
+Coordinated CoordinateWriting(const std::string& path, NSFileCoordinatorWritingOptions options, Body& body) {
+  Body* run = &body;
+  NSURL* url = UrlFor(path);
+  return RunCoordinated([run, url, options](NSFileCoordinator* coordinator, bool (^begin)(void)) {
+    NSError* error = nil;
+    [coordinator coordinateWritingItemAtURL:url
+                                    options:options
+                                      error:&error
+                                 byAccessor:^(NSURL*) {
+                                   if (begin()) {
+                                     (*run)();
+                                   }
+                                 }];
+    return error;
+  });
+}
+
+template <typename Body>
+Coordinated CoordinateMoving(const std::string& from, const std::string& to, Body& body) {
   Body* run = &body;
   NSURL* source = UrlFor(from);
   NSURL* destination = UrlFor(to);
-  [coordinator coordinateWritingItemAtURL:source
-                                  options:NSFileCoordinatorWritingForMoving
-                         writingItemAtURL:destination
-                                  options:NSFileCoordinatorWritingForReplacing
-                                    error:&error
-                               byAccessor:^(NSURL* moving, NSURL* replacing) {
-                                 ran = true;
-                                 [coordinator itemAtURL:moving willMoveToURL:replacing];
-                                 (*run)();
-                                 [coordinator itemAtURL:moving didMoveToURL:replacing];
-                               }];
-  return ran;
+  return RunCoordinated([run, source, destination](NSFileCoordinator* coordinator, bool (^begin)(void)) {
+    NSError* error = nil;
+    [coordinator coordinateWritingItemAtURL:source
+                                    options:NSFileCoordinatorWritingForMoving
+                           writingItemAtURL:destination
+                                    options:NSFileCoordinatorWritingForReplacing
+                                      error:&error
+                                 byAccessor:^(NSURL* moving, NSURL* replacing) {
+                                   if (!begin()) {
+                                     return;
+                                   }
+                                   [coordinator itemAtURL:moving willMoveToURL:replacing];
+                                   (*run)();
+                                   [coordinator itemAtURL:moving didMoveToURL:replacing];
+                                 }];
+    return error;
+  });
+}
+
+std::optional<std::string> Uncoordinated(const Coordinated& coordinated, const std::string& folder) {
+  switch (coordinated.outcome) {
+    case policy::Coordination::kRan:
+      return std::nullopt;
+    case policy::Coordination::kTimedOut:
+      return "The folder " + Quoted(LastComponent(folder)) + " didn\u2019t answer in time.";
+    case policy::Coordination::kFailed:
+      return "Ardia couldn\u2019t get to " + Quoted(LastComponent(folder)) +
+             (coordinated.error.empty() ? std::string(".") : ": " + coordinated.error);
+  }
+  return std::nullopt;
 }
 
 std::optional<std::string> ReadText(const Folder& directory, const std::string& name, std::size_t limit) {
   std::optional<std::string> data;
   auto read = [&] { data = BoundedRead(directory.fd(), name, limit); };
-  if (!CoordinateReading(directory.Child(name), read) || !data) {
+  if (CoordinateReading(directory.Child(name), read).outcome != policy::Coordination::kRan || !data) {
     return std::nullopt;
   }
   if (data->starts_with("bplist")) {
@@ -684,10 +737,10 @@ Step Write(const std::string& text,
         return;
     }
   };
-  const bool ran = CoordinateWriting(folder.Child(name), NSFileCoordinatorWritingForReplacing, body);
+  const Coordinated coordinated = CoordinateWriting(folder.Child(name), NSFileCoordinatorWritingForReplacing, body);
   Unstage(*staged);
-  if (!ran) {
-    return Failed("The folder " + Quoted(LastComponent(folder.path())) + " didn’t answer in time.");
+  if (std::optional<std::string> failed = Uncoordinated(coordinated, folder.path())) {
+    return Failed(*failed);
   }
   if (failure) {
     return Failed(PosixFailure(failure));
@@ -715,8 +768,9 @@ Step Move(const Folder& source,
       failure = errno;
     }
   };
-  if (!CoordinateMoving(source.Child(name), destination.Child(target), body)) {
-    return Failed("The folder " + Quoted(LastComponent(source.path())) + " didn’t answer in time.");
+  if (std::optional<std::string> failed =
+          Uncoordinated(CoordinateMoving(source.Child(name), destination.Child(target), body), source.path())) {
+    return Failed(*failed);
   }
   if (failure) {
     return Failed(PosixFailure(failure));
@@ -745,8 +799,9 @@ Step Delete(const Folder& folder, const std::string& name, const std::string& ex
       failure = errno;
     }
   };
-  if (!CoordinateWriting(folder.Child(name), NSFileCoordinatorWritingForDeleting, body)) {
-    return Failed("The folder " + Quoted(LastComponent(folder.path())) + " didn’t answer in time.");
+  if (std::optional<std::string> failed =
+          Uncoordinated(CoordinateWriting(folder.Child(name), NSFileCoordinatorWritingForDeleting, body), folder.path())) {
+    return Failed(*failed);
   }
   return failure ? Failed(PosixFailure(failure)) : Step{};
 }
@@ -1139,7 +1194,7 @@ struct Watcher::Core {
   FSEventStreamEventId last_event = kFSEventStreamEventIdSinceNow;
   std::vector<std::pair<std::string, std::string>> roots;
   scoped_refptr<base::SequencedTaskRunner> reply_runner;
-  OnChange on_change;
+  base::WeakPtr<Watcher> watcher;
 
   void StopStream() {
     if (!stream) {
@@ -1167,7 +1222,7 @@ struct Watcher::Core {
       }
     }
     if (!watched.empty()) {
-      reply_runner->PostTask(FROM_HERE, base::BindOnce(on_change, std::move(watched)));
+      reply_runner->PostTask(FROM_HERE, base::BindOnce(&Watcher::Deliver, watcher, std::move(watched)));
     }
   }
 
@@ -1209,18 +1264,23 @@ struct Watcher::Core {
   }
 };
 
-Watcher::Watcher(OnChange on_change) : core_(std::make_unique<Core>()) {
+Watcher::Watcher(OnChange on_change) : core_(std::make_unique<Core>()), on_change_(std::move(on_change)) {
   core_->queue = dispatch_queue_create("dev.ardia.mac.webui.shared-folders.watch", DISPATCH_QUEUE_SERIAL);
   core_->reply_runner = base::SequencedTaskRunner::GetCurrentDefault();
-  core_->on_change = std::move(on_change);
+  core_->watcher = weak_factory_.GetWeakPtr();
 }
 
 Watcher::~Watcher() {
-  Core* core = core_.get();
-  dispatch_sync(core->queue, ^{
+  Core* core = core_.release();
+  dispatch_async(core->queue, ^{
     core->roots.clear();
     core->StopStream();
+    delete core;
   });
+}
+
+void Watcher::Deliver(std::vector<std::string> paths) {
+  on_change_.Run(std::move(paths));
 }
 
 void Watcher::Watch(std::vector<std::string> paths) {

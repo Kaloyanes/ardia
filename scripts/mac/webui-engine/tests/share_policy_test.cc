@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 
 #include "check.h"
@@ -132,6 +133,60 @@ TEST(hostile_sinks) {
     CHECK(policy::ClassifyUrl(url) != policy::UrlKind::kWeb);
   }
   CHECK(!policy::InsideDirectory(std::string("/tmp/images/a\0b", 15), "/tmp/images"));
+}
+
+TEST(each_context_menu_owns_its_observer_until_it_is_destroyed) {
+  struct Observer {
+    explicit Observer(int* alive) : alive(alive) { ++*alive; }
+    ~Observer() { --*alive; }
+    int* alive;
+  };
+  int alive = 0;
+  policy::KeyedOwner<const void*, Observer> observers;
+  const int first_menu = 0;
+  const int second_menu = 0;
+  Observer* first = observers.Attach(&first_menu, std::make_unique<Observer>(&alive));
+  Observer* second = observers.Attach(&second_menu, std::make_unique<Observer>(&alive));
+  CHECK(alive == 2 && observers.size() == 2);
+  CHECK(observers.Find(&first_menu) == first);
+  CHECK(observers.Find(&second_menu) == second);
+  CHECK(observers.Release(&first_menu));
+  CHECK(alive == 1 && observers.Find(&first_menu) == nullptr && observers.Find(&second_menu) == second);
+  CHECK(!observers.Release(&first_menu));
+  CHECK(observers.Release(&second_menu));
+  CHECK(alive == 0 && observers.size() == 0);
+}
+
+TEST(only_issued_images_are_taken_and_only_by_their_window) {
+  policy::IssuedFiles<std::string> issued;
+  CHECK(!issued.Issue("/tmp/i/1-a/one.png", "w1"));
+  CHECK(!issued.Issue("/tmp/i/1-a/two.png", "w2"));
+  CHECK(!issued.Take("/tmp/i/1-a/one.png", "w2"));
+  CHECK(issued.Holds("/tmp/i/1-a/one.png"));
+  CHECK(issued.Take("/tmp/i/1-a/one.png", "w1") == std::optional<std::string>("w1"));
+  CHECK(!issued.Take("/tmp/i/1-a/one.png", "w1"));
+  CHECK(!issued.Take("/tmp/i/1-a/never.png", "w1"));
+  CHECK((issued.ReleaseOwner("w2") == std::vector<std::string>{"/tmp/i/1-a/two.png"}));
+  CHECK(issued.size() == 0);
+  for (std::size_t index = 0; index < policy::kMaxIssuedFiles; ++index) {
+    CHECK(!issued.Issue("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1"));
+  }
+  CHECK(issued.Issue("/tmp/i/1-a/last.png", "w1") == std::optional<std::string>("/tmp/i/1-a/0.png"));
+  CHECK(issued.size() == policy::kMaxIssuedFiles);
+}
+
+TEST(instance_directories_name_their_process) {
+  CHECK(policy::InstanceDirectoryName(42, "0f3a-99") == std::optional<std::string>("42-0f3a-99"));
+  CHECK(!policy::InstanceDirectoryName(0, "ab"));
+  CHECK(!policy::InstanceDirectoryName(42, ""));
+  CHECK(!policy::InstanceDirectoryName(42, "../x"));
+  CHECK(policy::InstancePid("42-0f3a-99") == 42);
+  CHECK(!policy::InstancePid("42"));
+  CHECK(!policy::InstancePid("-ab"));
+  CHECK(!policy::InstancePid("42-"));
+  CHECK(!policy::InstancePid("4x-ab"));
+  CHECK(!policy::InstancePid("42-AB"));
+  CHECK(!policy::InstancePid("99999999999-ab"));
 }
 
 int main(int argc, char** argv) {

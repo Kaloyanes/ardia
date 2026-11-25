@@ -4,7 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <deque>
+#include <map>
+#include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -189,6 +193,101 @@ inline bool InsideDirectory(std::string_view path, std::string_view directory) {
   while (directory.size() > 1 && directory.back() == '/') directory.remove_suffix(1);
   return path.size() > directory.size() + 1 && path.starts_with(directory) && path[directory.size()] == '/' &&
          path.find('/', directory.size() + 1) == std::string_view::npos;
+}
+
+inline constexpr std::size_t kMaxIssuedFiles = 64;
+inline constexpr std::size_t kMaxInstanceNonce = 64;
+
+template <typename Key, typename Value>
+class KeyedOwner {
+ public:
+  Value* Attach(Key key, std::unique_ptr<Value> value) {
+    Value* raw = value.get();
+    entries_[key] = std::move(value);
+    return raw;
+  }
+  Value* Find(Key key) const {
+    const auto found = entries_.find(key);
+    return found == entries_.end() ? nullptr : found->second.get();
+  }
+  bool Release(Key key) { return entries_.erase(key) > 0; }
+  std::size_t size() const { return entries_.size(); }
+
+ private:
+  std::map<Key, std::unique_ptr<Value>> entries_;
+};
+
+template <typename Owner>
+class IssuedFiles {
+ public:
+  std::optional<std::string> Issue(std::string path, Owner owner) {
+    Forget(path);
+    order_.push_back(path);
+    owners_[std::move(path)] = std::move(owner);
+    if (order_.size() <= kMaxIssuedFiles) return std::nullopt;
+    std::string evicted = std::move(order_.front());
+    order_.pop_front();
+    owners_.erase(evicted);
+    return evicted;
+  }
+
+  std::optional<Owner> Take(std::string_view path, const Owner& owner) {
+    const auto found = owners_.find(std::string(path));
+    if (found == owners_.end() || !(found->second == owner)) return std::nullopt;
+    Owner taken = std::move(found->second);
+    Forget(std::string(path));
+    return taken;
+  }
+
+  bool Holds(std::string_view path) const { return owners_.contains(std::string(path)); }
+
+  std::vector<std::string> ReleaseOwner(const Owner& owner) {
+    std::vector<std::string> released;
+    for (const auto& [path, held] : owners_) {
+      if (held == owner) released.push_back(path);
+    }
+    for (const std::string& path : released) Forget(path);
+    return released;
+  }
+
+  std::size_t size() const { return owners_.size(); }
+
+ private:
+  void Forget(const std::string& path) {
+    owners_.erase(path);
+    std::erase(order_, path);
+  }
+
+  std::map<std::string, Owner> owners_;
+  std::deque<std::string> order_;
+};
+
+inline bool NonceCharacter(char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-';
+}
+
+inline std::optional<std::string> InstanceDirectoryName(long pid, std::string_view nonce) {
+  if (pid <= 0 || nonce.empty() || nonce.size() > kMaxInstanceNonce ||
+      !std::all_of(nonce.begin(), nonce.end(), NonceCharacter)) {
+    return std::nullopt;
+  }
+  return std::to_string(pid) + "-" + std::string(nonce);
+}
+
+inline std::optional<long> InstancePid(std::string_view name) {
+  const std::size_t dash = name.find('-');
+  if (dash == 0 || dash == std::string_view::npos || dash > 10 || dash + 1 >= name.size()) return std::nullopt;
+  long pid = 0;
+  for (char c : name.substr(0, dash)) {
+    if (c < '0' || c > '9') return std::nullopt;
+    pid = pid * 10 + (c - '0');
+  }
+  const std::string_view nonce = name.substr(dash + 1);
+  if (pid <= 0 || pid > 0x7fffffffL || nonce.size() > kMaxInstanceNonce ||
+      !std::all_of(nonce.begin(), nonce.end(), NonceCharacter)) {
+    return std::nullopt;
+  }
+  return pid;
 }
 
 }

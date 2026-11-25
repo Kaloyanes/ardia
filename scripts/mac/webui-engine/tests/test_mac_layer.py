@@ -165,6 +165,7 @@ class ApplyTests(unittest.TestCase):
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
             'components/renderer_context_menu/render_view_context_menu_base.cc':
                 '#include "build/build_config.h"\n#include "url/origin.h"\n\n'
+                'RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n}\n\n'
                 'void RenderViewContextMenuBase::Init() {\n  InitMenu();\n  if (toolkit_delegate_)\n'
                 '    toolkit_delegate_->Init(&menu_model_);\n}\n',
         }
@@ -197,11 +198,13 @@ class ApplyTests(unittest.TestCase):
             self.assertTrue((root / 'ardia/mac/generated/ac_desktop_routes.h').is_file())
             checked = self.run_apply(root, '--check')
             self.assertEqual(checked.returncode, 0, checked.stderr)
+            hooked = {path: (root / path).read_text() for path in HOOKED_FILES}
             again = self.run_apply(root)
             self.assertEqual(again.returncode, 0, again.stderr)
             for path in HOOKED_FILES:
                 text = (root / path).read_text()
-                self.assertLessEqual(text.count('g_ardia_mac_'), 4, path)
+                self.assertEqual(text, hooked[path], path)
+                self.assertLessEqual(text.count('g_ardia_mac_'), 8, path)
             reverted = self.run_apply(root, '--revert')
             self.assertEqual(reverted.returncode, 0, reverted.stderr)
             for path in HOOKED_FILES:
@@ -469,6 +472,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn('observers_.AddObserver(observer);', apply)
         share = self.read('ac_mac_share.mm')
         self.assertIn('g_ardia_mac_page_menu_observer = &PageMenuObserver;', share)
+        self.assertIn('g_ardia_mac_page_menu_destroyed = &PageMenuDestroyed;', share)
+        self.assertIn('g_ardia_mac_page_menu_destroyed(this);', apply)
+        self.assertIn('return MenuObservers().Attach(', share)
+        self.assertIn('MenuObservers().Release(menu);', share)
+        self.assertNotIn('CurrentObserver', share)
         observer = share.split('class PageShareObserver', 1)[1].split('\n};\n', 1)[0]
         self.assertIn('content::GlobalRenderFrameHostId frame_;', observer)
         self.assertNotIn('RenderViewContextMenuBase*', observer)
@@ -486,7 +494,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn('shared_folder_watcher_.reset();', detach)
         folders = self.read('ac_mac_shared_folders.mm')
         self.assertIn('Emit("ArdiaSharedFolders", "onChange"', folders)
-        self.assertIn('dispatch_sync(core->queue', folders)
+        self.assertNotIn('dispatch_sync', folders)
+        teardown = folders.split('Watcher::~Watcher() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('dispatch_async(core->queue', teardown)
+        self.assertIn('delete core;', teardown)
+        self.assertIn('base::BindOnce(&Watcher::Deliver, watcher,', folders)
+        retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(retire.index('shared_folder_watcher_.reset();'), retire.index('if (!had_document)'))
+        self.assertLess(retire.index('share::Retire(window_id_);'), retire.index('if (!had_document)'))
         modules = (REPO / 'apps/desktop/src/hostModules.ts').read_text()
         self.assertIn('host.bootstrap.nativeModules?.ArdiaSharedFolders?.location', modules)
         self.assertIn('"ArdiaSharedFolders.location",', folders)
@@ -501,6 +516,45 @@ class ContractTests(unittest.TestCase):
         self.assertIn('policy::RelativeParts(*path)', folders)
         self.assertIn('policy::RefusedFolder(*real, HomeDirectory())', folders)
         self.assertNotIn('DeletePathRecursively', folders)
+        run = folders.split('Coordinated RunCoordinated(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('policy::kCoordinationTimeoutSeconds', run)
+        self.assertIn('[coordinator cancel];', run)
+        self.assertIn('gate->Expire()', run)
+        self.assertIn('gate->Begin()', run)
+        self.assertIn('dispatch_block_cancel(expire);', run)
+        for helper in ('CoordinateReading', 'CoordinateWriting', 'CoordinateMoving'):
+            body = folders.split(f'Coordinated {helper}(', 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('begin()', body)
+
+    def test_each_share_owns_its_picker_window_and_file(self):
+        share = self.read('ac_mac_share.mm')
+        self.assertNotIn('PickerState', share)
+        chose = share.split('void PickerChose(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('found->second.picker != picker', chose)
+        self.assertIn('[[ArdiaMacShareRequest alloc] initWithRequest:id]', share)
+        self.assertIn('__weak NSWindow* window', share)
+        retire = share.split('void Retire(const std::string& owner) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('[picker close];', retire)
+        self.assertIn('Issued().ReleaseOwner(owner)', retire)
+        shareable = share.split('std::optional<SharedFile> ShareableFile(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('lstat(', shareable)
+        self.assertIn('S_ISREG(info.st_mode)', shareable)
+        self.assertIn('Issued().Take(path, owner)', shareable)
+        self.assertIn('InInstanceDirectory(path)', shareable)
+        self.assertIn('share_policy::InstanceDirectoryName(', share)
+        sweep = share.split('void SweepStaleInstances(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('entry == own', sweep)
+        self.assertIn('ESRCH', sweep)
+
+    def test_file_share_lists_the_system_services(self):
+        model = self.read('ac_mac_menu_model.h')
+        self.assertIn('Role::kShareServices)}),', model)
+        menu = self.read('ac_mac_menu.mm')
+        self.assertIn('submenu.delegate = ShareMenuFiller();', menu)
+        self.assertIn('ardia_mac::share::LinkServices()', menu)
+        self.assertIn('menu::FillsShareServices(item.role, app_menus)', menu)
+        app_menu = (REPO / 'apps/desktop/src/appMenu.ts').read_text()
+        self.assertIn('shareServices().map(', app_menu)
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

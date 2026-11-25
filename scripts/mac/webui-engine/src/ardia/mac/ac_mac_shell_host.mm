@@ -11,6 +11,7 @@
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_share.h"
 #include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
@@ -474,6 +475,7 @@ void ShellHostView::DetachBrowser() {
   bindings_.clear();
   StopWatchingWindowDrag();
   shared_folder_watcher_.reset();
+  share::Retire(window_id_);
   popovers_.reset();
   glass_.reset();
   if (focus_manager_) {
@@ -806,6 +808,8 @@ void ShellHostView::RetireRenderer() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   ++renderer_generation_;
+  shared_folder_watcher_.reset();
+  share::Retire(window_id_);
   if (!had_document) {
     return;
   }

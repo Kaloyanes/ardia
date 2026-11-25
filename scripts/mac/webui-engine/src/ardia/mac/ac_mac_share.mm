@@ -2,9 +2,14 @@
 
 #import <AppKit/AppKit.h>
 
+#include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,6 +19,7 @@
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_hooks.h"
 #include "ardia/mac/ac_mac_share_policy.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -44,17 +50,26 @@
 #include "url/gurl.h"
 
 namespace ardia_mac::share {
-void PickerFinished(bool cancelled);
-void RemoveTemporaryFiles(NSArray* items);
+void PickerChose(std::uint64_t request, NSSharingServicePicker* picker, bool cancelled);
+void ServiceFinished(std::uint64_t request);
+NSWindow* SourceWindow(std::uint64_t request);
 }
 
-@interface ArdiaMacShareDelegate : NSObject <NSSharingServicePickerDelegate, NSSharingServiceDelegate>
-@property(nonatomic, weak) NSWindow* sourceWindow;
+@interface ArdiaMacShareRequest : NSObject <NSSharingServicePickerDelegate, NSSharingServiceDelegate>
+- (instancetype)initWithRequest:(std::uint64_t)request;
+@property(nonatomic, readonly) std::uint64_t request;
 @end
 
-@implementation ArdiaMacShareDelegate
+@implementation ArdiaMacShareRequest
 
-@synthesize sourceWindow = _sourceWindow;
+@synthesize request = _request;
+
+- (instancetype)initWithRequest:(std::uint64_t)request {
+  if ((self = [super init])) {
+    _request = request;
+  }
+  return self;
+}
 
 - (id<NSSharingServiceDelegate>)sharingServicePicker:(NSSharingServicePicker*)picker
                            delegateForSharingService:(NSSharingService*)service {
@@ -63,23 +78,23 @@ void RemoveTemporaryFiles(NSArray* items);
 
 - (void)sharingServicePicker:(NSSharingServicePicker*)picker
      didChooseSharingService:(NSSharingService*)service {
-  ardia_mac::share::PickerFinished(service == nil);
+  ardia_mac::share::PickerChose(_request, picker, service == nil);
 }
 
 - (void)sharingService:(NSSharingService*)service didShareItems:(NSArray*)items {
-  ardia_mac::share::RemoveTemporaryFiles(items);
+  ardia_mac::share::ServiceFinished(_request);
 }
 
 - (void)sharingService:(NSSharingService*)service
     didFailToShareItems:(NSArray*)items
                   error:(NSError*)error {
-  ardia_mac::share::RemoveTemporaryFiles(items);
+  ardia_mac::share::ServiceFinished(_request);
 }
 
 - (NSWindow*)sharingService:(NSSharingService*)service
     sourceWindowForShareItems:(NSArray*)items
           sharingContentScope:(NSSharingContentScope*)scope {
-  return self.sourceWindow;
+  return ardia_mac::share::SourceWindow(_request);
 }
 
 @end
@@ -95,6 +110,7 @@ using ChromeRenderFrame = mojo::AssociatedRemote<chrome::mojom::ChromeRenderFram
 constexpr int kShareFirst = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + 890;
 constexpr int kLargestSharedImage = 8192;
 constexpr int kMaxSharedImageBytes = 64 * 1024 * 1024;
+constexpr char kSharedImagesFolder[] = "ardia-webui-shared-images";
 constexpr char kSharingSettings[] =
     "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.share-services";
 
@@ -106,48 +122,88 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaApp.openSharingSettings",
 };
 
-struct PickerState {
+struct Request {
+  std::string owner;
+  ArdiaMacShareRequest* delegate = nil;
   NSSharingServicePicker* picker = nil;
-  ArdiaMacShareDelegate* delegate = nil;
+  __weak NSWindow* window = nil;
   std::optional<Done> done;
-  std::optional<base::FilePath> temporary;
+  std::optional<base::FilePath> file;
 };
 
-PickerState& State() {
-  static base::NoDestructor<PickerState> state;
-  return *state;
+std::map<std::uint64_t, Request>& Requests() {
+  static base::NoDestructor<std::map<std::uint64_t, Request>> requests;
+  return *requests;
 }
 
-ArdiaMacShareDelegate* Delegate() {
-  PickerState& state = State();
-  if (!state.delegate) {
-    state.delegate = [[ArdiaMacShareDelegate alloc] init];
-  }
-  return state.delegate;
+std::uint64_t NextRequest() {
+  static std::uint64_t next = 0;
+  return ++next;
 }
 
-base::FilePath TemporaryImageDirectory() {
-  return base::FilePath(base::SysNSStringToUTF8(NSTemporaryDirectory()))
-      .Append("ardia-webui-shared-images");
+share_policy::IssuedFiles<std::string>& Issued() {
+  static base::NoDestructor<share_policy::IssuedFiles<std::string>> issued;
+  return *issued;
 }
 
-bool IsTemporaryImage(const base::FilePath& path) {
-  return share_policy::InsideDirectory(path.value(), TemporaryImageDirectory().value());
+base::FilePath SharedImagesRoot() {
+  return base::FilePath(base::SysNSStringToUTF8(NSTemporaryDirectory())).Append(kSharedImagesFolder);
+}
+
+const base::FilePath& InstanceDirectory() {
+  static base::NoDestructor<base::FilePath> directory([] {
+    const std::optional<std::string> name = share_policy::InstanceDirectoryName(
+        static_cast<long>(getpid()), base::Uuid::GenerateRandomV4().AsLowercaseString());
+    return SharedImagesRoot().Append(name.value_or("instance"));
+  }());
+  return *directory;
+}
+
+std::string StandardPath(const std::string& path) {
+  return base::SysNSStringToUTF8([NSURL fileURLWithPath:base::SysUTF8ToNSString(path)].path.stringByStandardizingPath);
+}
+
+bool UnderSharedImages(const std::string& path) {
+  const std::string root = StandardPath(SharedImagesRoot().value());
+  return path.size() > root.size() && path.starts_with(root) && path[root.size()] == '/';
+}
+
+bool InInstanceDirectory(const std::string& path) {
+  return share_policy::InsideDirectory(path, StandardPath(InstanceDirectory().value()));
 }
 
 void RemoveTemporary(const base::FilePath& path) {
-  if (!IsTemporaryImage(path)) {
+  if (!InInstanceDirectory(StandardPath(path.value()))) {
     return;
   }
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(base::IgnoreResult(&base::DeleteFile), path));
+  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+                             base::BindOnce(base::IgnoreResult(&base::DeleteFile), path));
+}
+
+void Settle(Request& request) {
+  if (request.done) {
+    Done done = std::move(*request.done);
+    request.done.reset();
+    std::move(done).Run(true, base::Value());
+  }
+}
+
+void EndRequest(std::uint64_t id) {
+  auto found = Requests().find(id);
+  if (found == Requests().end()) {
+    return;
+  }
+  Request request = std::move(found->second);
+  Requests().erase(found);
+  if (request.file) {
+    RemoveTemporary(*request.file);
+  }
+  Settle(request);
 }
 
 std::string StringAt(const base::ListValue* values, size_t index) {
-  return values && index < values->size() && (*values)[index].is_string()
-             ? (*values)[index].GetString()
-             : std::string();
+  return values && index < values->size() && (*values)[index].is_string() ? (*values)[index].GetString()
+                                                                           : std::string();
 }
 
 std::optional<std::string> OptionalStringAt(const base::ListValue* values, size_t index) {
@@ -190,8 +246,8 @@ double ZoomOf(content::WebContents* contents) {
   if (!contents) {
     return 1;
   }
-  return glass::SanitizedScale(blink::ZoomLevelToZoomFactor(
-      zoom::ZoomController::GetZoomLevelForWebContents(contents)));
+  return glass::SanitizedScale(
+      blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(contents)));
 }
 
 NSView* ShellView(ShellHostView* host) {
@@ -261,14 +317,15 @@ void AppendActivityLog(std::string line) {
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(
           [](base::FilePath path, std::string line) {
-            const bool written = base::PathExists(path) ? base::AppendToFile(path, line)
-                                                        : base::WriteFile(path, line);
+            const bool written =
+                base::PathExists(path) ? base::AppendToFile(path, line) : base::WriteFile(path, line);
             if (!written) {
               Trace("activation.log is not writable");
             }
           },
           DataDirectory().Append("activation.log"),
-          base::SysNSStringToUTF8([[[NSISO8601DateFormatter alloc] init] stringFromDate:[NSDate date]]) + " " + line + "\n"));
+          base::SysNSStringToUTF8([[[NSISO8601DateFormatter alloc] init] stringFromDate:[NSDate date]]) + " " +
+              line + "\n"));
 }
 
 void LogUnshown(ShellHostView& host, const std::string& line) {
@@ -280,24 +337,17 @@ std::string Describe(const NSRect& rect) {
   return base::SysNSStringToUTF8(NSStringFromRect(rect));
 }
 
-void FinishPending() {
-  PickerState& state = State();
-  state.picker = nil;
-  std::optional<Done> done = std::move(state.done);
-  state.done.reset();
-  state.temporary.reset();
-  if (done) {
-    std::move(*done).Run(true, base::Value());
-  }
-}
-
-void ShowPicker(ShellHostView* host, NSArray* items, std::optional<share_policy::Anchor> anchor,
-                std::optional<base::FilePath> temporary, std::string description, Done done) {
+void ShowPicker(ShellHostView* host,
+                NSArray* items,
+                std::optional<share_policy::Anchor> anchor,
+                std::optional<base::FilePath> file,
+                std::string description,
+                Done done) {
   NSView* view = ShellView(host);
   NSWindow* window = view.window;
   if (!view || !window) {
-    if (temporary) {
-      RemoveTemporary(*temporary);
+    if (file) {
+      RemoveTemporary(*file);
     }
     return std::move(done).Run(true, base::Value());
   }
@@ -307,39 +357,52 @@ void ShowPicker(ShellHostView* host, NSArray* items, std::optional<share_policy:
                           base::NumberToString(window.windowNumber) + " anchor=" + Describe(placement.rect) +
                           " inWindow=" + Describe([view convertRect:placement.rect toView:nil]) +
                           " services=" + ServiceTitles(items));
-    if (temporary) {
-      RemoveTemporary(*temporary);
+    if (file) {
+      RemoveTemporary(*file);
     }
     return std::move(done).Run(true, base::Value());
   }
-  FinishPending();
-  PickerState& state = State();
-  ArdiaMacShareDelegate* delegate = Delegate();
-  delegate.sourceWindow = window;
-  state.done = std::move(done);
-  state.temporary = std::move(temporary);
+  const std::uint64_t id = NextRequest();
+  Request request;
+  request.owner = host->window_id();
+  request.delegate = [[ArdiaMacShareRequest alloc] initWithRequest:id];
+  request.window = window;
+  request.done = std::move(done);
+  request.file = std::move(file);
   NSSharingServicePicker* picker = [[NSSharingServicePicker alloc] initWithItems:items];
-  picker.delegate = delegate;
-  state.picker = picker;
+  picker.delegate = request.delegate;
+  request.picker = picker;
+  Requests()[id] = std::move(request);
   [picker showRelativeToRect:placement.rect ofView:view preferredEdge:placement.edge];
 }
 
-std::optional<base::FilePath> ShareableFile(NSURL* url) {
+struct SharedFile {
+  base::FilePath path;
+  bool temporary = false;
+};
+
+std::optional<SharedFile> ShareableFile(NSURL* url, const std::string& owner) {
   if (!url.isFileURL || !url.path) {
     return std::nullopt;
   }
-  const base::FilePath path(base::SysNSStringToUTF8(url.path.stringByStandardizingPath));
-  if (!share_policy::CleanAbsolutePath(path.value())) {
+  const std::string path = base::SysNSStringToUTF8(url.path.stringByStandardizingPath);
+  if (!share_policy::CleanAbsolutePath(path)) {
     return std::nullopt;
-  }
-  if (IsTemporaryImage(path)) {
-    return path;
   }
   struct stat info = {};
-  if (lstat(path.value().c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+  if (lstat(path.c_str(), &info) != 0) {
     return std::nullopt;
   }
-  return path;
+  if (UnderSharedImages(path)) {
+    if (!InInstanceDirectory(path) || !S_ISREG(info.st_mode) || !Issued().Take(path, owner)) {
+      return std::nullopt;
+    }
+    return SharedFile{base::FilePath(path), true};
+  }
+  if (!S_ISDIR(info.st_mode)) {
+    return std::nullopt;
+  }
+  return SharedFile{base::FilePath(path), false};
 }
 
 void ShareLink(ShellHostView& caller, const base::ListValue* values, Done done) {
@@ -347,7 +410,8 @@ void ShareLink(ShellHostView& caller, const base::ListValue* values, Done done) 
   const std::optional<std::string> title = OptionalStringAt(values, 1);
   const share_policy::UrlKind kind = share_policy::ClassifyUrl(url);
   if (kind == share_policy::UrlKind::kRefused || (title && !share_policy::ValidTitle(*title))) {
-    return std::move(done).Run(false, Failure("ERR_SHARE_REQUEST", "Only web links, shared folders and shared images can be shared"));
+    return std::move(done).Run(
+        false, Failure("ERR_SHARE_REQUEST", "Only web links, shared folders and shared images can be shared"));
   }
   NSURL* link = [NSURL URLWithString:base::SysUTF8ToNSString(url)];
   if (!link) {
@@ -357,13 +421,14 @@ void ShareLink(ShellHostView& caller, const base::ListValue* values, Done done) 
   const std::optional<share_policy::Anchor> anchor = AnchorAt(values, 3);
   const std::string description = "url=" + url + " title=\"" + title.value_or("") + "\"";
   if (kind == share_policy::UrlKind::kFile) {
-    std::optional<base::FilePath> file = ShareableFile(link);
+    std::optional<SharedFile> file = ShareableFile(link, caller.window_id());
     if (!file) {
-      return std::move(done).Run(false, Failure("ERR_SHARE_REQUEST", "Only shared folders and shared images can be shared from disk"));
+      return std::move(done).Run(
+          false, Failure("ERR_SHARE_REQUEST", "Only shared folders and images this window took can be shared from disk"));
     }
-    NSURL* item = [NSURL fileURLWithPath:base::SysUTF8ToNSString(file->value())];
-    std::optional<base::FilePath> temporary = IsTemporaryImage(*file) ? std::optional(*file) : std::nullopt;
-    return ShowPicker(host, @[ item ], anchor, std::move(temporary), description, std::move(done));
+    NSURL* item = [NSURL fileURLWithPath:base::SysUTF8ToNSString(file->path.value())];
+    std::optional<base::FilePath> owned = file->temporary ? std::optional(file->path) : std::nullopt;
+    return ShowPicker(host, @[ item ], anchor, std::move(owned), description, std::move(done));
   }
   NSString* shown = title && !title->empty() ? base::SysUTF8ToNSString(*title) : link.host;
   NSPreviewRepresentingActivityItem* item =
@@ -403,28 +468,26 @@ void ShareVia(ShellHostView& caller, const base::ListValue* values, Done done) {
     return std::move(done).Run(true, base::Value());
   }
   if (BackgroundInstance()) {
-    LogUnshown(*host, "share via " + service + " (not performed): url=" + url + " title=\"" + title.value_or("") + "\"");
+    LogUnshown(*host,
+               "share via " + service + " (not performed): url=" + url + " title=\"" + title.value_or("") + "\"");
     return std::move(done).Run(true, base::Value());
   }
-  FinishPending();
-  ArdiaMacShareDelegate* delegate = Delegate();
-  delegate.sourceWindow = ShellView(host).window;
-  match.delegate = delegate;
+  const std::uint64_t id = NextRequest();
+  Request request;
+  request.owner = host->window_id();
+  request.delegate = [[ArdiaMacShareRequest alloc] initWithRequest:id];
+  request.window = ShellView(host).window;
+  match.delegate = request.delegate;
   match.subject = title ? base::SysUTF8ToNSString(*title) : nil;
+  Requests()[id] = std::move(request);
   [match performWithItems:@[ link ]];
   std::move(done).Run(true, base::Value());
 }
 
 void ListServices(Done done) {
   base::ListValue services;
-  for (NSSharingService* service in ServicesFor(SampleItems())) {
-    const std::string title = base::SysNSStringToUTF8(service.title);
-    if (!share_policy::ValidServiceName(title)) {
-      continue;
-    }
-    services.Append(base::DictValue()
-                        .Set("title", title)
-                        .Set("menuTitle", base::SysNSStringToUTF8(service.menuItemTitle ?: service.title)));
+  for (const Service& service : LinkServices()) {
+    services.Append(base::DictValue().Set("title", service.title).Set("menuTitle", service.menu_title));
   }
   std::move(done).Run(true, base::Value(std::move(services)));
 }
@@ -464,8 +527,7 @@ std::vector<int> Neighbours(share_policy::PageShare share) {
     case share_policy::PageShare::kLink:
       return {IDC_CONTENT_CONTEXT_COPYLINKLOCATION, IDC_CONTENT_CONTEXT_SAVELINKAS};
     case share_policy::PageShare::kImage:
-      return {IDC_CONTENT_CONTEXT_COPYIMAGELOCATION, IDC_CONTENT_CONTEXT_COPYIMAGE,
-              IDC_CONTENT_CONTEXT_SAVEIMAGEAS};
+      return {IDC_CONTENT_CONTEXT_COPYIMAGELOCATION, IDC_CONTENT_CONTEXT_COPYIMAGE, IDC_CONTENT_CONTEXT_SAVEIMAGEAS};
     case share_policy::PageShare::kVideo:
     case share_policy::PageShare::kAudio:
       return {IDC_CONTENT_CONTEXT_COPYAVLOCATION, IDC_CONTENT_CONTEXT_SAVEAVAS};
@@ -503,11 +565,25 @@ std::optional<base::ListValue> ShellAnchor(ShellHostView* host, content::WebCont
   return base::ListValue().Append(x).Append(y).Append(1).Append(1);
 }
 
-void Deliver(content::WebContents* contents, base::DictValue share, const gfx::PointF& point) {
+void Deliver(content::WebContents* contents,
+             base::DictValue share,
+             const gfx::PointF& point,
+             std::optional<base::FilePath> file) {
   PageBinding* binding = nullptr;
   ShellHostView* host = contents ? HostOfPage(contents, &binding) : nullptr;
   if (!host || !binding) {
+    if (file) {
+      RemoveTemporary(*file);
+    }
     return;
+  }
+  if (file) {
+    const std::string issued = StandardPath(file->value());
+    if (std::optional<std::string> evicted = Issued().Issue(issued, host->window_id())) {
+      RemoveTemporary(base::FilePath(*evicted));
+    }
+    share.Set("fileUrl",
+              base::SysNSStringToUTF8([NSURL fileURLWithPath:base::SysUTF8ToNSString(issued)].absoluteString));
   }
   base::DictValue data;
   data.Set("command", "share");
@@ -541,11 +617,10 @@ void DeliverImage(base::WeakPtr<content::WebContents> contents,
     share.Set("url", source.spec());
   }
   if (image.empty() || image.size() > static_cast<size_t>(kMaxSharedImageBytes)) {
-    return Deliver(contents.get(), std::move(share), point);
+    return Deliver(contents.get(), std::move(share), point, std::nullopt);
   }
-  const base::FilePath path = TemporaryImageDirectory().Append(
-      base::Uuid::GenerateRandomV4().AsLowercaseString() + "." +
-      std::string(share_policy::ImageExtension(mime_type)));
+  const base::FilePath path = InstanceDirectory().Append(base::Uuid::GenerateRandomV4().AsLowercaseString() + "." +
+                                                         std::string(share_policy::ImageExtension(mime_type)));
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(
@@ -556,14 +631,10 @@ void DeliverImage(base::WeakPtr<content::WebContents> contents,
       base::BindOnce(
           [](base::WeakPtr<content::WebContents> contents, base::DictValue share, gfx::PointF point,
              base::FilePath path, bool written) {
-            if (written) {
-              share.Set("fileUrl", base::SysNSStringToUTF8(
-                                       [NSURL fileURLWithPath:base::SysUTF8ToNSString(path.value())].absoluteString));
-            }
             if (!contents) {
               return RemoveTemporary(path);
             }
-            Deliver(contents.get(), std::move(share), point);
+            Deliver(contents.get(), std::move(share), point, written ? std::optional(path) : std::nullopt);
           },
           contents, std::move(share), point, path));
 }
@@ -602,12 +673,11 @@ void ShareFromMenu(content::RenderFrameHost& frame,
           0, gfx::Size(kLargestSharedImage, kLargestSharedImage), chrome::mojom::ImageFormat::ORIGINAL,
           chrome::mojom::kDefaultQuality,
           base::BindOnce(&DeliverImage, contents->GetWeakPtr(), std::move(remote), params.src_url,
-                         base::UTF16ToUTF8(!params.alt_text.empty() ? params.alt_text : params.title_text),
-                         point));
+                         base::UTF16ToUTF8(!params.alt_text.empty() ? params.alt_text : params.title_text), point));
       return;
     }
   }
-  Deliver(contents, std::move(item), point);
+  Deliver(contents, std::move(item), point, std::nullopt);
 }
 
 class PageShareObserver : public RenderViewContextMenuObserver {
@@ -642,9 +712,9 @@ class PageShareObserver : public RenderViewContextMenuObserver {
   std::vector<share_policy::PageShare> shares_;
 };
 
-std::unique_ptr<PageShareObserver>& CurrentObserver() {
-  static base::NoDestructor<std::unique_ptr<PageShareObserver>> observer;
-  return *observer;
+share_policy::KeyedOwner<const RenderViewContextMenuBase*, PageShareObserver>& MenuObservers() {
+  static base::NoDestructor<share_policy::KeyedOwner<const RenderViewContextMenuBase*, PageShareObserver>> observers;
+  return *observers;
 }
 
 RenderViewContextMenuObserver* PageMenuObserver(RenderViewContextMenuBase* menu, ui::SimpleMenuModel* model) {
@@ -659,8 +729,8 @@ RenderViewContextMenuObserver* PageMenuObserver(RenderViewContextMenuBase* menu,
   input.editable = params.is_editable;
   input.link_is_web = Web(params.link_url);
   input.has_selection = !params.selection_text.empty();
-  input.selection_is_link_text = base::CollapseWhitespace(params.selection_text, true) ==
-                                 base::CollapseWhitespace(params.link_text, true);
+  input.selection_is_link_text =
+      base::CollapseWhitespace(params.selection_text, true) == base::CollapseWhitespace(params.link_text, true);
   input.media = MediaOf(params.media_type);
   input.has_image_contents = params.has_image_contents;
   input.source_is_web = Web(params.src_url);
@@ -683,25 +753,84 @@ RenderViewContextMenuObserver* PageMenuObserver(RenderViewContextMenuBase* menu,
     model->InsertItemAt(at, kShareFirst + static_cast<int>(index),
                         base::UTF8ToUTF16(share_policy::ShareTitle(shares[index], shares.size() == 1)));
   }
-  CurrentObserver() = std::make_unique<PageShareObserver>(frame->GetGlobalId(), params, std::move(shares));
-  return CurrentObserver().get();
+  return MenuObservers().Attach(
+      menu, std::make_unique<PageShareObserver>(frame->GetGlobalId(), params, std::move(shares)));
 }
 
+void PageMenuDestroyed(RenderViewContextMenuBase* menu) {
+  MenuObservers().Release(menu);
 }
 
-void PickerFinished(bool cancelled) {
-  PickerState& state = State();
-  if (cancelled && state.temporary) {
-    RemoveTemporary(*state.temporary);
-  }
-  FinishPending();
-}
-
-void RemoveTemporaryFiles(NSArray* items) {
-  for (id item in items) {
-    if ([item isKindOfClass:[NSURL class]] && [(NSURL*)item isFileURL]) {
-      RemoveTemporary(base::FilePath(base::SysNSStringToUTF8([(NSURL*)item path])));
+void SweepStaleInstances(base::FilePath root, base::FilePath own) {
+  base::FileEnumerator entries(root, false, base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
+  for (base::FilePath entry = entries.Next(); !entry.empty(); entry = entries.Next()) {
+    if (entry == own) {
+      continue;
     }
+    if (!entries.GetInfo().IsDirectory()) {
+      base::DeleteFile(entry);
+      continue;
+    }
+    const std::optional<long> pid = share_policy::InstancePid(entry.BaseName().value());
+    if (!pid || (kill(static_cast<pid_t>(*pid), 0) != 0 && errno == ESRCH)) {
+      base::DeletePathRecursively(entry);
+    }
+  }
+}
+
+}
+
+void PickerChose(std::uint64_t id, NSSharingServicePicker* picker, bool cancelled) {
+  auto found = Requests().find(id);
+  if (found == Requests().end() || found->second.picker != picker) {
+    return;
+  }
+  found->second.picker = nil;
+  if (cancelled) {
+    return EndRequest(id);
+  }
+  Settle(found->second);
+}
+
+void ServiceFinished(std::uint64_t id) {
+  EndRequest(id);
+}
+
+NSWindow* SourceWindow(std::uint64_t id) {
+  auto found = Requests().find(id);
+  return found == Requests().end() ? nil : found->second.window;
+}
+
+std::vector<Service> LinkServices() {
+  std::vector<Service> services;
+  for (NSSharingService* service in ServicesFor(SampleItems())) {
+    const std::string title = base::SysNSStringToUTF8(service.title);
+    if (share_policy::ValidServiceName(title)) {
+      services.push_back(Service{title, base::SysNSStringToUTF8(service.menuItemTitle ?: service.title)});
+    }
+  }
+  return services;
+}
+
+void Retire(const std::string& owner) {
+  std::vector<std::uint64_t> retired;
+  for (auto& [id, request] : Requests()) {
+    if (request.owner == owner) {
+      retired.push_back(id);
+    }
+  }
+  for (std::uint64_t id : retired) {
+    auto found = Requests().find(id);
+    if (found == Requests().end()) {
+      continue;
+    }
+    NSSharingServicePicker* picker = found->second.picker;
+    found->second.picker = nil;
+    [picker close];
+    EndRequest(id);
+  }
+  for (const std::string& path : Issued().ReleaseOwner(owner)) {
+    RemoveTemporary(base::FilePath(path));
   }
 }
 
@@ -715,10 +844,7 @@ void AppendCapabilities(base::ListValue& capabilities) {
   }
 }
 
-void Invoke(ShellHostView& host,
-            const std::string& method,
-            const base::ListValue* values,
-            ShellHostView::Done done) {
+void Invoke(ShellHostView& host, const std::string& method, const base::ListValue* values, ShellHostView::Done done) {
   if (method == "ArdiaApp.share") {
     return ShareLink(host, values, std::move(done));
   }
@@ -739,9 +865,9 @@ void Invoke(ShellHostView& host,
 
 void InstallPageMenu() {
   g_ardia_mac_page_menu_observer = &PageMenuObserver;
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(base::IgnoreResult(&base::DeletePathRecursively), TemporaryImageDirectory()));
+  g_ardia_mac_page_menu_destroyed = &PageMenuDestroyed;
+  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+                             base::BindOnce(&SweepStaleInstances, SharedImagesRoot(), InstanceDirectory()));
 }
 
 }

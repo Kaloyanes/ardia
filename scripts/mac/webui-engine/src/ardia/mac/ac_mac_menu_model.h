@@ -41,6 +41,7 @@ enum class Role {
   kBringAllToFront,
   kWindowMenu,
   kHelpMenu,
+  kShareServices,
 };
 
 inline constexpr std::uint32_t kShift = 1;
@@ -70,7 +71,7 @@ struct RoleName {
   Role role;
 };
 
-inline constexpr std::array<RoleName, 21> kRoles = {{
+inline constexpr std::array<RoleName, 22> kRoles = {{
     {"separator", Role::kSeparator},
     {"about", Role::kAbout},
     {"services", Role::kServices},
@@ -92,6 +93,7 @@ inline constexpr std::array<RoleName, 21> kRoles = {{
     {"front", Role::kBringAllToFront},
     {"windowMenu", Role::kWindowMenu},
     {"helpMenu", Role::kHelpMenu},
+    {"shareServices", Role::kShareServices},
 }};
 
 inline std::optional<Role> RoleNamed(std::string_view name) {
@@ -143,9 +145,22 @@ inline std::string_view SelectorFor(Role role) {
     case Role::kServices:
     case Role::kWindowMenu:
     case Role::kHelpMenu:
+    case Role::kShareServices:
       return {};
   }
   return {};
+}
+
+inline constexpr std::string_view kShareCommand = "share";
+inline constexpr std::string_view kShareViaPrefix = "via:";
+inline constexpr std::string_view kShareMoreService = "ardia.more";
+
+inline bool FillsShareServices(Role role, bool main_menu) {
+  return main_menu && role == Role::kShareServices;
+}
+
+inline std::string ShareArgument(std::string_view service) {
+  return std::string(kShareViaPrefix) + std::string(service);
 }
 
 inline bool InstallsAppMenu(Role role, bool main_menu) {
@@ -273,6 +288,13 @@ inline Item DefaultMainMenu(std::string_view app_name) {
     item.modifiers = modifiers;
     return item;
   };
+  const auto share = [](std::string title, std::string_view service) {
+    Item item;
+    item.title = std::move(title);
+    item.command = std::string(kShareCommand);
+    item.argument = ShareArgument(service);
+    return item;
+  };
   const auto separator = []() {
     Item item;
     item.role = Role::kSeparator;
@@ -297,7 +319,8 @@ inline Item DefaultMainMenu(std::string_view app_name) {
                role("Quit " + app, Role::kQuit, "q", kCommand)}),
       submenu("File",
               {command("New Tab", "newTab", "t", kCommand), command("New Window", "newWindow", "n", kCommand),
-               separator(), command("Close Tab", "closeTab", "w", kCommand)}),
+               separator(), command("Close Tab", "closeTab", "w", kCommand), separator(),
+               submenu("Share", {share("Copy Link", "copy"), share("Email Link", "email")}, Role::kShareServices)}),
       submenu("Edit",
               {role("Undo", Role::kUndo, "z", kCommand), role("Redo", Role::kRedo, "z", kCommand | kShift),
                separator(), role("Cut", Role::kCut, "x", kCommand), role("Copy", Role::kCopy, "c", kCommand),

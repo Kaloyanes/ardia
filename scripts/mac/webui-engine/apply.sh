@@ -60,13 +60,18 @@ HOOKS = [
     ("components/renderer_context_menu/render_view_context_menu_base.cc",
      '#include "url/origin.h"\n',
      "\n" + MAC_DEV + HOOKS_INCLUDE + "\nRenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n"
-     "    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n#endif\n",
+     "    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n"
+     "void (*g_ardia_mac_page_menu_destroyed)(RenderViewContextMenuBase* menu) = nullptr;\n#endif\n",
      "after"),
     ("components/renderer_context_menu/render_view_context_menu_base.cc",
      "  InitMenu();\n",
      MAC_DEV + "  if (g_ardia_mac_page_menu_observer) {\n    if (RenderViewContextMenuObserver* observer =\n"
      "            g_ardia_mac_page_menu_observer(this, &menu_model_)) {\n      observers_.AddObserver(observer);\n"
      "    }\n  }\n#endif\n",
+     "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     "RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n",
+     MAC_DEV + "  if (g_ardia_mac_page_menu_destroyed) {\n    g_ardia_mac_page_menu_destroyed(this);\n  }\n#endif\n",
      "after"),
 ]
 failed = False

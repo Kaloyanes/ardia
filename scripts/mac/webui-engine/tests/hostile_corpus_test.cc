@@ -276,6 +276,16 @@ TEST(share_guards) {
       }
     }
   }
+  for (const std::string& text : Load().strings) {
+    if (const auto pid = share::InstancePid(text)) {
+      CHECK(*pid > 0 && text.starts_with(std::to_string(*pid) + "-") && Charset(text, "-"));
+      CHECK(text.find('/') == std::string::npos && text.find("..") == std::string::npos);
+    }
+    if (const auto name = share::InstanceDirectoryName(1, text)) CHECK(Charset(*name, "-") && name->find('/') == std::string::npos);
+    share::IssuedFiles<std::string> issued;
+    issued.Issue("/tmp/ardia-images/1-a/image.png", "w1");
+    CHECK(!issued.Take(text, "w1") || text == "/tmp/ardia-images/1-a/image.png");
+  }
   CHECK(share::ClassifyUrl("https://ardia.dev/") == share::UrlKind::kWeb);
 }
 

@@ -8,6 +8,7 @@
 
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "base/values.h"
 
 namespace ardia_mac::shared_folders {
@@ -33,7 +34,12 @@ class Watcher {
 
  private:
   struct Core;
+
+  void Deliver(std::vector<std::string> paths);
+
   std::unique_ptr<Core> core_;
+  OnChange on_change_;
+  base::WeakPtrFactory<Watcher> weak_factory_{this};
 };
 
 }

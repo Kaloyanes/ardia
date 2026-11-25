@@ -2,6 +2,7 @@
 #define ARDIA_MAC_AC_MAC_SHARED_FOLDERS_POLICY_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -210,6 +211,35 @@ inline bool WatchHit(std::string_view root, std::string_view changed) {
 inline bool WatchedPathsValid(const std::vector<std::string>& paths) {
   return paths.size() <= kMaxWatched &&
          std::ranges::all_of(paths, [](const std::string& path) { return ValidAbsolutePath(path); });
+}
+
+inline constexpr long long kCoordinationTimeoutSeconds = 20;
+
+class CoordinationGate {
+ public:
+  bool Begin() {
+    int pending = kPending;
+    return state_.compare_exchange_strong(pending, kStarted) || pending == kStarted;
+  }
+  bool Expire() {
+    int pending = kPending;
+    return state_.compare_exchange_strong(pending, kExpired);
+  }
+  bool GaveUp() const { return state_.load() == kExpired; }
+  bool Started() const { return state_.load() == kStarted; }
+
+ private:
+  static constexpr int kPending = 0;
+  static constexpr int kStarted = 1;
+  static constexpr int kExpired = 2;
+  std::atomic<int> state_{kPending};
+};
+
+enum class Coordination { kRan, kTimedOut, kFailed };
+
+inline Coordination CoordinationOutcome(bool body_ran, const CoordinationGate& gate) {
+  if (body_ran) return Coordination::kRan;
+  return gate.GaveUp() ? Coordination::kTimedOut : Coordination::kFailed;
 }
 
 }

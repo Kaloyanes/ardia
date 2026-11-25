@@ -72,19 +72,26 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
     `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
     `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
-  - Only http(s) links, temporary page images and directories (Share Folder…) are shared.
+  - The menu bar's File › Share lists the same services, then Copy Link, Email Link and More… (the `shareServices`
+    role, filled each time the submenu opens). The in-window app menu adds them once the host lists them.
+  - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
+    and a shell reload or window close closes that window's pickers.
+  - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder; a later instance
+    deletes the folders of processes that have exited and leaves running ones alone.
   - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
     places them, through a dev-only `RenderViewContextMenuObserver` hook in
-    `render_view_context_menu_base.cc`. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`
     cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
-    share ends.
+    share ends, or when the window's shell reloads or closes.
   - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
 - **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
   `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
   `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`, plus `ArdiaShell.pickFolder`
   for Add Shared Folder…. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
-  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator`, as the Mac app does. Unlike the Swift code,
-  coordination has no 20-second timeout. The folder panel and Finder are never shown in background mode.
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
+  as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
+  its own queue. The folder panel and Finder are never shown in background mode.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's

@@ -114,6 +114,30 @@ TEST(hostile_sinks) {
   CHECK(!policy::ValidAbsolutePath(std::string(policy::kMaxPathBytes + 1, '/')));
 }
 
+TEST(a_stalled_coordinator_times_out_and_never_starts_late) {
+  policy::CoordinationGate stalled;
+  CHECK(stalled.Expire());
+  CHECK(!stalled.Begin());
+  CHECK(stalled.GaveUp() && !stalled.Started());
+  CHECK(policy::CoordinationOutcome(false, stalled) == policy::Coordination::kTimedOut);
+  CHECK(!stalled.Expire());
+}
+
+TEST(a_started_coordinator_is_never_cancelled) {
+  policy::CoordinationGate started;
+  CHECK(started.Begin());
+  CHECK(!started.Expire());
+  CHECK(started.Begin());
+  CHECK(started.Started() && !started.GaveUp());
+  CHECK(policy::CoordinationOutcome(true, started) == policy::Coordination::kRan);
+}
+
+TEST(a_coordinator_error_is_a_failure_not_a_timeout) {
+  policy::CoordinationGate refused;
+  CHECK(policy::CoordinationOutcome(false, refused) == policy::Coordination::kFailed);
+  CHECK(policy::kCoordinationTimeoutSeconds == 20);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

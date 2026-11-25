@@ -224,3 +224,21 @@ test("an Open Command Bar picked from the app menu carries the consent epoch it 
   assert.equal(off.epoch, "");
   assert.equal(off.counted, 0);
 });
+
+test("on a Mac host, File › Share adds the system's sharing services and More… after Copy Link and Email Link", async () => {
+  const { setShareServices, MORE_SHARE_SERVICE } = await import("./linkShare.ts");
+  setShareServices([{ title: "AirDrop", menuTitle: "AirDrop" }, { title: "Messages", menuTitle: "Messages" }], null);
+  try {
+    const share = top(appMenuItems(state()), "File").children.find((item) => item.title === "Share");
+    assert.deepEqual(share.children.map((item) => ("separator" in item ? "-" : [item.id, item.title])), [
+      ["share:via:copy", "Copy Link"],
+      ["share:via:email", "Email Link"],
+      "-",
+      ["share:via:AirDrop", "AirDrop"],
+      ["share:via:Messages", "Messages"],
+      [`share:via:${MORE_SHARE_SERVICE}`, "More…"],
+    ]);
+  } finally {
+    setShareServices([], null);
+  }
+});
