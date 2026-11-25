@@ -288,12 +288,16 @@ async function gesture(inst, win, c, first, ids, { reset = true, reverse = c.rev
   const f0 = await frames(inst, "counters");
   const s0 = await swipeProbe(inst, { op: "counters" });
   await swipeProbe(inst, { op: "resetMax" });
-  if (sampleMain) await swipeProbe(inst, { op: "sample", ms: 1400 });
+  if (sampleMain) {
+    const sampling = await swipeProbe(inst, { op: "sample", ms: 1400 });
+    if (!sampling.ok) throw new Error(`sample: ${sampling.error}`);
+  }
   const cpu0 = cpuMs(inst.pid);
   const t0 = Date.now();
   const midRead = Number(flag("mid-read", "0"));
   let mid = null;
   const posting = post(inst, win, c.at, reverse);
+  posting.catch(() => {});
   if (midRead) {
     await sleep(midRead);
     mid = await inst.eval(`const st = acPerf.read(); return { commits: st.commits, rendersBy: Object.fromEntries(Object.entries(st.renders ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 25)) };`);
@@ -313,7 +317,7 @@ async function gesture(inst, win, c, first, ids, { reset = true, reverse = c.rev
   const fr = frameStats(inst, t0, t1);
   const r = (x) => Math.round(x * 10) / 10;
   const m = motion(samples);
-  const moving = movingSpan(samples);
+  const moving = movingSpan(samples.filter(([at]) => at >= t0 && at <= t1));
   const during = moving ? frameStats(inst, moving[0], moving[1]) : { ticks: 0, longestGapMs: 0, gaps: [] };
   const dist = gapDistribution(during.gaps ?? [], refreshMs(inst), moving?.[0] ?? 0);
   const busyMoving = moving ? busy(inst, moving[0], moving[1]) : { m: 0, j: 0 };
@@ -537,7 +541,7 @@ async function runTour(apps, c, seeded, profiles, tabsEach, layout, out, save, c
     const ordered = i % 2 ? [...apps].reverse() : apps;
     const instances = await launchSides(ordered, seeded, profiles, tabsEach, layout, "-tour");
     try {
-      const films = filmDir ? instances.map(({ side, inst }) => filmStart(inst, join(filmDir, `${side.label}-${i + 1}.mov`))) : [];
+      const films = filmDir ? instances.map(({ side, inst }) => filmStart(inst, join(filmDir, config.replace(/\s+/g, "-"), `${side.label}-${i + 1}.mov`))) : [];
       const offTour = new Set();
       for (const st of steps)
         for (const { side, inst } of instances) {

@@ -199,6 +199,7 @@ test("settle frames count under the consent their motion began with, once, even 
   counts = takePagerCounts();
   assert.equal(counts.profile_pager_settle_frames, 30, "a selected that read the settle snapshot first doesn't swallow the sample, and a repeat counts once");
   assert.equal(counts.profile_pager_settles_with_long_frames, 1);
+  assert.equal(counts.profile_pager_settles_sampled, 1, "the long-frame share has a denominator from the same settle, even when the store commit saw it first");
   assert.equal(counts.profile_pager_settle_worst_gap_ms, 25);
   event("settled", 3, 2, frames);
   assert.equal(takePagerCounts().profile_pager_settle_frames, 0, "a motion whose start was never seen isn't counted");

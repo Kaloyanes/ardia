@@ -202,7 +202,7 @@ static double gSampleAt[SAMPLE_MAX];
 static int gSampleDepth[SAMPLE_MAX];
 static uint64_t gSampleFrames[SAMPLE_MAX][SAMPLE_DEPTH];
 static int gSampleCount;
-static volatile int gSampling;
+static _Atomic int gSampling;
 
 static int ReadWord(uint64_t addr, uint64_t *out) {
   mach_vm_size_t got = 0;
@@ -270,7 +270,10 @@ static NSDictionary *StartSampling(NSDictionary *cmd) {
   if (gSampling) return @{@"ok" : @NO, @"error" : @"already sampling"};
   gSampling = 1;
   pthread_t t;
-  pthread_create(&t, NULL, SampleMain, (void *)(intptr_t)([cmd[@"ms"] intValue] ?: 1500));
+  if (pthread_create(&t, NULL, SampleMain, (void *)(intptr_t)([cmd[@"ms"] intValue] ?: 1500)) != 0) {
+    gSampling = 0;
+    return @{@"ok" : @NO, @"error" : @"no sampler thread"};
+  }
   pthread_detach(t);
   return @{@"ok" : @YES};
 }
