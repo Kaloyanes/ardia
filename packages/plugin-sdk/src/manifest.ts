@@ -12,6 +12,7 @@ import {
   httpsUrl,
   interfaceName,
   pluginId,
+  pluginPath,
   scriptPath,
   semver,
   semverRange,
@@ -21,7 +22,7 @@ import {
 } from "./manifestParts";
 import { permissionsSpec } from "./manifestPermissions";
 import { manifestRules, needsGlobalScope } from "./manifestRules";
-import { INVALID, arr, int, isPlainObject, obj, oneOf, record, str, text, withDefault, type Infer, type JsonSchema } from "./spec";
+import { INVALID, arr, int, isPlainObject, obj, oneOf, record, str, text, withDefault, type Infer, type JsonSchema, type Spec } from "./spec";
 
 export {
   ACTIVATION_PREFIXES_V3,
@@ -69,9 +70,38 @@ const releaseSpec = obj(
   { required: ["github"], what: "release", description: "Where Ardia finds the plugin's releases" },
 );
 
+function argvSpec(): Spec<string[]> {
+  const program = pluginPath("a program inside the plugin's folder, as a relative path like bin/server");
+  return {
+    accepts: Array.isArray,
+    check(value, path, problems) {
+      if (!Array.isArray(value) || value.length < 1 || value.length > LIMITS_V3.argv) {
+        problems.push(`${path} must be a list of 1 to ${LIMITS_V3.argv}`);
+        return INVALID;
+      }
+      const out: string[] = [];
+      let failed = false;
+      value.forEach((entry, i) => {
+        const checked = (i === 0 ? program : argument).check(entry, `${path}[${i}]`, problems);
+        if (checked === INVALID) failed = true;
+        else out.push(checked);
+      });
+      return failed ? INVALID : out;
+    },
+    schema: () => ({
+      type: "array",
+      minItems: 1,
+      maxItems: LIMITS_V3.argv,
+      prefixItems: [program.schema()],
+      items: argument.schema(),
+      description: "The program, a relative path inside the plugin's folder, then its arguments",
+    }),
+  };
+}
+
 const sidecarSpec = obj(
   {
-    run: arr(argument, { min: 1, max: LIMITS_V3.argv, description: "The program and its arguments, the program inside the plugin's folder" }),
+    run: argvSpec(),
     memoryMB: int(LIMITS_V3.memoryMB[0], LIMITS_V3.memoryMB[1], "The sidecar's memory limit"),
   },
   { required: ["run"], what: "sidecar" },
@@ -88,6 +118,7 @@ export const manifestV3Spec = obj(
     description,
     version: semver,
     icon: symbol,
+    iconUrl: httpsUrl,
     license: str({ pattern: "^[A-Za-z0-9.+\\- ()]{1,64}$", rule: "an SPDX license expression like MIT" }),
     repository: httpsUrl,
     homepage: httpsUrl,

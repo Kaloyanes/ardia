@@ -2,12 +2,17 @@ import { verifyEnvelope, type CryptoOptions, type PublicKeys } from "./envelope"
 import type { Validated } from "./registryTypes";
 
 export {
+  CanonicalJsonError,
   ENVELOPE_CONTEXT,
+  REGISTRY_ENVELOPE_VERSION,
+  REGISTRY_SIGNATURE_DOMAIN,
   canonicalJson,
   envelopeMessage,
   fromBase64,
+  fromBase64Url,
   signEnvelope,
   toBase64,
+  toBase64Url,
   utf8,
   verifyEnvelope,
   type CryptoOptions,
@@ -25,21 +30,35 @@ export {
   registryIndexSpec,
   revocationEntrySpec,
   revocationListSpec,
+  revocationMatchSpec,
   validatePluginDetail,
   validateRegistryIndex,
   validateRevocationList,
   versionEntrySpec,
   type RegistryArtifact,
-  type RegistryIndex,
+  type RegistryArtifacts,
   type RegistryIndexEntry,
-  type RegistryPluginDetail,
+  type RegistryIndexPayload,
+  type RegistryPluginPayload,
+  type RegistryRevocationsPayload,
   type RegistryVersion,
   type RevocationAction,
   type RevocationEntry,
-  type RevocationList,
+  type RevocationMatchSpec,
   type Validated,
 } from "./registryTypes";
-export { currentPlatform, matchRevocations, pickArtifact, strongestRevocation, type RevocationMatch, type RevocationTarget } from "./revocations";
+export {
+  currentPlatform,
+  matchRevocations,
+  pickArtifact,
+  registryKey,
+  sameRegistry,
+  strongestRevocation,
+  versionMatches,
+  type PickedArtifact,
+  type RevocationMatch,
+  type RevocationTarget,
+} from "./revocations";
 export {
   resolvePluginGraph,
   type Channel,
@@ -49,6 +68,8 @@ export {
   type ResolveProblemCode,
   type ResolveResult,
   type ResolveRoot,
+  type SkippedDependency,
+  type Catalog,
 } from "./resolve";
 export { diffSecuritySurface, securitySurface, type SecurityDiff, type SecuritySurfaceInput } from "./securitySurface";
 export type { PlatformKey } from "./manifestParts";

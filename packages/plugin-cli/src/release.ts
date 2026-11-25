@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import { PLATFORM_KEYS, type PlatformKey } from "@ardia/plugin-sdk/manifest";
 import { parseSemver } from "@ardia/plugin-sdk/semver";
 import { runBuild, type BuildFlags } from "./build";
 import { CliError, type Output } from "./output";
-import { packProject, parsePlatform, type PackReport } from "./pack";
+import { assetName, packProject, parsePlatform, type PackReport } from "./pack";
 import { loadProject, type Project } from "./project";
 
 export type ReleaseFlags = BuildFlags & { tag?: string; prerelease?: boolean; dryRun?: boolean; platform?: string; repo?: string; notes?: string; draft?: boolean };
@@ -31,48 +32,79 @@ export function releaseTag(project: Project, flag: string | undefined): string {
   return `${project.manifest.release?.tagPrefix ?? "v"}${project.manifest.version}`;
 }
 
+const TAG = /^[A-Za-z0-9][A-Za-z0-9._/+-]{0,127}$/;
+const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+
+export function checkTag(tag: string): string {
+  if (!TAG.test(tag) || tag.includes("..") || tag.endsWith("/") || tag.endsWith(".lock")) {
+    throw new CliError(`The tag ${JSON.stringify(tag)} isn't a tag name: start with a letter or digit, then letters, digits, ., _, /, + and -`);
+  }
+  return tag;
+}
+
+export function checkRepo(repo: string): string {
+  if (!REPO.test(repo)) throw new CliError(`${JSON.stringify(repo)} isn't a GitHub repository like owner/repo`);
+  return repo;
+}
+
 export function releaseCommands(project: Project, tag: string, files: readonly string[], options: { prerelease: boolean; repo: string | null; notes?: string; draft?: boolean; exists: boolean }): string[][] {
-  const repo = options.repo ? ["--repo", options.repo] : [];
-  if (options.exists) return [["gh", "release", "upload", tag, ...files, "--clobber", ...repo]];
+  checkTag(tag);
+  const repo = options.repo ? [`--repo=${checkRepo(options.repo)}`] : [];
+  if (options.exists) return [["gh", "release", "upload", "--clobber", ...repo, "--", tag, ...files]];
   return [
     [
       "gh",
       "release",
       "create",
-      tag,
-      ...files,
-      "--title",
-      `${project.manifest.name} ${project.manifest.version}`,
-      ...(options.notes ? ["--notes", options.notes] : ["--generate-notes"]),
+      `--title=${project.manifest.name} ${project.manifest.version}`,
+      ...(options.notes !== undefined ? [`--notes=${options.notes}`] : ["--generate-notes"]),
       ...(options.prerelease ? ["--prerelease"] : []),
       ...(options.draft ? ["--draft"] : []),
       ...repo,
+      "--",
+      tag,
+      ...files,
     ],
   ];
 }
 
+export function assetFiles(project: Project, platforms: readonly PlatformKey[]): Map<PlatformKey, string> {
+  const names = new Map<PlatformKey, string>();
+  const owners = new Map<string, PlatformKey>();
+  for (const platform of platforms) {
+    const name = assetName(project, platform);
+    const clash = owners.get(name);
+    if (clash) throw new CliError(`${clash} and ${platform} would both be released as ${name}; give each platform its own name in release.assets or use {platform} in release.asset`);
+    owners.set(name, platform);
+    names.set(platform, name);
+  }
+  return names;
+}
+
 export async function runRelease(dir: string | undefined, out: Output, flags: ReleaseFlags = {}, runner: Runner = defaultRunner): Promise<ReleaseReport> {
   const project = loadProject(dir);
-  const tag = releaseTag(project, flags.tag);
+  const tag = checkTag(releaseTag(project, flags.tag));
   const expected = `${project.manifest.release?.tagPrefix ?? "v"}${project.manifest.version}`;
   if (flags.tag && flags.tag !== expected && !flags.tag.endsWith(project.manifest.version)) {
     throw new CliError(`The tag ${flags.tag} doesn't name plugin.json's version ${project.manifest.version}; bump the version or tag ${expected}`);
   }
   const prerelease = flags.prerelease === true || (parseSemver(project.manifest.version)?.prerelease.length ?? 0) > 0;
-  const repo = flags.repo ?? project.manifest.release?.github ?? null;
+  const repo = flags.repo !== undefined ? checkRepo(flags.repo) : (project.manifest.release?.github ?? null);
+  const platforms = releasePlatforms(project, flags.platform);
+  const names = assetFiles(project, platforms);
   if (repo && /^OWNER\//.test(repo)) {
     if (!flags.dryRun) throw new CliError(`plugin.json's release.github is still ${repo}; set it to your repository`);
     out.warn(`plugin.json's release.github is still ${repo}; set it to your repository before a real release`);
   }
   await runBuild(project, { ...out, result: () => undefined }, flags);
   const assets: PackReport[] = [];
-  for (const platform of releasePlatforms(project, flags.platform)) assets.push(await packProject(project, out, { ...flags, platform, skipBuild: true }));
+  for (const platform of platforms) assets.push(await packProject(project, out, { ...flags, platform, skipBuild: true, out: join(project.dir, "release", names.get(platform)!) }));
   const files = [...new Set(assets.flatMap((a) => [a.file, `${a.file}.sha256`]))];
   let exists = false;
   if (!flags.dryRun) {
     const version = runner("gh", ["--version"]);
     if (version.status !== 0) throw new CliError("ardia-plugin release needs the GitHub CLI (gh), signed in: https://cli.github.com");
-    exists = runner("gh", ["release", "view", tag, ...(repo ? ["--repo", repo] : [])]).status === 0;
+    exists = runner("gh", ["release", "view", ...(repo ? [`--repo=${repo}`] : []), "--", tag]).status === 0;
   }
   const commands = releaseCommands(project, tag, files, { prerelease, repo, notes: flags.notes, draft: flags.draft, exists });
   if (flags.dryRun) {

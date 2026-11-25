@@ -1,7 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { CodeBlock, FileDropZone, Grid, Image, List, Table, Tabs, TagList, Text, jsx, jsxs, readServerSentEvents, useState } from "./index.ts";
-import { applyTreePatch, diffTree } from "./protocol.ts";
+import { applyTreePatch, diffTree, isTreeNode } from "./protocol.ts";
+import { createChannels } from "./channels.ts";
 import { createMockHost } from "./testing.ts";
 
 const node = (type, props = {}, children = [], key) => ({ type, ...(key !== undefined ? { key } : {}), props, children });
@@ -34,6 +35,43 @@ describe("tree patches", () => {
     assert.throws(() => applyTreePatch(tree, [{ op: "props", path: [9] }]), /no child/);
     assert.throws(() => applyTreePatch(null, [{ op: "props", path: [] }]), /start by replacing/);
     assert.throws(() => applyTreePatch(tree, [{ op: "explode", path: [] }]), /Unknown patch op/);
+  });
+});
+
+describe("tree patch hardening", () => {
+  test("a prop set to undefined is removed on the other side", () => {
+    const before = node("Box", { title: "x", tone: "accent" }, ["a"]);
+    const after = node("Box", { title: "x", tone: undefined }, ["a"]);
+    const ops = JSON.parse(JSON.stringify(diffTree(before, after)));
+    assert.deepEqual(ops, [{ op: "props", path: [], unset: ["tone"] }]);
+    assert.deepEqual(applyTreePatch(before, ops).props, { title: "x" });
+    assert.deepEqual(diffTree(node("Box", { a: undefined }), node("Box", {})), []);
+    const inserted = diffTree(node("Box", {}, []), node("Box", {}, [node("Text", { hidden: undefined, t: 1 })]));
+    assert.deepEqual(inserted[0].nodes[0].props, { t: 1 });
+  });
+
+  test("malformed roots and nodes are refused", () => {
+    for (const bad of [null, "text", 3, { type: "Box" }, { type: "Box", props: null, children: [] }, { type: "", props: {}, children: [] }, { type: "Box", props: {}, children: [{ type: "Text", props: {}, children: [7] }] }, { type: "Box", props: {}, children: [], extra: 1 }, { type: "Box", key: {}, props: {}, children: [] }]) {
+      assert.equal(isTreeNode(bad), false, JSON.stringify(bad));
+      assert.throws(() => applyTreePatch(null, [{ op: "replace", path: [], node: bad }]), /well-formed|root/);
+    }
+    assert.throws(() => applyTreePatch(node("Box"), [{ op: "replace", path: [], node: "text" }]), /root must be a node/);
+    assert.throws(() => applyTreePatch(node("Box"), [{ op: "insert", path: [], index: 0, nodes: [{ type: "Text", props: [], children: [] }] }]), /well-formed/);
+    let deep = node("Box");
+    for (let i = 0; i < 300; i++) deep = node("Box", {}, [deep]);
+    assert.equal(isTreeNode(deep), false);
+  });
+
+  test("__proto__, constructor and prototype keys are refused everywhere", () => {
+    const poisoned = JSON.parse('{"type":"Box","props":{"__proto__":{"polluted":true}},"children":[]}');
+    assert.equal(isTreeNode(poisoned), false);
+    assert.equal(isTreeNode(JSON.parse('{"type":"Box","props":{"style":{"constructor":{"prototype":{}}}},"children":[]}')), false);
+    const tree = node("Box", { a: 1 });
+    assert.throws(() => applyTreePatch(tree, JSON.parse('[{"op":"props","path":[],"set":{"__proto__":{"polluted":true}}}]')), /__proto__/);
+    assert.throws(() => applyTreePatch(tree, [{ op: "props", path: [], set: { nested: { prototype: 1 } } }]), /__proto__/);
+    assert.throws(() => applyTreePatch(tree, [{ op: "props", path: [], unset: ["constructor"] }]), /unset/);
+    assert.throws(() => applyTreePatch(tree, [{ op: "props", path: [], set: null }]), /set must be/);
+    assert.equal({}.polluted, undefined);
   });
 });
 
@@ -188,6 +226,97 @@ describe("streaming and sockets", () => {
       throw new Error("refused: network permission");
     });
     await assert.rejects(host.ardia.net.connect("wss://nope.example.com/"), /refused/);
+    await host.dispose();
+  });
+});
+
+describe("channel edge cases", () => {
+  const fakeRpc = (handlers) => {
+    const calls = [];
+    return {
+      calls,
+      rpc: {
+        request: (method, params) => {
+          calls.push([method, params]);
+          const handler = handlers[method];
+          return handler ? Promise.resolve().then(() => handler(params)) : Promise.resolve(null);
+        },
+      },
+    };
+  };
+
+  test("a stream error before the head arrives rejects fetchStream instead of stranding it", async () => {
+    let release;
+    const { rpc } = fakeRpc({ "net.fetch.stream": () => new Promise((r) => (release = r)) });
+    const channels = createChannels(rpc, () => {});
+    const pending = channels.fetchStream("https://a.com/");
+    await Promise.resolve();
+    channels.deliver("net.fetch.error", { stream: "f1", message: "dns failed", code: "dns" });
+    await assert.rejects(pending, /dns failed/);
+    release({ status: 200, statusText: "OK", headers: {}, url: "https://a.com/" });
+    assert.equal(channels.openCount(), 0);
+  });
+
+  test("an overflowing stream is cancelled on the host and forgotten", async () => {
+    const { rpc, calls } = fakeRpc({ "net.fetch.stream": () => ({ status: 200, statusText: "OK", headers: {}, url: "u" }) });
+    const channels = createChannels(rpc, () => {});
+    const response = await channels.fetchStream("https://a.com/");
+    for (let i = 0; i < 4097; i++) channels.deliver("net.fetch.chunk", { stream: "f1", data: "x" });
+    await assert.rejects(response.text(), /cut off/);
+    await Promise.resolve();
+    assert.ok(calls.some(([m]) => m === "net.fetch.cancel"));
+    assert.equal(channels.openCount(), 0);
+  });
+
+  test("closeAll cancels open streams and closes open sockets on the host", async () => {
+    const { rpc, calls } = fakeRpc({ "net.fetch.stream": () => ({ status: 200, statusText: "OK", headers: {}, url: "u" }), "net.ws.connect": () => ({ open: true }) });
+    const channels = createChannels(rpc, () => {});
+    await channels.fetchStream("https://a.com/");
+    const socket = await channels.connect("wss://a.com/");
+    channels.closeAll();
+    await Promise.resolve();
+    assert.deepEqual(calls.filter(([m]) => m === "net.fetch.cancel" || m === "net.ws.close").map(([m]) => m).sort(), ["net.fetch.cancel", "net.ws.close"]);
+    assert.equal(socket.state, "closed");
+    assert.equal(channels.openCount(), 0);
+  });
+
+  test("socket events that arrive before a listener attaches are held for it", async () => {
+    const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    channels.deliver("net.ws.message", { socket: socket.id, data: "early" });
+    channels.deliver("net.ws.error", { socket: socket.id, message: "hiccup" });
+    channels.deliver("net.ws.close", { socket: socket.id, code: 1000, reason: "done" });
+    const got = [];
+    socket.onMessage((d) => got.push(["message", d]));
+    socket.onError((m) => got.push(["error", m]));
+    socket.onClose((c, r) => got.push(["close", c, r]));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(got, [["message", "early"], ["error", "hiccup"], ["close", 1000, "done"]]);
+  });
+
+  test("a refused close leaves the socket open", async () => {
+    const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }), "net.ws.close": () => Promise.reject(new Error("busy")) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    await assert.rejects(socket.close(), /busy/);
+    assert.equal(socket.state, "open");
+  });
+
+  test("a failed activation closes the channels it opened", async () => {
+    const errors = [];
+    const host = createMockHost({ runtime: { onError: (e) => errors.push(e) } });
+    host.mockFetchStream("https://a.com/", { chunks: ["x", "y", "z"] });
+    await host.load({
+      activate: async (ardia) => {
+        await ardia.net.fetchStream("https://a.com/");
+        throw new Error("activation broke");
+      },
+    }).catch(() => {});
+    await host.settle();
+    assert.equal(host.runtime.channelCount(), 0);
+    assert.ok(host.requests("net.fetch.cancel").length >= 1);
+    assert.ok(errors.some((e) => /activation broke/.test(e.message)));
     await host.dispose();
   });
 });

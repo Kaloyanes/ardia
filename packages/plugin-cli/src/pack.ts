@@ -7,7 +7,7 @@ import { checkProject, packedFiles } from "./check";
 import { PACK_LIMITS } from "./files";
 import { CliError, formatBytes, shownPath, type Output } from "./output";
 import { loadProject, type Project } from "./project";
-import { gzipDeterministic, tarBytes, type TarEntry } from "./tar";
+import { gzipDeterministic, TarError, tarBytes, type TarEntry } from "./tar";
 
 export type PackReport = {
   id: string;
@@ -65,7 +65,13 @@ export async function packProject(project: Project, out: Output, flags: PackFlag
   for (const warning of report.warnings) out.warn(warning);
   if (!report.ok) throw new CliError(`${project.manifest.id} can't be packed`, report.problems);
   const { entries, unpackedBytes, files } = packEntries(project);
-  const archive = gzipDeterministic(tarBytes(entries));
+  let archive: Buffer;
+  try {
+    archive = gzipDeterministic(tarBytes(entries));
+  } catch (error) {
+    if (error instanceof TarError) throw new CliError(error.message);
+    throw error;
+  }
   if (archive.length > PACK_LIMITS.packedBytes) throw new CliError(`The pack is ${formatBytes(archive.length)}; the limit is ${formatBytes(PACK_LIMITS.packedBytes)}`);
   const file = resolve(flags.out ?? join(project.dir, "release", assetName(project, platform)));
   const sha256 = createHash("sha256").update(archive).digest("hex");

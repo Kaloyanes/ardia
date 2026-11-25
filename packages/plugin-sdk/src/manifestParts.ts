@@ -63,9 +63,9 @@ export const EVENT_PATTERN = "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)+$";
 export const OMNIBOX_KEYWORD_PATTERN = "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$";
 export const GITHUB_REPO_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$";
 export const SEMVER_PATTERN =
-  "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$";
+  "^(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})(?:-((?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?$";
 export const HTTPS_URL_PATTERN = "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})(?::\\d{1,5})?(?:[/?#][^\\s]*)?$";
-const PLUGIN_PATH_PATTERN = "^(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/\\\\\\u0000][^\\\\\\u0000]*$";
+const PLUGIN_PATH_PATTERN = "^(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/\\\\\\u0000][^\\\\\\u0000]*$";
 
 export const PLATFORM_KEYS = ["universal", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64", "windows-x64"] as const;
 export type PlatformKey = (typeof PLATFORM_KEYS)[number];
@@ -94,7 +94,7 @@ export const RUN_AT = ["document_start", "document_idle"] as const;
 export const ACTIVATION_PREFIXES_V3 = ["onCommand", "onView", "onPanel", "onToolbar", "onOmnibox", "onMenu", "onEvent", "onUrl", "onService", "onInputMode"] as const;
 
 export function isPluginPath(value: string): boolean {
-  if (!value || value.length > LIMITS_V3.path || value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
+  if (!value || value.length > LIMITS_V3.path || value.startsWith("/") || /^[A-Za-z]:/.test(value) || value.includes("\\") || value.includes("\0")) return false;
   return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
@@ -191,21 +191,23 @@ export const activationEvent = str({
   rule: `*, onStartupFinished or one of ${ACTIVATION_PREFIXES_V3.map((p) => `${p}:`).join(", ")} followed by a name`,
 });
 
-export const MATCH_PATTERN = "^(?:https://(?:\\*|(?:\\*\\.)?[a-z0-9-]+(?:\\.[a-z0-9-]+)+)|http://(?:localhost|127\\.0\\.0\\.1):(?:\\*|\\d{1,5}))/[^\\s]*$";
+const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const TOP_LABEL = "[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const DOMAIN = `(?:${LABEL}\\.)+${TOP_LABEL}`;
+export const PORT_PATTERN = "(?:[1-9]\\d{0,3}|[1-5]\\d{4}|6[0-4]\\d{3}|65[0-4]\\d{2}|655[0-2]\\d|6553[0-5])";
+const LOOPBACK = "(?:localhost|127\\.0\\.0\\.1)";
+
+export const MATCH_PATTERN = `^(?:https://(?:\\*|(?:\\*\\.)?${DOMAIN})|http://${LOOPBACK}:(?:\\*|${PORT_PATTERN}))/[^\\s]*$`;
 export const matchPattern = str({
   pattern: MATCH_PATTERN,
   max: 512,
-  rule: "a URL match pattern like https://example.com/path* or http://localhost:*/*",
+  rule: "a URL match pattern like https://example.com/path* or http://localhost:*/*, with a domain name (no IP addresses) and a port from 1 to 65535",
 });
 
-export const NETWORK_HOST_PATTERN = "^(?:(?:\\*\\.)?[a-z0-9-]+(?:\\.[a-z0-9-]+)+|(?:localhost|127\\.0\\.0\\.1):\\d{1,5})$";
+export const NETWORK_HOST_PATTERN = `^(?:(?:\\*\\.)?${DOMAIN}|${LOOPBACK}:${PORT_PATTERN})$`;
 export const networkHost = str({
   pattern: NETWORK_HOST_PATTERN,
-  test: (value) => {
-    const port = /:(\d+)$/.exec(value);
-    return !port || (Number(port[1]) >= 1 && Number(port[1]) <= 65535);
-  },
   max: 253,
-  rule: "a host like api.example.com or *.example.com, or localhost:<port> or 127.0.0.1:<port>",
+  rule: "a host like api.example.com or *.example.com (no IP addresses), or localhost:<port> or 127.0.0.1:<port> with a port from 1 to 65535",
 });
 

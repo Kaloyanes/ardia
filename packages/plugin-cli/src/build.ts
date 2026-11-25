@@ -1,7 +1,7 @@
 import { context, build as esbuild, type BuildOptions, type BuildResult, type Message } from "esbuild";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError, type Output } from "./output";
 import { entrySources, type Project } from "./project";
@@ -50,7 +50,7 @@ function projectHasSdk(dir: string): boolean {
 
 export function buildOptions(project: Project, output: string, source: string, flags: BuildFlags = {}): BuildOptions {
   return {
-    entryPoints: [join(project.dir, source)],
+    entryPoints: [`./${source}`],
     outfile: join(project.dir, output),
     bundle: true,
     format: "iife",
@@ -62,7 +62,9 @@ export function buildOptions(project: Project, output: string, source: string, f
     conditions: ["import", "default"],
     charset: "utf8",
     legalComments: "none",
-    minify: flags.minify === true,
+    minifyWhitespace: true,
+    minifyIdentifiers: flags.minify === true,
+    minifySyntax: flags.minify === true,
     sourcemap: flags.sourcemap === true ? "linked" : false,
     write: false,
     logLevel: "silent",
@@ -71,19 +73,42 @@ export function buildOptions(project: Project, output: string, source: string, f
   };
 }
 
-const REGION_COMMENT = /^[ \t]*\/\/ \S.*\.(?:[cm]?[jt]sx?|json|css)$/gm;
-
-export function cleanBundle(text: string, keepColumns: boolean): string {
-  const lines = text.replace(REGION_COMMENT, "");
-  return keepColumns ? lines : lines.replace(/\/\* @__PURE__ \*\/ /g, "");
+export function unsafeOutput(root: string, file: string): string | null {
+  const rel = relative(root, file);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return `${file} is outside the plugin's folder`;
+  let current = root;
+  for (const part of rel.split(sep)) {
+    current = join(current, part);
+    let stats;
+    try {
+      stats = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (stats.isSymbolicLink()) return `${rel.split(sep).join("/")} goes through a symlink (${relative(root, current).split(sep).join("/")}); the build won't write through it`;
+  }
+  return null;
 }
 
-function writeOutputs(result: BuildResult, keepColumns: boolean) {
+function writeOutputs(root: string, result: BuildResult): string[] {
+  const problems: string[] = [];
   for (const file of result.outputFiles ?? []) {
+    const refused = unsafeOutput(root, file.path);
+    if (refused) {
+      problems.push(refused);
+      continue;
+    }
     mkdirSync(dirname(file.path), { recursive: true });
-    const content = file.path.endsWith(".js") || file.path.endsWith(".mjs") || file.path.endsWith(".cjs") ? cleanBundle(file.text, keepColumns) : file.text;
-    writeFileSync(file.path, content);
+    const again = unsafeOutput(root, file.path);
+    if (again) {
+      problems.push(again);
+      continue;
+    }
+    const partial = `${file.path}.partial-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    writeFileSync(partial, file.contents, { flag: "wx" });
+    renameSync(partial, file.path);
   }
+  return problems;
 }
 
 const messageText = (m: Message) => (m.location ? `${m.location.file}:${m.location.line}:${m.location.column}: ${m.text}` : m.text);
@@ -118,8 +143,9 @@ const combine = (built: readonly Built[]): BuildReport => ({
 async function buildOne(project: Project, entry: string, source: string, flags: BuildFlags): Promise<Built> {
   try {
     const result = await esbuild(buildOptions(project, entry, source, flags));
-    if (!result.errors.length) writeOutputs(result, flags.sourcemap === true);
-    return builtOf(project, entry, source, result);
+    const refused = result.errors.length ? [] : writeOutputs(project.dir, result);
+    const built = builtOf(project, entry, source, result);
+    return refused.length ? { ...built, bytes: 0, errors: [...built.errors, ...refused] } : built;
   } catch (error) {
     return builtOf(project, entry, source, null, error as { errors?: Message[]; warnings?: Message[] });
   }
@@ -142,8 +168,9 @@ export async function watchProject(project: Project, flags: BuildFlags, onBuild:
             name: "ardia-plugin-report",
             setup(build) {
               build.onEnd((result) => {
-                if (!result.errors.length) writeOutputs(result, flags.sourcemap === true);
-                latest.set(entry, builtOf(project, entry, source, result));
+                const refused = result.errors.length ? [] : writeOutputs(project.dir, result);
+                const built = builtOf(project, entry, source, result);
+                latest.set(entry, refused.length ? { ...built, bytes: 0, errors: [...built.errors, ...refused] } : built);
                 if (latest.size === entries.length) onBuild(combine([...latest.values()]));
               });
             },

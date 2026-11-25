@@ -308,6 +308,14 @@ export function union<S extends readonly Spec<any>[]>(alternatives: S, rule: str
   };
 }
 
+export function nullable<T>(spec: Spec<T>): Spec<T | null> {
+  return {
+    accepts: (value) => value === null || spec.accepts(value),
+    check: (value, path, problems) => (value === null ? null : spec.check(value, path, problems)),
+    schema: () => ({ anyOf: [{ type: "null" }, spec.schema()] }),
+  };
+}
+
 export function withDefault<T>(spec: Spec<T>, value: T): Spec<T> & { readonly hasDefault: true } {
   return {
     ...spec,

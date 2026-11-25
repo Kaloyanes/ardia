@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, type Stats } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-export const PACK_LIMITS = { files: 4000, fileBytes: 32 * 1024 * 1024, totalBytes: 64 * 1024 * 1024, packedBytes: 64 * 1024 * 1024, pathBytes: 240 } as const;
+export const PACK_LIMITS = { entries: 20_000, fileBytes: 32 * 1024 * 1024, totalBytes: 64 * 1024 * 1024, packedBytes: 64 * 1024 * 1024, pathBytes: 240 } as const;
 
 export type FileEntry = { path: string; size: number; mode: number; executable: boolean };
 
@@ -95,9 +95,10 @@ export function walkPluginFiles(root: string, ignore: readonly IgnoreRule[], kee
   return { files, directories, problems };
 }
 
-export function limitProblems(files: readonly FileEntry[]): string[] {
+export function limitProblems(files: readonly FileEntry[], directories: readonly string[] = []): string[] {
   const problems: string[] = [];
-  if (files.length > PACK_LIMITS.files) problems.push(`the pack would hold ${files.length} files; the limit is ${PACK_LIMITS.files}`);
+  const entries = files.length + directories.length + 1;
+  if (entries > PACK_LIMITS.entries) problems.push(`the pack would hold ${entries} entries (files and folders); the limit is ${PACK_LIMITS.entries}`);
   let total = 0;
   for (const file of files) {
     total += file.size;

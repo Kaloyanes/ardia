@@ -39,7 +39,7 @@ export function referencedFiles(manifest: ManifestV3): { path: string; what: str
   const c = manifest.contributes ?? {};
   if (manifest.main) out.push({ path: manifest.main, what: "main" });
   const program = manifest.sidecar?.run[0];
-  if (program && !program.startsWith("/") && program.includes("/")) out.push({ path: program, what: "sidecar.run[0]", executable: true });
+  if (program !== undefined) out.push({ path: program, what: "sidecar.run[0]", executable: true });
   c.contentScripts?.forEach((script, i) => {
     script.js.forEach((path, j) => out.push({ path, what: `contributes.contentScripts[${i}].js[${j}]` }));
     script.css?.forEach((path, j) => out.push({ path, what: `contributes.contentScripts[${i}].css[${j}]` }));

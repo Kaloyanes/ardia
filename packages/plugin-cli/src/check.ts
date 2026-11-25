@@ -42,11 +42,11 @@ export function checkProject(project: Project, options: CheckOptions = {}): Chec
       else problems.push(`${ref.what}: ${ref.path} ${found.reason}`);
       continue;
     }
-    if (ref.executable && (found.stats.mode & 0o111) === 0) problems.push(`${ref.what}: ${ref.path} isn't executable (chmod +x ${ref.path})`);
+    if (ref.executable && (found.stats.mode & 0o100) === 0) problems.push(`${ref.what}: ${ref.path} isn't executable (chmod +x ${ref.path})`);
     if (ref.path.endsWith(".json")) problems.push(...jsonProblems(project.dir, ref.path, ref.what));
   }
   const walked = packedFiles(project);
-  problems.push(...walked.problems, ...limitProblems(walked.files));
+  problems.push(...walked.problems, ...limitProblems(walked.files, walked.directories));
   const bytes = walked.files.reduce((sum, f) => sum + f.size, 0);
   if (project.packageJson && typeof project.packageJson.version === "string" && project.packageJson.version !== project.manifest.version) {
     warnings.push(`package.json's version ${project.packageJson.version} isn't plugin.json's ${project.manifest.version}`);

@@ -318,6 +318,7 @@ export function createHostRuntime(transport: Transport, options: HostRuntimeOpti
         return rpc.request(M.ready, readyParams());
       })
       .then(() => undefined);
+    activation.catch(() => channels.closeAll());
     ready.catch(report);
     return ready;
   }

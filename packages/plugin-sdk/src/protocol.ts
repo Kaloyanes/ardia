@@ -1,6 +1,6 @@
 export * from "./protocolV3";
 import type { MediaSession, PeekOpenOptions, ProfileInfo, SplitOpenOptions } from "./protocolV3";
-export { TreePatchError, applyTreePatch, deepEqual, diffTree, type SurfacePatchParams, type TreeChild, type TreeOp, type TreePath } from "./treePatch";
+export { FORBIDDEN_KEYS, TreePatchError, applyTreePatch, deepEqual, diffTree, isTreeNode, type SurfacePatchParams, type TreeChild, type TreeOp, type TreePath } from "./treePatch";
 
 export type Tone = "default" | "secondary" | "tertiary" | "accent" | "success" | "warning" | "destructive";
 

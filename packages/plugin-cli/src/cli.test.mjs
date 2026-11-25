@@ -18,7 +18,7 @@ import { createOutput } from "./output.ts";
 import { assetName, packProject } from "./pack.ts";
 import { loadProject } from "./project.ts";
 import { releaseCommands, runRelease } from "./release.ts";
-import { tarBytes } from "./tar.ts";
+import { normalizedMode, TarError, tarBytes } from "./tar.ts";
 import { TEMPLATES } from "./templates.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "apc-"));
@@ -94,8 +94,8 @@ describe("init, check, build and pack", () => {
       assert.ok(names.includes(`${template}/plugin.json`) && names.includes(`${template}/dist/index.js`));
       assert.ok(!names.some((n) => n.includes("/src/") || n.includes(".github") || n.includes("tsconfig")), names.join(", "));
       const bundle = entries.find((e) => e.name === `${template}/dist/index.js`).data.toString("utf8");
-      assert.match(bundle, /^(?:"use strict";\n)?\(\(\) => \{/);
-      assert.equal(/^\s*\/\/ |\/\*/m.test(bundle), false, "the bundle carries no comments or paths");
+      assert.match(bundle, /^(?:"use strict";)?\(\(\)=>\{/);
+      assert.equal(/\/\*|\n\s*\/\/ /.test(bundle), false, "the bundle carries no comments or paths");
       assert.equal(bundle.includes(scratch), false);
       if (template === "content-script") assert.ok(names.includes("content-script/dist/content.js") && names.includes("content-script/styles/focus.css"));
       if (template === "sidecar") assert.equal(entries.find((e) => e.name === "sidecar/sidecar/server.mjs").mode, 0o755);
@@ -292,8 +292,9 @@ describe("release", () => {
     assert.equal(dry.tag, "v1.2.0-beta.1");
     assert.equal(dry.prerelease, true);
     assert.equal(dry.assets.length, 2);
-    assert.deepEqual(dry.commands[0].slice(0, 4), ["gh", "release", "create", "v1.2.0-beta.1"]);
-    assert.ok(dry.commands[0].includes("--prerelease") && dry.commands[0].includes("--repo"));
+    assert.deepEqual(dry.commands[0].slice(0, 3), ["gh", "release", "create"]);
+    assert.equal(dry.commands[0][dry.commands[0].indexOf("--") + 1], "v1.2.0-beta.1");
+    assert.ok(dry.commands[0].includes("--prerelease") && dry.commands[0].includes("--repo=acme/shipped"));
     const calls = [];
     const runner = (command, args) => {
       calls.push([command, ...args]);
@@ -301,7 +302,9 @@ describe("release", () => {
       return { status: 0, stdout: "gh version 2", stderr: "" };
     };
     const real = await runRelease(dir, silent(), {}, runner);
-    assert.deepEqual(real.commands[0].slice(0, 4), ["gh", "release", "upload", "v1.2.0-beta.1"]);
+    assert.deepEqual(real.commands[0].slice(0, 3), ["gh", "release", "upload"]);
+    assert.equal(real.commands[0][real.commands[0].indexOf("--") + 1], "v1.2.0-beta.1");
+    assert.ok(calls.some((c) => c[1] === "release" && c[2] === "view" && c.at(-2) === "--" && c.at(-1) === "v1.2.0-beta.1"));
     assert.ok(calls.some((c) => c[2] === "upload" && c.includes("--clobber")));
     await assert.rejects(runRelease(dir, silent(), { tag: "v9.9.9" }, runner), /doesn't name plugin\.json's version/);
     const noGh = () => ({ status: null, stdout: "", stderr: "not found" });
@@ -310,7 +313,133 @@ describe("release", () => {
 
   test("release commands quote and include notes", () => {
     const project = { manifest: { name: "N", version: "1.0.0" } };
-    assert.deepEqual(releaseCommands(project, "v1.0.0", ["a.tgz"], { prerelease: false, repo: null, notes: "hi", exists: false }), [["gh", "release", "create", "v1.0.0", "a.tgz", "--title", "N 1.0.0", "--notes", "hi"]]);
+    assert.deepEqual(releaseCommands(project, "v1.0.0", ["a.tgz"], { prerelease: false, repo: "a/b", notes: "-rf /", exists: false }), [["gh", "release", "create", "--title=N 1.0.0", "--notes=-rf /", "--repo=a/b", "--", "v1.0.0", "a.tgz"]]);
+    for (const bad of ["-v1.0.0", "--help", "v1..0", "v1 0", "", "v1/"]) assert.throws(() => releaseCommands(project, bad, [], { prerelease: false, repo: null, exists: false }), /isn't a tag name/, bad);
+    assert.throws(() => releaseCommands(project, "v1.0.0", [], { prerelease: false, repo: "--evil", exists: false }), /isn't a GitHub repository/);
+  });
+});
+
+describe("round 1 fixes", () => {
+  test("a template literal holding // survives the build untouched", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/literal" });
+    writeFileSync(join(dir, "src/index.tsx"), 'export const text = `first\n  // not a comment\n/* nor this */`;\n(globalThis as { keep?: string }).keep = text;\n');
+    const packed = await packProject(loadProject(dir), silent());
+    const bundle = readTar(readFileSync(packed.file)).find((e) => e.name === "literal/dist/index.js").data.toString("utf8");
+    const value = new Function(`${bundle}; return globalThis.keep;`)();
+    assert.equal(value, "first\n  // not a comment\n/* nor this */");
+    assert.equal(bundle.includes(dir), false);
+  });
+
+  test("the build refuses to write through a symlinked output folder", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/linked" });
+    const outside = mkdtempSync(join(tmpdir(), "apo-"));
+    symlinkSync(outside, join(dir, "dist"));
+    const q = quiet();
+    assert.equal(await mainWith(["build", dir], q.streams), 1);
+    assert.match(q.out.stderr, /goes through a symlink/);
+    assert.equal(existsSync(join(outside, "index.js")), false);
+  });
+
+  test("tar names count UTF-8 bytes, and every entry counts against the cap", () => {
+    const wide = "é".repeat(60);
+    const nested = `${"ü".repeat(70)}/${"ö".repeat(70)}/file.txt`;
+    const gz = createRequire(import.meta.url)("node:zlib").gzipSync(
+      tarBytes([
+        { path: wide, type: "file", mode: 0o644, data: Buffer.from("a") },
+        { path: "dir-ü", type: "directory", mode: 0o755 },
+        { path: nested, type: "file", mode: 0o644, data: Buffer.from("b") },
+      ]),
+    );
+    const entries = readTar(gz);
+    assert.deepEqual(entries.map((e) => e.name), [wide, "dir-ü/", nested]);
+    assert.ok(entries.every((e) => Buffer.byteLength(e.name.split("/").pop()) <= 200));
+    const many = Array.from({ length: 20_000 }, (_, i) => ({ path: `f${i}`, type: "file", mode: 0o644, data: Buffer.alloc(0) }));
+    assert.doesNotThrow(() => tarBytes(many));
+    assert.throws(() => tarBytes([...many, { path: "one-more", type: "directory", mode: 0o755 }]), TarError);
+    const longOnes = Array.from({ length: 10_001 }, (_, i) => ({ path: `${"x".repeat(150)}${i}`, type: "file", mode: 0o644, data: Buffer.alloc(0) }));
+    assert.throws(() => tarBytes(longOnes), /more than 20000/);
+  });
+
+  test("the executable bit is the owner's x, the same in check and pack", async () => {
+    const dir = fresh();
+    initPlugin(dir, { template: "sidecar", id: "@acme/modes" });
+    chmodSync(join(dir, "sidecar/server.mjs"), 0o011);
+    assert.match(checkProject(loadProject(dir)).problems.join("\n"), /sidecar\.run\[0\]: sidecar\/server\.mjs isn't executable/);
+    chmodSync(join(dir, "sidecar/server.mjs"), 0o700);
+    const packed = await packProject(loadProject(dir), silent());
+    assert.equal(readTar(readFileSync(packed.file)).find((e) => e.name === "modes/sidecar/server.mjs").mode, 0o755);
+    assert.equal(normalizedMode({ type: "file", mode: 0o011 }), 0o644);
+  });
+
+  test("a bare sidecar program is checked like any packaged file", () => {
+    const dir = fresh();
+    initPlugin(dir, { template: "sidecar", id: "@acme/bare" });
+    const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
+    manifest.sidecar.run = ["server"];
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
+    assert.match(checkProject(loadProject(dir)).problems.join("\n"), /sidecar\.run\[0\]: server doesn't exist/);
+    writeFileSync(join(dir, "server"), "#!/bin/sh\n");
+    assert.match(checkProject(loadProject(dir)).problems.join("\n"), /server isn't executable/);
+    chmodSync(join(dir, "server"), 0o755);
+    assert.doesNotMatch(checkProject(loadProject(dir)).problems.join("\n"), /sidecar/);
+  });
+
+  test("release refuses two platforms that would share a file name", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/twins" });
+    const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
+    manifest.release = { github: "acme/twins", assets: { "macos-arm64": "twins.tar.gz", "linux-x64": "twins.tar.gz" } };
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both be released as twins\.tar\.gz/);
+    manifest.release = { github: "acme/twins", asset: "twins.tar.gz" };
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
+    const ok = await runRelease(dir, silent(), { dryRun: true, platform: "universal,macos-arm64,linux-x64" });
+    assert.deepEqual(ok.assets.map((a) => a.file.split("/").pop()), ["twins.tar.gz", "twins-0.1.0-macos-arm64.tar.gz", "twins-0.1.0-linux-x64.tar.gz"]);
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true, tag: "--draft" }), /isn't a tag name/);
+  });
+
+  test("dev doesn't ask Ardia to reload a plugin that fails its check", async () => {
+    const dir = fresh();
+    initPlugin(dir, { template: "sidecar", id: "@acme/unfit" });
+    chmodSync(join(dir, "sidecar/server.mjs"), 0o644);
+    const data = join(mkdtempSync(join(tmpdir(), "apf-")), "d");
+    mkdirSync(data, { recursive: true });
+    const requests = [];
+    const server = createServer((socket) => socket.on("data", (line) => requests.push(String(line))));
+    await new Promise((resolve) => server.listen(join(data, "ArdiaControl.sock"), resolve));
+    try {
+      await assert.rejects(runDev(dir, silent(), { dataDir: data, once: true }), /wasn't asked to reload/);
+      assert.equal(requests.length, 0);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a stop that races setup still unlinks, and stopping twice is safe", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/racy" });
+    const data = mkdtempSync(join(tmpdir(), "apr-"));
+    const early = new AbortController();
+    early.abort();
+    const skipped = await runDev(dir, silent(), { dataDir: data, tail: false, signal: early.signal });
+    assert.equal(existsSync(skipped.paths.link), false);
+    const controller = new AbortController();
+    const pending = runDev(dir, silent(), { dataDir: data, tail: false, signal: controller.signal });
+    controller.abort();
+    const session = await pending;
+    await session.done;
+    assert.equal(existsSync(session.paths.link), false);
+    await Promise.all([session.stop(), session.stop()]);
+    const q = quiet();
+    const handlers = {};
+    const running = main(["dev", dir, "--data-dir", data, "--no-tail"], { streams: q.streams, env: {}, signals: { once: (name, listener) => (handlers[name] = listener) } });
+    const deadline = Date.now() + 10000;
+    while (!existsSync(session.paths.link) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    handlers.SIGINT();
+    assert.equal(await running, 0);
+    assert.equal(existsSync(session.paths.link), false);
   });
 });
 

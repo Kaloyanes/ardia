@@ -98,26 +98,36 @@ const LEVELS: Record<string, readonly unknown[]> = {
   files: [false, "picker"],
 };
 
-export function permissionGrants(permissions: PermissionsV3 | undefined): string[] {
+export function permissionGrants(permissions: PermissionsV3 | Readonly<Record<string, unknown>> | undefined): string[] {
   const grants: string[] = [];
-  const p = permissions ?? {};
+  const p = (permissions ?? {}) as Record<string, unknown>;
   for (const [key, levels] of Object.entries(LEVELS)) {
-    const value = (p as Record<string, unknown>)[key];
-    const index = levels.indexOf(value ?? false);
+    const value = p[key] ?? false;
+    const index = levels.indexOf(value);
+    if (index < 0) grants.push(`${key}:${String(value)}`);
     for (let i = 1; i <= index; i++) grants.push(`${key}:${String(levels[i])}`);
   }
-  for (const key of ["fullUrls", "workspace", "notifications", "commands", "storage", "secrets", "control"] as const) if (p[key] === true) grants.push(key);
+  for (const key of ["fullUrls", "workspace", "notifications", "commands", "storage", "secrets", "control"]) {
+    const value = p[key];
+    if (value === true) grants.push(key);
+    else if (value !== undefined && value !== false) grants.push(`${key}:${String(value)}`);
+  }
   const active = p.activePage;
   if (active === true) grants.push("activePage:read");
   else if (active && typeof active === "object") {
-    for (const part of ["read", "screenshot", "multiTab"] as const) if (active[part]) grants.push(`activePage:${part}`);
-  }
-  if (Array.isArray(p.pages)) for (const match of p.pages) grants.push(`pages:${match}`);
+    for (const [part, on] of Object.entries(active as Record<string, unknown>)) if (on) grants.push(`activePage:${part}`);
+  } else if (active !== undefined && active !== false) grants.push(`activePage:${String(active)}`);
+  if (Array.isArray(p.pages)) for (const match of p.pages) grants.push(`pages:${String(match)}`);
+  else if (p.pages !== undefined && p.pages !== false) grants.push(`pages:${String(p.pages)}`);
   if (p.network === "*") grants.push("network:*");
-  else if (Array.isArray(p.network)) for (const host of p.network) grants.push(`network:${host}`);
-  if (p.state && typeof p.state === "object") {
-    for (const event of p.state.events ?? []) grants.push(`state.events:${event}`);
-    for (const intent of p.state.intents ?? []) grants.push(`state.intents:${intent}`);
-  }
+  else if (Array.isArray(p.network)) for (const host of p.network) grants.push(`network:${String(host)}`);
+  else if (p.network !== undefined && p.network !== false) grants.push(`network:${String(p.network)}`);
+  const state = p.state;
+  if (state && typeof state === "object") {
+    const { events, intents } = state as { events?: unknown; intents?: unknown };
+    for (const event of Array.isArray(events) ? events : []) grants.push(`state.events:${String(event)}`);
+    for (const intent of Array.isArray(intents) ? intents : []) grants.push(`state.intents:${String(intent)}`);
+  } else if (state !== undefined && state !== false) grants.push(`state:${String(state)}`);
+  for (const key of Object.keys(p)) if (!(PERMISSION_KEYS as readonly string[]).includes(key)) grants.push(`unknown:${key}`);
   return [...new Set(grants)].sort();
 }

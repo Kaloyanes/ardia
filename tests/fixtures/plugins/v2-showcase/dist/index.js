@@ -50,6 +50,7 @@
   };
   var CHANNEL_EVENT_NAMES = Object.values(CHANNEL_EVENTS);
 
+  var definedKeys = (record) => Object.keys(record).filter((key) => record[key] !== void 0);
   function deepEqual(a, b) {
     if (a === b) return true;
     if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -60,20 +61,26 @@
     }
     const left = a;
     const right = b;
-    const keys = Object.keys(left);
-    if (keys.length !== Object.keys(right).length) return false;
-    return keys.every((key) => Object.hasOwn(right, key) && deepEqual(left[key], right[key]));
+    const keys = definedKeys(left);
+    if (keys.length !== definedKeys(right).length) return false;
+    return keys.every((key) => right[key] !== void 0 && deepEqual(left[key], right[key]));
   }
   var sameIdentity = (a, b) => {
     if (a === void 0 || b === void 0) return false;
     if (typeof a === "string" || typeof b === "string") return typeof a === typeof b;
     return a.type === b.type && (a.key ?? null) === (b.key ?? null);
   };
+  function withoutUndefined(node) {
+    if (typeof node === "string") return node;
+    const props = {};
+    for (const key of definedKeys(node.props)) props[key] = node.props[key];
+    return { ...node, props, children: node.children.map(withoutUndefined) };
+  }
   function diffProps(a, b, path, ops) {
     const set = {};
     const unset = [];
-    for (const key of Object.keys(b.props)) if (!Object.hasOwn(a.props, key) || !deepEqual(a.props[key], b.props[key])) set[key] = b.props[key];
-    for (const key of Object.keys(a.props)) if (!Object.hasOwn(b.props, key)) unset.push(key);
+    for (const key of definedKeys(b.props)) if (!deepEqual(a.props[key], b.props[key])) set[key] = b.props[key];
+    for (const key of definedKeys(a.props)) if (b.props[key] === void 0) unset.push(key);
     if (Object.keys(set).length || unset.length) ops.push({ op: "props", path, ...Object.keys(set).length ? { set } : {}, ...unset.length ? { unset } : {} });
   }
   function diffChildren(a, b, path, ops) {
@@ -92,21 +99,21 @@
       for (let i = start; i < endA; i++) diffNode(a[i], b[i], [...path, i], ops);
     } else {
       if (removed) ops.push({ op: "remove", path, index: start, count: removed });
-      if (added) ops.push({ op: "insert", path, index: start, nodes: b.slice(start, endB) });
+      if (added) ops.push({ op: "insert", path, index: start, nodes: b.slice(start, endB).map(withoutUndefined) });
     }
     for (let i = 0; i < a.length - endA; i++) diffNode(a[endA + i], b[endB + i], [...path, endB + i], ops);
   }
   function diffNode(a, b, path, ops) {
     if (a === b) return;
     if (typeof a === "string" || typeof b === "string" || !sameIdentity(a, b)) {
-      if (!deepEqual(a, b)) ops.push({ op: "replace", path, node: b });
+      if (!deepEqual(a, b)) ops.push({ op: "replace", path, node: withoutUndefined(b) });
       return;
     }
     diffProps(a, b, path, ops);
     diffChildren(a.children, b.children, path, ops);
   }
   function diffTree(previous, next) {
-    if (!previous) return [{ op: "replace", path: [], node: next }];
+    if (!previous) return [{ op: "replace", path: [], node: withoutUndefined(next) }];
     const ops = [];
     diffNode(previous, next, [], ops);
     return ops;
@@ -606,7 +613,9 @@
 
   var abortError = (signal) => signal.reason instanceof Error ? signal.reason : new PluginError("aborted", typeof signal.reason === "string" ? signal.reason : "The request was aborted.");
   var MAX_BUFFERED_CHUNKS = 4096;
-  function chunkQueue(onDone) {
+  var MAX_HELD_MESSAGES = 256;
+  var quiet = () => void 0;
+  function chunkQueue(onDone, onFail) {
     const buffered = [];
     const readers = [];
     let ended = false;
@@ -621,19 +630,20 @@
         const reader = readers.shift();
         if (reader) reader.resolve({ value: data, done: false });
         else if (buffered.length < MAX_BUFFERED_CHUNKS) buffered.push(data);
-        else queue.fail(new PluginError("overflow", "The stream sent more than the plugin read; it was cut off."));
+        else queue.fail(new PluginError("overflow", "The stream sent more than the plugin read; it was cut off."), false);
       },
       end() {
         if (ended) return;
         close();
         if (!buffered.length) for (const reader of readers.splice(0)) reader.resolve({ value: void 0, done: true });
       },
-      fail(error) {
+      fail(error, fromHost = true) {
         if (ended) return;
         failure = error;
         buffered.length = 0;
         close();
         for (const reader of readers.splice(0)) reader.reject(error);
+        onFail(error, fromHost);
       },
       next() {
         const value = buffered.shift();
@@ -706,33 +716,37 @@
       if (signal?.aborted) throw abortError(signal);
       const id = `f${++next}`;
       let cancelled = false;
-      const queue = chunkQueue(() => {
-        streams.delete(id);
-        signal?.removeEventListener("abort", onAbort);
-      });
+      let rejectHead = null;
+      const cancelRemote = () => {
+        if (cancelled) return Promise.resolve();
+        cancelled = true;
+        return rpc.request(HOST_METHODS_V3.fetchCancel, { stream: id }).then(void 0, quiet);
+      };
+      const queue = chunkQueue(
+        () => {
+          streams.delete(id);
+          signal?.removeEventListener("abort", onAbort);
+        },
+        (error, fromHost) => {
+          rejectHead?.(error);
+          if (!fromHost) void cancelRemote();
+        }
+      );
       const cancel = async () => {
         if (cancelled || queue.ended) return;
-        cancelled = true;
         queue.end();
-        streams.delete(id);
-        await rpc.request(HOST_METHODS_V3.fetchCancel, { stream: id }).then(void 0, report);
+        await cancelRemote();
       };
-      let rejectHead = null;
       function onAbort() {
-        const error = abortError(signal);
-        queue.fail(error);
-        rejectHead?.(error);
-        if (!cancelled) {
-          cancelled = true;
-          void rpc.request(HOST_METHODS_V3.fetchCancel, { stream: id }).then(void 0, report);
-        }
+        queue.fail(abortError(signal), false);
       }
       streams.set(id, queue);
       signal?.addEventListener("abort", onAbort, { once: true });
       const head = await new Promise((resolve, reject) => {
         rejectHead = reject;
         rpc.request(HOST_METHODS_V3.fetchStream, { ...request, stream: id }).then(resolve, (error) => {
-          queue.fail(error);
+          rejectHead = null;
+          queue.fail(error, true);
           reject(error);
         });
       });
@@ -772,6 +786,17 @@
       let state = "connecting";
       let protocol = "";
       let settle = null;
+      const held = { message: [], close: [], error: [] };
+      const flush = () => void Promise.resolve().then(() => {
+        if (listeners.message.size) for (const [data, binary] of held.message.splice(0)) for (const l of [...listeners.message]) safely(() => l(data, binary));
+        if (listeners.error.size) for (const message of held.error.splice(0)) for (const l of [...listeners.error]) safely(() => l(message));
+        if (listeners.close.size) for (const [code, reason] of held.close.splice(0)) for (const l of [...listeners.close]) safely(() => l(code, reason));
+      });
+      const attach = (set, listener) => {
+        const added = addTo(set, listener);
+        flush();
+        return added;
+      };
       const forget = () => {
         sockets.delete(id);
         options.signal?.removeEventListener("abort", onAbort);
@@ -791,12 +816,19 @@
         },
         close: (code = 1e3, reason = "") => {
           if (state === "closed" || state === "closing") return Promise.resolve();
+          const before = state;
           state = "closing";
-          return rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code, reason }).then(() => void 0);
+          return rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code, reason }).then(
+            () => void 0,
+            (error) => {
+              if (state === "closing") state = before;
+              throw error;
+            }
+          );
         },
-        onMessage: (listener) => addTo(listeners.message, listener),
-        onClose: (listener) => addTo(listeners.close, listener),
-        onError: (listener) => addTo(listeners.error, listener)
+        onMessage: (listener) => attach(listeners.message, listener),
+        onClose: (listener) => attach(listeners.close, listener),
+        onError: (listener) => attach(listeners.error, listener)
       };
       sockets.set(id, {
         opened(given) {
@@ -806,16 +838,26 @@
           settle?.resolve();
         },
         message(data, binary) {
+          if (!listeners.message.size) {
+            if (held.message.length < MAX_HELD_MESSAGES) held.message.push([data, binary]);
+            return;
+          }
           for (const listener of [...listeners.message]) safely(() => listener(data, binary));
         },
         closed(code, reason) {
+          if (state === "closed") return;
           state = "closed";
           forget();
           settle?.reject(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
-          for (const listener of [...listeners.close]) safely(() => listener(code, reason));
+          if (!listeners.close.size) held.close.push([code, reason]);
+          else for (const listener of [...listeners.close]) safely(() => listener(code, reason));
         },
         failed(message) {
           settle?.reject(new PluginError("failed", message));
+          if (!listeners.error.size) {
+            if (held.error.length < MAX_HELD_MESSAGES) held.error.push(message);
+            return;
+          }
           for (const listener of [...listeners.error]) safely(() => listener(message));
         }
       });
@@ -861,8 +903,11 @@
       openCount: () => streams.size + sockets.size,
       closeAll() {
         const error = new PluginError("stopped", "The plugin stopped.");
-        for (const stream of [...streams.values()]) stream.fail(error);
-        for (const socket of [...sockets.values()]) socket.closed(1001, "The plugin stopped.");
+        for (const stream of [...streams.values()]) stream.fail(error, false);
+        for (const [socket, entry] of [...sockets]) {
+          void rpc.request(HOST_METHODS_V3.wsClose, { socket, code: 1001, reason: "The plugin stopped." }).then(void 0, quiet);
+          entry.closed(1001, "The plugin stopped.");
+        }
         streams.clear();
         sockets.clear();
         sidecarListeners.clear();
@@ -1902,6 +1947,7 @@
         readySent = true;
         return rpc.request(HOST_METHODS.ready, readyParams());
       }).then(() => void 0);
+      activation.catch(() => channels.closeAll());
       ready.catch(report);
       return ready;
     }

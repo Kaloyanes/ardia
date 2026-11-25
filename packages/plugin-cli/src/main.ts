@@ -113,10 +113,19 @@ export async function main(argv: readonly string[], context: MainContext = {}): 
         });
         return 0;
       case "dev": {
-        const session = await runDev(dir, out, { ...build, dataDir: str(parsed, "data-dir"), configDir: str(parsed, "config-dir"), once: bool(parsed, "once"), tail: parsed.flags.tail !== false, env: context.env ?? {} });
-        const stop = () => void session.stop();
-        signals.once("SIGINT", stop);
-        signals.once("SIGTERM", stop);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        signals.once("SIGINT", abort);
+        signals.once("SIGTERM", abort);
+        const session = await runDev(dir, out, {
+          ...build,
+          dataDir: str(parsed, "data-dir"),
+          configDir: str(parsed, "config-dir"),
+          once: bool(parsed, "once"),
+          tail: parsed.flags.tail !== false,
+          env: context.env ?? {},
+          signal: controller.signal,
+        });
         await session.done;
         return 0;
       }

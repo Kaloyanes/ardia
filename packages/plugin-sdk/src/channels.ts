@@ -43,7 +43,7 @@ export type ConnectOptions = { protocols?: string[]; headers?: Record<string, st
 
 type Waiting = { resolve: (result: IteratorResult<string>) => void; reject: (error: unknown) => void };
 
-type Stream = { push(data: string): void; end(): void; fail(error: unknown): void };
+type Stream = { push(data: string): void; end(): void; fail(error: unknown, fromHost?: boolean): void };
 
 type Socket = { opened(protocol: string): void; message(data: string, binary: boolean): void; closed(code: number, reason: string): void; failed(message: string): void };
 
@@ -52,7 +52,11 @@ const abortError = (signal: AbortSignalLike) =>
 
 const MAX_BUFFERED_CHUNKS = 4096;
 
-function chunkQueue(onDone: () => void) {
+const MAX_HELD_MESSAGES = 256;
+
+const quiet = () => undefined;
+
+function chunkQueue(onDone: () => void, onFail: (error: unknown, fromHost: boolean) => void) {
   const buffered: string[] = [];
   const readers: Waiting[] = [];
   let ended = false;
@@ -67,19 +71,20 @@ function chunkQueue(onDone: () => void) {
       const reader = readers.shift();
       if (reader) reader.resolve({ value: data, done: false });
       else if (buffered.length < MAX_BUFFERED_CHUNKS) buffered.push(data);
-      else queue.fail(new PluginError("overflow", "The stream sent more than the plugin read; it was cut off."));
+      else queue.fail(new PluginError("overflow", "The stream sent more than the plugin read; it was cut off."), false);
     },
     end() {
       if (ended) return;
       close();
       if (!buffered.length) for (const reader of readers.splice(0)) reader.resolve({ value: undefined, done: true });
     },
-    fail(error: unknown) {
+    fail(error: unknown, fromHost = true) {
       if (ended) return;
       failure = error;
       buffered.length = 0;
       close();
       for (const reader of readers.splice(0)) reader.reject(error);
+      onFail(error, fromHost);
     },
     next(): Promise<IteratorResult<string>> {
       const value = buffered.shift();
@@ -158,33 +163,37 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     if (signal?.aborted) throw abortError(signal);
     const id = `f${++next}`;
     let cancelled = false;
-    const queue = chunkQueue(() => {
-      streams.delete(id);
-      signal?.removeEventListener("abort", onAbort);
-    });
+    let rejectHead: ((error: unknown) => void) | null = null;
+    const cancelRemote = () => {
+      if (cancelled) return Promise.resolve();
+      cancelled = true;
+      return rpc.request(M.fetchCancel, { stream: id }).then(undefined, quiet);
+    };
+    const queue = chunkQueue(
+      () => {
+        streams.delete(id);
+        signal?.removeEventListener("abort", onAbort);
+      },
+      (error, fromHost) => {
+        rejectHead?.(error);
+        if (!fromHost) void cancelRemote();
+      },
+    );
     const cancel = async () => {
       if (cancelled || queue.ended) return;
-      cancelled = true;
       queue.end();
-      streams.delete(id);
-      await rpc.request(M.fetchCancel, { stream: id }).then(undefined, report);
+      await cancelRemote();
     };
-    let rejectHead: ((error: unknown) => void) | null = null;
     function onAbort() {
-      const error = abortError(signal!);
-      queue.fail(error);
-      rejectHead?.(error);
-      if (!cancelled) {
-        cancelled = true;
-        void rpc.request(M.fetchCancel, { stream: id }).then(undefined, report);
-      }
+      queue.fail(abortError(signal!), false);
     }
     streams.set(id, queue);
     signal?.addEventListener("abort", onAbort, { once: true });
     const head = await new Promise<StreamHead>((resolve, reject) => {
       rejectHead = reject;
       rpc.request<StreamHead>(M.fetchStream, { ...request, stream: id }).then(resolve, (error) => {
-        queue.fail(error);
+        rejectHead = null;
+        queue.fail(error, true);
         reject(error);
       });
     });
@@ -225,6 +234,18 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     let state: SocketState = "connecting";
     let protocol = "";
     let settle: { resolve: () => void; reject: (error: unknown) => void } | null = null;
+    const held = { message: [] as [string, boolean][], close: [] as [number, string][], error: [] as string[] };
+    const flush = () =>
+      void Promise.resolve().then(() => {
+        if (listeners.message.size) for (const [data, binary] of held.message.splice(0)) for (const l of [...listeners.message]) safely(() => l(data, binary));
+        if (listeners.error.size) for (const message of held.error.splice(0)) for (const l of [...listeners.error]) safely(() => l(message));
+        if (listeners.close.size) for (const [code, reason] of held.close.splice(0)) for (const l of [...listeners.close]) safely(() => l(code, reason));
+      });
+    const attach = <L>(set: Set<L>, listener: L): Disposable => {
+      const added = addTo(set, listener);
+      flush();
+      return added;
+    };
     const forget = () => {
       sockets.delete(id);
       options.signal?.removeEventListener("abort", onAbort);
@@ -244,12 +265,19 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
       },
       close: (code = 1000, reason = "") => {
         if (state === "closed" || state === "closing") return Promise.resolve();
+        const before = state;
         state = "closing";
-        return rpc.request(M.wsClose, { socket: id, code, reason }).then(() => undefined);
+        return rpc.request(M.wsClose, { socket: id, code, reason }).then(
+          () => undefined,
+          (error) => {
+            if (state === "closing") state = before;
+            throw error;
+          },
+        );
       },
-      onMessage: (listener) => addTo(listeners.message, listener),
-      onClose: (listener) => addTo(listeners.close, listener),
-      onError: (listener) => addTo(listeners.error, listener),
+      onMessage: (listener) => attach(listeners.message, listener),
+      onClose: (listener) => attach(listeners.close, listener),
+      onError: (listener) => attach(listeners.error, listener),
     };
     sockets.set(id, {
       opened(given) {
@@ -259,16 +287,26 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
         settle?.resolve();
       },
       message(data, binary) {
+        if (!listeners.message.size) {
+          if (held.message.length < MAX_HELD_MESSAGES) held.message.push([data, binary]);
+          return;
+        }
         for (const listener of [...listeners.message]) safely(() => listener(data, binary));
       },
       closed(code, reason) {
+        if (state === "closed") return;
         state = "closed";
         forget();
         settle?.reject(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
-        for (const listener of [...listeners.close]) safely(() => listener(code, reason));
+        if (!listeners.close.size) held.close.push([code, reason]);
+        else for (const listener of [...listeners.close]) safely(() => listener(code, reason));
       },
       failed(message) {
         settle?.reject(new PluginError("failed", message));
+        if (!listeners.error.size) {
+          if (held.error.length < MAX_HELD_MESSAGES) held.error.push(message);
+          return;
+        }
         for (const listener of [...listeners.error]) safely(() => listener(message));
       },
     });
@@ -315,8 +353,11 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     openCount: () => streams.size + sockets.size,
     closeAll() {
       const error = new PluginError("stopped", "The plugin stopped.");
-      for (const stream of [...streams.values()]) stream.fail(error);
-      for (const socket of [...sockets.values()]) socket.closed(1001, "The plugin stopped.");
+      for (const stream of [...streams.values()]) stream.fail(error, false);
+      for (const [socket, entry] of [...sockets]) {
+        void rpc.request(M.wsClose, { socket, code: 1001, reason: "The plugin stopped." }).then(undefined, quiet);
+        entry.closed(1001, "The plugin stopped.");
+      }
       streams.clear();
       sockets.clear();
       sidecarListeners.clear();

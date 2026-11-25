@@ -9,15 +9,15 @@ import { patternCovers, urlMatches } from "./matchPatterns.ts";
 
 describe("semver", () => {
   test("parses strict versions and refuses loose ones", () => {
-    assert.deepEqual(parseSemver("1.2.3-beta.4+build.5"), { major: 1, minor: 2, patch: 3, prerelease: ["beta", 4], build: ["build", "5"] });
-    for (const bad of ["1.2", "01.2.3", "1.2.3-", "v1.2.3", "1.2.3-01", " 1.2.3", "1.2.3.4", "", null, 3]) assert.equal(parseSemver(bad), null, String(bad));
-    assert.equal(formatSemver(parseSemver("1.0.0-rc.1+x")), "1.0.0-rc.1");
+    assert.deepEqual(parseSemver("1.2.3-beta.4"), { major: 1, minor: 2, patch: 3, prerelease: ["beta", 4] });
+    for (const bad of ["1.2", "01.2.3", "1.2.3-", "v1.2.3", "1.2.3-01", " 1.2.3", "1.2.3.4", "", null, 3, "1.2.3+build.5", "1.0.0-rc.1+x", "1000000000.0.0", "1.2.3-1000000000"]) assert.equal(parseSemver(bad), null, String(bad));
+    assert.equal(formatSemver(parseSemver("1.0.0-rc.1")), "1.0.0-rc.1");
+    assert.deepEqual(parseSemver("999999999.999999999.999999999"), { major: 999999999, minor: 999999999, patch: 999999999, prerelease: [] });
   });
 
   test("orders versions the way semver 2.0.0 does", () => {
     const order = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.10.0", "2.0.0"];
     for (let i = 1; i < order.length; i++) assert.equal(compareVersions(order[i - 1], order[i]), -1, `${order[i - 1]} < ${order[i]}`);
-    assert.equal(compareVersions("1.0.0+a", "1.0.0+b"), 0);
     assert.deepEqual(sortVersions(["2.0.0", "bad", "1.0.0", "1.0.0-rc.1"], "desc"), ["2.0.0", "1.0.0", "1.0.0-rc.1"]);
     assert.throws(() => compareVersions("1", "2"));
   });
@@ -56,6 +56,15 @@ describe("semver", () => {
     assert.equal(satisfies("1.2.4-beta", ">=1.2.3", { includePrerelease: true }), true);
     assert.equal(satisfies("1.2.3-beta.5", "^1.2.3-beta.2"), true);
     assert.equal(maxSatisfying(["1.0.0", "1.5.0", "2.0.0", "1.6.0-beta"], "^1.0.0"), "1.5.0");
+  });
+
+  test("ranges at the top of the number cap stay bounded instead of matching everything", () => {
+    assert.equal(satisfies("999999999.5.0", "^999999999.0.0"), true);
+    assert.equal(satisfies("0.0.1", "^999999999.0.0"), false);
+    assert.equal(satisfies("999999999.999999999.0", "~999999999.999999999.0"), true);
+    assert.equal(satisfies("1.0.0", "~999999999.999999999.0"), false);
+    assert.equal(parseRange("^9999999999.0.0"), null);
+    assert.equal(parseRange(">=1.0.0+build"), null);
   });
 
   test("refuses ranges that aren't ranges", () => {
@@ -125,6 +134,31 @@ describe("manifest v3", () => {
     assert.equal(ok({ permissions: { control: true } }).scope, "global");
   });
 
+  test("relative paths never take a drive letter, a backslash or a way out", () => {
+    for (const bad of ["C:/x.js", "c:x.js", "C:\\x.js", "a/../b.js", "./a.js", "a//b.js", "/abs.js"]) assert.equal(problems({ main: bad }).length, 1, bad);
+    assert.equal(problems({ contributes: { netRules: "D:/rules.json" } }).length, 1);
+    const schema = generateManifestV3JsonSchema();
+    const main = new RegExp(schema.properties.main.pattern, "u");
+    assert.equal(main.test("C:/x.js"), false);
+    assert.equal(main.test("dist/index.js"), true);
+  });
+
+  test("sidecar.run[0] is a program inside the plugin's folder", () => {
+    ok({ sidecar: { run: ["bin/server", "--port", "0"] } });
+    ok({ sidecar: { run: ["server"] } });
+    for (const bad of ["/usr/bin/env", "../bin/x", "C:\\tools\\x.exe", "D:/x", "bin/../../x"]) assert.equal(problems({ sidecar: { run: [bad] } })[0], "sidecar.run[0] must be a program inside the plugin's folder, as a relative path like bin/server", bad);
+    assert.equal(problems({ sidecar: { run: ["bin/s", "a\u0000b"] } })[0], "sidecar.run[1] must be an argument of 1 to 1024 characters with no NUL");
+    assert.deepEqual(problems({ sidecar: { run: [] } }), ["sidecar.run must be a list of 1 to 32"]);
+    const run = generateManifestV3JsonSchema().properties.sidecar.properties.run;
+    assert.equal(new RegExp(run.prefixItems[0].pattern, "u").test("/usr/bin/env"), false);
+  });
+
+  test("icon is an SF Symbol; iconUrl is an https image", () => {
+    ok({ icon: "sparkles", iconUrl: "https://example.com/icon.png" });
+    assert.equal(problems({ icon: "https://example.com/i.png" })[0], "icon must be an SF Symbol name");
+    assert.equal(problems({ iconUrl: "http://example.com/i.png" })[0], "iconUrl must be an https:// URL");
+  });
+
   test("runtime bounds and paths", () => {
     assert.deepEqual(problems({ main: "../index.js" }), ["main must be a relative .js, .mjs or .cjs file inside the plugin's folder"]);
     assert.deepEqual(problems({ main: "dist/index.ts" }), ["main must be a relative .js, .mjs or .cjs file inside the plugin's folder"]);
@@ -151,7 +185,14 @@ describe("manifest v3", () => {
   test("network takes hosts, wildcards and explicit loopback ports", () => {
     ok({ permissions: { network: ["api.example.com", "*.example.org", "localhost:8080", "127.0.0.1:11434"] } });
     ok({ permissions: { network: "*" } });
-    for (const bad of ["localhost", "http://x.com", "*.com", "localhost:0", "localhost:70000", "x.com:443"]) assert.equal(problems({ permissions: { network: [bad] } }).length, 1, bad);
+    for (const bad of ["localhost", "http://x.com", "*.com", "localhost:0", "localhost:65536", "localhost:70000", "x.com:443", "2130706433", "0x7f000001", "127.0.0.2", "10.0.0.1", "127.0.0.1", "0x7f.0x0.0x0.0x1", "017700000001", "192.168.1.1:80"]) assert.equal(problems({ permissions: { network: [bad] } }).length, 1, bad);
+    ok({ permissions: { network: ["localhost:1", "127.0.0.1:65535"] } });
+    for (const bad of ["https://127.0.0.2/*", "https://10.0.0.1/*", "https://2130706433/*", "http://localhost:0/*", "http://localhost:65536/*", "http://127.0.0.2:80/*", "https://0x7f.0x1/*"]) assert.equal(problems({ permissions: { pages: [bad] } }).length, 1, bad);
+    const schema = generateManifestV3JsonSchema();
+    const hosts = new RegExp(schema.properties.permissions.properties.network.anyOf[1].items.pattern, "u");
+    assert.equal(hosts.test("localhost:65535"), true);
+    assert.equal(hosts.test("localhost:65536"), false);
+    assert.equal(hosts.test("127.0.0.2"), false);
     assert.equal(problems({ permissions: { network: [] } })[0], "permissions.network must be a list of 1 to 32");
     assert.equal(problems({ permissions: { network: true } })[0], 'permissions.network must be false, "*" or a list of 1 to 32 hosts');
   });

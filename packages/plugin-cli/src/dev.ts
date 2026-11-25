@@ -8,7 +8,7 @@ import { CliError, type Output } from "./output";
 import { loadProject, type Project } from "./project";
 import { CLI_VERSION } from "./version";
 
-export type DevFlags = BuildFlags & { dataDir?: string; configDir?: string; once?: boolean; tail?: boolean; env?: Env };
+export type DevFlags = BuildFlags & { dataDir?: string; configDir?: string; once?: boolean; tail?: boolean; env?: Env; signal?: AbortSignal };
 
 export type DevPaths = { dataDir: string; configDir: string; socket: string; link: string; logs: string[] };
 
@@ -135,12 +135,17 @@ function describeBuild(report: BuildReport): string {
 export async function runDev(dir: string | undefined, out: Output, flags: DevFlags = {}): Promise<DevSession> {
   const project = loadProject(dir);
   const paths = devPaths(project, flags);
+  const signal = flags.signal;
   let warnedUnreachable = false;
-  const reload = async (report: BuildReport) => {
+  const reload = async (report: BuildReport): Promise<boolean> => {
     out.info(`[${new Date().toLocaleTimeString()}] ${describeBuild(report)}`);
-    if (!report.ok) return;
+    if (!report.ok) return false;
     const check = checkProject(project, { built: true });
-    for (const problem of check.problems) out.warn(problem);
+    if (!check.ok) {
+      out.warn(`not reloading ${project.manifest.id}: plugin.json or its files have ${check.problems.length} problem${check.problems.length === 1 ? "" : "s"}`);
+      for (const problem of check.problems) out.warn(`  ${problem}`);
+      return false;
+    }
     const ping = await pingArdia(paths.socket, { id: project.manifest.id, path: project.dir, link: paths.link });
     if (ping.reached && !ping.error) out.info(`reloaded ${project.manifest.id} in Ardia`);
     else if (ping.reached) out.warn(`Ardia didn't reload the plugin: ${ping.error}`);
@@ -148,29 +153,47 @@ export async function runDev(dir: string | undefined, out: Output, flags: DevFla
       warnedUnreachable = true;
       out.info(`Ardia isn't reachable at ${paths.socket}; it picks the link up when it starts (turn on Settings › Advanced › Let programs control Ardia to reload on save)`);
     }
+    return true;
   };
+  const finished = (): DevSession => ({ paths, stop: async () => undefined, done: Promise.resolve() });
+  if (signal?.aborted) return finished();
   writeDevLink(project, paths);
   out.info(`linked ${project.manifest.id} → ${paths.link}`);
   if (flags.once) {
     const report = await buildProject(project, flags);
-    await reload(report);
+    const reloaded = await reload(report);
     if (!report.ok) throw new CliError("The build failed", report.errors);
+    if (!reloaded) throw new CliError(`${project.manifest.id} has problems, so Ardia wasn't asked to reload it`, checkProject(project, { built: true }).problems);
     out.result(describeBuild(report), { id: project.manifest.id, link: paths.link, socket: paths.socket, build: report });
-    return { paths, stop: async () => undefined, done: Promise.resolve() };
+    return finished();
   }
   let finish!: () => void;
   const done = new Promise<void>((resolve) => (finish = resolve));
-  const watcher = await watchProject(project, flags, (report) => void reload(report).catch((error) => out.warn(String(error))));
+  let reloading = Promise.resolve();
+  let watcher: { dispose(): Promise<void> };
+  try {
+    watcher = await watchProject(project, flags, (report) => {
+      reloading = reloading.then(() => reload(report).then(() => undefined, (error: unknown) => out.warn(String(error))));
+    });
+  } catch (error) {
+    removeDevLink(paths);
+    throw error;
+  }
   const stopTail = flags.tail === false ? () => undefined : tailLogs(paths.logs, (text) => process.stdout.write(text));
   out.info("watching for changes; press Ctrl+C to stop");
-  let stopped = false;
-  const stop = async () => {
-    if (stopped) return;
-    stopped = true;
-    stopTail();
-    await watcher.dispose();
-    if (removeDevLink(paths)) out.info(`unlinked ${project.manifest.id}`);
-    finish();
-  };
+  let stopping: Promise<void> | null = null;
+  const stop = () =>
+    (stopping ??= (async () => {
+      stopTail();
+      try {
+        await watcher.dispose();
+        await reloading;
+      } finally {
+        if (removeDevLink(paths)) out.info(`unlinked ${project.manifest.id}`);
+        finish();
+      }
+    })());
+  if (signal?.aborted) await stop();
+  else signal?.addEventListener("abort", () => void stop(), { once: true });
   return { paths, stop, done };
 }

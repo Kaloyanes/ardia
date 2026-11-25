@@ -3,7 +3,6 @@ export type SemVer = {
   readonly minor: number;
   readonly patch: number;
   readonly prerelease: readonly (string | number)[];
-  readonly build: readonly string[];
 };
 
 export type Comparator = { readonly op: "<" | "<=" | ">" | ">=" | "="; readonly version: SemVer };
@@ -12,17 +11,17 @@ export type Range = { readonly source: string; readonly sets: readonly (readonly
 
 export type SatisfyOptions = { includePrerelease?: boolean };
 
-const NUMERIC = "0|[1-9]\\d*";
-const IDENT = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
-const STRICT = new RegExp(`^(${NUMERIC})\\.(${NUMERIC})\\.(${NUMERIC})(?:-(${IDENT}(?:\\.${IDENT})*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$`);
-const PART = "(?:0|[1-9]\\d*|[xX*])";
-const PARTIAL = new RegExp(`^v?(${PART})(?:\\.(${PART})(?:\\.(${PART})(?:-(${IDENT}(?:\\.${IDENT})*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?)?)?$`);
+const NUMERIC = "0|[1-9]\\d{0,8}";
+const IDENT = "(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const STRICT = new RegExp(`^(${NUMERIC})\\.(${NUMERIC})\\.(${NUMERIC})(?:-(${IDENT}(?:\\.${IDENT})*))?$`);
+const PART = "(?:0|[1-9]\\d{0,8}|[xX*])";
+const PARTIAL = new RegExp(`^v?(${PART})(?:\\.(${PART})(?:\\.(${PART})(?:-(${IDENT}(?:\\.${IDENT})*))?)?)?$`);
 const MAX_LENGTH = 256;
-const MAX_PART = Number.MAX_SAFE_INTEGER;
+export const MAX_VERSION_PART = 999_999_999;
 
 const toPart = (text: string): number | null => {
   const value = Number(text);
-  return Number.isSafeInteger(value) && value <= MAX_PART ? value : null;
+  return Number.isSafeInteger(value) && value <= MAX_VERSION_PART ? value : null;
 };
 
 const prereleaseOf = (text: string | undefined): (string | number)[] =>
@@ -36,7 +35,7 @@ export function parseSemver(text: unknown): SemVer | null {
   if (major === null || minor === null || patch === null || major === undefined || minor === undefined || patch === undefined) return null;
   const prerelease = prereleaseOf(match[4]);
   if (prerelease.some((id) => typeof id === "number" && !Number.isSafeInteger(id))) return null;
-  return { major, minor, patch, prerelease, build: match[5] ? match[5].split(".") : [] };
+  return { major, minor, patch, prerelease };
 }
 
 export const isSemver = (text: unknown): text is string => parseSemver(text) !== null;
@@ -78,7 +77,7 @@ export function compareVersions(a: string, b: string): number {
   return compareSemver(left, right);
 }
 
-const version = (major: number, minor: number, patch: number, prerelease: readonly (string | number)[] = []): SemVer => ({ major, minor, patch, prerelease, build: [] });
+const version = (major: number, minor: number, patch: number, prerelease: readonly (string | number)[] = []): SemVer => ({ major, minor, patch, prerelease });
 const floor = (major: number, minor: number, patch: number) => version(major, minor, patch, [0]);
 
 type Partial = { major: number | null; minor: number | null; patch: number | null; prerelease: (string | number)[] };

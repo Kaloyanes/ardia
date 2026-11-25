@@ -16,33 +16,89 @@ export type SubtleLike = {
 
 export type CryptoOptions = { subtle?: SubtleLike };
 
-export const ENVELOPE_CONTEXT = "ardia.registry.v1\n";
+export const REGISTRY_ENVELOPE_VERSION = 1;
+
+export const REGISTRY_SIGNATURE_DOMAIN = "ardia-registry-v1\n";
+
+export const ENVELOPE_CONTEXT = REGISTRY_SIGNATURE_DOMAIN;
+
+const SIG_PATTERN = /^[A-Za-z0-9_-]{86}$/;
 
 const ED25519 = { name: "Ed25519" } as const;
 
-export function canonicalJson(value: unknown): string {
+export class CanonicalJsonError extends TypeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "CanonicalJsonError";
+  }
+}
+
+function hasLoneSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++;
+        continue;
+      }
+      return true;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) return true;
+  }
+  return false;
+}
+
+function encodeString(text: string, path: string): string {
+  if (hasLoneSurrogate(text)) throw new CanonicalJsonError(`canonicalJson can't encode a lone surrogate at ${path}`);
+  return JSON.stringify(text);
+}
+
+const compareUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function encode(value: unknown, path: string, seen: Set<object>): string {
   if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("canonicalJson can't encode NaN or Infinity");
-    return JSON.stringify(value);
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "number":
+      if (!Number.isFinite(value)) throw new CanonicalJsonError(`canonicalJson can't encode a non-finite number at ${path}`);
+      return Object.is(value, -0) ? "0" : JSON.stringify(value);
+    case "string":
+      return encodeString(value, path);
+    case "object":
+      break;
+    default:
+      throw new CanonicalJsonError(`canonicalJson can't encode a ${typeof value} at ${path}`);
   }
-  if (Array.isArray(value)) {
-    return `[${value
-      .map((item) => {
-        if (item === undefined || typeof item === "function" || typeof item === "symbol") throw new TypeError("canonicalJson can't encode undefined, a function or a symbol in a list");
-        return canonicalJson(item);
-      })
-      .join(",")}]`;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) throw new CanonicalJsonError(`canonicalJson can't encode an invalid Date at ${path}`);
+    return JSON.stringify(value.toISOString());
   }
-  if (isPlainObject(value)) {
-    const keys = Object.keys(value)
-      .filter((key) => value[key] !== undefined)
-      .sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  const object = value as object;
+  if (seen.has(object)) throw new CanonicalJsonError(`canonicalJson can't encode a cycle at ${path}`);
+  seen.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const parts: string[] = [];
+      for (let i = 0; i < object.length; i++) {
+        const item: unknown = object[i];
+        parts.push(item === undefined || typeof item === "function" || typeof item === "symbol" ? "null" : encode(item, `${path}[${i}]`, seen));
+      }
+      return `[${parts.join(",")}]`;
+    }
+    if (!isPlainObject(object)) throw new CanonicalJsonError(`canonicalJson can't encode an object that isn't plain at ${path}`);
+    const keys = Object.keys(object)
+      .filter((key) => object[key] !== undefined)
+      .sort(compareUnits);
+    return `{${keys.map((key) => `${encodeString(key, `${path} key`)}:${encode(object[key], `${path}.${key}`, seen)}`).join(",")}}`;
+  } finally {
+    seen.delete(object);
   }
-  throw new TypeError(`canonicalJson can't encode ${typeof value === "object" ? "an object that isn't plain" : `a ${typeof value}`}`);
+}
+
+export function canonicalJson(value: unknown): string {
+  return encode(value, "$", new Set());
 }
 
 export function utf8(text: string): Uint8Array {
@@ -81,6 +137,15 @@ export function toBase64(bytes: Uint8Array): string {
   return out;
 }
 
+export function toBase64Url(bytes: Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function fromBase64Url(text: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) return null;
+  return fromBase64(text);
+}
+
 export function fromBase64(text: string): Uint8Array | null {
   const clean = text.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
   if (!/^[A-Za-z0-9+/]*$/.test(clean) || clean.length % 4 === 1) return null;
@@ -117,7 +182,7 @@ async function publicKey(subtle: SubtleLike, text: string): Promise<CryptoKeyLik
   return null;
 }
 
-export const envelopeMessage = (kid: string, payload: unknown): Uint8Array => utf8(ENVELOPE_CONTEXT + canonicalJson({ v: 1, kid, payload }));
+export const envelopeMessage = (kid: string, payload: unknown): Uint8Array => utf8(REGISTRY_SIGNATURE_DOMAIN + canonicalJson({ v: REGISTRY_ENVELOPE_VERSION, kid, payload }));
 
 export async function signEnvelope<T>(payload: T, kid: string, privateKeyPem: string, options: CryptoOptions = {}): Promise<SignedEnvelope<T>> {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(kid)) throw new Error("kid must be 1 to 64 letters, digits, ., _ and -");
@@ -126,7 +191,7 @@ export async function signEnvelope<T>(payload: T, kid: string, privateKeyPem: st
   const subtle = subtleOf(options);
   const key = await subtle.importKey("pkcs8", pkcs8, ED25519, false, ["sign"]);
   const signature = new Uint8Array(await subtle.sign(ED25519, key, envelopeMessage(kid, payload)));
-  return { v: 1, kid, sig: toBase64(signature), payload };
+  return { v: 1, kid, sig: toBase64Url(signature), payload };
 }
 
 const lookup = (keys: PublicKeys, kid: string): string | undefined =>
@@ -138,13 +203,13 @@ export async function verifyEnvelope<T = unknown>(envelope: unknown, publicKeys:
   if (extra.length) return { ok: false, reason: `The envelope has unknown keys: ${extra.join(", ")}` };
   const { v, kid, sig, payload } = envelope;
   if (v !== 1) return { ok: false, reason: "The envelope's v must be 1" };
-  if (typeof kid !== "string" || !kid) return { ok: false, reason: "The envelope has no kid" };
+  if (typeof kid !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(kid)) return { ok: false, reason: "The envelope's kid must be 1 to 64 letters, digits, ., _ and -" };
   if (typeof sig !== "string") return { ok: false, reason: "The envelope has no sig" };
   if (!("payload" in envelope)) return { ok: false, reason: "The envelope has no payload" };
   const keyText = lookup(publicKeys, kid);
   if (!keyText) return { ok: false, reason: `No trusted key has the id ${kid}` };
-  const signature = fromBase64(sig);
-  if (!signature || signature.length !== 64) return { ok: false, reason: "The signature isn't 64 bytes of base64" };
+  const signature = SIG_PATTERN.test(sig) ? fromBase64Url(sig) : null;
+  if (!signature || signature.length !== 64) return { ok: false, reason: "The signature isn't 64 bytes of unpadded base64url" };
   let message: Uint8Array;
   try {
     message = envelopeMessage(kid, payload);
