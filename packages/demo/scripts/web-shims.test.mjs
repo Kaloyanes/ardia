@@ -29,6 +29,28 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
   await page.getByRole("button", { name: "Run checks" }).click();
   await page.waitForFunction(() => document.getElementById("results")?.textContent);
   const results = JSON.parse(await page.locator("#results").textContent());
+  const card = await page.locator("#ring > div").boundingBox();
+  const shot = await page.screenshot({ clip: { x: card.x, y: card.y, width: 12, height: 12 } });
+  const ringCorner = await page.evaluate(async (png) => {
+    const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+    const canvas = new OffscreenCanvas(image.width, image.height);
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0);
+    return [...context.getImageData(4, 4, 1, 1).data];
+  }, shot.toString("base64"));
+  results.checks.selectedRingCorner = ringCorner[2] > 200 && ringCorner[0] < 60;
+  const track = await page.locator("#drag [style*='height: 20px']").first().boundingBox();
+  const middle = track.y + track.height / 2;
+  await page.mouse.move(track.x + track.width * 0.3, middle);
+  await page.mouse.down();
+  for (let step = 1; step <= 10; step++) await page.mouse.move(track.x + track.width * (0.3 + step * 0.05), middle);
+  await page.mouse.up();
+  const dragged = await page.evaluate(() => window.sliderValues);
+  t.diagnostic(`slider drag ${JSON.stringify(dragged)}`);
+  const live = dragged.filter((entry) => !entry.endsWith("!")).map(Number);
+  results.checks.sliderFollowsDrag =
+    live.length === 11 && Math.abs(live[0] - 0.3) < 0.01 && Math.abs(live.at(-1) - 0.8) < 0.01 &&
+    live.every((value, i) => i === 0 || value > live[i - 1]) && dragged.at(-1) === `${live.at(-1).toFixed(3)}!`;
   t.diagnostic(JSON.stringify(results));
   assert.deepEqual(results.checks, {
     pointerBeforeSubscriber: true,
@@ -47,6 +69,11 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
     hudCloseOnDarkHud: true,
     breathe: true,
     holdKeyLookQuiet: true,
+    retinaStripeTile: true,
+    retinaIconSharp: true,
+    retinaMarkLogical: true,
+    selectedRingCorner: true,
+    sliderFollowsDrag: true,
   });
 });
 

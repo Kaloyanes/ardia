@@ -6,12 +6,14 @@ type Deps = {
   apply: (theme: ProfileTheme | null, final: boolean) => void;
   showing: () => string;
   current: () => unknown;
+  same?: (a: unknown, b: unknown) => boolean;
   draft: (edit: ThemeEdit | null) => void;
   requestFrame: (run: () => void) => number;
   cancelFrame: (handle: number) => void;
 };
 
 export function themeGesture(deps: Deps) {
+  const same = deps.same ?? Object.is;
   let pending: ThemeEdit | undefined;
   let frame: number | null = null;
   let gesture: string | null = null;
@@ -26,7 +28,7 @@ export function themeGesture(deps: Deps) {
     const edit = pending;
     pending = undefined;
     if (!edit) return;
-    if (edit.target !== deps.showing() || deps.current() !== expected) {
+    if (edit.target !== deps.showing() || !same(deps.current(), expected)) {
       cancelled = true;
       deps.draft(null);
       return;

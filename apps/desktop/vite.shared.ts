@@ -6,6 +6,7 @@ import { visualizer } from "rollup-plugin-visualizer";
 import type { Plugin, UserConfig } from "vite";
 import { outDirFor, platformSuffixes, type DesktopMode } from "./desktopModes";
 import { keyedPaths, pathKey, posixFilePath, toPosixPath } from "./desktopPaths";
+import { scaledAssets } from "./scaledAssets";
 
 const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 const repo = here("../../");
@@ -119,6 +120,7 @@ export function webShellConfig(mode: DesktopMode, options: { plugins?: Plugin[];
       platformSeams(mode),
       ...(options.plugins ?? []),
       commonJsRequires(),
+      scaledAssets("ardia-desktop:scaled-assets"),
       lazyComponents(),
       react(),
       analyze && visualizer({ filename: `${outDir}/stats.html`, gzipSize: true, template: "treemap" }),

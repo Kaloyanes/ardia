@@ -2,7 +2,7 @@ import { holdThemedWindowsKeyLook, choosePresetColor, onPresetSelection, resetPr
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Animated, Pressable, View } from "react-native";
 import { flatColors, lookAngle, MAX_THEME_STOPS, requestedDarkFor, resolveTheme, shownLook, themeAccent, withAddedStop, withAngle, withoutStop, spaceLookSource, stopLightness, type PresetLookFields, type ShownLook } from "../../lib/profileLook";
-import { isUntouched, presetStartingTheme, presetThemeOf } from "../../lib/presetLook";
+import { isUntouched, presetStartingTheme, presetThemeOf, sameTheme } from "../../lib/presetLook";
 import { THEME_TEXTURES } from "@ardia/core";
 import { PROFILE_COLORS } from "../ui/theme";
 import { useAppDark, useProfile, useSettings, useWindow } from "../../state/browser/hooks";
@@ -38,6 +38,7 @@ function useLiveTheme(profileId: string, theme: ProfileTheme | null | undefined,
     apply: (next, final) => applyLatest.current(next, final),
     showing: () => showingLatest.current(),
     current: () => showingTheme(profileLatest.current),
+    same: (a, b) => sameTheme(a as ProfileTheme | null | undefined, b as ProfileTheme | null | undefined),
     draft: setDraft,
     requestFrame: requestAnimationFrame,
     cancelFrame: cancelAnimationFrame,

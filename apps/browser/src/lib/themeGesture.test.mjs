@@ -158,3 +158,38 @@ test("a release after an outside change drops the drag and leaves the next gestu
   g.change(look(0.3), "p:plum", true);
   assert.deepEqual(applied, [["p:plum", 0.3]], "the next click lands");
 });
+
+test("a drag keeps going when the host hands back the look it just wrote as a new but equal copy", async () => {
+  const { sameTheme } = await import("./presetLook.ts");
+  const applied = [];
+  const frames = new Map();
+  let next = 1;
+  const state = { current: look(0.1) };
+  const g = themeGesture({
+    apply: (theme) => (applied.push(theme?.intensity ?? null), (state.current = theme)),
+    showing: () => "p:plum",
+    current: () => state.current,
+    same: sameTheme,
+    draft: () => {},
+    requestFrame: (run) => (frames.set(next, run), next++),
+    cancelFrame: (handle) => void frames.delete(handle),
+  });
+  const tick = () => {
+    const runs = [...frames.values()];
+    frames.clear();
+    runs.forEach((run) => run());
+  };
+  g.change(look(0.2), "p:plum");
+  tick();
+  state.current = structuredClone(state.current);
+  g.change(look(0.3), "p:plum");
+  tick();
+  state.current = structuredClone(state.current);
+  g.change(look(0.4), "p:plum", true);
+  assert.deepEqual(applied, [0.2, 0.3, 0.4]);
+  g.change(look(0.5), "p:plum");
+  state.current = look(0.9);
+  tick();
+  g.change(look(0.6), "p:plum", true);
+  assert.deepEqual(applied, [0.2, 0.3, 0.4], "a look really changed from outside still cancels the drag");
+});
