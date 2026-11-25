@@ -13,7 +13,6 @@ import { returnFocusToPage } from "../sidebar/actions";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { userClose, type ByUser } from "../tabs/closeActivation";
 import { consentToken } from "../telemetry/client";
-import { hasPage } from "../tabs/pageSession";
 
 const store = () => useBrowser.getState();
 
@@ -95,12 +94,11 @@ function closePane(tabId: string, user: ByUser) {
 export const pressClosePane = (tabId: string) => closePane(tabId, { consent: consentToken() });
 
 export function closeEmptySplitPaneOnEscape(tabId: string): boolean {
-  const s = store();
-  const tab = s.tabs[tabId];
-  if (!tab || tab.url || hasPage(tab) || !splitOf(s, tabId)) return false;
   const consent = consentToken();
+  const windowId = store().tabs[tabId]?.windowId;
+  if (!windowId || !store().removeEmptySplitPane(tabId)) return false;
   noteSplit("splitEmptyPaneEscapeCloses", consent);
-  closePane(tabId, { consent });
+  returnFocusToPage(windowId);
   return true;
 }
 

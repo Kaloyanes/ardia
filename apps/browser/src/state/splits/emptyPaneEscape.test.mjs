@@ -34,3 +34,32 @@ test("Esc never closes a pane that has a page, or an empty tab outside a split",
   await settle();
   assert.ok(S().tabs[other] && S().tabs[blank]);
 });
+
+test("Esc on a blank third pane of a pinned split removes only that pane: both pages stay loaded in their split and one of them is shown", async () => {
+  const { splitTabIdsOf } = await import("./splits.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  S().hydrate({});
+  const windowId = S().createWindow({ url: "https://a.example/" });
+  const a = activeTabId(S(), windowId);
+  const b = S().newTab(windowId, { url: "https://b.example/" });
+  S().pinTabs([a, b], true, true);
+  S().createSplit([a, b]);
+  S().activate(b);
+  S().activate(a);
+  assert.ok(S().tabs[a].page.nav && S().tabs[b].page.nav, "both pages are loaded");
+  const split = splitOf(S(), a);
+  const empty = openSplitPane(windowId, { anchorTabId: a });
+  assert.ok(empty && splitOf(S(), empty)?.id === split.id, "the blank pane joined the pinned split");
+  assert.equal(activeTabId(S(), windowId), empty);
+  const focused = [];
+  for (const id of [a, b]) webviews.set(id, { focus: async () => void focused.push(id) });
+  assert.equal(closeEmptySplitPaneOnEscape(empty), true);
+  await settle();
+  assert.equal(S().tabs[empty], undefined, "the blank pane is gone");
+  assert.deepEqual(splitTabIdsOf(splitOf(S(), a)).sort(), [a, b].sort(), "the split keeps its two pages");
+  assert.ok(S().tabs[a].page.nav && S().tabs[b].page.nav, "neither page was put to sleep");
+  const shown = activeTabId(S(), windowId);
+  assert.ok(shown === a || shown === b, `a surviving pane is shown: ${shown}`);
+  assert.deepEqual(focused, [shown], "and its page has the keyboard");
+  assert.equal(S().closedTabs.some((c) => c.id === empty), false, "a blank pane leaves nothing in Recently Closed");
+});
