@@ -162,6 +162,7 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
@@ -421,7 +422,13 @@ class ShellRecovery : public content::WebContentsObserver {
  public:
   ShellRecovery(content::WebContents* shell,
                 base::RepeatingCallback<desktop_webui_process::WindowState()> window_state)
-      : content::WebContentsObserver(shell), window_state_(std::move(window_state)) {}
+      : content::WebContentsObserver(shell), window_state_(std::move(window_state)) {
+    quit_cancelled_ = chrome::AddClosingAllBrowsersCallback(base::BindRepeating(
+        [](base::WeakPtr<ShellRecovery> recovery, bool closing) {
+          if (recovery && !closing) recovery->Resume();
+        },
+        weak_factory_.GetWeakPtr()));
+  }
 
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override {
     state_.RendererGone(status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
@@ -429,6 +436,12 @@ class ShellRecovery : public content::WebContentsObserver {
     Resume();
   }
   void PrimaryPageChanged(content::Page&) override { state_.DocumentCommitted(); }
+  void DidFinishNavigation(content::NavigationHandle* handle) override {
+    if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument() || handle->HasCommitted()) return;
+    content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+    state_.NavigationEndedWithoutCommit(frame && frame->IsRenderFrameLive());
+    Resume();
+  }
 
   void Resume() {
     if (!state_.owed()) return;
@@ -442,8 +455,9 @@ class ShellRecovery : public content::WebContentsObserver {
     content::NavigationController& controller = web_contents()->GetController();
     const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
     switch (state_.Next((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
-                        browser_shutdown::IsTryingToQuit() ? desktop_webui_process::WindowState::kGone
-                                                           : window_state_.Run(),
+                        desktop_webui_process::ShellWindowState(browser_shutdown::HasShutdownStarted(),
+                                                                browser_shutdown::IsTryingToQuit(),
+                                                                window_state_.Run()),
                         entry && !entry->IsInitialEntry())) {
       case desktop_webui_process::RecoveryStep::kReloadDocument:
         controller.Reload(content::ReloadType::NORMAL, false);
@@ -453,13 +467,14 @@ class ShellRecovery : public content::WebContentsObserver {
                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
         break;
       case desktop_webui_process::RecoveryStep::kNothing:
-      case desktop_webui_process::RecoveryStep::kWaitForClose:
+      case desktop_webui_process::RecoveryStep::kWaitForResume:
         break;
     }
   }
 
   base::RepeatingCallback<desktop_webui_process::WindowState()> window_state_;
   desktop_webui_process::ShellRecoveryState state_;
+  base::CallbackListSubscription quit_cancelled_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -1465,6 +1480,7 @@ class ShellHostView : public views::View,
   void DocumentCall(std::string verb, base::DictValue request,
                     base::OnceCallback<void(LinuxDocumentResult)> done);
   base::DictValue Bootstrap() const;
+  void NoteAssetServed(std::string_view asset) { launch_bootstrap_.Served(asset); }
   void HandUnclaimedTabsToShell();
   base::DictValue Strip() const;
   base::DictValue Transaction(std::optional<int> command, bool advance);
@@ -1982,6 +1998,7 @@ class ShellHostView : public views::View,
   base::WeakPtr<content::WebContents> switcher_source_;
   int id_;
   bool startup_;
+  desktop_webui_process::LaunchBootstrap launch_bootstrap_;
   std::unique_ptr<ardia::linux_suggest::SuggestionClient> suggestions_ =
       std::make_unique<ardia::linux_suggest::SuggestionClient>();
   std::unique_ptr<ardia::linux_telemetry::TelemetryClient> telemetry_ =
@@ -2819,6 +2836,7 @@ class ShellDataSource : public content::URLDataSource {
     const bool shell_bootstrap = AssetPath(url) == "host-bootstrap.js";
     if (shell_bootstrap) host->HandUnclaimedTabsToShell();
     base::DictValue bootstrap = host->Bootstrap();
+    host->NoteAssetServed(AssetPath(url));
     if (shell_bootstrap && host->TakeOpenedFloating()) bootstrap.Set("openedFloating", true);
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE,
@@ -2858,7 +2876,7 @@ class ShellConfig : public content::DefaultWebUIConfig<ShellController> {
 ShellHostView::ShellHostView(BrowserWindowInterface* browser, BrowserView* parent,
                              bool startup, Profile* app_profile)
     : browser_(browser), browser_view_(parent), app_profile_(app_profile->GetWeakPtr()),
-      id_(browser->GetSessionID().id()), startup_(startup),
+      id_(browser->GetSessionID().id()), startup_(startup), launch_bootstrap_(startup),
       window_id_(Hosts().empty() ? "main" : "window-" + base::NumberToString(id_)) {
   Hosts()[id_] = this;
   SetBackground(views::CreateSolidBackground(kColorWebContentsBackground));
@@ -3003,7 +3021,7 @@ void ShellHostView::Initialize() {
                    [](base::WeakPtr<ShellHostView> host) {
                      if (!host || !host->GetWidget() || host->GetWidget()->IsClosed() || host->close_.Irreversible())
                        return desktop_webui_process::WindowState::kGone;
-                     return host->closing() ? desktop_webui_process::WindowState::kClosingReversibly
+                     return host->closing() ? desktop_webui_process::WindowState::kPaused
                                             : desktop_webui_process::WindowState::kOpen;
                    },
                    GetWeakPtr()));
@@ -3616,7 +3634,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   }
   auto bootstrap = base::DictValue()
       .Set("windowId", window_id_)
-      .Set("startup", startup_)
+      .Set("startup", launch_bootstrap_.startup())
       .Set("profileId", "default")
       .Set("nativeModules", std::move(native_modules))
       .Set("launchConfig", ardiacore::LinuxLaunchConfig(DocumentDirectory(profile()), user_data_directory))

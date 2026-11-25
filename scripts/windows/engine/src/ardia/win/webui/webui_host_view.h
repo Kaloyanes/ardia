@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/desktop/ac_desktop_webui_process_policy.h"
 #include "ardia/win/webui/desktop_platform_win.h"
 #include "ardia/win/webui/webui_documents.h"
 #include "ardia/win/webui/webui_frame.h"
@@ -194,6 +195,9 @@ class ShellHostView : public views::View,
   void NoteRequest(base::WeakPtr<ShellBridge> handler, uint64_t generation);
 
   std::string BootstrapJson() const;
+  void NoteAssetServed(std::string_view asset) {
+    launch_bootstrap_.Served(asset);
+  }
   void Invoke(const std::string& method, const base::DictValue& args, Done done);
   void EngineCall(const std::string& name,
                   const std::string& profile,
@@ -338,6 +342,7 @@ class ShellHostView : public views::View,
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<Profile> app_profile_;
   WindowConfig config_;
+  ardia::desktop_webui_process::LaunchBootstrap launch_bootstrap_;
   int id_ = 0;
   int private_ordinal_ = 0;
   bool closing_ = false;

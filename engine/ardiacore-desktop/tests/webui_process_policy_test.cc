@@ -63,11 +63,11 @@ void TestACrashBeforeTheFirstCommitLoadsTheShell() {
   assert(state.Next(1, WindowState::kOpen, false) == RecoveryStep::kLoadShellUrl);
 }
 
-void TestACrashDuringAReversibleCloseWaitsWithoutSpendingTheBudget() {
+void TestACrashWhilePausedWaitsWithoutSpendingTheBudget() {
   policy::ShellRecoveryState state;
   for (int crash = 0; crash < 10; ++crash) {
     state.RendererGone(false);
-    assert(state.Next(crash, WindowState::kClosingReversibly, true) == RecoveryStep::kWaitForClose);
+    assert(state.Next(crash, WindowState::kPaused, true) == RecoveryStep::kWaitForResume);
     assert(state.owed());
   }
   assert(state.recent_reloads() == 0);
@@ -87,7 +87,7 @@ void TestAClosedOrQuittingWindowNeverReloads() {
 void TestANewDocumentSettlesARecovery() {
   policy::ShellRecoveryState state;
   state.RendererGone(false);
-  assert(state.Next(1, WindowState::kClosingReversibly, true) == RecoveryStep::kWaitForClose);
+  assert(state.Next(1, WindowState::kPaused, true) == RecoveryStep::kWaitForResume);
   state.DocumentCommitted();
   assert(!state.owed());
   assert(state.Next(2, WindowState::kOpen, true) == RecoveryStep::kNothing);
@@ -116,16 +116,91 @@ void TestEveryWindowOfASharedRendererRecovers() {
   }
 }
 
+void TestAQuitInProgressPausesAndShutdownEnds() {
+  static_assert(policy::ShellWindowState(false, false, WindowState::kOpen) == WindowState::kOpen);
+  static_assert(policy::ShellWindowState(false, true, WindowState::kOpen) == WindowState::kPaused);
+  static_assert(policy::ShellWindowState(false, true, WindowState::kPaused) == WindowState::kPaused);
+  static_assert(policy::ShellWindowState(true, true, WindowState::kOpen) == WindowState::kGone);
+  static_assert(policy::ShellWindowState(true, false, WindowState::kOpen) == WindowState::kGone);
+  static_assert(policy::ShellWindowState(false, true, WindowState::kGone) == WindowState::kGone);
+  static_assert(policy::ShellWindowState(false, false, WindowState::kPaused) == WindowState::kPaused);
+
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  assert(state.Next(1, policy::ShellWindowState(false, true, WindowState::kOpen), true) == RecoveryStep::kWaitForResume);
+  assert(state.owed() && state.recent_reloads() == 0);
+  assert(state.Next(2, policy::ShellWindowState(false, false, WindowState::kOpen), true) == RecoveryStep::kReloadDocument);
+}
+
+void TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget() {
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  assert(state.Next(1, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  assert(state.in_flight() && !state.owed());
+  state.NavigationEndedWithoutCommit(false);
+  assert(!state.in_flight() && state.owed());
+  assert(state.Next(2, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  state.NavigationEndedWithoutCommit(false);
+  assert(state.Next(3, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  state.NavigationEndedWithoutCommit(false);
+  assert(state.owed());
+  assert(state.Next(4, WindowState::kOpen, true) == RecoveryStep::kNothing);
+  assert(!state.owed() && !state.in_flight());
+}
+
+void TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight() {
+  policy::ShellRecoveryState idle;
+  idle.NavigationEndedWithoutCommit(false);
+  assert(!idle.owed());
+
+  policy::ShellRecoveryState live;
+  live.RendererGone(false);
+  assert(live.Next(1, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  live.NavigationEndedWithoutCommit(true);
+  assert(!live.owed() && !live.in_flight());
+
+  policy::ShellRecoveryState committed;
+  committed.RendererGone(false);
+  assert(committed.Next(1, WindowState::kOpen, false) == RecoveryStep::kLoadShellUrl);
+  committed.DocumentCommitted();
+  assert(!committed.in_flight());
+  committed.NavigationEndedWithoutCommit(false);
+  assert(!committed.owed());
+}
+
+void TestOnlyTheLaunchWindowsFirstBootstrapSaysStartup() {
+  static_assert(policy::kShellBootstrapAsset == "host-bootstrap.js");
+  policy::LaunchBootstrap launch(true);
+  assert(launch.startup());
+  launch.Served("index.html");
+  launch.Served("assets/app.js");
+  launch.Served("HOST-BOOTSTRAP.JS");
+  assert(launch.startup());
+  launch.Served(policy::kShellBootstrapAsset);
+  assert(!launch.startup());
+  launch.Served(policy::kShellBootstrapAsset);
+  assert(!launch.startup());
+
+  policy::LaunchBootstrap other(false);
+  assert(!other.startup());
+  other.Served(policy::kShellBootstrapAsset);
+  assert(!other.startup());
+}
+
 }
 
 int main() {
+  TestAQuitInProgressPausesAndShutdownEnds();
+  TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget();
+  TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight();
+  TestOnlyTheLaunchWindowsFirstBootstrapSaysStartup();
   TestTheShellSite();
   TestOnlyRegularWindowsShareTheRenderer();
   TestReloadBudget();
   TestACrashReloadsAnOpenWindow();
   TestANormalExitIsNotACrash();
   TestACrashBeforeTheFirstCommitLoadsTheShell();
-  TestACrashDuringAReversibleCloseWaitsWithoutSpendingTheBudget();
+  TestACrashWhilePausedWaitsWithoutSpendingTheBudget();
   TestAClosedOrQuittingWindowNeverReloads();
   TestANewDocumentSettlesARecovery();
   TestACrashLoopStops();

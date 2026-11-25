@@ -93,9 +93,42 @@ void TestACrashLoopStopsReloading() {
          RecoveryStep::kReloadDocument);
 }
 
+void TestACancelledQuitResumesRecovery() {
+  ShellWindow window{"default"};
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  assert(state.Next(1, policy::ShellWindowState(false, true, window.State()),
+                    true) == RecoveryStep::kWaitForResume);
+  assert(state.owed());
+  assert(state.Next(2, policy::ShellWindowState(false, false, window.State()),
+                    true) == RecoveryStep::kReloadDocument);
+}
+
+void TestAStartedShutdownDropsRecovery() {
+  ShellWindow window{"default"};
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  assert(state.Next(1, policy::ShellWindowState(true, true, window.State()),
+                    true) == RecoveryStep::kNothing);
+  assert(!state.owed());
+}
+
+void TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup() {
+  policy::LaunchBootstrap launch(true);
+  launch.Served("index.html");
+  assert(launch.startup());
+  launch.Served("host-bootstrap.js");
+  assert(!launch.startup());
+  policy::LaunchBootstrap second(false);
+  assert(!second.startup());
+}
+
 }
 
 int main() {
+  TestACancelledQuitResumesRecovery();
+  TestAStartedShutdownDropsRecovery();
+  TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup();
   TestPrivateWindowShellsGetTheirOwnRenderer();
   TestAWindowsCloseIsFinal();
   TestADetachedWindowNeverReloads();

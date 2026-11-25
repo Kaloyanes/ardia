@@ -39,6 +39,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/unload_controller.h"
@@ -181,7 +182,15 @@ class ShellRecovery : public content::WebContentsObserver {
       base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
           window_state)
       : content::WebContentsObserver(shell),
-        window_state_(std::move(window_state)) {}
+        window_state_(std::move(window_state)) {
+    quit_cancelled_ = chrome::AddClosingAllBrowsersCallback(base::BindRepeating(
+        [](base::WeakPtr<ShellRecovery> recovery, bool closing) {
+          if (recovery && !closing) {
+            recovery->Resume();
+          }
+        },
+        weak_factory_.GetWeakPtr()));
+  }
 
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override {
@@ -192,6 +201,16 @@ class ShellRecovery : public content::WebContentsObserver {
 
   void PrimaryPageChanged(content::Page& page) override {
     state_.DocumentCommitted();
+  }
+
+  void DidFinishNavigation(content::NavigationHandle* handle) override {
+    if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument() ||
+        handle->HasCommitted()) {
+      return;
+    }
+    content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+    state_.NavigationEndedWithoutCommit(frame && frame->IsRenderFrameLive());
+    Resume();
   }
 
   void Resume() {
@@ -212,9 +231,9 @@ class ShellRecovery : public content::WebContentsObserver {
     const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
     switch (state_.Next(
         (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
-        browser_shutdown::IsTryingToQuit()
-            ? ardia::desktop_webui_process::WindowState::kGone
-            : window_state_.Run(),
+        ardia::desktop_webui_process::ShellWindowState(
+            browser_shutdown::HasShutdownStarted(),
+            browser_shutdown::IsTryingToQuit(), window_state_.Run()),
         entry && !entry->IsInitialEntry())) {
       case ardia::desktop_webui_process::RecoveryStep::kReloadDocument:
         controller.Reload(content::ReloadType::NORMAL, false);
@@ -225,7 +244,7 @@ class ShellRecovery : public content::WebContentsObserver {
                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
         break;
       case ardia::desktop_webui_process::RecoveryStep::kNothing:
-      case ardia::desktop_webui_process::RecoveryStep::kWaitForClose:
+      case ardia::desktop_webui_process::RecoveryStep::kWaitForResume:
         break;
     }
   }
@@ -233,6 +252,7 @@ class ShellRecovery : public content::WebContentsObserver {
   base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
       window_state_;
   ardia::desktop_webui_process::ShellRecoveryState state_;
+  base::CallbackListSubscription quit_cancelled_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -463,6 +483,7 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser,
       browser_view_(browser_view),
       app_profile_(app_profile),
       config_(std::move(config)),
+      launch_bootstrap_(config_.startup),
       id_(browser->GetSessionID().id()) {
   SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
   caption_ = std::make_unique<CaptionInput>(
@@ -1440,7 +1461,7 @@ std::string ShellHostView::BootstrapJson() const {
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", config_.window_id);
-  bootstrap.Set("startup", config_.startup);
+  bootstrap.Set("startup", launch_bootstrap_.startup());
   bootstrap.Set("profileId", kAppProfileName);
   bootstrap.Set("nativeModules",
                 base::DictValue().Set(

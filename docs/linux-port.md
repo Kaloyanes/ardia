@@ -41,18 +41,25 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   (`ac_desktop_webui_process_policy.h`) allows it, which is never for a private window or an off-the-record profile.
   Chromium uses one process per site for privileged contents and keys that by profile, site (`chrome://ardia/`, the
   site Chromium derives for any shell URL) and feature id, and it never puts privileged and ordinary contents in the
-  same process, so a private window's shell gets a renderer of its own even under the renderer-process limit. No
-  Chromium patch is involved. Each window still has its own document, `WebUI` and bridge (`Trusted`, `OwnsHandler` and
+  same process, so a private window's shell never joins the regular shells' renderer, even under the
+  renderer-process limit. Private shells are ordinary WebUI contents, so at that limit Chromium may still put two of
+  them in one ordinary renderer. No Chromium patch is involved. Each window still has its own document, `WebUI` and bridge (`Trusted`, `OwnsHandler` and
   the renderer generation belong to one `WebContents`). Privileged contents can't open windows (`window.open` returns
   null), which the shell never does.
 - **Shell recovery.** One crash now blanks every regular window, so each window reloads its shell after an abnormal
   renderer exit (`ShellRecovery`, driven by `ShellRecoveryState`), at most 3 times a minute. A crash before the
-  shell's first commit loads `chrome://ardia/` instead of reloading. A crash while a reversible close is pending
-  spends nothing and waits: a cancelled close resumes it, a finished close drops it, and so does a quit. The first
-  reload starts the new renderer and the rest join it.
+  shell's first commit loads `chrome://ardia/` instead of reloading. A crash while a reversible close or an app quit
+  is pending spends nothing and waits: a cancelled close resumes it, and so does a cancelled quit
+  (`chrome::AddClosingAllBrowsersCallback` reports `false`); a finished close or a started shutdown drops it. A
+  recovery navigation that ends without committing while the shell has no live renderer (a speculative frame whose
+  renderer died) is retried within the same budget; only a commit ends a recovery. The first reload starts the new
+  renderer and the rest join it. Only the launch window's first `host-bootstrap.js` says `startup: true`
+  (`LaunchBootstrap`), so a recovered or reloaded launch window never boots as a fresh launch and never replaces the
+  saved session.
 - **What the tests cover.** `engine/ardiacore-desktop/tests/test_desktop_layer.py` runs the policy test
   (`webui_process_policy_test.cc`) and compiles each host's real `CreateShellContents` and `ShellRecovery` against
-  stubbed content and base types to drive crashes, close waits, cancellations and pre-commit crashes. Only a built
+  stubbed content and base types to drive crashes, close and quit waits, cancellations, uncommitted recovery
+  navigations and pre-commit crashes. Only a built
   engine shows the rest: three windows on one `chrome://ardia/` renderer, a private window on its own, and every
   window coming back after the renderer is killed.
 - **Code cache.** `chromium-linux-auto-pip.patch` turns on Chromium's `WebUICodeCache`, so V8 keeps the shell's

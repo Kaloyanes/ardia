@@ -151,6 +151,7 @@ class ShellDataSource : public content::URLDataSource {
                            : nullptr);
             },
             std::move(callback), path == "index.html"));
+    host->NoteAssetServed(path);
   }
 };
 

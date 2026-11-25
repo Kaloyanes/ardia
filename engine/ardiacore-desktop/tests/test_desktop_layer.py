@@ -199,21 +199,43 @@ enum TerminationStatus {
 };
 template <typename Signature>
 class RepeatingCallback;
-template <typename R>
-class RepeatingCallback<R()> {
+template <typename R, typename... Args>
+class RepeatingCallback<R(Args...)> {
  public:
   RepeatingCallback() = default;
-  explicit RepeatingCallback(std::function<R()> run) : run_(std::move(run)) {}
-  R Run() const { return run_(); }
+  explicit RepeatingCallback(std::function<R(Args...)> run) : run_(std::move(run)) {}
+  R Run(Args... args) const { return run_(args...); }
  private:
-  std::function<R()> run_;
+  std::function<R(Args...)> run_;
 };
 template <typename T>
 struct WeakPtr {
   T* target = nullptr;
   std::shared_ptr<bool> alive;
   T* get() const { return alive && *alive ? target : nullptr; }
+  explicit operator bool() const { return get() != nullptr; }
+  T* operator->() const { return get(); }
 };
+class CallbackListSubscription {
+ public:
+  CallbackListSubscription() = default;
+  explicit CallbackListSubscription(std::function<void()> cancel) : cancel_(std::move(cancel)) {}
+  CallbackListSubscription(CallbackListSubscription&& other) : cancel_(std::exchange(other.cancel_, nullptr)) {}
+  CallbackListSubscription& operator=(CallbackListSubscription&& other) {
+    if (cancel_) cancel_();
+    cancel_ = std::exchange(other.cancel_, nullptr);
+    return *this;
+  }
+  ~CallbackListSubscription() {
+    if (cancel_) cancel_();
+  }
+ private:
+  std::function<void()> cancel_;
+};
+template <typename F, typename T>
+RepeatingCallback<void(bool)> BindRepeating(F run, WeakPtr<T> weak) {
+  return RepeatingCallback<void(bool)>([run, weak](bool value) { run(weak, value); });
+}
 template <typename T>
 class WeakPtrFactory {
  public:
@@ -265,6 +287,31 @@ inline bool& Quitting() {
   return quitting;
 }
 inline bool IsTryingToQuit() { return Quitting(); }
+inline bool& ShutdownStarted() {
+  static bool started = false;
+  return started;
+}
+inline bool HasShutdownStarted() { return ShutdownStarted(); }
+}
+
+namespace chrome {
+inline std::vector<std::pair<int, base::RepeatingCallback<void(bool)>>>& ClosingAllBrowsersCallbacks() {
+  static std::vector<std::pair<int, base::RepeatingCallback<void(bool)>>> callbacks;
+  return callbacks;
+}
+inline base::CallbackListSubscription AddClosingAllBrowsersCallback(base::RepeatingCallback<void(bool)> callback) {
+  static int next = 0;
+  const int id = ++next;
+  ClosingAllBrowsersCallbacks().emplace_back(id, std::move(callback));
+  return base::CallbackListSubscription([id] {
+    auto& callbacks = ClosingAllBrowsersCallbacks();
+    std::erase_if(callbacks, [id](const auto& entry) { return entry.first == id; });
+  });
+}
+inline void OnClosingAllBrowsers(bool closing) {
+  auto callbacks = ClosingAllBrowsersCallbacks();
+  for (auto& [id, callback] : callbacks) callback.Run(closing);
+}
 }
 
 struct GURL {
@@ -294,6 +341,18 @@ struct NavigationController {
   }
   void LoadURL(const GURL& url, const Referrer&, ui::PageTransition, const std::string&) { loads.push_back(url.spec); }
 };
+struct RenderFrameHost {
+  bool live = true;
+  bool IsRenderFrameLive() const { return live; }
+};
+struct NavigationHandle {
+  bool primary = true;
+  bool same_document = false;
+  bool committed = false;
+  bool IsInPrimaryMainFrame() const { return primary; }
+  bool IsSameDocument() const { return same_document; }
+  bool HasCommitted() const { return committed; }
+};
 struct WebContents {
   struct PrivilegedParams {
     int32_t feature_id = 0;
@@ -311,6 +370,8 @@ struct WebContents {
     return contents;
   }
   NavigationController& GetController() { return controller; }
+  RenderFrameHost* GetPrimaryMainFrame() { return &frame; }
+  RenderFrameHost frame;
   std::optional<PrivilegedParams> privileged;
   NavigationController controller;
 };
@@ -322,6 +383,7 @@ class WebContentsObserver {
   WebContents* web_contents() const { return contents_; }
   virtual void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) {}
   virtual void PrimaryPageChanged(Page&) {}
+  virtual void DidFinishNavigation(NavigationHandle*) {}
  private:
   WebContents* contents_;
 };
@@ -387,7 +449,7 @@ void TestACrashBeforeTheFirstCommitLoadsTheShellUrl() {
 
 void TestACrashDuringAReversibleCloseResumesWhenTheCloseIsCancelled() {
   Shell shell;
-  shell.window = WindowState::kClosingReversibly;
+  shell.window = WindowState::kPaused;
   for (int crash = 0; crash < 6; ++crash) shell.Crash();
   assert(shell.reloads() == 0);
   shell.recovery.Resume();
@@ -404,7 +466,7 @@ void TestACrashDuringAReversibleCloseResumesWhenTheCloseIsCancelled() {
 
 void TestANewDocumentSettlesAWaitingRecovery() {
   Shell shell;
-  shell.window = WindowState::kClosingReversibly;
+  shell.window = WindowState::kPaused;
   shell.Crash();
   content::Page page;
   shell.recovery.PrimaryPageChanged(page);
@@ -414,7 +476,7 @@ void TestANewDocumentSettlesAWaitingRecovery() {
   assert(shell.reloads() == 0);
 }
 
-void TestNoReloadWhenGoneOrQuitting() {
+void TestNoReloadWhenGoneAndAQuitOnlyPauses() {
   Shell gone;
   gone.window = WindowState::kGone;
   gone.Crash();
@@ -422,10 +484,112 @@ void TestNoReloadWhenGoneOrQuitting() {
   Shell quitting;
   browser_shutdown::Quitting() = true;
   quitting.Crash();
-  browser_shutdown::Quitting() = false;
   quitting.recovery.Resume();
   RunTasks();
   assert(quitting.reloads() == 0);
+  browser_shutdown::Quitting() = false;
+  quitting.recovery.Resume();
+  RunTasks();
+  assert(quitting.reloads() == 1);
+}
+
+void TestACancelledQuitResumesEveryWaitingShell() {
+  Shell first;
+  Shell second;
+  browser_shutdown::Quitting() = true;
+  first.Crash();
+  second.Crash(base::TERMINATION_STATUS_OOM);
+  assert(first.reloads() == 0 && second.reloads() == 0);
+  chrome::OnClosingAllBrowsers(true);
+  RunTasks();
+  assert(first.reloads() == 0 && second.reloads() == 0);
+  browser_shutdown::Quitting() = false;
+  chrome::OnClosingAllBrowsers(false);
+  RunTasks();
+  assert(first.reloads() == 1 && second.reloads() == 1);
+  chrome::OnClosingAllBrowsers(false);
+  RunTasks();
+  assert(first.reloads() == 1 && second.reloads() == 1);
+}
+
+void TestAStartedShutdownNeverReloads() {
+  Shell shell;
+  browser_shutdown::Quitting() = true;
+  browser_shutdown::ShutdownStarted() = true;
+  shell.Crash();
+  browser_shutdown::Quitting() = false;
+  browser_shutdown::ShutdownStarted() = false;
+  chrome::OnClosingAllBrowsers(false);
+  RunTasks();
+  assert(shell.reloads() == 0);
+}
+
+void TestAClosedShellStopsListeningForQuitCancels() {
+  const size_t before = chrome::ClosingAllBrowsersCallbacks().size();
+  {
+    Shell shell;
+    assert(chrome::ClosingAllBrowsersCallbacks().size() == before + 1);
+  }
+  assert(chrome::ClosingAllBrowsersCallbacks().size() == before);
+  chrome::OnClosingAllBrowsers(false);
+  RunTasks();
+}
+
+void TestARecoveryNavigationThatDiesBeforeCommitIsRetried() {
+  Shell shell;
+  shell.Crash();
+  assert(shell.reloads() == 1);
+  shell.contents.frame.live = false;
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 2);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 3);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 3);
+}
+
+void TestOnlyAFailedPrimaryRecoveryNavigationRetries() {
+  Shell shell;
+  shell.contents.frame.live = false;
+  content::NavigationHandle unrelated;
+  shell.recovery.DidFinishNavigation(&unrelated);
+  RunTasks();
+  assert(shell.reloads() == 0);
+  shell.Crash();
+  assert(shell.reloads() == 1);
+  content::NavigationHandle subframe{false};
+  content::NavigationHandle same_document{true, true};
+  content::NavigationHandle committed{true, false, true};
+  shell.recovery.DidFinishNavigation(&subframe);
+  shell.recovery.DidFinishNavigation(&same_document);
+  shell.recovery.DidFinishNavigation(&committed);
+  RunTasks();
+  assert(shell.reloads() == 1);
+  shell.contents.frame.live = true;
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 1);
+  shell.contents.frame.live = false;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 1);
+}
+
+void TestACommittedRecoveryEndsIt() {
+  Shell shell;
+  shell.Crash();
+  content::Page page;
+  shell.recovery.PrimaryPageChanged(page);
+  shell.contents.frame.live = false;
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 1);
 }
 
 void TestACrashLoopStops() {
@@ -455,7 +619,13 @@ int main() {
   TestACrashBeforeTheFirstCommitLoadsTheShellUrl();
   TestACrashDuringAReversibleCloseResumesWhenTheCloseIsCancelled();
   TestANewDocumentSettlesAWaitingRecovery();
-  TestNoReloadWhenGoneOrQuitting();
+  TestNoReloadWhenGoneAndAQuitOnlyPauses();
+  TestACancelledQuitResumesEveryWaitingShell();
+  TestAStartedShutdownNeverReloads();
+  TestAClosedShellStopsListeningForQuitCancels();
+  TestARecoveryNavigationThatDiesBeforeCommitIsRetried();
+  TestOnlyAFailedPrimaryRecoveryNavigationRetries();
+  TestACommittedRecoveryEndsIt();
   TestACrashLoopStops();
   TestAPostedRecoveryOutlivesItsWindowSafely();
   return 0;
@@ -498,12 +668,38 @@ class WebUIProcessPolicyTests(unittest.TestCase):
         self.assertRegex(text, r'if \(!host->close_\.Cancelled\(identity\)\) return;\n\s*'
                                r'if \(host->shell_recovery_\) host->shell_recovery_->Resume\(\);')
         self.assertRegex(text, r'host->close_\.Irreversible\(\)\)\s*return desktop_webui_process::WindowState::kGone;')
-        self.assertRegex(text, r'host->closing\(\) \? desktop_webui_process::WindowState::kClosingReversibly')
+        self.assertRegex(text, r'host->closing\(\) \? desktop_webui_process::WindowState::kPaused')
 
     def test_a_windows_close_is_final(self):
         text = (WIN / 'webui/webui_host_view.cc').read_text()
-        self.assertNotIn('kClosingReversibly', text)
+        self.assertNotIn('WindowState::kPaused', text)
         self.assertNotRegex(text, r'closing_ = false')
+
+    def test_only_the_first_shell_bootstrap_of_the_launch_window_says_startup(self):
+        hosts = ((LINUX / 'ac_linux_host.cc', LINUX / 'ac_linux_host.cc', 'host->Bootstrap();', 'NoteAssetServed(AssetPath(url));'),
+                 (WIN / 'webui/webui_host_view.cc', WIN / 'webui/webui_shell.cc', 'host->BootstrapJson(),',
+                  'host->NoteAssetServed(path);'))
+        for host, source, built, served in hosts:
+            text = host.read_text()
+            with self.subTest(host=host.name):
+                self.assertEqual(len(re.findall(r'"startup", launch_bootstrap_\.startup\(\)', text)), 1)
+                self.assertNotRegex(text, r'"startup", (startup_|config_\.startup)\)')
+                data = source.read_text()
+                self.assertEqual(data.count(served), 1)
+                self.assertLess(data.index(built), data.index(served))
+        header = (WIN / 'webui/webui_host_view.h').read_text()
+        self.assertIn('launch_bootstrap_.Served(asset);', header)
+        self.assertIn('void NoteAssetServed(std::string_view asset) { launch_bootstrap_.Served(asset); }',
+                      (LINUX / 'ac_linux_host.cc').read_text())
+
+    def test_each_host_waits_out_a_quit_and_resumes_when_it_is_cancelled(self):
+        for host in HOSTS:
+            text = host_recovery_source(host)
+            with self.subTest(host=host.name):
+                self.assertIn('chrome::AddClosingAllBrowsersCallback(', text)
+                self.assertRegex(text, r'ShellWindowState\(\s*browser_shutdown::HasShutdownStarted\(\),\s*'
+                                       r'browser_shutdown::IsTryingToQuit\(\),\s*window_state_\.Run\(\)\)')
+                self.assertIn('#include "chrome/browser/lifetime/application_lifetime_desktop.h"', host.read_text())
 
     @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
     def test_the_policy_program_passes(self):

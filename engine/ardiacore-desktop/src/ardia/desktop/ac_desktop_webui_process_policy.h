@@ -43,9 +43,15 @@ class ShellReloadBudget {
   std::deque<double> reloads_;
 };
 
-enum class WindowState { kOpen, kClosingReversibly, kGone };
+enum class WindowState { kOpen, kPaused, kGone };
 
-enum class RecoveryStep { kNothing, kWaitForClose, kReloadDocument, kLoadShellUrl };
+inline constexpr WindowState ShellWindowState(bool shutdown_started, bool trying_to_quit, WindowState window) {
+  if (shutdown_started || window == WindowState::kGone) return WindowState::kGone;
+  if (trying_to_quit) return WindowState::kPaused;
+  return window;
+}
+
+enum class RecoveryStep { kNothing, kWaitForResume, kReloadDocument, kLoadShellUrl };
 
 class ShellRecoveryState {
  public:
@@ -53,22 +59,50 @@ class ShellRecoveryState {
     if (!normal_exit) owed_ = true;
   }
 
-  void DocumentCommitted() { owed_ = false; }
+  void DocumentCommitted() {
+    owed_ = false;
+    in_flight_ = false;
+  }
+
+  void NavigationEndedWithoutCommit(bool shell_live) {
+    if (!in_flight_) return;
+    in_flight_ = false;
+    if (!shell_live) owed_ = true;
+  }
 
   RecoveryStep Next(double now_seconds, WindowState window, bool committed_shell_document) {
     if (!owed_) return RecoveryStep::kNothing;
-    if (window == WindowState::kClosingReversibly) return RecoveryStep::kWaitForClose;
+    if (window == WindowState::kPaused) return RecoveryStep::kWaitForResume;
     owed_ = false;
     if (window == WindowState::kGone || !budget_.Allow(now_seconds)) return RecoveryStep::kNothing;
+    in_flight_ = true;
     return committed_shell_document ? RecoveryStep::kReloadDocument : RecoveryStep::kLoadShellUrl;
   }
 
   bool owed() const { return owed_; }
+  bool in_flight() const { return in_flight_; }
   size_t recent_reloads() const { return budget_.recent(); }
 
  private:
   bool owed_ = false;
+  bool in_flight_ = false;
   ShellReloadBudget budget_;
+};
+
+inline constexpr std::string_view kShellBootstrapAsset = "host-bootstrap.js";
+
+class LaunchBootstrap {
+ public:
+  explicit LaunchBootstrap(bool launch_window) : pending_(launch_window) {}
+
+  bool startup() const { return pending_; }
+
+  void Served(std::string_view asset) {
+    if (asset == kShellBootstrapAsset) pending_ = false;
+  }
+
+ private:
+  bool pending_;
 };
 
 }
