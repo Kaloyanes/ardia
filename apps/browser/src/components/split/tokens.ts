@@ -1,24 +1,12 @@
-import { curve, duration, springs } from "../ui/motion";
-import { concentric, radius } from "../ui/tokens";
+import { curve, duration } from "../ui/motion";
+import { radius } from "../ui/tokens";
 
 const DARK = {
   emptyStateFill: "rgba(34,32,33,0.92)",
-  zoneRest: "rgba(255,255,255,0.6)",
-  zoneBorder: "rgba(255,255,255,0.08)",
-  zoneFill: "rgba(255,236,214,0.04)",
-  zoneDash: "rgba(255,255,255,0.1)",
-  zoneDashActive: "rgba(255,255,255,0.72)",
-  zoneLabelActive: "rgba(255,255,255,0.95)",
 };
 
 const LIGHT: typeof DARK = {
   emptyStateFill: "rgba(255,255,255,0.92)",
-  zoneRest: "rgba(0,0,0,0.55)",
-  zoneBorder: "rgba(0,0,0,0.08)",
-  zoneFill: "rgba(255,255,255,0.45)",
-  zoneDash: "rgba(0,0,0,0.1)",
-  zoneDashActive: "rgba(0,0,0,0.5)",
-  zoneLabelActive: "rgba(0,0,0,0.85)",
 };
 
 type SplitColors = typeof DARK;
@@ -29,19 +17,20 @@ export const emptyStateRadius = () => radius.sheet;
 export const EMPTY_STATE_WIDTH = 420;
 export const SPLIT_ROW_HEIGHT = 36;
 export const splitRowRadius = () => radius.chrome;
-export const zoneRadius = () => radius.hero;
-export const ZONE_DASH_INSET = 9.5;
-export const zoneDashRadius = () => concentric(radius.hero, ZONE_DASH_INSET);
+export const dropPreviewRadius = () => radius.hero;
+export const DROP_PREVIEW = {
+  fill: "rgba(18,20,28,0.58)",
+  border: "rgba(255,255,255,0.85)",
+  borderWidth: 1.5,
+  label: "#FFFFFF",
+  labelInset: 24,
+  shadow: { color: "#000000", opacity: 0.3, radius: 12, offset: [0, 2] as [number, number] },
+} as const;
 
 export const FOCUS_RING = { width: 2, gap: 1 } as const;
 
-export const ZONE_SLIDE_MS = 110;
-
 export const SPLIT_MOTION = {
-  zoneGlow: { duration: duration.fast, easing: curve.enter },
-  zoneIn: { duration: ZONE_SLIDE_MS, easing: curve.enter },
-  zoneOut: { duration: ZONE_SLIDE_MS, easing: curve.exit },
-  zoneSpring: springs.snappy,
+  dropPreview: { show: { duration: duration.fast, easing: curve.enter }, hide: { duration: duration.fast, easing: curve.exit } },
 } as const;
 
 export const TOAST_MS = 2600;
