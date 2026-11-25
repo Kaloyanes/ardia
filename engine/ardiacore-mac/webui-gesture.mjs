@@ -28,6 +28,8 @@ const CATEGORIES = [
   "blink.user_timing",
   "cc",
   "benchmark",
+  "input",
+  "disabled-by-default-cc.debug.scheduler",
 ].join(",");
 
 async function browser() {
