@@ -12,6 +12,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
@@ -32,6 +33,10 @@
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 class BrowserView;
 class BrowserWindowInterface;
@@ -74,17 +79,50 @@ void WithProfile(std::string_view name,
 std::string ProfileName(const Profile* profile);
 base::FilePath DataDirectory();
 base::FilePath AssetDirectory();
+struct WindowSpec {
+  std::string id = "main";
+  std::string kind = "browser";
+  std::string title;
+  std::string page_profile;
+  bool startup = true;
+  base::DictValue utility;
+};
+
+struct MergedSession {
+  bool ok = false;
+  bool blocked = false;
+  base::DictValue previous;
+  base::DictValue session;
+};
+
+scoped_refptr<base::SequencedTaskRunner> SessionFiles();
+MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local);
+void BroadcastSession(const MergedSession& merged,
+                      const std::string& source_window,
+                      const base::DictValue* source_base);
+
 std::vector<ShellHostView*>& Hosts();
+ShellHostView* HostForWindow(std::string_view id);
+struct OpenPlacement {
+  bool focus = true;
+  bool maximized = false;
+  std::string behind;
+};
+
+ShellHostView* OpenShellWindow(Profile* profile,
+                               WindowSpec spec,
+                               std::optional<gfx::Rect> frame,
+                               const OpenPlacement& placement = OpenPlacement());
 ShellHostView* HostForShell(content::WebContents* contents);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
+MenuWindowResolver ShellMenuWindows();
 bool BackgroundInstance();
 std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
                                            const char* host_bootstrap);
 void Trace(const std::string& line);
 std::vector<std::string_view> LifecycleCapabilities();
 void QuitWithoutShell();
-void WriteSessionInBackground(base::DictValue session, base::OnceCallback<void(bool)> done);
 
 class PageBinding : public content::WebContentsObserver {
  public:
@@ -148,7 +186,7 @@ class ShellHostView : public views::View,
   ShellHostView(BrowserWindowInterface* browser,
                 BrowserView* browser_view,
                 Profile* app_profile,
-                std::string window_id);
+                WindowSpec spec);
   ShellHostView(const ShellHostView&) = delete;
   ShellHostView& operator=(const ShellHostView&) = delete;
   ~ShellHostView() override;
@@ -157,6 +195,10 @@ class ShellHostView : public views::View,
   void DetachBrowser();
 
   const std::string& window_id() const { return window_id_; }
+  bool is_utility() const { return shell_policy::UtilityKind(kind_); }
+  void NavigateUtility(base::DictValue utility);
+  void ActivateWindow();
+  void ForwardRecordedKey(const input::NativeWebKeyboardEvent& event);
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* app_profile() const { return app_profile_; }
   content::WebContents* shell_contents() const;
@@ -258,6 +300,10 @@ class ShellHostView : public views::View,
   void SetMainMenu(const base::DictValue& args, Done done);
   void ShowShellContextMenu(const base::DictValue& args, Done done);
   void SetTrafficLights(const base::DictValue& args, Done done);
+  void OpenWindow(const base::ListValue* values, Done done);
+  void WriteSession(const base::DictValue& args, Done done);
+  void WatchRecordedKeys(bool recording);
+  void CommitHeldDeparture();
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
@@ -303,11 +349,25 @@ class ShellHostView : public views::View,
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<Profile> app_profile_;
   std::string window_id_;
+  std::string kind_;
+  std::string title_;
+  std::string page_profile_;
+  bool startup_ = true;
+  base::DictValue utility_;
+  bool utility_ready_ = false;
+  struct HeldDeparture {
+    window_policy::CloseIdentity identity;
+    base::DictValue base;
+    base::DictValue session;
+  };
+  std::optional<HeldDeparture> held_departure_;
   bool closing_ = false;
   bool painted_ = false;
+  uint64_t shell_ready_generation_ = 0;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
 
   raw_ptr<views::WebView> shell_ = nullptr;
+  raw_ptr<views::View> under_shell_ = nullptr;
   std::vector<glass::Rect> pass_;
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
@@ -342,6 +402,8 @@ class ShellHostView : public views::View,
   std::optional<window_policy::WindowState> reported_state_;
   bool full_screen_restored_ = false;
   bool shortcut_recording_ = false;
+  struct RecordingKeys;
+  std::unique_ptr<RecordingKeys> recording_keys_;
   bool switcher_capture_ = false;
   base::WeakPtr<content::WebContents> switcher_source_;
 

@@ -2,13 +2,18 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_pip.h"
+#include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_policy.h"
@@ -30,6 +35,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/time/time.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -67,10 +73,13 @@ constexpr std::string_view kPopoverCapabilities[] = {
 constexpr std::string_view kCapabilities[] = {
     "shell.inputRegions",
     "shell.glassRegions",
+    "shell.glassBehindWindow",
     "shell.backdropRegions",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
+    "ArdiaShell.setMenuState",
+    "ArdiaShell.setMenuBookmarks",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",
@@ -78,14 +87,13 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
     ardia::desktop_commands::kEditCapability,
+    "ArdiaShell.openWindow",
+    "ArdiaShell.focusWindow",
+    "ArdiaShell.windowIds",
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
-  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
-  return *runner;
+  return SessionFiles();
 }
 
 base::FilePath DocumentDirectory() {
@@ -99,24 +107,62 @@ bool ValidDocumentName(const std::string& name) {
   return shell_policy::ValidDocumentName(name);
 }
 
-std::optional<base::DictValue> ReadSessionFile() {
-  std::string text;
-  if (!base::ReadFileToStringWithMaxSize(
-          DataDirectory().Append("session.json"), &text,
-          shell_policy::kSessionLimit)) {
-    return std::nullopt;
+bool MoveSessionAside(const base::FilePath& path) {
+  const std::uint64_t now = static_cast<std::uint64_t>(
+      std::max<int64_t>(0, base::Time::Now().InMillisecondsSinceUnixEpoch()));
+  for (int attempt = 0; attempt < shell_policy::kSetAsideAttempts; ++attempt) {
+    const base::FilePath backup =
+        DataDirectory().Append(shell_policy::SetAsideSessionName(now, attempt));
+    if (base::PathExists(backup)) {
+      continue;
+    }
+    return base::Move(path, backup);
   }
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(text, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return std::nullopt;
-  }
-  return std::move(parsed->GetDict());
+  return false;
 }
 
-bool WriteSessionFile(base::DictValue session) {
-  std::optional<std::string> json = base::WriteJson(base::Value(std::move(session)));
-  if (!json || !shell_policy::SessionFits(json->size())) {
+static_assert(shell_policy::kMergeableSessionBytes == ardia::kLinuxSessionMaxBytes);
+
+struct SessionRead {
+  shell_policy::SessionLoad load = shell_policy::SessionLoad::kAbsent;
+  std::optional<base::DictValue> session;
+};
+
+SessionRead ReadSessionForMerge() {
+  const base::FilePath path = DataDirectory().Append("session.json");
+  const std::optional<int64_t> size = base::GetFileSize(path);
+  if (!size) {
+    return SessionRead{};
+  }
+  const std::size_t bytes = static_cast<std::size_t>(std::max<int64_t>(0, *size));
+  std::string text;
+  std::optional<base::Value> parsed;
+  if (bytes <= shell_policy::kMergeableSessionBytes &&
+      base::ReadFileToStringWithMaxSize(path, &text, shell_policy::kMergeableSessionBytes)) {
+    parsed = base::JSONReader::Read(text, base::JSON_PARSE_RFC);
+  }
+  const bool object = parsed && parsed->is_dict();
+  const shell_policy::SessionFile file = shell_policy::SessionFileFor(
+      true, bytes, object, object && ardia::ValidLinuxSession(parsed->GetDict()));
+  const bool moved = file == shell_policy::SessionFile::kSetAside && MoveSessionAside(path);
+  SessionRead read{shell_policy::SessionLoadFor(file, moved), std::nullopt};
+  if (read.load == shell_policy::SessionLoad::kBlocked) {
+    LOG(WARNING) << "Ardia Mac WebUI: session.json cannot be merged or set aside; saves are refused";
+  }
+  if (read.load == shell_policy::SessionLoad::kUse) {
+    read.session = std::move(parsed->GetDict());
+  }
+  return read;
+}
+
+std::optional<base::DictValue> ReadSessionFile() {
+  return ReadSessionForMerge().session;
+}
+
+bool WriteSessionFile(const base::DictValue& session) {
+  std::optional<std::string> json = base::WriteJsonWithOptions(
+      session, base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, ardia::kLinuxSessionMaxDepth);
+  if (!json || !shell_policy::SessionFitsOnDisk(json->size())) {
     return false;
   }
   return base::ImportantFileWriter::WriteFileAtomically(
@@ -175,9 +221,50 @@ void ServiceCall(base::WeakPtr<ShellHostView> host,
 
 }
 
-void WriteSessionInBackground(base::DictValue session, base::OnceCallback<void(bool)> done) {
-  FileRunner()->PostTaskAndReplyWithResult(FROM_HERE, base::BindOnce(&WriteSessionFile, std::move(session)),
-                                           std::move(done));
+scoped_refptr<base::SequencedTaskRunner> SessionFiles() {
+  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
+      base::ThreadPool::CreateSequencedTaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
+  return *runner;
+}
+
+MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local) {
+  MergedSession result;
+  SessionRead read = ReadSessionForMerge();
+  if (!shell_policy::SessionWritable(read.load)) {
+    result.blocked = true;
+    return result;
+  }
+  if (read.session) {
+    result.previous = std::move(*read.session);
+  }
+  std::optional<base::DictValue> merged =
+      ardia::MergeLinuxSession(base, local, result.previous);
+  if (!merged || !WriteSessionFile(*merged)) {
+    return result;
+  }
+  result.session = std::move(*merged);
+  result.ok = true;
+  return result;
+}
+
+void BroadcastSession(const MergedSession& merged,
+                      const std::string& source_window,
+                      const base::DictValue* source_base) {
+  if (!merged.ok || merged.previous == merged.session) {
+    return;
+  }
+  for (ShellHostView* host : Hosts()) {
+    const bool source = host->window_id() == source_window;
+    host->Emit("ArdiaHost", "session",
+               base::Value(base::DictValue()
+                               .Set("base", source && source_base
+                                                ? source_base->Clone()
+                                                : merged.previous.Clone())
+                               .Set("session", merged.session.Clone())
+                               .Set("sourceWindowId", source_window)));
+  }
 }
 
 std::string ShellHostView::BootstrapJson() const {
@@ -220,15 +307,24 @@ std::string ShellHostView::BootstrapJson() const {
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
-  bootstrap.Set("startup", true);
+  bootstrap.Set("startup", startup_);
   bootstrap.Set("profileId", "default");
-  bootstrap.Set("nativeModules",
-                base::DictValue().Set(
-                    "ArdiaApp", base::DictValue().Set("systemInfo", std::move(info))));
+  bootstrap.Set(
+      "nativeModules",
+      base::DictValue()
+          .Set("ArdiaApp", base::DictValue().Set("systemInfo", std::move(info)))
+          .Set("ArdiaGlassEffect",
+               base::DictValue().Set("isLiquidGlass", LiquidGlassAvailable())));
   bootstrap.Set("capabilities", std::move(capabilities));
   bootstrap.Set("glassPanels", true);
-  bootstrap.Set("pageProfile", "");
-  bootstrap.Set("windowKind", "browser");
+  bootstrap.Set("pageProfile", page_profile_);
+  bootstrap.Set("windowKind", kind_);
+  if (!title_.empty()) {
+    bootstrap.Set("title", title_);
+  }
+  if (is_utility()) {
+    bootstrap.Set("utility", utility_.Clone());
+  }
   bootstrap.Set("shellZoom", 1.0);
   return base::WriteJson(bootstrap).value_or("{}");
 }
@@ -317,7 +413,17 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.setMenuState" ||
       method == "ArdiaShell.setMenuBookmarks") {
-    return std::move(done).Run(true, base::Value());
+    if (!values || values->size() != 1) {
+      return std::move(done).Run(false, base::Value("One menu update is required"));
+    }
+    const std::optional<std::string> error =
+        method == "ArdiaShell.setMenuState"
+            ? SetWindowMenuState(window_id_, (*values)[0])
+            : SetWindowMenuBookmarks(window_id_, (*values)[0]);
+    if (error) {
+      return std::move(done).Run(false, base::Value(*error));
+    }
+    return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));
@@ -343,23 +449,7 @@ void ShellHostView::Invoke(const std::string& method,
     return;
   }
   if (method == "session.write") {
-    const base::DictValue* session = args.FindDict("session");
-    if (!session) {
-      return std::move(done).Run(false, base::Value("A session is required"));
-    }
-    base::DictValue copy = session->Clone();
-    FileRunner()->PostTaskAndReplyWithResult(
-        FROM_HERE, base::BindOnce(&WriteSessionFile, session->Clone()),
-        base::BindOnce(
-            [](Done done, base::DictValue session, bool ok) {
-              if (!ok) {
-                return std::move(done).Run(
-                    false, base::Value("The session could not be saved"));
-              }
-              std::move(done).Run(true, base::Value(std::move(session)));
-            },
-            std::move(done), std::move(copy)));
-    return;
+    return WriteSession(args, std::move(done));
   }
   if (method == "ArdiaShell.readDocument") {
     const std::string name = first_string();
@@ -434,7 +524,16 @@ void ShellHostView::Invoke(const std::string& method,
                                       base::NumberToString(renderer_generation_))));
   }
   if (method == "ArdiaShell.windowIds") {
-    return Reply(std::move(done), base::Value(base::ListValue().Append(window_id_)));
+    base::ListValue ids;
+    for (ShellHostView* host : Hosts()) {
+      if (host->browser()) {
+        ids.Append(host->window_id());
+      }
+    }
+    return Reply(std::move(done), base::Value(std::move(ids)));
+  }
+  if (method == "ArdiaShell.openWindow") {
+    return OpenWindow(values, std::move(done));
   }
   if (method == "ArdiaShell.windowFrame") {
     const gfx::Rect bounds = browser_ ? browser_->GetWindow()->GetBounds()
@@ -448,7 +547,7 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.windowButtonLayout") {
     return Reply(std::move(done),
                  base::Value(base::DictValue()
-                                 .Set("layout", "close,minimize,maximize:")
+                                 .Set("layout", "")
                                  .Set("desktop", "macos")));
   }
   if (method == "ArdiaShell.isDarkAppearance") {
@@ -459,6 +558,7 @@ void ShellHostView::Invoke(const std::string& method,
                  base::Value([name isEqualToString:NSAppearanceNameDarkAqua]));
   }
   if (method == "ArdiaShell.shellPainted") {
+    shell_ready_generation_ = renderer_generation_;
     if (!painted_) {
       painted_ = true;
       Note("shell painted in window " + window_id_);
@@ -488,9 +588,12 @@ void ShellHostView::Invoke(const std::string& method,
     return;
   }
   if (method == "ArdiaShell.focusWindow") {
-    if (browser_ && !BackgroundInstance()) {
-      browser_->GetWindow()->Activate();
+    ShellHostView* target =
+        first_string().empty() ? this : HostForWindow(first_string());
+    if (!target) {
+      return std::move(done).Run(false, base::Value("No such native window"));
     }
+    target->ActivateWindow();
     return Reply(std::move(done), base::Value(true));
   }
   if (method == "ArdiaShell.setActiveProfile") {
