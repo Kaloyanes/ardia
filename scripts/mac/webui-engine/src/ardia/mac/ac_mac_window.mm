@@ -1,5 +1,9 @@
 #include "ardia/mac/ac_mac_window.h"
 
+#include <algorithm>
+
+#include "ardia/mac/ac_mac_window_policy.h"
+
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 
@@ -98,6 +102,20 @@ void ApplyShellWindowStyle(views::Widget* widget) {
   content.layer.opaque = NO;
   ns_window.hasShadow = YES;
   [ns_window invalidateShadow];
+  KeepMinimumSize(widget);
+}
+
+void KeepMinimumSize(views::Widget* widget) {
+  NSWindow* ns_window = widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
+  if (!ns_window) {
+    return;
+  }
+  const NSSize content = ns_window.contentMinSize;
+  ns_window.contentMinSize = NSMakeSize(std::max<CGFloat>(content.width, window_policy::kMinWidth),
+                                        std::max<CGFloat>(content.height, window_policy::kMinHeight));
+  const NSSize frame = ns_window.minSize;
+  ns_window.minSize = NSMakeSize(std::max<CGFloat>(frame.width, window_policy::kMinWidth),
+                                 std::max<CGFloat>(frame.height, window_policy::kMinHeight));
 }
 
 void SetTrafficLights(views::Widget* widget, const window::Lights& lights) {

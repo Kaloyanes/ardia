@@ -4,6 +4,7 @@ import { appInfo, docs } from "../../browser/src/test-native/index.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { useOnboarding, onboardingCompletedAt } from "../../browser/src/state/onboarding/onboarding.ts";
 import { useToasts } from "../../browser/src/state/app/toasts.ts";
+import { PLATFORM_TERMS } from "../../browser/src/lib/platformTerms.ts";
 import { useReportSheet } from "../../browser/src/state/report/store.ts";
 import { APP_COMMAND_HANDLERS } from "../../browser/src/state/commands/appCommands.ts";
 import { LINUX_REPORT_TEMPLATE, openReport } from "./reportProblem.ts";
@@ -243,7 +244,7 @@ test("unavailable help and developer commands say so instead of failing silently
   for (const command of ["taskManager", "releaseNotes", "videoTour"]) {
     useToasts.setState({ toasts: {} });
     assert.equal(runAppCommand(first, command, capabilities), true, command);
-    assert.equal(toast(first)?.title, "Not available on Linux yet", command);
+    assert.equal(toast(first)?.title, `Not available on ${PLATFORM_TERMS.os} yet`, command);
   }
   assert.equal(runAppCommand(first, "newTab", capabilities), false);
 });
@@ -298,7 +299,7 @@ test("utility windows run only the app commands that need no browser window", ()
   assert.deepEqual([...UTILITY_APP_COMMANDS].sort(), ["copyDiagnostics", "quit", "taskManager"]);
   useToasts.setState({ toasts: {} });
   listeners[0]({ command: "taskManager", windowId: "settings" });
-  assert.equal(toast("settings")?.title, "Not available on Linux yet");
+  assert.equal(toast("settings")?.title, `Not available on ${PLATFORM_TERMS.os} yet`);
   assert.equal(toast(first), undefined);
 });
 
@@ -422,5 +423,5 @@ test("the quit command is handled here and says so when this build cannot quit",
   useToasts.setState({ toasts: {} });
   assert.equal(runAppCommand(first, "quit", capabilities), true);
   for (let i = 0; i < 20 && !toast(first); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(toast(first)?.title, "Not available on Linux yet");
+  assert.equal(toast(first)?.title, `Not available on ${PLATFORM_TERMS.os} yet`);
 });
