@@ -1257,11 +1257,16 @@ class SwipeContractTests(unittest.TestCase):
     def test_page_swipes_follow_the_page_ack_and_system_setting(self):
         start = self.source.split('void StartPage(const Hit& hit, NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
         for needle in ('NSEvent.isSwipeTrackingFromScrollEventsEnabled', 'binding->presented', 'binding->visible',
-                       'watch->Watch(view->GetRenderWidgetHost())'):
+                       'watch->Watch(view->GetRenderWidgetHost(), FrameWidgets(contents))',
+                       'page.Begin(enabled, ++next_gesture, event.timestamp)'):
             self.assertIn(needle, start)
         self.assertIn('blink::mojom::GestureDevice::kTouchpad', self.source)
         self.assertIn('InertialPhaseState::kMomentum', self.source)
         self.assertIn('RenderWidgetHostDestroyed', self.source)
+        self.assertIn('contents->ForEachRenderFrameHost(', self.source)
+        self.assertIn('(event.TimeStamp() - base::TimeTicks()).InSecondsF()', self.source)
+        ack = self.source.split('void OnInputEventAck(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('sp::AckEvent{ack, time, &host == main_}', ack)
 
     def test_only_tracked_page_motion_is_swallowed(self):
         gesture = self.source.split('bool PageGesture(', 1)[1].split('\n  }\n', 1)[0]
@@ -1292,7 +1297,7 @@ class SwipeContractTests(unittest.TestCase):
                        'page_document.AsRenderFrameHostIfValid()', 'contents->GetPrimaryMainFrame()',
                        'view->GetRenderWidgetHost() == watch->host()'):
             self.assertIn(needle, live)
-        for name in ('void Scroll(double dx, double dy) {', 'void Acknowledged(sp::Ack ack) {', 'bool Claim(const base::DictValue& args) {'):
+        for name in ('void Scroll(double dx, double dy) {', 'void Acknowledged(const sp::AckEvent& ack) {', 'bool Claim(const base::DictValue& args) {'):
             body = self.source.split(name, 1)[1].split('\n  }\n', 1)[0]
             self.assertIn('KeepPage()', body, name)
         forward = self.source.split('void ForwardPage(', 1)[1].split('\n  }\n', 1)[0]

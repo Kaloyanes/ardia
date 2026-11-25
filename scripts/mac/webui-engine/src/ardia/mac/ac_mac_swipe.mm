@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -15,6 +16,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiping_control.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -92,10 +94,14 @@ std::vector<sp::Ack> AcksFor(blink::mojom::InputEventResultState state, const bl
   return {};
 }
 
+double EventSeconds(const blink::WebInputEvent& event) {
+  return (event.TimeStamp() - base::TimeTicks()).InSecondsF();
+}
+
 class PageWatch : public content::RenderWidgetHost::InputEventObserver,
                   public content::RenderWidgetHostObserver {
  public:
-  using Acked = base::RepeatingCallback<void(sp::Ack)>;
+  using Acked = base::RepeatingCallback<void(sp::AckEvent)>;
   using Gone = base::RepeatingClosure;
 
   PageWatch(Acked acked, Gone gone) : acked_(std::move(acked)), gone_(std::move(gone)) {}
@@ -103,36 +109,59 @@ class PageWatch : public content::RenderWidgetHost::InputEventObserver,
   PageWatch& operator=(const PageWatch&) = delete;
   ~PageWatch() override { Stop(); }
 
-  void Watch(content::RenderWidgetHost* host) {
-    if (host == host_) {
-      return;
-    }
+  void Watch(content::RenderWidgetHost* main, const std::vector<content::RenderWidgetHost*>& widgets) {
     Stop();
-    if (!host) {
+    if (!main) {
       return;
     }
-    host_ = host;
-    host->AddInputEventObserver(this);
-    host->AddObserver(this);
+    main_ = main;
+    Add(main);
+    for (content::RenderWidgetHost* widget : widgets) {
+      if (widgets_.size() >= kWidgetsMax) {
+        break;
+      }
+      Add(widget);
+    }
   }
 
   void Stop() {
-    if (!host_) {
-      return;
+    main_ = nullptr;
+    std::vector<raw_ptr<content::RenderWidgetHost>> widgets = std::move(widgets_);
+    widgets_.clear();
+    for (content::RenderWidgetHost* widget : widgets) {
+      widget->RemoveInputEventObserver(this);
+      widget->RemoveObserver(this);
     }
-    content::RenderWidgetHost* host = std::exchange(host_, nullptr);
-    host->RemoveInputEventObserver(this);
-    host->RemoveObserver(this);
   }
 
-  content::RenderWidgetHost* host() const { return host_; }
+  content::RenderWidgetHost* host() const { return main_; }
 
  private:
+  static constexpr size_t kWidgetsMax = 64;
+
+  void Add(content::RenderWidgetHost* widget) {
+    if (!widget || Watches(widget)) {
+      return;
+    }
+    widgets_.push_back(widget);
+    widget->AddInputEventObserver(this);
+    widget->AddObserver(this);
+  }
+
+  bool Watches(const content::RenderWidgetHost* widget) const {
+    for (const content::RenderWidgetHost* watched : widgets_) {
+      if (watched == widget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void OnInputEvent(const content::RenderWidgetHost& host,
                     const blink::WebInputEvent& event,
                     InputEventSource source) override {
-    if (&host == host_ && WheelBegins(event)) {
-      acked_.Run(sp::Ack::kWheelBegan);
+    if (Watches(&host) && WheelBegins(event)) {
+      acked_.Run(sp::AckEvent{sp::Ack::kWheelBegan, EventSeconds(event), &host == main_});
     }
   }
 
@@ -140,28 +169,50 @@ class PageWatch : public content::RenderWidgetHost::InputEventObserver,
                        blink::mojom::InputEventResultSource source,
                        blink::mojom::InputEventResultState state,
                        const blink::WebInputEvent& event) override {
-    if (&host != host_) {
+    if (!Watches(&host)) {
       return;
     }
+    const double time = EventSeconds(event);
     for (sp::Ack ack : AcksFor(state, event)) {
-      if (host_ != &host) {
+      if (!Watches(&host)) {
         return;
       }
-      acked_.Run(ack);
+      acked_.Run(sp::AckEvent{ack, time, &host == main_});
     }
   }
 
   void RenderWidgetHostDestroyed(content::RenderWidgetHost* host) override {
-    if (host == host_) {
+    if (host == main_) {
       Stop();
       gone_.Run();
+      return;
+    }
+    for (auto it = widgets_.begin(); it != widgets_.end(); ++it) {
+      if (*it == host) {
+        host->RemoveInputEventObserver(this);
+        host->RemoveObserver(this);
+        widgets_.erase(it);
+        return;
+      }
     }
   }
 
-  raw_ptr<content::RenderWidgetHost> host_ = nullptr;
+  raw_ptr<content::RenderWidgetHost> main_ = nullptr;
+  std::vector<raw_ptr<content::RenderWidgetHost>> widgets_;
   Acked acked_;
   Gone gone_;
 };
+
+std::vector<content::RenderWidgetHost*> FrameWidgets(content::WebContents* contents) {
+  std::vector<content::RenderWidgetHost*> widgets;
+  contents->ForEachRenderFrameHost([&widgets](content::RenderFrameHost* frame) {
+    content::RenderWidgetHost* widget = frame->GetRenderWidgetHost();
+    if (widget && std::find(widgets.begin(), widgets.end(), widget) == widgets.end()) {
+      widgets.push_back(widget);
+    }
+  });
+  return widgets;
+}
 
 struct Hit {
   sp::Route route = sp::Route::kNone;
@@ -349,7 +400,7 @@ struct ScrollGestures::Native {
     const std::optional<std::pair<double, double>> point = ShellPoint(event);
     const bool enabled = view && frame && point && binding->presented && binding->visible &&
                          NSEvent.isSwipeTrackingFromScrollEventsEnabled;
-    page.Begin(enabled, ++next_gesture);
+    page.Begin(enabled, ++next_gesture, event.timestamp);
     if (!enabled) {
       return;
     }
@@ -360,7 +411,7 @@ struct ScrollGestures::Native {
     page_key = binding->key();
     page_x = point->first;
     page_y = point->second;
-    watch->Watch(view->GetRenderWidgetHost());
+    watch->Watch(view->GetRenderWidgetHost(), FrameWidgets(contents));
   }
 
   bool PageLive() const {
@@ -403,7 +454,7 @@ struct ScrollGestures::Native {
     }
   }
 
-  void Acknowledged(sp::Ack ack) {
+  void Acknowledged(const sp::AckEvent& ack) {
     if (!KeepPage()) {
       return;
     }
@@ -461,7 +512,7 @@ ScrollGestures::ScrollGestures(ShellHostView* host, views::Widget* widget) : sta
   base::WeakPtr<Native> weak = state->weak_factory.GetWeakPtr();
   state->watch = std::make_unique<PageWatch>(
       base::BindRepeating(
-          [](base::WeakPtr<Native> native, sp::Ack ack) {
+          [](base::WeakPtr<Native> native, sp::AckEvent ack) {
             if (native) {
               native->Acknowledged(ack);
             }

@@ -464,7 +464,39 @@ test("a slow drag that leaves its committed home past halfway still lands where 
   let now = 0.012;
   while (spring.position < 0.3) spring.stepFrame((now += FRAME));
   spring.input("began", 0, 1, WIDTH, 0.2);
-  spring.input("changed", 120, 1, WIDTH, 0.5);
-  spring.input("ended", 120, 1, WIDTH, 0.9);
+  spring.input("changed", 150, 1, WIDTH, 0.5);
+  spring.input("ended", 150, 1, WIDTH, 0.9);
   assert.equal(spring.selected, 0, "a deliberate drag back to the first profile is honoured");
+});
+
+function interruptedAt(position) {
+  const spring = new PagerSpring();
+  spring.configure(3, 0, 0, ["a", "b", "c"]);
+  spring.drain();
+  spring.input("began", 0, -1, WIDTH, 0);
+  spring.input("changed", 10, -1, WIDTH, 0);
+  spring.input("changed", 90, -1, WIDTH, 0.01);
+  spring.input("ended", 90, -1, WIDTH, 0.012);
+  assert.equal(spring.selected, 1);
+  let now = 0.012;
+  while (spring.position < position) spring.stepFrame((now += FRAME));
+  return { spring, at: spring.position, now };
+}
+
+test("a tiny reverse nudge on a settle that hasn't crossed halfway keeps the committed profile", () => {
+  const { spring, at } = interruptedAt(0.447);
+  assert.ok(at >= 0.447 && at < 0.5, `interrupted at ${at}`);
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 10, 1, WIDTH, 1.2);
+  assert.ok(Math.abs(spring.position - (at - (10 * 0.5) / WIDTH)) < 1e-9);
+  spring.input("ended", 10, 1, WIDTH, 1.6);
+  assert.equal(spring.selected, 1, "a 0.021-page nudge reversed the switch");
+});
+
+test("a deliberate reverse drag on the same unfinished settle goes back to the first profile", () => {
+  const { spring } = interruptedAt(0.447);
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 140, 1, WIDTH, 1.3);
+  spring.input("ended", 140, 1, WIDTH, 1.7);
+  assert.equal(spring.selected, 0);
 });

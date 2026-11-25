@@ -12,6 +12,7 @@ export const MIN_PAGE_WIDTH = 1;
 export const MAX_RELEASE_VELOCITY = 40;
 export const MAX_SETTLE_SECONDS = 2;
 export const FIRST_FRAME_LEAD = 1 / 60;
+export const OWN_TRAVEL = 0.25;
 
 export type PagerInput = "prepare" | "abandon" | "began" | "changed" | "ended" | "cancelled";
 export type PagerPhase = "idle" | "tracking" | "holding" | "settling";
@@ -410,7 +411,9 @@ export class PagerSpring {
   private slowAim(x: number, home: number) {
     const fromHome = x - home;
     const travelled = x - this.drag.start;
-    const leftHome = Math.abs(fromHome) >= 0.5 && travelled !== 0 && fromHome > 0 === travelled > 0;
+    const startedNearHome = Math.abs(this.drag.start - home) < 0.5;
+    const ownProgress = startedNearHome || Math.abs(travelled) >= OWN_TRAVEL;
+    const leftHome = ownProgress && Math.abs(fromHome) >= 0.5 && travelled !== 0 && fromHome > 0 === travelled > 0;
     return leftHome ? Math.round(x) : home;
   }
 

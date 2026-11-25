@@ -177,9 +177,13 @@ that branch). It is a development tool and never runs in a release. Like Windows
     left, so a pager held by `mayBegin` settles instead of staying held.
   - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
     timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
-    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. A page that
+    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. Acks are matched to
+    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, so a late ack from an earlier gesture
+    is dropped, and every frame widget of the tab is watched, so a wheel aimed at a non-scrolling cross-site iframe
+    still opens the gesture. A page that
     scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
-    vertical start. The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
+    vertical start (latched on the first deltas). A consumed update before the shell claims the swipe cancels it.
+    The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
     soon as any of them changes or the tab stops being shown. `swipe.ts` routes it only to the swipe area whose
     `pageTabId` is that tab.
   - The host swallows a page swipe's horizontal motion only after the shell claims it with `shell.pageSwipeClaim

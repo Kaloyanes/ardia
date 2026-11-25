@@ -154,6 +154,14 @@ constexpr bool VerticalIntent(double dx, double dy) {
 
 enum class Ack { kWheelBegan, kWheelConsumed, kScrollBegin, kScrollConsumed, kScrollUnconsumed };
 
+inline constexpr double kAckSlack = 0.0005;
+
+struct AckEvent {
+  Ack ack = Ack::kWheelBegan;
+  double time = 0;
+  bool main = true;
+};
+
 struct Step {
   Phase phase = Phase::kCancelled;
   double dx = 0;
@@ -162,10 +170,11 @@ struct Step {
 
 class PageSwipe {
  public:
-  void Begin(bool enabled, std::uint64_t gesture) {
+  void Begin(bool enabled, std::uint64_t gesture, double start) {
     *this = PageSwipe();
-    state_ = enabled ? State::kPending : State::kIdle;
+    state_ = enabled && std::isfinite(start) ? State::kPending : State::kIdle;
     gesture_ = gesture;
+    start_ = start;
   }
 
   std::optional<Step> Scroll(double dx, double dy) {
@@ -177,14 +186,25 @@ class PageSwipe {
     if (state_ == State::kTracking) {
       return Step{Phase::kChanged, dx, dy};
     }
+    if (VerticalIntent(total_dx_, total_dy_)) {
+      state_ = State::kPage;
+      return std::nullopt;
+    }
     return Start();
   }
 
-  std::optional<Step> Acknowledge(Ack ack) {
+  std::optional<Step> Acknowledge(const AckEvent& event) {
+    if (!std::isfinite(event.time) || event.time < start_ - kAckSlack) {
+      return std::nullopt;
+    }
+    if (state_ == State::kTracking && !claimed_ && scrolling_ && event.ack == Ack::kScrollConsumed) {
+      state_ = State::kPage;
+      return Step{Phase::kCancelled};
+    }
     if (state_ != State::kPending) {
       return std::nullopt;
     }
-    switch (ack) {
+    switch (event.ack) {
       case Ack::kWheelBegan:
         wheel_began_ = true;
         return std::nullopt;
@@ -194,7 +214,7 @@ class PageSwipe {
         }
         return std::nullopt;
       case Ack::kScrollBegin:
-        scrolling_ = wheel_began_;
+        scrolling_ = scrolling_ || wheel_began_;
         return std::nullopt;
       case Ack::kScrollConsumed:
         if (scrolling_) {
@@ -202,7 +222,7 @@ class PageSwipe {
         }
         return std::nullopt;
       case Ack::kScrollUnconsumed:
-        if (!scrolling_) {
+        if (!scrolling_ || !event.main) {
           return std::nullopt;
         }
         unconsumed_ = true;
@@ -260,6 +280,7 @@ class PageSwipe {
 
   State state_ = State::kIdle;
   std::uint64_t gesture_ = 0;
+  double start_ = 0;
   bool wheel_began_ = false;
   bool scrolling_ = false;
   bool unconsumed_ = false;
