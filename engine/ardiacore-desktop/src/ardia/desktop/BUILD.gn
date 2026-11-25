@@ -38,6 +38,13 @@ source_set("cores") {
   ]
 }
 
+source_set("layout_sync") {
+  sources = [
+    "ac_desktop_layout_sync.cc",
+    "ac_desktop_layout_sync.h",
+  ]
+}
+
 source_set("platform") {
   sources = [
     "ac_desktop_platform.cc",
@@ -49,6 +56,7 @@ source_set("platform") {
 group("desktop") {
   public_deps = [
     ":cores",
+    ":layout_sync",
     ":platform",
     ":policies",
   ]

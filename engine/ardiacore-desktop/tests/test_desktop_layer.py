@@ -165,5 +165,18 @@ class PathTextTests(unittest.TestCase):
             self.assertEqual(ran.returncode, 0, ran.stderr)
 
 
+@unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
+class LayoutSyncTests(unittest.TestCase):
+    def test_the_layout_and_surface_sync_program_passes(self):
+        compiler = os.environ.get('CXX', 'c++')
+        with tempfile.TemporaryDirectory(prefix='ardia-desktop-layout-sync-') as scratch:
+            binary = pathlib.Path(scratch, 'layout_sync_test')
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', str(SOURCE),
+                                    str(DESKTOP / 'ac_desktop_layout_sync.cc'), str(ROOT / 'tests/layout_sync_test.cc'),
+                                    '-o', str(binary)], capture_output=True, text=True, timeout=180)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
 if __name__ == '__main__':
     unittest.main()
