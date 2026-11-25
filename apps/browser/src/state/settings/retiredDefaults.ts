@@ -11,19 +11,24 @@ export const RETIRED_DEFAULTS: readonly RetiredDefault[] = [
 ];
 
 type Retired<S> = { settings: S | undefined; settingsMeta: SettingsMeta };
+type RetireOptions = { waitForSync?: boolean; heldBySync?: (key: string) => boolean };
 
-function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied }: RetiredDefault): Retired<S> {
+const marked = (meta: SettingsMeta, applied: string): SettingsMeta => ({ chosen: meta.chosen, inferred: [...meta.inferred, applied] });
+
+function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied }: RetiredDefault, { waitForSync = false, heldBySync }: RetireOptions): Retired<S> {
   if (meta.inferred.includes(applied)) return { settings: saved, settingsMeta: meta };
-  const marked = (m: SettingsMeta): SettingsMeta => ({ chosen: m.chosen, inferred: [...m.inferred, applied] });
   const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !(meta.chosen.includes(key) && !meta.inferred.includes(key));
-  if (!oldDefaultNobodyChose) return { settings: saved, settingsMeta: marked(meta) };
+  if (!oldDefaultNobodyChose || heldBySync?.(key)) return { settings: saved, settingsMeta: marked(meta, applied) };
+  if (waitForSync) return { settings: saved, settingsMeta: meta };
   const { [key]: _untouched, ...settings } = saved as Record<string, unknown>;
   const without = (keys: string[]) => keys.filter((k) => k !== key);
-  return { settings: settings as S, settingsMeta: marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }) };
+  return { settings: settings as S, settingsMeta: marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }, applied) };
 }
 
-export const withRetiredDefaults = <S extends object>(saved: S | undefined, meta: SettingsMeta): Retired<S> =>
-  RETIRED_DEFAULTS.reduce<Retired<S>>(withRetiredDefault, { settings: saved, settingsMeta: meta });
+export const withRetiredDefaults = <S extends object>(saved: S | undefined, meta: SettingsMeta, options: RetireOptions = {}): Retired<S> =>
+  RETIRED_DEFAULTS.reduce<Retired<S>>((retired, retiredDefault) => withRetiredDefault(retired, retiredDefault, options), { settings: saved, settingsMeta: meta });
+
+export const retiredDefaultsWaiting = (meta: SettingsMeta) => RETIRED_DEFAULTS.filter(({ applied }) => !meta.inferred.includes(applied)).map(({ key }) => key);
 
 type SettingsState = { settings: unknown; settingsMeta: SettingsMeta };
 

@@ -72,8 +72,8 @@ class Device {
     stub.passwordStores.set(id, new Map());
     this.passwords = adapters.passwordsAdapter("default", sealedLogins())(true);
   }
-  loadSaved() {
-    this.with(() => settleSettingsFromSavedSync(this.scopes.app));
+  loadSaved({ settingsSynced = true } = {}) {
+    this.with(() => settleSettingsFromSavedSync(this.scopes.app, settingsSynced));
   }
   with(fn) {
     useEditClock(this.clock);
@@ -178,48 +178,84 @@ test("settings: what a Mac only has by default isn't sent; nulls from another Ma
   b.with(() => assert.equal(S().settings.cmdClickCreatesTabGroup, false, "an explicit off is taken"));
 });
 
-test("settings: a ⌘-click grouping on synced from another Mac survives the launch that retires its old default, even with the sync folder out of reach", async () => {
+const GROUPING = "cmdClickCreatesTabGroup";
+const GROUPING_RETIRED = "cmdClickCreatesTabGroup:offByDefault";
+const grouping = (device) => device.with(() => ({ on: S().settings[GROUPING], chosen: S().settingsMeta.chosen.includes(GROUPING), retired: S().settingsMeta.inferred.includes(GROUPING_RETIRED) }));
+const relaunchUnretired = (device, overrides) =>
+  device.with(() => {
+    const { settingsMeta } = S();
+    const unretired = { chosen: settingsMeta.chosen, inferred: settingsMeta.inferred.filter((k) => k !== GROUPING_RETIRED) };
+    stub.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: S().profiles, profileOrder: S().profileOrder, settings: { ...S().settings }, settingsMeta: unretired, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
+    S().hydrate(loadSession(overrides));
+  });
+const relaunchSaved = (device) =>
+  device.with(() => {
+    stub.docs.set("session.json", versionedJson(savedDocumentValue("session.json", S()), SESSION_VERSION));
+    S().hydrate(loadSession());
+  });
+async function syncedGroupingOn() {
   const folder = new Folder();
   const a = new Device("A", folder);
   const b = new Device("B", folder);
-  a.with(() => S().updateSettings({ cmdClickCreatesTabGroup: true }));
+  a.with(() => S().updateSettings({ [GROUPING]: true }));
   await syncAll([a, b]);
-  assert.deepEqual(b.with(() => [S().settings.cmdClickCreatesTabGroup, S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup")]), [true, false], "B took A's on without choosing it");
-  const { settingsMeta } = b.with(() => S());
-  const markers = new Set(["cmdClickCreatesTabGroup:offByDefault"]);
-  const unmarked = { chosen: settingsMeta.chosen, inferred: settingsMeta.inferred.filter((k) => !markers.has(k)) };
-  b.with(() => {
-    stub.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: S().profiles, profileOrder: S().profileOrder, settings: { ...S().settings }, settingsMeta: unmarked, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
-    S().hydrate(loadSession());
-  });
-  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), false, "the session alone can't tell a synced on from the old default");
+  assert.deepEqual(grouping(b), { on: true, chosen: false, retired: true }, "B took A's on without choosing it");
+  return { folder, b };
+}
+
+test("settings: with Settings sync on and its key still locked at launch, an unchosen ⌘-click grouping on waits: no flip, no marker", async () => {
+  const { b } = await syncedGroupingOn();
+  relaunchUnretired(b, { retiredDefaultsWaitForSync: true });
+  assert.deepEqual(grouping(b), { on: true, chosen: false, retired: false });
+  relaunchSaved(b);
+  assert.deepEqual(grouping(b), { on: false, chosen: false, retired: true }, "a launch with Settings sync off retires it at once");
+});
+
+test("settings: once sync unlocks, a grouping on its saved record holds stays on and is marked, even with the sync folder out of reach", async () => {
+  const { folder, b } = await syncedGroupingOn();
+  relaunchUnretired(b, { retiredDefaultsWaitForSync: true });
   folder.transport = () => {
     throw new Error("the sync folder is out of reach");
   };
   b.loadSaved();
-  assert.deepEqual(b.with(() => [S().settings.cmdClickCreatesTabGroup, S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup")]), [true, false], "the saved sync record puts it back at launch, still unchosen");
-  const extraction = b.with(() => settingsAdapter.extract(() => undefined));
-  assert.equal(extraction.values.has("set:cmdClickCreatesTabGroup"), false, "and B doesn't publish it as its own");
-  b.with(() => {
-    stub.docs.set("session.json", versionedJson(savedDocumentValue("session.json", S()), SESSION_VERSION));
-    S().hydrate(loadSession());
-  });
-  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), true, "the next launch keeps it: the default retires once");
+  assert.deepEqual(grouping(b), { on: true, chosen: false, retired: true });
+  assert.equal(b.with(() => settingsAdapter.extract(() => undefined)).values.has(`set:${GROUPING}`), false, "and B doesn't publish it as its own");
+  relaunchSaved(b);
+  assert.deepEqual(grouping(b), { on: true, chosen: false, retired: true }, "the next launch keeps it: the default retires once");
 });
 
-test("settings: the saved sync record restores only what sync holds explicitly and the user didn't choose here", async () => {
-  const folder = new Folder();
-  const a = new Device("A", folder);
-  const b = new Device("B", folder);
-  a.with(() => S().updateSettings({ cmdClickCreatesTabGroup: true }));
-  await syncAll([a, b]);
-  b.with(() => S().updateSettings({ cmdClickCreatesTabGroup: false }));
-  b.loadSaved();
-  assert.equal(b.with(() => S().settings.cmdClickCreatesTabGroup), false, "an off chosen here wins over the saved record");
+test("settings: once sync unlocks with no say on grouping in its saved record, the waiting on retires to off and is marked", async () => {
   const c = new Device("C", new Folder());
-  c.scopes.app.records["set:cmdClickCreatesTabGroup"] = { v: { v: null } };
+  c.with(() => S().updateSettings({ [GROUPING]: true }, { fromSync: true }));
+  relaunchUnretired(c, { retiredDefaultsWaitForSync: true });
+  assert.deepEqual(grouping(c), { on: true, chosen: false, retired: false });
   c.loadSaved();
-  assert.equal(c.with(() => S().settings.cmdClickCreatesTabGroup), false, "a record with no say leaves the default");
+  assert.deepEqual(grouping(c), { on: false, chosen: false, retired: true });
+});
+
+test("settings: with Settings sync turned off, the saved sync record never sets settings: a waiting on retires, and an off stays off", async () => {
+  const { b } = await syncedGroupingOn();
+  relaunchUnretired(b, { retiredDefaultsWaitForSync: true });
+  b.loadSaved({ settingsSynced: false });
+  assert.deepEqual(grouping(b), { on: false, chosen: false, retired: true });
+  b.with(() => S().updateSettings({ [GROUPING]: false }, { fromSync: true }));
+  relaunchUnretired(b, { retiredDefaultsWaitForSync: true });
+  b.loadSaved({ settingsSynced: false });
+  assert.deepEqual(grouping(b), { on: false, chosen: false, retired: true }, "the cached on doesn't override the local off");
+});
+
+test("settings: the saved sync record settles a waiting grouping only with an explicit value the user didn't overrule here", async () => {
+  const { b } = await syncedGroupingOn();
+  b.with(() => S().updateSettings({ [GROUPING]: false }));
+  relaunchUnretired(b, { retiredDefaultsWaitForSync: true });
+  b.loadSaved();
+  assert.deepEqual(grouping(b), { on: false, chosen: true, retired: true }, "an off chosen here wins over the saved record");
+  const c = new Device("C", new Folder());
+  c.with(() => S().updateSettings({ [GROUPING]: true }, { fromSync: true }));
+  relaunchUnretired(c, { retiredDefaultsWaitForSync: true });
+  c.scopes.app.records[`set:${GROUPING}`] = { v: { v: null } };
+  c.loadSaved();
+  assert.deepEqual(grouping(c), { on: false, chosen: false, retired: true }, "a record with no say retires the waiting on");
 });
 
 test("settings: the clean-up time goes out as hours, the key a Mac a version behind reads, and comes back as exact minutes", () => {

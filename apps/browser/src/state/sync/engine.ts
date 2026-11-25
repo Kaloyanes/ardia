@@ -7,7 +7,7 @@ import { historyExpired } from "./historyAdapter";
 import { settleSettingsFromSavedSync } from "./settingsAdapter";
 import { watchExtensionIntents } from "./extensions";
 import { appAdapters, extensionsOf, forgetScopeAdapters, profileAdapters, typeSynced } from "./scopeAdapters";
-import { APP_SCOPE, emptyDoc, emptyUi, type DataType, type SendTarget, type SyncDoc, type SyncUi } from "./syncDoc";
+import { APP_SCOPE, emptyDoc, emptyUi, typeSyncedFor, type DataType, type SendTarget, type SyncDoc, type SyncUi } from "./syncDoc";
 import { syncFiles } from "./syncFiles";
 import { settleThemeAdoption, themeChosenHere } from "./syncThemes";
 import { editClock, startEditClock } from "./editClock";
@@ -207,7 +207,7 @@ async function loadSavedState() {
   await loadState();
   startEditClock(doc.deviceId ?? "", doc.clock);
   const app = doc.scopes[APP_SCOPE];
-  if (app) settleSettingsFromSavedSync(app);
+  settleSettingsFromSavedSync(app, typeSyncedFor(doc.types, "settings", true));
   settleThemeAdoption(doc.profiles, app, false);
 }
 

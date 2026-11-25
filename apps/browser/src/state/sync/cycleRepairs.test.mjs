@@ -153,3 +153,62 @@ test("a setting chosen on this Mac isn't replaced by the one an older build rece
   await engine.syncNow();
   assert.equal(S().settings.selectedTabGlow, "soft");
 });
+
+const GROUPING = "set:cmdClickCreatesTabGroup";
+const GROUPING_RETIRED = "cmdClickCreatesTabGroup:offByDefault";
+const { loadSession, SESSION_VERSION } = await import("../session/persist.ts");
+const { settingsSyncWaitsAtLaunch } = await import("./settingsSyncAtLaunch.ts");
+
+function upgradeWithGroupingOn({ settings, synced }) {
+  reset();
+  const record = { h: "0000000001000.0000.peer", v: { v: synced }, o: ["peer", 1] };
+  const app = { ...emptyScope(), records: synced === undefined ? {} : { [GROUPING]: record }, base: synced === undefined ? {} : { [GROUPING]: canonical(record.v) }, vv: { peer: 1 }, joined: true, seen: { peer: 1 } };
+  shell.docs.set("sync-state.nns", `sealed:${JSON.stringify({ covers: -1, scopes: { app }, version: 1 })}`);
+  shell.docs.set("sync.json", JSON.stringify({ v: 1, enabled: true, folder: "/sync", deviceId: "me", clock: null, types: { bookmarks: true, history: true, tabs: true, pinned: true, passwords: true, extensions: true, settings }, profiles: {}, lastSyncedAt: null, setupAt: 1, joining: false }));
+  const profile = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
+  shell.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: { default: profile }, profileOrder: ["default"], settings: { ...S().settings, cmdClickCreatesTabGroup: true }, settingsMeta: { chosen: [], inferred: ["hideToolbarWhileScrolling:offByDefault"] }, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
+  S().hydrate(loadSession({ retiredDefaultsWaitForSync: settingsSyncWaitsAtLaunch() }));
+}
+const grouping = () => ({ on: S().settings.cmdClickCreatesTabGroup, retired: S().settingsMeta.inferred.includes(GROUPING_RETIRED) });
+
+test("at launch the retired grouping default waits only while Settings sync is on, then settles from the unlocked saved state", async () => {
+  upgradeWithGroupingOn({ settings: true, synced: true });
+  assert.deepEqual(grouping(), { on: true, retired: false }, "sync is still locked: nothing flips and nothing is marked");
+  const engine = await import("./engine.ts?groupingHeld");
+  engine.startSync();
+  await settle();
+  assert.deepEqual(grouping(), { on: true, retired: true }, "the unlocked record holds an on: it stays on, now marked");
+  assert.ok(!S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup"));
+});
+
+test("unlocked with no grouping record, the waiting on retires to off", async () => {
+  upgradeWithGroupingOn({ settings: true, synced: undefined });
+  const engine = await import("./engine.ts?groupingAbsent");
+  engine.startSync();
+  await settle();
+  assert.deepEqual(grouping(), { on: false, retired: true });
+});
+
+test("a key that stays locked leaves the waiting on alone", async () => {
+  const sync = globalThis.acTestNativeModules.ArdiaSync;
+  const unlock = sync.unlock;
+  sync.unlock = async () => false;
+  try {
+    upgradeWithGroupingOn({ settings: true, synced: true });
+    const engine = await import("./engine.ts?groupingLocked");
+    engine.startSync();
+    await settle();
+    assert.deepEqual(grouping(), { on: true, retired: false });
+  } finally {
+    sync.unlock = unlock;
+  }
+});
+
+test("with Settings sync off at launch the old on retires during hydration, and the saved on record never brings it back", async () => {
+  upgradeWithGroupingOn({ settings: false, synced: true });
+  assert.deepEqual(grouping(), { on: false, retired: true });
+  const engine = await import("./engine.ts?groupingTypeOff");
+  engine.startSync();
+  await settle();
+  assert.deepEqual(grouping(), { on: false, retired: true });
+});

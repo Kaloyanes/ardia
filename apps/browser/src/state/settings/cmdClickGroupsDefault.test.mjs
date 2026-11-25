@@ -6,7 +6,7 @@ const { versionedJson } = await import("../../lib/savedDocument.ts");
 const { savedDocumentValue } = await import("../session/documentJson.ts");
 const { CMD_CLICK_GROUPS_DEFAULT_APPLIED: APPLIED, TOOLBAR_SCROLL_DEFAULT_APPLIED } = await import("./retiredDefaults.ts");
 const { DEFAULT_SETTINGS } = await import("./settings.ts");
-const { settingsAdapter } = await import("../sync/settingsAdapter.ts");
+const { settingsAdapter, settleSettingsFromSavedSync } = await import("../sync/settingsAdapter.ts");
 const { PRESETS } = await import("../onboarding/presets.ts");
 const { search } = await import("../../components/settings/searchMatch.ts");
 const { findSetting, SETTINGS_INDEX } = await import("../../components/settings/settingsIndex.ts");
@@ -156,11 +156,11 @@ test("unticking the box while redoing onboarding as Dia is a choice: it turns of
   settleOnboarding();
 });
 
-const launchWith = async (saved) => {
+const launchWith = async (saved, overrides) => {
   stub.docs.clear();
   stub.docs.set("session.json", JSON.stringify(saved));
   const before = stub.docs.get("session.json");
-  const stop = startPersistence();
+  const stop = startPersistence(overrides);
   await new Promise((resolve) => setTimeout(resolve, 0));
   flushPersistence();
   stop();
@@ -183,4 +183,38 @@ test("a launch that only marks the flip, with no on to retire, leaves the write 
 test("a launch with every default already retired doesn't rewrite the session", async () => {
   const { written } = await launchWith(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [KEY], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED, APPLIED] }));
   assert.equal(written, false);
+});
+
+test("a launch that waits for locked Settings sync keeps the saved on and writes no marker yet", async () => {
+  const { written } = await launchWith(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED] }), { retiredDefaultsWaitForSync: true });
+  assert.equal(written, false);
+  assert.deepEqual({ on: S().settings[KEY], retired: S().settingsMeta.inferred.includes(APPLIED) }, { on: true, retired: false });
+});
+
+const launchThenUnlock = async (records) => {
+  stub.docs.clear();
+  stub.docs.set("session.json", JSON.stringify(doc({ ...DEFAULT_SETTINGS, [KEY]: true }, { chosen: [], inferred: [TOOLBAR_SCROLL_DEFAULT_APPLIED] })));
+  const stop = startPersistence({ retiredDefaultsWaitForSync: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flushPersistence();
+  const waiting = stub.docs.get("session.json");
+  settleSettingsFromSavedSync({ records, unapplied: [] }, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flushPersistence();
+  stop();
+  return { waiting: JSON.parse(waiting), saved: JSON.parse(stub.docs.get("session.json")) };
+};
+
+test("when locked sync unlocks with no say on grouping, the on retires and the off and its marker are written", async () => {
+  const { waiting, saved } = await launchThenUnlock({});
+  assert.equal(waiting.settingsMeta.inferred.includes(APPLIED), false);
+  assert.ok(saved.settingsMeta.inferred.includes(APPLIED));
+  assert.notEqual(saved.settings[KEY], true);
+});
+
+test("when locked sync unlocks holding a synced on, the on stays and only its marker is written", async () => {
+  const { saved } = await launchThenUnlock({ [`set:${KEY}`]: { v: { v: true } } });
+  assert.ok(saved.settingsMeta.inferred.includes(APPLIED));
+  assert.equal(saved.settings[KEY], true);
+  assert.equal(saved.settingsMeta.chosen.includes(KEY), false);
 });

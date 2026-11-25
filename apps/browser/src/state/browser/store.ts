@@ -68,7 +68,7 @@ export type HydrateData = Partial<
     | "settings"
     | "settingsMeta"
   >
-> & { focusedWindowId?: string | null; lastProfileId?: string | null };
+> & { focusedWindowId?: string | null; lastProfileId?: string | null; retiredDefaultsWaitForSync?: boolean };
 
 let batch = (update: () => void) => update();
 export function setStoreBatching(batchedUpdates: (update: () => void) => void) {
@@ -126,7 +126,7 @@ const createdBrowser = create<BrowserState>()(actionsApart(transactions.middlewa
       ...(data.profileOrder ?? []).filter((id) => profiles[id]),
       ...Object.keys(profiles).filter((id) => !data.profileOrder?.includes(id)),
     ];
-    const kept = withRetiredDefaults(data.settings, parseSettingsMeta(data.settingsMeta));
+    const kept = withRetiredDefaults(data.settings, parseSettingsMeta(data.settingsMeta), { waitForSync: data.retiredDefaultsWaitForSync });
     const settings = parseSettings(kept.settings);
     if (!profiles[settings.defaultProfileId]) settings.defaultProfileId = profileOrder[0]!;
 

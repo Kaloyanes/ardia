@@ -2,7 +2,8 @@ import { canonical, type Adapter, type SyncRecord } from "../../platform/sync";
 import { useBrowser } from "../browser/store";
 import { DEFAULT_SETTINGS, SETTING_KEYS, SETTING_SPECS, validSettingValue, type SettingKey, type Settings } from "../settings/settings";
 import { fromLegacy } from "../../lib/legacy";
-import { RETIRED_DEFAULTS } from "../settings/retiredDefaults";
+import { retiredDefaultsWaiting } from "../settings/retiredDefaults";
+import { settleRetiredDefaults } from "../settings/settleRetiredDefaults";
 import { CLEAN_UP_KEY, hoursFromMinutes, LEGACY_CLEAN_UP_KEY, minutesFromHours } from "../settings/cleanUpAfter";
 
 const store = () => useBrowser.getState();
@@ -66,20 +67,22 @@ export function settingsToReapply(records: Record<string, SyncRecord>): string[]
 }
 
 export function retiredDefaultsHeldBySync(records: Record<string, SyncRecord>): Map<string, { v: unknown }> {
-  const settings = store().settings;
   const chosen = new Set(store().settingsMeta.chosen);
   const held = new Map<string, { v: unknown }>();
-  for (const { key: name } of RETIRED_DEFAULTS) {
+  for (const name of retiredDefaultsWaiting(store().settingsMeta)) {
     const key = recordKey(name);
     const value = fromRecord(name, (fromLegacy(records[key]?.v) as { v?: unknown } | null | undefined)?.v);
     if (chosen.has(name) || value === null || value === undefined || !validSettingValue(name as SettingKey, value)) continue;
-    if (canonical(value) !== canonical(settings[name as SettingKey])) held.set(key, { v: toRecord(name, value) });
+    held.set(key, { v: toRecord(name, value) });
   }
   return held;
 }
 
-export function settleSettingsFromSavedSync(app: { records: Record<string, SyncRecord>; unapplied: string[] }) {
-  const held = retiredDefaultsHeldBySync(app.records);
+type SavedAppScope = { records: Record<string, SyncRecord>; unapplied: string[] };
+
+export function settleSettingsFromSavedSync(app: SavedAppScope | undefined, settingsSynced: boolean) {
+  const held = app && settingsSynced ? retiredDefaultsHeldBySync(app.records) : new Map<string, { v: unknown }>();
   if (held.size) applySettingRecords(held, held.keys());
-  app.unapplied = [...new Set([...app.unapplied, ...settingsToReapply(app.records)])];
+  settleRetiredDefaults((name) => held.has(recordKey(name)));
+  if (app) app.unapplied = [...new Set([...app.unapplied, ...settingsToReapply(app.records)])];
 }
