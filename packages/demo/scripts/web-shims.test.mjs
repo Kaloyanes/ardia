@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 import { backdropFragment, haloFragment, powerUpFragment } from "../src/shims/web/gl/sources.ts";
-import { measuredSize, MIN_FRAME_INTERVAL, stepAnimation } from "../src/shims/web/gl/viewClock.ts";
+import { frameSubscription, measuredSize, MIN_FRAME_INTERVAL, stepAnimation, wantsFrames } from "../src/shims/web/gl/viewClock.ts";
 import { baseStops, GRAIN_SIDE, grainAlpha, overlayStops, padLayers, srgbFromOklab, SWATCH_SAMPLES, swatchColors } from "../src/shims/web/gl/themeSwatch.ts";
 import { oklab } from "../src/shims/web/gl/colors.ts";
 
@@ -42,6 +42,7 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
     colorPad: true,
     themedBackdrop: true,
     darkVisualEffect: true,
+    hudStaysDark: true,
     breathe: true,
     holdKeyLookQuiet: true,
   });
@@ -122,4 +123,37 @@ test("an animated GL view holds its clock at zero until it has a size, then play
   assert.ok(Math.abs(clock.time - (0.001 + MIN_FRAME_INTERVAL)) < 1e-9);
   assert.equal(stepAnimation(clock, 5, 1), "finish");
   assert.equal(clock.time, 1);
+});
+
+test("an onscreen GL view with no size holds no frame subscription, and takes one only once it is measured", () => {
+  let subscribed = 0;
+  let unsubscribed = 0;
+  const frames = frameSubscription(() => {
+    subscribed++;
+    return () => unsubscribed++;
+  });
+  const clock = { css: [0, 0], done: false };
+  const sync = (visible) => frames.sync(wantsFrames(visible, clock.css, clock.done));
+  sync(true);
+  sync(true);
+  assert.equal(frames.active(), false);
+  assert.equal(subscribed, 0);
+  clock.css = [0, 40];
+  sync(true);
+  assert.equal(frames.active(), false);
+  clock.css = [120, 40];
+  sync(true);
+  sync(true);
+  assert.deepEqual([frames.active(), subscribed, unsubscribed], [true, 1, 0]);
+  clock.css = [0, 0];
+  sync(true);
+  assert.deepEqual([frames.active(), subscribed, unsubscribed], [false, 1, 1]);
+  clock.css = [120, 40];
+  sync(false);
+  assert.equal(frames.active(), false);
+  sync(true);
+  assert.deepEqual([frames.active(), subscribed], [true, 2]);
+  clock.done = true;
+  sync(true);
+  assert.deepEqual([frames.active(), subscribed, unsubscribed], [false, 2, 2]);
 });

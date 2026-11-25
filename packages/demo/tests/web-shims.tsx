@@ -64,6 +64,7 @@ document.getElementById("run")!.addEventListener("click", async (event) => {
     createElement("div", { key: "pad", id: "pad" }, createElement(ThemeSwatch, { colors: [], padLightness: 0.5, style: box })),
     createElement("div", { key: "backdrop", id: "backdrop" }, createElement(WindowBackdrop, { colors: ["#000000", "#000000"], vibrancy: true, themeColors: [1, 0, 0, 1, 0, 0, 1, 1], themeOpacity: 0.7, themeBaseAlpha: 0.4, themeGrain: 0.2, themeTexture: "denim", themeAppearance: "dark", style: box })),
     createElement("div", { key: "effect", id: "effect" }, createElement(VisualEffect, { material: "sidebar", style: box })),
+    createElement("div", { key: "hud", id: "hud" }, createElement(VisualEffect, { material: "hudWindow", style: box })),
     createElement("div", { key: "breathe", id: "breathe" }, createElement(Breathe, { running: true, cycleMs: 1000, opacityRange: [0.4, 1], scaleRange: [1, 1.1], style: box })),
   ]));
   const swatch = document.querySelector<HTMLElement>("#swatch > div");
@@ -73,6 +74,10 @@ document.getElementById("run")!.addEventListener("click", async (event) => {
   const backdrop = document.querySelector<HTMLElement>("#backdrop > div");
   checks.themedBackdrop = !!backdrop && backdrop.querySelectorAll("linearGradient").length === 1 && /linear-gradient/.test(backdrop.querySelector<HTMLElement>(":scope > div")?.style.backgroundImage ?? "") && !backdrop.querySelector("canvas");
   checks.darkVisualEffect = getComputedStyle(document.querySelector("#effect > div")!).backgroundColor === "rgba(46, 46, 48, 0.5)";
+  const hudFill = () => getComputedStyle(document.querySelector("#hud > div")!).backgroundColor;
+  const darkHud = hudFill();
+  flushSync(() => useBrowser.setState((s) => ({ ui: { ...s.ui, appDark: false } })));
+  checks.hudStaysDark = darkHud === "rgba(30, 30, 30, 0.6)" && hudFill() === "rgba(30, 30, 30, 0.6)";
   checks.breathe = /ardia-breathe-/.test(getComputedStyle(document.querySelector("#breathe > div > div")!).animationName);
   console.warn = warn;
   console.error = error;

@@ -12,11 +12,15 @@ function webPrefersReducedMotion(): boolean | null {
 }
 
 let reduce: boolean | null = webPrefersReducedMotion();
+let changedSinceLaunch = false;
 
 export const reduceMotionKnown: Promise<boolean> = AccessibilityInfo.isReduceMotionEnabled().then(
-  (on) => (reduce = on),
-  () => (reduce = false),
+  (on) => (changedSinceLaunch ? reduce! : (reduce = on)),
+  () => (reduce ??= false),
 );
-AccessibilityInfo.addEventListener("reduceMotionChanged", (on) => (reduce = on));
+AccessibilityInfo.addEventListener("reduceMotionChanged", (on) => {
+  changedSinceLaunch = true;
+  reduce = on;
+});
 
 export const reduceMotion = () => reduce;

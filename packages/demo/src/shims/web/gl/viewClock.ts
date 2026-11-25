@@ -26,3 +26,20 @@ export function stepAnimation(clock: ViewClock, dt: number, lastFrameTime: numbe
   clock.time = lastFrameTime;
   return "finish";
 }
+
+export const wantsFrames = (visible: boolean, css: readonly [number, number], done: boolean) => visible && hasSize(css) && !done;
+
+export function frameSubscription(subscribe: () => () => void): { sync: (wanted: boolean) => void; active: () => boolean } {
+  let stop: (() => void) | null = null;
+  return {
+    sync: (wanted) => {
+      if (wanted && !stop) stop = subscribe();
+      else if (!wanted && stop) {
+        const current = stop;
+        stop = null;
+        current();
+      }
+    },
+    active: () => stop !== null,
+  };
+}

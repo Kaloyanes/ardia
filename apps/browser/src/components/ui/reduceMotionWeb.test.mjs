@@ -3,7 +3,16 @@ import { test } from "node:test";
 
 const { AccessibilityInfo } = await import("react-native");
 const settle = [];
-AccessibilityInfo.isReduceMotionEnabled = () => new Promise((resolve) => settle.push(resolve));
+const fail = [];
+const changeListeners = [];
+AccessibilityInfo.isReduceMotionEnabled = () => new Promise((resolve, reject) => {
+  settle.push(resolve);
+  fail.push(reject);
+});
+AccessibilityInfo.addEventListener = (type, listener) => {
+  if (type === "reduceMotionChanged") changeListeners.push(listener);
+  return { remove() {} };
+};
 
 const load = async (tag, matchMedia) => {
   const previous = globalThis.window;
@@ -31,7 +40,30 @@ test("without matchMedia the preference stays unknown until the platform answers
   assert.equal(native.reduceMotion(), null);
   const broken = await load("broken", () => null);
   assert.equal(broken.reduceMotion(), false);
-  for (const resolve of settle) resolve(true);
+  settle[2](true);
   await native.reduceMotionKnown;
   assert.equal(native.reduceMotion(), true);
+});
+
+test("a Reduce Motion change that lands before the first answer is not overwritten by that answer", async () => {
+  const at = settle.length;
+  const late = await load("late", undefined);
+  changeListeners.at(-1)(true);
+  settle[at](false);
+  assert.equal(await late.reduceMotionKnown, true);
+  assert.equal(late.reduceMotion(), true);
+  changeListeners.at(-1)(false);
+  assert.equal(late.reduceMotion(), false);
+});
+
+test("a failed first answer keeps the reduced-motion preference the web already read, and falls back to off only when nothing is known", async () => {
+  const at = fail.length;
+  const web = await load("rejected-web", () => ({ matches: true }));
+  fail[at](new Error("unavailable"));
+  assert.equal(await web.reduceMotionKnown, true);
+  assert.equal(web.reduceMotion(), true);
+  const unknown = await load("rejected-native", undefined);
+  fail[at + 1](new Error("unavailable"));
+  assert.equal(await unknown.reduceMotionKnown, false);
+  assert.equal(unknown.reduceMotion(), false);
 });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import { observeOnscreen, observePixelSize, subscribeFrames } from "./clock";
 import { GLSurface, type Uniforms } from "./surface";
-import { hasSize, measuredSize, stepAnimation, type ViewClock } from "./viewClock";
+import { frameSubscription, hasSize, measuredSize, stepAnimation, wantsFrames, type ViewClock } from "./viewClock";
 
 type UniformsAt = (css: [number, number], time: number) => Uniforms;
 
@@ -40,6 +40,19 @@ export function GLView({ fragment, uniformsAt, animation, style, version }: Prop
     Object.assign(surface.canvas.style, { ...fill, display: "block" });
     el.appendChild(surface.canvas);
 
+    let visible = false;
+    let stopOnscreen = () => {};
+    const tick = (dt: number) => {
+      if (!animation) return;
+      const step = stepAnimation(v, dt, animation.lastFrameTime);
+      if (step === "unmeasured" || step === "skip") return;
+      redraw();
+      if (step === "finish") v.done = true;
+      syncFrames();
+    };
+    const frames = frameSubscription(() => subscribeFrames(tick));
+    const syncFrames = () => frames.sync(!!animation && wantsFrames(visible, v.css, v.done));
+
     const { width, height } = el.getBoundingClientRect();
     const initial = measuredSize(width, height, window.devicePixelRatio);
     if (initial) {
@@ -52,30 +65,20 @@ export function GLView({ fragment, uniformsAt, animation, style, version }: Prop
       v.css = css;
       surface.resize(pixels[0], pixels[1]);
       if (!animation || v.started) redraw();
+      syncFrames();
     });
 
-    let stopFrames = () => {};
-    let stopOnscreen = () => {};
     if (animation) {
-      const tick = (dt: number) => {
-        const step = stepAnimation(v, dt, animation.lastFrameTime);
-        if (step === "unmeasured" || step === "skip") return;
-        redraw();
-        if (step === "finish") {
-          v.done = true;
-          stopFrames();
-          stopFrames = () => {};
-        }
-      };
-      stopOnscreen = observeOnscreen(el, (visible) => {
-        stopFrames();
-        stopFrames = visible && !v.done ? subscribeFrames(tick) : () => {};
+      stopOnscreen = observeOnscreen(el, (onscreen) => {
+        visible = onscreen;
+        syncFrames();
       });
     }
+    syncFrames();
 
     return () => {
       stopOnscreen();
-      stopFrames();
+      frames.sync(false);
       stopSize();
       surface.canvas.remove();
       surface.dispose();
