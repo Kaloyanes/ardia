@@ -8,7 +8,7 @@
  
  #include <algorithm>
  #include <set>
-@@ -101,6 +102,9 @@
+@@ -102,6 +103,9 @@
  #include "content/browser/devtools/protocol/visual_debugger_handler.h"
  #endif
  
@@ -18,7 +18,7 @@
  namespace content {
  
  namespace {
-@@ -119,6 +123,10 @@
+@@ -120,6 +124,10 @@
  }
  
  bool ShouldCreateDevToolsForNode(FrameTreeNode* ftn) {
@@ -29,7 +29,7 @@
    return !ftn->parent() ||
           (ftn->current_frame_host() &&
            RenderFrameDevToolsAgentHost::ShouldCreateDevToolsForHost(
-@@ -310,6 +318,10 @@
+@@ -311,6 +319,10 @@
  // static
  void RenderFrameDevToolsAgentHost::AttachToWebContents(
      WebContents* web_contents) {

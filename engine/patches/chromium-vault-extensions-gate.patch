@@ -60,7 +60,7 @@
  
  #include <algorithm>
  #include <map>
-@@ -182,6 +183,10 @@
+@@ -184,6 +185,10 @@
  bool ExtensionMayAttachToTargetProfile(Profile* extension_profile,
                                         bool allow_incognito_access,
                                         DevToolsAgentHost& agent_host) {
