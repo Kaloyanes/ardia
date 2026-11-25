@@ -102,6 +102,16 @@ TEST(automatic_pip_keeps_chromiums_ask_prompt) {
         pip::Presentation::kDeclined);
 }
 
+TEST(a_reused_visible_window_still_checks_the_auto_pip_permission) {
+  CHECK(pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAllow));
+  CHECK(pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAsk));
+  CHECK(!pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kBlock));
+  CHECK(!pip::KeepsVisibleWindow(pip::Intent::kAutomatic, false, pip::AutoPipPermission::kAllow));
+  CHECK(!pip::KeepsVisibleWindow(pip::Intent::kExplicit, true, pip::AutoPipPermission::kAllow));
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, false, pip::AutoPipPermission::kBlock) ==
+        pip::Presentation::kDeclined);
+}
+
 TEST(pop_outs_refit_to_the_shown_windows_effective_minimum) {
   const pip::Box area{0, 25, 1440, 875};
   const pip::Box flush{1440 - 284, 900 - 160, 284, 160};

@@ -499,14 +499,18 @@ class ContractTests(unittest.TestCase):
     def test_round_three_contracts(self):
         system = (MAC / 'ac_mac_system.mm').read_text()
         watch_teardown = system.split('~DownloadWatch() override {', 1)[1].split('\n  }', 1)[0]
-        self.assertIn('ready_.Drop()', watch_teardown)
-        self.assertIn('false', watch_teardown)
+        self.assertIn('Refuse(ready_.Drop())', watch_teardown)
+        going_down = system.split('void OnManagerGoingDown(content::DownloadManager*) override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('Refuse(ready_.Close())', going_down)
+        self.assertNotIn('Run(true)', going_down)
         handoff = system.split('void SystemServices::HandOffOpenUrls() {', 1)[1].split('\n}', 1)[0]
         self.assertIn('browser_shutdown::IsTryingToQuit()', handoff)
         self.assertIn('browser_shutdown::HasShutdownStarted()', handoff)
         pip = (MAC / 'ac_mac_pip.mm').read_text()
         self.assertIn('ContentSettingsType::AUTO_PICTURE_IN_PICTURE', pip)
-        self.assertIn('PresentationFor(intent, presenter != nullptr, PermissionOf(contents))', pip)
+        self.assertIn('PresentationFor(intent, presenter != nullptr, permission)', pip)
+        show = pip.split('void PipPlayer::ShowInactive() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(show.index('PermissionOf(contents)'), show.index('KeepsVisibleWindow('))
         enter = pip.split('void PipPlayer::EnterWindow(', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(enter.index('window_->ShowInactive();'), enter.index('window_->GetMinimumSize()'))
 

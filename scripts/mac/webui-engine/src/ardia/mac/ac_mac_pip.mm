@@ -221,11 +221,13 @@ void PipPlayer::ShowInactive() {
   hide_fade_ = Milliseconds(pip::kBackToTabFadeMs);
   content::WebContents* contents = source();
   const pip::Intent intent = IntentFor(contents);
-  if (intent == pip::Intent::kAutomatic && Windowed() && IsVisible()) {
+  const pip::AutoPipPermission permission =
+      intent == pip::Intent::kAutomatic ? PermissionOf(contents) : pip::AutoPipPermission::kAllow;
+  if (pip::KeepsVisibleWindow(intent, Windowed() && IsVisible(), permission)) {
     return;
   }
   PipPresenter* presenter = intent == pip::Intent::kAutomatic ? PipPresenter::Find(contents) : nullptr;
-  switch (pip::PresentationFor(intent, presenter != nullptr, PermissionOf(contents))) {
+  switch (pip::PresentationFor(intent, presenter != nullptr, permission)) {
     case pip::Presentation::kInWindow:
       return EnterInWindow(presenter);
     case pip::Presentation::kWindow:

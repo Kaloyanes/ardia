@@ -210,6 +210,17 @@ TEST(a_dropped_watch_settles_every_queued_request_as_refused) {
   CHECK(queue.Release().empty());
 }
 
+TEST(a_manager_going_down_refuses_queued_and_later_requests) {
+  policy::ReadyQueue<std::function<void(bool)>> queue;
+  int refused = 0;
+  CHECK(!queue.Hold(false, [&](bool ready) { refused += ready ? 0 : 1; }).has_value());
+  CHECK(!queue.Hold(false, [&](bool ready) { refused += ready ? 0 : 1; }).has_value());
+  for (auto& waiting : queue.Close()) waiting(false);
+  CHECK(refused == 2);
+  CHECK(queue.closed() && !queue.ready() && queue.waiting() == 0);
+  CHECK(queue.Release().empty());
+}
+
 TEST(links_are_captured_before_the_first_window_and_while_windows_live) {
   CHECK(policy::CapturesOpenUrls(true, false, false));
   CHECK(policy::CapturesOpenUrls(true, true, true));

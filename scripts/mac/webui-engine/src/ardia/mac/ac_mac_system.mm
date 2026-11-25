@@ -342,12 +342,7 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
   }
   DownloadWatch(const DownloadWatch&) = delete;
   DownloadWatch& operator=(const DownloadWatch&) = delete;
-  ~DownloadWatch() override {
-    for (Waiter& waiting : ready_.Drop()) {
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-                                                               base::BindOnce(std::move(waiting), false));
-    }
-  }
+  ~DownloadWatch() override { Refuse(ready_.Drop()); }
 
   using Waiter = base::OnceCallback<void(bool)>;
 
@@ -355,6 +350,11 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
 
   void WhenReady(Waiter ready) {
     content::DownloadManager* downloads = manager();
+    if (ready_.closed() || !downloads) {
+      std::vector<Waiter> refused;
+      refused.push_back(std::move(ready));
+      return Refuse(std::move(refused));
+    }
     if (std::optional<Waiter> now = ready_.Hold(!downloads || downloads->IsManagerInitialized(), std::move(ready))) {
       std::move(*now).Run(true);
     }
@@ -396,10 +396,15 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
     }
   }
 
-  void OnManagerGoingDown(content::DownloadManager*) override {
-    for (Waiter& ready : ready_.Release()) {
-      std::move(ready).Run(true);
+  static void Refuse(std::vector<Waiter> waiting) {
+    for (Waiter& refused : waiting) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                               base::BindOnce(std::move(refused), false));
     }
+  }
+
+  void OnManagerGoingDown(content::DownloadManager*) override {
+    Refuse(ready_.Close());
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&SystemServices::WatchGone, owner_->GetWeakPtr(),
                                   reinterpret_cast<uintptr_t>(profile_.get())));

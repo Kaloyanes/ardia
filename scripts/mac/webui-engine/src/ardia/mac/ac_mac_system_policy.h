@@ -279,11 +279,18 @@ class ReadyQueue {
 
   std::vector<Callback> Drop() { return std::exchange(waiting_, {}); }
 
+  std::vector<Callback> Close() {
+    closed_ = true;
+    return Drop();
+  }
+
+  bool closed() const { return closed_; }
   bool ready() const { return ready_; }
   std::size_t waiting() const { return waiting_.size(); }
 
  private:
   bool ready_ = false;
+  bool closed_ = false;
   std::vector<Callback> waiting_;
 };
 
