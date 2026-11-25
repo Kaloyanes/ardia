@@ -96,7 +96,6 @@ test("a stopped keyring watcher's late observation is counted under its own cons
   answer(status("locked"));
   stale.note(await pending);
   assert.deepEqual(nonzero(takeKeyringCounts()), {});
-  noteSyncKeyStore(null, null);
   replacement.note(status("locked"));
   assert.deepEqual(nonzero(takeKeyringCounts()), { keyring_sync_locked: 1 });
 });

@@ -1,6 +1,7 @@
 import type { SyncKeyStoreStatus } from "./hostSync.ts";
 import { noteKeyringFailure } from "../../browser/src/state/telemetry/keyringCounts";
 import type { ConsentToken } from "../../browser/src/state/telemetry/choice";
+import { stillValid } from "../../browser/src/state/telemetry/consentPeriod";
 
 type KeyringFailure = "locked" | "unavailable";
 
@@ -15,6 +16,11 @@ function keyringFailure(status: SyncKeyStoreStatus | null): KeyringFailure | nul
 }
 
 export function noteSyncKeyStore(status: SyncKeyStoreStatus | null, consent: ConsentToken | null) {
+  if (!status) {
+    lastFailure = null;
+    return;
+  }
+  if (!stillValid(consent)) return;
   const failed = keyringFailure(status);
   const before = lastFailure;
   lastFailure = failed;

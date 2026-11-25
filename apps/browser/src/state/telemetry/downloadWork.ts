@@ -3,7 +3,7 @@ import { stillValid } from "./consentPeriod";
 import { consentOrNow, countFor } from "./countFor";
 import { telemetryRelay } from "./relay";
 
-type DownloadSeen = { id: string; state: string; received: number; startTime?: number };
+type DownloadSeen = { id: string; state: string; received: number; startTime?: number; paused?: boolean };
 
 const MAX_TRACKED = 200;
 const FOLLOW_UP_MS = 15_000;
@@ -89,7 +89,7 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
     if (tracked.size >= MAX_TRACKED) tracked.delete(tracked.keys().next().value!);
     if (!leading) {
       const consent = d.received > 0 ? null : consentOrNow(undefined);
-      tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
+      tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 || !!d.paused });
       return;
     }
     if (tookOver && d.received > 0) {
@@ -97,12 +97,13 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
       return;
     }
     const consent = consentOrNow(undefined);
-    tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
+    tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 || !!d.paused });
     bump("downloads_started", consent);
     const newest = followUps.at(-1);
     if (newest && stillValid(newest.consent)) newest.started++;
     return;
   }
+  if (d.paused) before.interrupted = true;
   if (before.state === d.state) return;
   before.state = d.state;
   if (d.state === "downloading") return;

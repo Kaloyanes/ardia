@@ -216,6 +216,16 @@ test("a download that was interrupted and resumed keeps its first token and isn'
   assert.deepEqual([taken.downloads_started, taken.downloads_failed, taken.downloads_finished, taken.downloads_timed], [1, 1, 1, 0]);
 });
 
+test("a download paused while downloading finishes without distorting speed buckets", () => {
+  downloads.takeDownloadWork(0);
+  downloads.noteDownloadSeen({ id: "p", state: "downloading", received: 0, startTime: 1_000, paused: false }, 1_000);
+  downloads.noteDownloadSeen({ id: "p", state: "downloading", received: MB, startTime: 1_000, paused: true }, 2_000);
+  downloads.noteDownloadSeen({ id: "p", state: "downloading", received: 2 * MB, startTime: 1_000, paused: false }, 3_602_000);
+  downloads.noteDownloadSeen({ id: "p", state: "finished", received: 10 * MB, startTime: 1_000, paused: false }, 3_605_000);
+  const taken = downloads.takeDownloadWork(3_606_000);
+  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed, taken.download_speeds_under_100kbs], [1, 1, 0, 0]);
+});
+
 test("a download is credited once, to the newest open approval, never to every approval at once", () => {
   downloads.takeDownloadWork(0);
   downloads.noteMultipleDownloadsAnswered("accept", client.consentNow(), 1_000);
