@@ -14,7 +14,7 @@ import { useCardFrame } from "../window/cardFrame";
 import type { Size } from "../ui/useSettled";
 import { overPeek } from "../../state/windows/dockMotion";
 import { DROP_SIDES, dropPreviewRect, PANE_SIDES, paneDropTarget } from "./splitDrop";
-import { setDropTarget, setOnPage, setTargetResolver, useTabDrag, type PaneDropSide } from "../../state/drag/tabDrag";
+import { setPageDrop, setTargetResolver, useTabDrag, type PaneDropSide } from "../../state/drag/tabDrag";
 import { splitViewAvailable } from "../../state/splits/splits";
 import { DROP_PREVIEW, dropPreviewRadius, FOCUS_RING, SPLIT_MOTION, TOAST_ACTION_MS, TOAST_MS } from "./tokens";
 
@@ -207,15 +207,8 @@ export function DropTargets({ panes, origin }: { panes: Record<string, Rect>; or
     });
     return () => setTargetResolver(null);
   }, [dragging]);
-  useEffect(() => setDropTarget(hit), [hit?.tabId, hit?.side]);
-  useEffect(() => setOnPage(preview), [preview]);
-  useEffect(
-    () => () => {
-      setDropTarget(null);
-      setOnPage(false);
-    },
-    [],
-  );
+  useEffect(() => setPageDrop(hit, preview), [hit?.tabId, hit?.side, preview]);
+  useEffect(() => () => setPageDrop(null, false), []);
   const pane = hit ? candidates.find(([tabId]) => tabId === hit.tabId)?.[1] : undefined;
   const from = ownPane ? panes[dragging!]! : null;
   const landing = hit && pane ? { rect: dropPreviewRect(pane, hit.side), side: hit.side, stacked: !!from && stackedPanes(from, pane) } : null;

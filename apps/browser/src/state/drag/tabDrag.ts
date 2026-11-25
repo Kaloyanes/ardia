@@ -186,6 +186,14 @@ export function setTargetResolver(resolver: typeof resolveTarget) {
   resolveTarget = resolver;
 }
 
+export function setPageDrop(offered: DropTarget | null, onPage: boolean) {
+  const target = splitViewAvailable ? offered : null;
+  const d = tabDragState();
+  if (!d || (d.onPage === onPage && d.target?.tabId === target?.tabId && d.target?.side === target?.side)) return;
+  useTabDrag.setState({ target, onPage });
+  syncPreview();
+}
+
 export function setOnPage(onPage: boolean) {
   const d = tabDragState();
   if (!d || d.onPage === onPage) return;

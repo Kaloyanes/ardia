@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
-const { beginTabDrag, endTabDrag, setDropTarget, setOnPage, updateTabDrag, useTabDrag } = await import("./tabDrag.ts");
+const { beginTabDrag, endTabDrag, setDropTarget, setOnPage, setPageDrop, updateTabDrag, useTabDrag } = await import("./tabDrag.ts");
 const { splitOf, splitTabIdsOf } = await import("../splits/splits.ts");
 await import("../../test-native/index.ts");
 
@@ -94,6 +94,29 @@ test("the dragged page card hides while a split landing preview is showing and c
     assert.equal(shapes.at(-1), "hidden");
     setDropTarget(null);
     assert.equal(shapes.at(-1), "card");
+  } finally {
+    endTabDrag();
+    windows.dragPreviewUpdate = original;
+  }
+});
+
+test("leaving a landing preview straight for the sidebar, or coming straight in from it, never flashes the page card", async () => {
+  const { shellNativeModules } = await import("../../test-native/shell.ts");
+  const { a, b } = splitWindow();
+  const shapes = [];
+  const windows = shellNativeModules.ArdiaAppWindows;
+  const original = windows.dragPreviewUpdate;
+  windows.dragPreviewUpdate = (shape) => {
+    shapes.push(shape);
+    return Promise.resolve();
+  };
+  try {
+    beginTabDrag(b);
+    updateTabDrag(600, 400, null);
+    setPageDrop({ tabId: a, side: "left" }, true);
+    setPageDrop(null, false);
+    setPageDrop({ tabId: a, side: "left" }, true);
+    assert.equal(shapes.includes("card"), false, shapes.join(","));
   } finally {
     endTabDrag();
     windows.dragPreviewUpdate = original;
