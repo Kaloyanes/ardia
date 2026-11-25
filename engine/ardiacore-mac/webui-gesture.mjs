@@ -75,11 +75,14 @@ const moving = marks.find((e) => e.name === "ardia-pager-moving");
 const rest = marks.filter((e) => e.name === "ardia-pager-rest").at(-1);
 const reporters = cdp.events.filter((e) => e.name === "PipelineReporter" && e.ph === "b");
 const states = {};
+const scrolling = {};
+const within = (e) => moving && rest && e.ts >= moving.ts && e.ts <= rest.ts;
 for (const r of reporters) {
-  const state = r.args?.chrome_frame_reporter?.state ?? r.args?.data?.state ?? "unknown";
-  states[state] = (states[state] ?? 0) + 1;
+  const report = r.args?.frame_reporter ?? {};
+  if (!within(r)) continue;
+  states[report.state ?? "unknown"] = (states[report.state ?? "unknown"] ?? 0) + 1;
+  if (report.scroll_state && report.scroll_state !== "SCROLL_NONE") scrolling[`${report.scroll_state} ${report.state}`] = (scrolling[`${report.scroll_state} ${report.state}`] ?? 0) + 1;
 }
-if (process.env.MAC_WEBUI_DUMP) writeFileSync(process.env.MAC_WEBUI_DUMP, JSON.stringify(reporters.slice(0, 3).concat(cdp.events.filter((e) => /Frame/.test(e.name)).slice(0, 10))));
 const origin = moving?.ts ?? shots[0]?.ts ?? 0;
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -102,6 +105,7 @@ const result = {
   screenshots: shots.length,
   restMs: rest ? Math.round((rest.ts - origin) / 100) / 10 : null,
   pipeline: states,
+  scrollFrames: scrolling,
   metrics: metrics && { ...metrics, fresh: undefined },
 };
 writeFileSync(join(out, "result.json"), JSON.stringify({ ...result, times, fresh: metrics?.fresh }, null, 1));
