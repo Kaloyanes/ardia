@@ -115,6 +115,7 @@ ShellHostView* OpenShellWindow(Profile* profile,
 ShellHostView* HostForShell(content::WebContents* contents);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
+MenuWindowResolver ShellMenuWindows();
 bool BackgroundInstance();
 std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
                                            const char* host_bootstrap);
@@ -360,6 +361,7 @@ class ShellHostView : public views::View,
   std::optional<HeldDeparture> held_departure_;
   bool closing_ = false;
   bool painted_ = false;
+  uint64_t shell_ready_generation_ = 0;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
 
   raw_ptr<views::WebView> shell_ = nullptr;

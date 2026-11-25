@@ -14,6 +14,7 @@
 #include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_menu_state.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
@@ -193,6 +194,49 @@ TEST(menu_construction) {
   open.key = "o";
   control.children.push_back(open);
   CHECK(ardia_mac::menu::Validate(control).empty());
+}
+
+TEST(menu_state_and_bookmarks) {
+  ardia_mac::menu::Bookmarks bookmarks;
+  for (const std::string& text : Load().strings) {
+    ardia_mac::menu::State state;
+    if (ardia_mac::menu::AddStateEntry(state.disabled, text)) {
+      CHECK(!text.empty() && text.size() <= ardia_mac::menu::kMaxStateId && NoControls(text));
+    }
+    if (ardia_mac::menu::AddStateTitle(state, "id", text)) {
+      CHECK(ardia_mac::menu::ValidTitle(text));
+    }
+    const std::string clean = ardia_mac::menu::CleanTitle(text);
+    CHECK(ardia_mac::menu::ValidTitle(clean));
+    const auto shown = ardia_mac::menu::Resolve(text, false, false, clean, state);
+    CHECK(shown.title == clean || ardia_mac::menu::ValidTitle(shown.title));
+    bookmarks.other.push_back({text, text, text, false, {}});
+    ardia_mac::menu::Bookmark folder{text, text, "", true, {}};
+    folder.children.push_back({text + "child", text, text, false, {}});
+    bookmarks.bar.push_back(folder);
+  }
+  ardia_mac::menu::Item root;
+  root.children = ardia_mac::menu::BookmarkMenuItems(bookmarks);
+  std::size_t problems = 0;
+  for (const auto& problem : ardia_mac::menu::Validate(root)) {
+    problems += problem.reason == "too many items" || problem.reason == "too deep" ? 0 : 1;
+  }
+  CHECK(problems == 0);
+}
+
+TEST(glass_tints_groups_and_appearance) {
+  for (const std::string& text : Load().strings) {
+    if (const auto color = ardia_mac::glass::ColorFrom(text)) {
+      for (double channel : {color->red, color->green, color->blue, color->alpha}) {
+        CHECK(std::isfinite(channel) && channel >= 0 && channel <= 1);
+      }
+      CHECK(Charset(text, "#(),. "));
+    }
+    if (ardia_mac::glass::ValidGroup(text)) CHECK(text.size() <= ardia_mac::glass::kMaxIdLength && Charset(text, "-_:."));
+    if (ardia_mac::glass::AppearanceNamed(text)) CHECK(text.empty() || text == "auto" || text == "light" || text == "dark");
+    if (ardia_mac::popover::MessageFits(text.size())) CHECK(text.size() <= ardia_mac::popover::kMaxMessageBytes);
+  }
+  CHECK(ardia_mac::glass::ColorFrom("rgba(10,20,30,0.5)").has_value());
 }
 
 TEST(window_guards) {

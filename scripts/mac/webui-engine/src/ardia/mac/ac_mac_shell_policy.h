@@ -1,6 +1,7 @@
 #ifndef ARDIA_MAC_AC_MAC_SHELL_POLICY_H_
 #define ARDIA_MAC_AC_MAC_SHELL_POLICY_H_
 
+#include <cstdint>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -140,6 +141,9 @@ inline ShortcutAction ShortcutActionFor(bool suppressed) {
   return suppressed ? ShortcutAction::kConsume : ShortcutAction::kDispatch;
 }
 
+inline bool ShellTakesQuit(bool renderer_live, std::uint64_t ready_generation, std::uint64_t renderer_generation) {
+  return renderer_live && ready_generation != 0 && ready_generation == renderer_generation;
+}
 inline constexpr int kShiftDown = 1 << 1;
 inline constexpr int kControlDown = 1 << 2;
 inline constexpr int kAltDown = 1 << 3;

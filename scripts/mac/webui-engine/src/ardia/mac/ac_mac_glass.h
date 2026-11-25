@@ -24,6 +24,7 @@ struct GlassPage {
 };
 
 bool LiquidGlassAvailable();
+bool GlassGroupsAvailable();
 
 class GlassRegions {
  public:

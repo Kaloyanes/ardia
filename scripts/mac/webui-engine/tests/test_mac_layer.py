@@ -336,7 +336,7 @@ class ContractTests(unittest.TestCase):
         clear = glass.split('void GlassRegions::Clear() {', 1)[1].split('\n}\n', 1)[0]
         for step in ('gate_.Invalidate();', 'weak_factory_.InvalidateWeakPtrs();', 'regions_.clear();', 'backdrops_.clear();'):
             self.assertIn(step, clear)
-        self.assertIn('glass::MountedGlass(mounted.placements)', glass)
+        self.assertIn('glass::MountedGlass(mounted)', glass)
         relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1]
         self.assertRegex(relayout, r'if \(!content \|\| !frame\) \{\n\s+return glass::Layout\{\};')
         self.assertIn('region.source = glass::Source::kBackdrop;', glass)
@@ -387,7 +387,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('command("Quit " + app, "quit", "q", kCommand)', model)
         self.assertNotIn('role("Quit " + app, Role::kQuit', model)
         host = self.read('ac_mac_shell_host.mm')
-        self.assertIn('if (command == "quit" && !RendererLive()) {', host)
+        self.assertIn('if (command == "quit" && !shell_policy::ShellTakesQuit(RendererLive(), shell_ready_generation_, renderer_generation_)) {', host)
+        self.assertIn('shell_ready_generation_ = renderer_generation_;', self.read('ac_mac_shell_calls.mm').split('if (method == "ArdiaShell.shellPainted") {', 1)[1].split('\n  }\n', 1)[0])
         self.assertEqual((REPO / 'apps/desktop/src/quit.ts').read_text().count('export const QUIT_COMMAND = "quit";'), 1)
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         quit = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]
@@ -548,7 +549,10 @@ class ContractTests(unittest.TestCase):
         style = style.split('\n}\n', 1)[0]
         self.assertIn('vibrancy.material = VibrancyMaterial(placement.material);', style)
         self.assertIn('glass::GlassStyle(placement.material)', style)
-        self.assertEqual(style.count('ApplyCornerMask(view, shape);'), 2)
+        self.assertEqual(style.count('ApplyMask(view, shape, slice);'), 2)
+        apply = self.read('ac_mac_glass.mm').split('void ApplyMask(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ApplyCornerMask(view, shape);', apply)
+        self.assertIn('ApplySliceMask(view, slice);', apply)
         mask = self.read('ac_mac_glass.mm').split('void ApplyCornerMask(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('view.layer.mask = mask;', mask)
         self.assertIn('view.layer.mask = nil;', mask)
@@ -608,7 +612,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('/^tab:\\d+$/', desktop)
         self.assertIn('module === "ArdiaTabs" && event === "unclaimed"', desktop)
 
-    def test_popover_panels_are_not_advertised_until_a_renderer_ships(self):
+    def test_popover_panels_are_advertised_once_the_renderer_ships(self):
         policy = self.read('ac_mac_popover_policy.h')
         shipped = re.search(r'kPopoverRendererShipped = (true|false);', policy).group(1)
         calls = self.read('ac_mac_shell_calls.mm')
@@ -617,11 +621,39 @@ class ContractTests(unittest.TestCase):
         self.assertIn('if (popover::kPopoverRendererShipped) {', calls)
         host = self.read('ac_mac_shell_host.mm')
         self.assertIn('method == "shell.popover.open" && !popover::kPopoverRendererShipped', host)
+        main = (REPO / 'apps/desktop/src/main.tsx').read_text()
+        surface = (REPO / 'apps/desktop/src/popoverSurface.ts').read_text()
         if shipped == 'false':
-            main = (REPO / 'apps/desktop/src/main.tsx').read_text()
-            self.assertNotIn('bootstrap.popover', main)
+            self.assertNotIn('entryKind(', main)
+        else:
+            self.assertIn('entryKind(ardiaHost, location.search)', main)
+            self.assertIn('popoverBoot(host, search)', surface)
+            self.assertIn('import("./popoverEntry")', main)
+            self.assertIn('import("./shellEntry")', main)
+            self.assertNotIn('browser/src', main)
+            self.assertIn('bootstrap.popover', surface)
+            self.assertIn('bootstrap.surface !== POPOVER_SURFACE', surface)
+            self.assertIn('POPOVER_SURFACE = "popover"', surface)
+            root = (REPO / 'apps/desktop/src/PopoverRoot.tsx').read_text()
+            for method in ('shell.popover.close', 'shell.popover.message', 'shell.popover.props'):
+                self.assertIn(method, root + surface)
+            self.assertIn('POPOVER_MODULE = "ArdiaPopover"', surface)
+            self.assertIn('module !== POPOVER_MODULE', surface)
         popover_host = (REPO / 'apps/desktop/src/popoverHost.ts').read_text()
         self.assertIn('POPOVER_CHILD_PANEL_METHODS.every((method) => hostSupports(method, host))', popover_host)
+        self.assertIn('POPOVER_MESSAGE_EVENT', popover_host)
+
+    def test_popover_bridge_stays_narrow(self):
+        bridge = self.read('ac_mac_shell_bridge.cc')
+        request = bridge.split('void PopoverBridge::Request(', 1)[1].split('\n}\n', 1)[0]
+        methods = set(re.findall(r'method == "([^"]+)"', request))
+        self.assertEqual(methods, {'shell.popover.close', 'shell.popover.props', 'shell.popover.message'})
+        self.assertIn('popover::MessageFits(', request)
+        deliver = bridge.split('void PopoverBridge::Deliver(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(deliver.index('if (!Trusted())'), deliver.index('CallJavascriptFunction('))
+        popover = self.read('ac_mac_popover.mm')
+        self.assertIn('.Append("shell.popover.props")', popover)
+        self.assertIn('popover::PropsFit(', popover)
 
     def test_suppressed_shortcuts_are_consumed(self):
         host = self.read('ac_mac_shell_host.mm')
@@ -630,11 +662,61 @@ class ContractTests(unittest.TestCase):
         self.assertLess(pressed.index('shell_policy::ShortcutAction::kConsume'), pressed.index('"onCommand"'))
         self.assertIn('shell_policy::ShortcutAccepted(', host)
 
-    def test_menu_state_is_not_advertised_while_it_is_a_no_op(self):
+    def test_menu_state_and_bookmarks_are_real_and_advertised(self):
         calls = self.read('ac_mac_shell_calls.mm')
         listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
-        self.assertNotIn('setMenuState', listed)
-        self.assertNotIn('setMenuBookmarks', listed)
+        self.assertIn('"ArdiaShell.setMenuState"', listed)
+        self.assertIn('"ArdiaShell.setMenuBookmarks"', listed)
+        self.assertIn('SetWindowMenuState(window_id_, (*values)[0])', calls)
+        self.assertIn('SetWindowMenuBookmarks(window_id_, (*values)[0])', calls)
+        menu = self.read('ac_mac_menu.mm')
+        present = menu.split('void Present(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('FillBookmarks(record.bookmarks);', present)
+        self.assertIn('ApplyState(NSApp.mainMenu, *record.state, 0);', present)
+        self.assertIn('menu::BookmarkMenuItems(*known)', menu)
+        for setter in ('SetWindowMainMenu', 'SetWindowMenuState', 'SetWindowMenuBookmarks'):
+            body = menu.split('void ' + setter + '(' if setter == 'SetWindowMainMenu' else 'std::optional<std::string> ' + setter + '(', 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('ClaimsBar(window_id)', body)
+        self.assertIn('return Owner().Claims(window_id, key == window_id, key.has_value());', menu)
+        self.assertIn('NSWindowDidBecomeKeyNotification', menu)
+        activate = menu.split('void ActivateKeyWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('BuildBar(menu::MinimalMainMenu(', activate)
+        handler = self.read('ac_mac_shell_host.mm').split('MenuCommandHandler MainMenuHandler() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('KeyMenuWindowId()', handler)
+
+    def test_shortcut_recording_suppresses_menu_key_equivalents(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        keyboard = lifecycle.split('void ShellHostView::KeyboardCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('SetMenuKeysSuppressed(window_id_, on);', keyboard)
+        self.assertNotIn('"ArdiaShell.setShortcutRecording"', self.read('ac_mac_shell_calls.mm'))
+        menu = self.read('ac_mac_menu.mm')
+        key = menu.split('- (BOOL)performKeyEquivalent:(NSEvent*)event {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(key.index('MenuKeysSuppressed()'), key.index('[super performKeyEquivalent:event]'))
+        self.assertIn('[[ArdiaMacMainMenu alloc] initWithTitle:@""]', menu)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('SetMenuKeysSuppressed(window_id_, false);', host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('ForgetWindowMenu(window_id_);', host.split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('menu::AddStateEntry(', menu)
+        self.assertIn('menu::AddStateTitle(', menu)
+        desktop = (REPO / 'apps/desktop/src/nativeMenuBar.ts').read_text()
+        self.assertIn('"ArdiaShell.setMainMenu"', desktop)
+        self.assertIn('SetWindowMainMenu(window_id_, std::move(parsed.root), MainMenuHandler());', self.read('ac_mac_shell_host.mm'))
+        self.assertIn('SetMenuWindowResolver(ShellMenuWindows());', self.read('ac_mac_webui.mm'))
+        self.assertIn('"menu:Bookmarks": "bookmarksMenu"', desktop)
+
+    def test_glass_regions_carry_tint_group_and_appearance(self):
+        glass = self.read('ac_mac_glass.mm')
+        region = glass.split('std::optional<glass::Region> RegionOf(', 1)[1].split('\n}\n', 1)[0]
+        for key in ('"tint"', '"group"', '"appearance"'):
+            self.assertIn(key, region)
+        self.assertIn('glass::ColorFrom(', region)
+        self.assertIn('glass::ValidGroup(', region)
+        self.assertIn('@"tintColor"', glass)
+        self.assertIn('NSGlassEffectContainerView', glass)
+        self.assertIn('glass::Grouped(placement, groups_glass)', glass)
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('"shell.glassBehindWindow"', calls)
+        self.assertIn('.Set("isLiquidGlass", LiquidGlassAvailable())', calls)
 
     def test_offers_leave_with_their_tab_and_replay_active(self):
         host = self.read('ac_mac_shell_host.mm')
@@ -1192,6 +1274,8 @@ class BoundaryTests(unittest.TestCase):
         for method in ('shell.glassRegions', 'shell.backdropRegions', 'shell.trafficLights', 'shell.popover.open',
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
+                       'ArdiaShell.setMenuState', 'ArdiaShell.setMenuBookmarks', 'shell.popover.props',
+                       'ArdiaShell.setShortcutRecording',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
                        'session.write', 'ArdiaShell.writeDocument', 'tab.command', 'evaluate',
                        'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs',

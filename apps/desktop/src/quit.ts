@@ -61,10 +61,11 @@ export function createLinuxQuit(hooks: LinuxQuitHooks) {
 
 const browserLocks = (): QuitLocks | undefined => typeof navigator === "undefined" ? undefined : (navigator as { locks?: QuitLocks }).locks;
 
-const QUIT_ROUTES = ["ArdiaShell.downloadsInProgress", "ArdiaShell.quit"];
+const QUIT_ROUTE = "ArdiaShell.quit";
+const DOWNLOADS_IN_PROGRESS = "ArdiaShell.downloadsInProgress";
 
 export function createHostQuit(host: ArdiaHost, ask: QuitAsk, locks: QuitLocks | undefined = browserLocks()) {
-  if (!QUIT_ROUTES.every((method) => hostSupports(method, host)))
+  if (!hostSupports(QUIT_ROUTE, host))
     return () => Promise.reject(quitError("ERR_UNAVAILABLE", `Quitting isn't available in this ${PLATFORM_TERMS.os} build`));
   return createLinuxQuit({
     appName: () => "Ardia",
@@ -72,6 +73,7 @@ export function createHostQuit(host: ArdiaHost, ask: QuitAsk, locks: QuitLocks |
     stopWarning: () => useBrowser.getState().updateSettings({ warnBeforeQuitting: false }),
     ask,
     downloadsInProgress: async () => {
+      if (!hostSupports(DOWNLOADS_IN_PROGRESS, host)) return 0;
       const count = await invokeHost<unknown>("ArdiaShell.downloadsInProgress", { args: [] }, host);
       if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) throw quitError("ERR_QUIT", "The download count is unreadable");
       return count;
