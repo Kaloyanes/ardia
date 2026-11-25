@@ -165,5 +165,42 @@ class PathTextTests(unittest.TestCase):
             self.assertEqual(ran.returncode, 0, ran.stderr)
 
 
+
+def compiler_is_clang(compiler):
+    found = subprocess.run([compiler, '--version'], capture_output=True, text=True, timeout=60)
+    return 'clang' in found.stdout
+
+
+@unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
+class TabRevealTests(unittest.TestCase):
+    def build_and_run(self, scratch, name, extra):
+        compiler = os.environ.get('CXX', 'c++')
+        flags = ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wconversion']
+        if compiler_is_clang(compiler):
+            flags += ['-Wshorten-64-to-32', '-Wunsafe-buffer-usage']
+        binary = pathlib.Path(scratch, name)
+        built = subprocess.run([compiler, *flags, *extra, '-I', str(SOURCE), str(ROOT / 'tests/tab_reveal_test.cc'), '-o',
+                                str(binary)], capture_output=True, text=True, timeout=300)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertRegex(ran.stdout, r'^\d+ tests, \d+ checks, 0 failures$')
+
+    def test_the_coordinator_passes_its_unit_tests(self):
+        with tempfile.TemporaryDirectory(prefix='ardia-desktop-reveal-') as scratch:
+            self.build_and_run(scratch, 'tab_reveal_test', ['-O1'])
+
+    def test_the_coordinator_passes_under_sanitizers(self):
+        compiler = os.environ.get('CXX', 'c++')
+        sanitize = ['-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+        with tempfile.TemporaryDirectory(prefix='ardia-desktop-reveal-san-') as scratch:
+            probe = pathlib.Path(scratch, 'probe.cc')
+            probe.write_text('int main() { return 0; }\n')
+            linked = subprocess.run([compiler, *sanitize, str(probe), '-o', str(pathlib.Path(scratch, 'probe'))],
+                                    capture_output=True, text=True, timeout=120)
+            if linked.returncode != 0:
+                self.skipTest('the compiler has no address and undefined sanitizers')
+            self.build_and_run(scratch, 'tab_reveal_test_sanitized', sanitize)
+
 if __name__ == '__main__':
     unittest.main()
