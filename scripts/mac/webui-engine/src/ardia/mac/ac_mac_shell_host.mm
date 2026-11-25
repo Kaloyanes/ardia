@@ -11,7 +11,9 @@
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_delegate.h"
 #include "ardia/mac/ac_mac_page_events.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
@@ -347,9 +349,39 @@ base::DictValue PageBinding::Envelope(std::string_view type) {
       .Set("type", type)
       .Set("claim", claim)
       .Set("rendererGeneration", base::NumberToString(renderer_generation))
-      .Set("bindingGeneration", "1")
+      .Set("bindingGeneration", base::NumberToString(binding_generation))
       .Set("documentEpoch", "1")
       .Set("sequence", static_cast<double>(++sequence));
+}
+
+base::DictValue PageBinding::CreationState() {
+  base::DictValue lease;
+  lease.Set("claim", claim);
+  lease.Set("rendererGeneration", base::NumberToString(renderer_generation));
+  lease.Set("bindingGeneration", base::NumberToString(binding_generation));
+  lease.Set("documentEpoch", "1");
+  base::ListValue events = base::ListValue().Append(NavigationEvent());
+  if (events_) {
+    events_->AppendSnapshot(events);
+  }
+  base::DictValue snapshot;
+  snapshot.Set("watermark", static_cast<double>(sequence));
+  snapshot.Set("events", std::move(events));
+  return base::DictValue()
+      .Set("browserId", id_)
+      .Set("chromeTabId", id_)
+      .Set("lease", std::move(lease))
+      .Set("snapshot", std::move(snapshot));
+}
+
+void PageBinding::Rebind(content::WebContents* contents) {
+  commands_.reset();
+  events_.reset();
+  Observe(contents);
+  id_ = TabId(contents);
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  commands_ = std::make_unique<PageCommands>(this);
 }
 
 void PageBinding::ReportNavigation() {
@@ -900,24 +932,50 @@ PageBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) const {
 }
 
 base::DictValue ShellHostView::Identity(PageBinding* binding) const {
-  base::DictValue lease;
-  lease.Set("claim", binding->claim);
-  lease.Set("rendererGeneration",
-            base::NumberToString(binding->renderer_generation));
-  lease.Set("bindingGeneration", "1");
-  lease.Set("documentEpoch", "1");
-  base::DictValue snapshot;
-  snapshot.Set("watermark", static_cast<double>(binding->sequence));
-  base::ListValue events = base::ListValue().Append(binding->NavigationEvent());
-  if (binding->events()) {
-    binding->events()->AppendSnapshot(events);
+  return binding->CreationState();
+}
+
+void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
+                                   content::WebContents* contents) {
+  PageBinding* binding = BindingForContents(old_contents);
+  const int old_id = binding ? binding->id() : 0;
+  const int id = TabId(contents);
+  if (!binding || !contents ||
+      !page_policy::RebindAllowed(old_id, id, id != old_id && bindings_.contains(id))) {
+    return;
   }
-  snapshot.Set("events", std::move(events));
-  return base::DictValue()
-      .Set("browserId", binding->id())
-      .Set("chromeTabId", binding->id())
-      .Set("lease", std::move(lease))
-      .Set("snapshot", std::move(snapshot));
+  const std::optional<uint64_t> generation =
+      page_policy::NextBindingGeneration(binding->binding_generation);
+  if (!generation) {
+    return;
+  }
+  base::DictValue delivery = binding->Envelope("pageLifecycle");
+  binding->Rebind(contents);
+  binding->binding_generation = *generation;
+  if (id != old_id) {
+    std::unique_ptr<PageBinding> owned = std::move(bindings_[old_id]);
+    bindings_.erase(old_id);
+    bindings_[id] = std::move(owned);
+  }
+  if (binding->claim.empty()) {
+    return;
+  }
+  delivery.Set("action", "rebind");
+  delivery.Set("creation", binding->CreationState());
+  Emit("ArdiaWebView", base::NumberToString(old_id), base::Value(std::move(delivery)));
+}
+
+void ShellHostView::DropDetachedBinding(int id,
+                                        base::WeakPtr<content::WebContents> contents) {
+  const auto found = bindings_.find(id);
+  if (!contents || found == bindings_.end() ||
+      found->second->contents() != contents.get() ||
+      page_policy::StripExitFor(false, OwnerOf(contents.get()) != nullptr) !=
+          page_policy::StripExit::kDrop) {
+    return;
+  }
+  bindings_.erase(found);
+  ReattachViewports();
 }
 
 void ShellHostView::CreateTab(const base::DictValue& args, Done done) {
@@ -949,6 +1007,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
     return std::move(done).Run(
         false, base::Value("The shell document that asked for this tab is gone"));
   }
+  AssertPageHooks();
   if (!profile || !browser_) {
     return std::move(done).Run(
         false, Failure("ERR_PROFILE_UNAVAILABLE", "The tab's profile did not load"));
@@ -1479,7 +1538,20 @@ void ShellHostView::OnTabStripModelChanged(
       const int id = TabId(removed.contents);
       offered_.Forget(id);
       unclaimed_.erase(id);
+      const bool deleted =
+          removed.remove_reason == TabRemovedReason::kDeleted ||
+          removed.remove_reason == TabRemovedReason::kDeletedAndExpandSidePanel;
+      if (page_policy::StripExitFor(deleted, true) != page_policy::StripExit::kDestroyed &&
+          BindsContents(removed.contents)) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(&ShellHostView::DropDetachedBinding, GetWeakPtr(),
+                                      id, removed.contents->GetWeakPtr()));
+      }
     }
+  }
+  if (change.type() == TabStripModelChange::kReplaced) {
+    const TabStripModelChange::Replace* replace = change.GetReplace();
+    ReplaceBinding(replace->old_contents, replace->new_contents);
   }
   if (change.type() == TabStripModelChange::kInserted && !closing_) {
     for (const auto& inserted : change.GetInsert()->contents) {

@@ -1,6 +1,8 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 
 #include <array>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -185,6 +187,99 @@ TEST(evaluation_arguments_are_rebuilt_not_forwarded) {
   CHECK(policy::ScriptableScheme("https") && policy::ScriptableScheme("file"));
   CHECK(!policy::ScriptableScheme("chrome") && !policy::ScriptableScheme("devtools"));
   CHECK(policy::FindTextFits(policy::kFindTextMax) && !policy::FindTextFits(policy::kFindTextMax + 1));
+}
+
+TEST(history_offsets_never_overflow) {
+  constexpr int kMax = std::numeric_limits<int>::max();
+  constexpr int kMin = std::numeric_limits<int>::min();
+  CHECK(policy::HistoryTarget(2, 5, 1) == 3);
+  CHECK(policy::HistoryTarget(2, 5, -2) == 0);
+  CHECK(!policy::HistoryTarget(2, 5, 0).has_value());
+  CHECK(!policy::HistoryTarget(2, 5, 3).has_value());
+  CHECK(!policy::HistoryTarget(2, 5, -3).has_value());
+  CHECK(!policy::HistoryTarget(2, 5, kMax).has_value());
+  CHECK(!policy::HistoryTarget(2, 5, kMin).has_value());
+  CHECK(!policy::HistoryTarget(kMax, kMax, kMax).has_value());
+  CHECK(!policy::HistoryTarget(-1, 5, 1).has_value());
+  CHECK(policy::HistoryTarget(kMax - 1, kMax, 0 - (kMax - 1)) == 0);
+}
+
+TEST(unsaved_input_and_pending_prompts_keep_a_tab_awake) {
+  CHECK(policy::UnsavedInput(false, false, false) == false);
+  CHECK(policy::UnsavedInput(false, true, false) == true);
+  CHECK(policy::UnsavedInput(false, false, true) == true);
+  CHECK(policy::UnsavedInput(true, std::nullopt, std::nullopt) == true);
+  CHECK(!policy::UnsavedInput(false, std::nullopt, std::nullopt).has_value());
+  policy::Protection edited{false, false, false, false, false, false, std::nullopt};
+  edited.dirty_input = policy::UnsavedInput(false, true, false);
+  CHECK(policy::DecideDiscard(true, false, false, edited) == policy::DiscardDecision::kRefused);
+  CHECK(!policy::MayFreeze(edited));
+  policy::Protection prompting{false, false, false, false, false, true, false};
+  CHECK(policy::ProtectionReason(prompting) == "pending prompt");
+  policy::Protection unknown_prompt{false, false, false, false, false, std::nullopt, false};
+  CHECK(policy::DecideDiscard(true, false, false, unknown_prompt) ==
+        policy::DiscardDecision::kRefused);
+}
+
+TEST(background_permission_prompts_are_dismissed_only_for_bound_tabs) {
+  CHECK(policy::PromptHandlingFor(true, true) == policy::PromptHandling::kDismissWithoutUi);
+  CHECK(policy::PromptHandlingFor(true, false) == policy::PromptHandling::kChrome);
+  CHECK(policy::PromptHandlingFor(false, true) == policy::PromptHandling::kChrome);
+  CHECK(policy::PromptHandlingFor(false, false) == policy::PromptHandling::kChrome);
+}
+
+TEST(bindings_follow_replaced_and_detached_tabs) {
+  CHECK(policy::StripExitFor(true, true) == policy::StripExit::kDestroyed);
+  CHECK(policy::StripExitFor(false, true) == policy::StripExit::kKeep);
+  CHECK(policy::StripExitFor(false, false) == policy::StripExit::kDrop);
+  CHECK(policy::RebindAllowed(4, 4, true));
+  CHECK(policy::RebindAllowed(4, 9, false));
+  CHECK(!policy::RebindAllowed(4, 9, true));
+  CHECK(!policy::RebindAllowed(0, 9, false));
+  CHECK(!policy::RebindAllowed(4, 0, false));
+  CHECK(policy::NextBindingGeneration(1) == 2u);
+  CHECK(!policy::NextBindingGeneration(0).has_value());
+  CHECK(!policy::NextBindingGeneration(std::numeric_limits<uint64_t>::max()).has_value());
+}
+
+TEST(blocked_popups_clear_on_cross_document_commits) {
+  CHECK(policy::ClearsBlockedPopups(true, true, false));
+  CHECK(!policy::ClearsBlockedPopups(true, true, true));
+  CHECK(!policy::ClearsBlockedPopups(true, false, false));
+  CHECK(!policy::ClearsBlockedPopups(false, true, false));
+  CHECK(policy::kSnapshotEventsMax == 128u);
+}
+
+TEST(promise_operations_are_awaited_by_token) {
+  const policy::Operation apply{
+      "elementPickerApply", 4, "x", policy::Arguments::kSelectors,
+      "])).then((v) => post(\"result\", JSON.stringify(v)), () => post(\"result\", \"null\"));"};
+  const policy::Operation start{
+      "elementPickerStart", 4, "x", policy::Arguments::kPoint,
+      "])).then((v) => { window.stash = v; }, () => { window.stash = null; });"};
+  const policy::Operation look{"readerOpen", 4, "x", policy::Arguments::kLook, ")));"};
+  const policy::Operation take{"elementPickerTake", 4, "x", policy::Arguments::kNone, ""};
+  CHECK(policy::AwaitsResult(apply));
+  CHECK(!policy::AwaitsResult(start));
+  CHECK(!policy::AwaitsResult(look));
+  CHECK(!policy::AwaitsResult(take));
+  const std::string awaited = policy::WrapAwaitedEvaluation("post(\"result\", \"1\")", 7);
+  CHECK(awaited.find("ardiaSlots.set(7, value)") != std::string::npos);
+  CHECK(awaited.find("ardiaSlots.delete(7)") != std::string::npos);
+  CHECK(policy::TakeEvaluation(7).find("ardiaSlots.get(7)") != std::string::npos);
+  CHECK(policy::kEvaluationPollMilliseconds * policy::kEvaluationPollAttempts == 5000);
+  if (const char* out = std::getenv("ARDIA_EVALUATION_SCRIPTS")) {
+    std::ofstream file(out);
+    file << policy::WrapAwaitedEvaluation(
+                "Promise.resolve([\"a\"]).then((v) => post(\"result\", JSON.stringify(v)), () => post(\"result\", \"null\"));",
+                41)
+         << "\n--ardia-split--\n"
+         << policy::WrapAwaitedEvaluation("post(\"result\", \"now\"); post(\"result\", \"later\");", 42)
+         << "\n--ardia-split--\n"
+         << policy::TakeEvaluation(41) << "\n--ardia-split--\n"
+         << policy::TakeEvaluation(42) << "\n--ardia-split--\n"
+         << policy::WrapEvaluation("post(\"result\", \"sync\")");
+  }
 }
 
 int main(int argc, char** argv) {

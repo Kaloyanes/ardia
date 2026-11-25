@@ -71,7 +71,16 @@ class PureHeaderTests(unittest.TestCase):
         compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
 
     def test_page_policy(self):
-        compile_and_run(self, TESTS / 'page_policy_test.cc', self.out / 'page-policy')
+        scripts = self.out / 'evaluation-scripts.txt'
+        compile_and_run(self, TESTS / 'page_policy_test.cc', self.out / 'page-policy',
+                        env={'ARDIA_EVALUATION_SCRIPTS': str(scripts)})
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('node is unavailable to run the awaited evaluation scripts')
+        ran = subprocess.run([node, str(TESTS / 'awaited-evaluation.mjs'), str(scripts)],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('awaited evaluation ok', ran.stdout)
 
     def test_shared_hostile_corpus_reaches_no_sink(self):
         node = shutil.which('node')
@@ -478,7 +487,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('PageThemeColor(contents)', host)
         self.assertIn('theme ? base::Value("meta") : base::Value()', host)
         self.assertIn('void PageBinding::DidChangeThemeColor() {\n  ReportNavigation();', host)
-        self.assertIn('binding->events()->AppendSnapshot(events);', host)
+        self.assertIn('events_->AppendSnapshot(events);', host)
 
     def test_page_event_payloads_match_linux(self):
         events = self.read('ac_mac_page_events.mm')
@@ -539,6 +548,81 @@ class ContractTests(unittest.TestCase):
         self.assertIn('kZoomRoutes[] = {"sites.zoomLevels",\n                                                   "sites.setZoom"}',
                       self.read('ac_mac_page_policy.h'))
         self.assertIn('ac_zoom_set', (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_history_zoom.cc').read_text())
+
+    def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
+        delegate = self.read('ac_mac_page_delegate.mm')
+        prompt = delegate.split('class BackgroundPermissionPrompt', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('weak_factory_.GetWeakPtr()', prompt)
+        self.assertIn('delegate_->GetCurrentPrompt() != this || delegate_->Requests().empty()', prompt)
+        self.assertIn('PermissionPromptDisposition::NONE_VISIBLE', prompt)
+        self.assertNotIn('delegate->GetWeakPtr()', delegate)
+        self.assertIn('return std::make_unique<BackgroundPermissionPrompt>(delegate);', delegate)
+        self.assertIn('page_policy::PromptHandlingFor(BackgroundInstance()', delegate)
+        install = delegate.split('void InstallPageDelegate() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertEqual(install.count('PostTask('), 2)
+        self.assertIn('base::BindOnce(&AssertPageHooks)', install)
+        host = self.read('ac_mac_shell_host.mm')
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('AssertPageHooks();'), create.index('shell_policy::PlanCreate(request)'))
+        engine = (REPO / 'engine/ardiacore/src/ardia/core/ac_main_delegate.cc').read_text()
+        self.assertIn('base::BindOnce(&OnEngineStarted)', engine)
+
+    def test_discard_and_freeze_read_the_real_prompt_and_edit_state(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        protection = commands.split('page_policy::Protection PageCommands::CurrentProtection() const {', 1)[1]
+        protection = protection.split('\n}\n', 1)[0]
+        for check in ('requests->IsRequestInProgress()', 'requests->has_pending_requests()',
+                      'dialogs->IsDialogActive()', 'UnsavedInputOf(contents)', 'IsCapturingUserMedia(contents)',
+                      'PictureInPictureWindowManager::GetInstance()->GetWebContents() == contents',
+                      'content::Visibility::VISIBLE'):
+            self.assertIn(check, protection)
+        self.assertNotIn('pending_prompt = false', commands)
+        unsaved = commands.split('std::optional<bool> UnsavedInputOf(', 1)[1].split('\n}\n', 1)[0]
+        for check in ('ForEachRenderFrameHost', 'HadFormInteraction()', 'HadUserEdits()', 'page_policy::UnsavedInput('):
+            self.assertIn(check, unsaved)
+
+    def test_bindings_follow_replacement_and_leave_with_their_tab(self):
+        host = self.read('ac_mac_shell_host.mm')
+        changed = host.split('void ShellHostView::OnTabStripModelChanged(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('TabStripModelChange::kReplaced', changed)
+        self.assertIn('ReplaceBinding(replace->old_contents, replace->new_contents);', changed)
+        self.assertIn('&ShellHostView::DropDetachedBinding', changed)
+        self.assertIn('TabRemovedReason::kDeleted', changed)
+        replace = host.split('void ShellHostView::ReplaceBinding(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(replace.index('binding->Envelope("pageLifecycle")'), replace.index('binding->Rebind(contents);'))
+        self.assertLess(replace.index('binding->Rebind(contents);'), replace.index('binding->binding_generation = *generation;'))
+        self.assertIn('delivery.Set("action", "rebind");', replace)
+        self.assertIn('Emit("ArdiaWebView", base::NumberToString(old_id)', replace)
+        self.assertNotIn('ReportClosed', replace)
+        self.assertIn('page_policy::RebindAllowed(', replace)
+        drop = host.split('void ShellHostView::DropDetachedBinding(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('page_policy::StripExitFor(false, OwnerOf(contents.get()) != nullptr)', drop)
+        self.assertNotIn('ReportClosed', drop)
+        self.assertIn('.Set("bindingGeneration", base::NumberToString(binding_generation))', host)
+        self.assertNotIn('"bindingGeneration", "1"', host)
+        events = (REPO / 'apps/desktop/src/hostPageEvents.ts').read_text()
+        self.assertIn('if (value.action === "rebind") return rebinding(value.creation);', events)
+
+    def test_blocked_popups_clear_on_cross_document_commits(self):
+        events = self.read('ac_mac_page_events.mm')
+        finish = events.split('void PageEvents::DidFinishNavigation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('page_policy::ClearsBlockedPopups('), finish.index('blocked_.clear();'))
+        self.assertIn('page_policy::kSnapshotEventsMax', events)
+
+    def test_history_offsets_are_checked_in_64_bits(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        offset = commands.split('if (command == "goToOffset") {', 1)[1].split('if (command == "evaluate")', 1)[0]
+        self.assertLess(offset.index('page_policy::HistoryTarget('), offset.index('controller.CanGoToOffset('))
+        self.assertIn('static_cast<int64_t>(current) + static_cast<int64_t>(offset)', self.read('ac_mac_page_policy.h'))
+
+    def test_promise_operations_are_polled_with_a_host_token(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        self.assertIn('page_policy::AwaitsResult(*match->operation)', commands)
+        self.assertIn('page_policy::TakeEvaluation(*token)', commands)
+        self.assertIn('base::Milliseconds(page_policy::kEvaluationPollMilliseconds)', commands)
+        self.assertIn('page_policy::kEvaluationPollAttempts', commands)
+        answered = commands.split('void EvaluationAnswered(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(answered.index('CurrentFrame(contents, document)'), answered.index('PostDelayedTask'))
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

@@ -20,13 +20,17 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/devtools/devtools_toggle_action.h"
 #include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/performance_manager/policies/cannot_discard_reason.h"
 #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -42,6 +46,7 @@
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/performance_manager.h"
+#include "components/permissions/permission_request_manager.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
@@ -178,14 +183,24 @@ std::optional<std::string> EncodedArguments(page_policy::Arguments kind,
   return std::nullopt;
 }
 
-std::optional<std::string> EvaluationScript(std::string_view code) {
+struct Evaluation {
+  std::string script;
+  std::optional<uint64_t> token;
+};
+
+uint64_t NextEvaluationToken() {
+  static uint64_t token = 0;
+  return ++token;
+}
+
+std::optional<Evaluation> EvaluationScript(std::string_view code) {
   const std::optional<page_policy::OperationMatch> match =
       page_policy::MatchOperation(code, &Sha256, Operations());
   if (!match) {
     return std::nullopt;
   }
   if (match->operation->args == page_policy::Arguments::kNone) {
-    return page_policy::WrapEvaluation(code);
+    return Evaluation{page_policy::WrapEvaluation(code), std::nullopt};
   }
   std::optional<base::Value> parsed = base::JSONReader::Read(
       "[" + std::string(match->arguments) + "]", base::JSON_PARSE_RFC, 4);
@@ -196,9 +211,74 @@ std::optional<std::string> EvaluationScript(std::string_view code) {
   if (!arguments) {
     return std::nullopt;
   }
-  return page_policy::WrapEvaluation(
-      std::string(code.substr(0, match->operation->length)) + *arguments +
-      std::string(match->operation->suffix));
+  const std::string body = std::string(code.substr(0, match->operation->length)) +
+                           *arguments + std::string(match->operation->suffix);
+  if (!page_policy::AwaitsResult(*match->operation)) {
+    return Evaluation{page_policy::WrapEvaluation(body), std::nullopt};
+  }
+  const uint64_t token = NextEvaluationToken();
+  return Evaluation{page_policy::WrapAwaitedEvaluation(body, token), token};
+}
+
+content::RenderFrameHost* CurrentFrame(const base::WeakPtr<content::WebContents>& contents,
+                                       const content::WeakDocumentPtr& document) {
+  content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
+  return contents && frame && frame == contents->GetPrimaryMainFrame() &&
+                 frame->IsRenderFrameLive()
+             ? frame
+             : nullptr;
+}
+
+void RunEvaluation(base::WeakPtr<content::WebContents> contents,
+                   content::WeakDocumentPtr document,
+                   std::string script,
+                   std::optional<uint64_t> token,
+                   int attempts_left,
+                   ShellHostView::Done done);
+
+void EvaluationAnswered(base::WeakPtr<content::WebContents> contents,
+                        content::WeakDocumentPtr document,
+                        std::optional<uint64_t> token,
+                        int attempts_left,
+                        ShellHostView::Done done,
+                        base::Value value) {
+  if (!CurrentFrame(contents, document)) {
+    return std::move(done).Run(true, base::Value());
+  }
+  if (value.is_string()) {
+    if (!page_policy::EvaluationResultFits(value.GetString().size())) {
+      return std::move(done).Run(true, base::Value());
+    }
+    return std::move(done).Run(true, std::move(value));
+  }
+  if (!token || attempts_left <= 0) {
+    return std::move(done).Run(true, base::Value());
+  }
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&RunEvaluation, std::move(contents), std::move(document),
+                     page_policy::TakeEvaluation(*token), token, attempts_left - 1,
+                     std::move(done)),
+      base::Milliseconds(page_policy::kEvaluationPollMilliseconds));
+}
+
+void RunEvaluation(base::WeakPtr<content::WebContents> contents,
+                   content::WeakDocumentPtr document,
+                   std::string script,
+                   std::optional<uint64_t> token,
+                   int attempts_left,
+                   ShellHostView::Done done) {
+  content::RenderFrameHost* frame = CurrentFrame(contents, document);
+  if (!frame || !frame->IsActive()) {
+    return std::move(done).Run(true, base::Value());
+  }
+  frame->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16(script),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(&EvaluationAnswered, contents, document, token, attempts_left,
+                         std::move(done)),
+          base::Value()),
+      ISOLATED_WORLD_ID_CHROME_INTERNAL);
 }
 
 base::Value ImageReply(const SkBitmap& source, int pixels) {
@@ -224,6 +304,25 @@ base::Value ImageReply(const SkBitmap& source, int pixels) {
                          .Set("uri", "data:image/png;base64," + base::Base64Encode(*png))
                          .Set("width", scaled.width())
                          .Set("height", scaled.height()));
+}
+
+std::optional<bool> UnsavedInputOf(content::WebContents* contents) {
+  bool before_unload = false;
+  contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      [&before_unload](content::RenderFrameHost* frame) {
+        before_unload |= frame->GetSuddenTerminationDisablerState(
+            blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+      });
+  if (!performance_manager::PerformanceManager::IsAvailable()) {
+    return page_policy::UnsavedInput(before_unload, std::nullopt, std::nullopt);
+  }
+  const base::WeakPtr<performance_manager::PageNode> page =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+  if (!page) {
+    return page_policy::UnsavedInput(before_unload, std::nullopt, std::nullopt);
+  }
+  return page_policy::UnsavedInput(before_unload, page->HadFormInteraction(),
+                                   page->HadUserEdits());
 }
 
 base::ListValue SleepUnavailable() {
@@ -364,7 +463,9 @@ void PageCommands::Run(const std::string& command,
           base::Value("goToOffset requires one integer offset on a live page"));
     }
     content::NavigationController& controller = contents->GetController();
-    if (*offset != 0 && controller.CanGoToOffset(*offset)) {
+    if (page_policy::HistoryTarget(controller.GetCurrentEntryIndex(),
+                                   controller.GetEntryCount(), *offset) &&
+        controller.CanGoToOffset(*offset)) {
       controller.GoToOffset(*offset);
     }
     return std::move(done).Run(true, base::Value());
@@ -672,8 +773,8 @@ void PageCommands::Evaluate(const base::ListValue& args, Done done) {
   if (args.size() != 1 || !args[0].is_string()) {
     return std::move(done).Run(false, base::Value("evaluate requires one script"));
   }
-  const std::optional<std::string> script = EvaluationScript(args[0].GetString());
-  if (!script) {
+  std::optional<Evaluation> evaluation = EvaluationScript(args[0].GetString());
+  if (!evaluation) {
     return std::move(done).Run(
         false, Error("ERR_PAGE_EVALUATION_REFUSED",
                      "Ardia runs only its own page operations"));
@@ -684,24 +785,9 @@ void PageCommands::Evaluate(const base::ListValue& args, Done done) {
       !page_policy::ScriptableScheme(frame->GetLastCommittedURL().scheme())) {
     return std::move(done).Run(true, base::Value());
   }
-  frame->ExecuteJavaScriptInIsolatedWorld(
-      base::UTF8ToUTF16(*script),
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-          base::BindOnce(
-              [](base::WeakPtr<content::WebContents> contents,
-                 content::WeakDocumentPtr document, Done done, base::Value value) {
-                content::RenderFrameHost* frame = document.AsRenderFrameHostIfValid();
-                const bool current =
-                    contents && frame && frame == contents->GetPrimaryMainFrame();
-                if (!current || !value.is_string() ||
-                    !page_policy::EvaluationResultFits(value.GetString().size())) {
-                  return std::move(done).Run(true, base::Value());
-                }
-                std::move(done).Run(true, std::move(value));
-              },
-              contents->GetWeakPtr(), frame->GetWeakDocumentPtr(), std::move(done)),
-          base::Value()),
-      ISOLATED_WORLD_ID_CHROME_INTERNAL);
+  RunEvaluation(contents->GetWeakPtr(), frame->GetWeakDocumentPtr(),
+                std::move(evaluation->script), evaluation->token,
+                page_policy::kEvaluationPollAttempts, std::move(done));
 }
 
 void PageCommands::Edit(const base::ListValue& args, Done done) {
@@ -743,18 +829,36 @@ void PageCommands::Edit(const base::ListValue& args, Done done) {
 
 page_policy::Protection PageCommands::CurrentProtection() const {
   content::WebContents* contents = binding_->contents();
-  content::RenderFrameHost* frame = contents->GetPrimaryMainFrame();
   page_policy::Protection protection;
-  protection.visible = binding_->presented || binding_->visible;
+  if (!contents) {
+    return protection;
+  }
+  protection.visible = binding_->presented || binding_->visible ||
+                       contents->GetVisibility() == content::Visibility::VISIBLE;
   protection.audible = contents->IsCurrentlyAudible();
   protection.playing = binding_->events() && binding_->events()->playing();
-  protection.capturing = contents->IsBeingCaptured();
+  scoped_refptr<MediaStreamCaptureIndicator> indicator =
+      MediaCaptureDevicesDispatcher::GetInstance()->GetMediaStreamCaptureIndicator();
+  protection.capturing =
+      contents->IsBeingCaptured() ||
+      (indicator && (indicator->IsCapturingUserMedia(contents) ||
+                     indicator->IsBeingMirrored(contents) ||
+                     indicator->IsCapturingTab(contents) ||
+                     indicator->IsCapturingWindow(contents) ||
+                     indicator->IsCapturingDisplay(contents)));
   protection.picture_in_picture =
-      contents->HasPictureInPictureVideo() || contents->HasPictureInPictureDocument();
-  protection.pending_prompt = false;
-  protection.dirty_input =
-      frame && frame->GetSuddenTerminationDisablerState(
-                   blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+      contents->HasPictureInPictureVideo() || contents->HasPictureInPictureDocument() ||
+      PictureInPictureWindowManager::GetInstance()->GetWebContents() == contents;
+  web_modal::WebContentsModalDialogManager* dialogs =
+      web_modal::WebContentsModalDialogManager::FromWebContents(contents);
+  permissions::PermissionRequestManager* requests =
+      permissions::PermissionRequestManager::FromWebContents(contents);
+  if (dialogs && requests) {
+    protection.pending_prompt = dialogs->IsDialogActive() ||
+                                requests->IsRequestInProgress() ||
+                                requests->has_pending_requests();
+  }
+  protection.dirty_input = UnsavedInputOf(contents);
   return protection;
 }
 

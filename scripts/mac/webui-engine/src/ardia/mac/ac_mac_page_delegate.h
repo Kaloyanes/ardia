@@ -4,6 +4,7 @@
 namespace ardia_mac {
 
 void InstallPageDelegate();
+void AssertPageHooks();
 
 }
 

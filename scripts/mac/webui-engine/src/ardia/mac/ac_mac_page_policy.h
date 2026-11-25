@@ -87,6 +87,14 @@ inline std::optional<int> WholeNumber(double value) {
   return static_cast<int>(value);
 }
 
+inline std::optional<int> HistoryTarget(int current, int count, int offset) {
+  const int64_t target = static_cast<int64_t>(current) + static_cast<int64_t>(offset);
+  if (offset == 0 || current < 0 || target < 0 || target >= static_cast<int64_t>(count)) {
+    return std::nullopt;
+  }
+  return static_cast<int>(target);
+}
+
 inline std::optional<int> ZoomStep(double value) {
   const std::optional<int> step = WholeNumber(value);
   if (!step || *step < -1 || *step > 1) {
@@ -207,6 +215,52 @@ inline bool MayFreeze(const Protection& protection) {
   return !ProtectionReason(protection);
 }
 
+inline std::optional<bool> UnsavedInput(std::optional<bool> before_unload,
+                                        std::optional<bool> form_interaction,
+                                        std::optional<bool> user_edits) {
+  if (before_unload.value_or(false) || form_interaction.value_or(false) ||
+      user_edits.value_or(false)) {
+    return true;
+  }
+  if (!before_unload || !form_interaction || !user_edits) {
+    return std::nullopt;
+  }
+  return false;
+}
+
+enum class PromptHandling { kChrome, kDismissWithoutUi };
+
+constexpr PromptHandling PromptHandlingFor(bool background, bool bound) {
+  return background && bound ? PromptHandling::kDismissWithoutUi
+                             : PromptHandling::kChrome;
+}
+
+enum class StripExit { kKeep, kDestroyed, kDrop };
+
+constexpr StripExit StripExitFor(bool deleted, bool still_in_member_strip) {
+  if (deleted) {
+    return StripExit::kDestroyed;
+  }
+  return still_in_member_strip ? StripExit::kKeep : StripExit::kDrop;
+}
+
+constexpr bool RebindAllowed(int old_id, int new_id, bool new_id_bound) {
+  return old_id > 0 && new_id > 0 && (new_id == old_id || !new_id_bound);
+}
+
+constexpr std::optional<uint64_t> NextBindingGeneration(uint64_t generation) {
+  if (generation == 0 || generation == std::numeric_limits<uint64_t>::max()) {
+    return std::nullopt;
+  }
+  return generation + 1;
+}
+
+constexpr bool ClearsBlockedPopups(bool primary_main_frame,
+                                   bool committed,
+                                   bool same_document) {
+  return primary_main_frame && committed && !same_document;
+}
+
 enum class Termination {
   kNormal,
   kAbnormal,
@@ -253,6 +307,7 @@ inline std::string ThemeColorText(uint8_t red, uint8_t green, uint8_t blue) {
 
 inline constexpr size_t kFaviconCandidatesMax = 32;
 inline constexpr size_t kBlockedPopupsMax = 100;
+inline constexpr size_t kSnapshotEventsMax = 128;
 inline constexpr size_t kHungWidgetsMax = 64;
 
 constexpr bool ZoomHostShape(std::string_view host) {
@@ -447,6 +502,63 @@ inline std::string WrapEvaluation(std::string_view body) {
          "try {\n" +
          std::string(body) +
          "\n;\n} catch (ardiaError) {}\n"
+         "return ardiaResult;\n"
+         "})()";
+}
+
+inline constexpr int kEvaluationPollMilliseconds = 20;
+inline constexpr int kEvaluationPollAttempts = 250;
+inline constexpr size_t kEvaluationSlotsMax = 64;
+
+constexpr bool AwaitsResult(const Operation& operation) {
+  return operation.args != Arguments::kNone &&
+         operation.suffix.find(".then(") != std::string_view::npos &&
+         operation.suffix.find("post(\"result\"") != std::string_view::npos;
+}
+
+inline std::string EvaluationSlots() {
+  return "(globalThis[Symbol.for(\"ardia.evaluations\")] || "
+         "(globalThis[Symbol.for(\"ardia.evaluations\")] = new Map()))";
+}
+
+inline std::string WrapAwaitedEvaluation(std::string_view body, uint64_t token) {
+  const std::string key = std::to_string(token);
+  return "(() => {\n"
+         "let ardiaResult = null;\n"
+         "const ardiaSlots = " +
+         EvaluationSlots() +
+         ";\n"
+         "const post = (kind, value) => { if (kind !== \"result\" || typeof value "
+         "!== \"string\" || ardiaResult !== null) return; ardiaResult = value; "
+         "ardiaSlots.set(" +
+         key +
+         ", value); while (ardiaSlots.size > " + std::to_string(kEvaluationSlotsMax) +
+         ") ardiaSlots.delete(ardiaSlots.keys().next().value); };\n"
+         "try {\n" +
+         std::string(body) +
+         "\n;\n} catch (ardiaError) {}\n"
+         "if (ardiaResult !== null) ardiaSlots.delete(" +
+         key +
+         ");\n"
+         "return ardiaResult;\n"
+         "})()";
+}
+
+inline std::string TakeEvaluation(uint64_t token) {
+  const std::string key = std::to_string(token);
+  return "(() => {\n"
+         "const ardiaSlots = " +
+         EvaluationSlots() +
+         ";\n"
+         "if (!ardiaSlots.has(" +
+         key +
+         ")) return null;\n"
+         "const ardiaResult = ardiaSlots.get(" +
+         key +
+         ");\n"
+         "ardiaSlots.delete(" +
+         key +
+         ");\n"
          "return ardiaResult;\n"
          "})()";
 }

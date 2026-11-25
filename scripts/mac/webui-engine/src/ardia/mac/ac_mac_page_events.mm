@@ -368,6 +368,10 @@ void PageEvents::AppendSnapshot(base::ListValue& events) {
       it = blocked_.erase(it);
       continue;
     }
+    if (events.size() + 2 >= page_policy::kSnapshotEventsMax) {
+      ++it;
+      continue;
+    }
     events.Append(PageEvent(
         "popupBlocked", base::Value(base::DictValue()
                                         .Set("id", base::NumberToString(it->first))
@@ -570,6 +574,11 @@ void PageEvents::PrimaryMainFrameRenderProcessGone(
 }
 
 void PageEvents::DidFinishNavigation(content::NavigationHandle* handle) {
+  if (page_policy::ClearsBlockedPopups(handle->IsInPrimaryMainFrame(),
+                                       handle->HasCommitted(),
+                                       handle->IsSameDocument())) {
+    blocked_.clear();
+  }
   if (!handle->IsInPrimaryMainFrame()) {
     return;
   }

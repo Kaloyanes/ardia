@@ -97,12 +97,15 @@ class PageBinding : public content::WebContentsObserver {
   std::string claim;
   uint64_t renderer_generation = 0;
   uint64_t sequence = 1;
+  uint64_t binding_generation = 1;
   raw_ptr<views::WebView> viewport = nullptr;
   bool visible = false;
   bool presented = false;
 
   base::DictValue NavigationEvent() const;
   base::DictValue Envelope(std::string_view type);
+  base::DictValue CreationState();
+  void Rebind(content::WebContents* contents);
   void ReportNavigation();
   void ReportClosed();
   void Report(std::string_view name, base::Value data);
@@ -213,6 +216,9 @@ class ShellHostView : public views::View,
                    uint64_t generation,
                    Profile* profile);
   base::DictValue Identity(PageBinding* binding) const;
+  void ReplaceBinding(content::WebContents* old_contents,
+                      content::WebContents* contents);
+  void DropDetachedBinding(int id, base::WeakPtr<content::WebContents> contents);
   void SetViewport(const base::DictValue& args, Done done);
   void SetPresentations(const base::DictValue& args, Done done);
   void TabCommand(const base::DictValue& args, Done done);

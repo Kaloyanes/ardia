@@ -4,11 +4,15 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ardia/core/ac_hooks.h"
 #include "ardia/mac/ac_mac_page_events.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,6 +28,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/javascript_dialog_type.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace ardia_mac {
 
@@ -169,33 +174,82 @@ std::unique_ptr<BrowserWebContentsDelegate> CreatePageDelegate(
       app_browser_controller, window, capabilities, browser_ui_controller);
 }
 
+class BackgroundPermissionPrompt : public permissions::PermissionPrompt {
+ public:
+  explicit BackgroundPermissionPrompt(permissions::PermissionPrompt::Delegate* delegate)
+      : delegate_(delegate) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&BackgroundPermissionPrompt::Dismiss,
+                                  weak_factory_.GetWeakPtr()));
+  }
+  BackgroundPermissionPrompt(const BackgroundPermissionPrompt&) = delete;
+  BackgroundPermissionPrompt& operator=(const BackgroundPermissionPrompt&) = delete;
+  ~BackgroundPermissionPrompt() override = default;
+
+  bool UpdateAnchor() override { return true; }
+  TabSwitchingBehavior GetTabSwitchingBehavior() override {
+    return TabSwitchingBehavior::kKeepPromptAlive;
+  }
+  permissions::PermissionPromptDisposition GetPromptDisposition() const override {
+    return permissions::PermissionPromptDisposition::NONE_VISIBLE;
+  }
+  bool IsAskPrompt() const override { return false; }
+  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
+    return std::nullopt;
+  }
+  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
+      const override {
+    return {};
+  }
+  std::optional<permissions::feature_params::PermissionElementPromptPosition>
+  GetPromptPosition() const override {
+    return std::nullopt;
+  }
+
+ private:
+  void Dismiss() {
+    if (delegate_->GetCurrentPrompt() != this || delegate_->Requests().empty()) {
+      return;
+    }
+    delegate_->Dismiss(PromptOptions(std::monostate()));
+  }
+
+  raw_ptr<permissions::PermissionPrompt::Delegate> delegate_;
+  base::WeakPtrFactory<BackgroundPermissionPrompt> weak_factory_{this};
+};
+
 std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
     content::WebContents* web_contents,
     permissions::PermissionPrompt::Delegate* delegate,
     bool* default_handling) {
-  if (!BackgroundInstance() || !delegate || !BindingFor(web_contents)) {
+  if (!delegate || page_policy::PromptHandlingFor(BackgroundInstance(),
+                                                  BindingFor(web_contents) != nullptr) !=
+                       page_policy::PromptHandling::kDismissWithoutUi) {
     return nullptr;
   }
   Trace("permission prompt (background run, not shown): " +
         base::NumberToString(delegate->Requests().size()) + " requests dismissed");
-  *default_handling = false;
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate) {
-            if (delegate) {
-              delegate->Dismiss(PromptOptions(std::monostate()));
-            }
-          },
-          delegate->GetWeakPtr()));
-  return nullptr;
+  return std::make_unique<BackgroundPermissionPrompt>(delegate);
 }
 
+}
+
+void AssertPageHooks() {
+  if (g_ardia_create_web_contents_delegate != &CreatePageDelegate) {
+    g_ardia_create_web_contents_delegate = &CreatePageDelegate;
+  }
+  if (g_ardia_create_permission_prompt != &CreatePermissionPrompt) {
+    g_ardia_create_permission_prompt = &CreatePermissionPrompt;
+  }
 }
 
 void InstallPageDelegate() {
-  g_ardia_create_web_contents_delegate = &CreatePageDelegate;
-  g_ardia_create_permission_prompt = &CreatePermissionPrompt;
+  AssertPageHooks();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce([] {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(&AssertPageHooks));
+      }));
 }
 
 }

@@ -75,7 +75,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
     `discard`, `sleepIfHidden`, `setFrozen`, `downloadFavicon`, `downloadImage`, `openBlockedPopup` and
     `resolveUnresponsive`.
   - `evaluate` runs only the page operations on Linux's allowlist (`ac_linux_page_operations.h`, a dev copy),
-    re-encodes their arguments and runs them in an isolated world.
+    re-encodes their arguments and runs them in an isolated world. The element picker's `apply` and `unhide`
+    settle in a promise, so the host waits for their result: it polls with a token it chose, for at most 5 s.
   - `sites.setZoom` and `sites.zoomLevels` go straight to the profile's `HostZoomMap`.
 - **Page events.** `ac_mac_page_events.mm` sends these `ArdiaWebView` page events in Linux's shapes, and includes
   them in the `tab.create` snapshot: `favicon`, `media`, `fullscreen`, `status`, `crashed`, `loadError`, `security`,
@@ -83,7 +84,11 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - The hover URL, hangs, context menus, JavaScript and leave-page dialogs, file choosers and permission prompts go
     through a `BrowserWebContentsDelegate` subclass (`ac_mac_page_delegate.mm`, installed through ArdiaCore's
     `g_ardia_create_web_contents_delegate`), so `apply.sh` adds no Chrome hook for them.
-  - With `ARDIA_BACKGROUND=1` each of those is logged by kind and answered without UI.
+  - With `ARDIA_BACKGROUND=1` each of those is logged by kind and answered without UI. A permission request
+    gets a prompt with no UI that dismisses itself. The hooks are set again after ArdiaCore's startup task and on
+    each `tab.create`.
+  - A tab whose contents Chromium replaces keeps its binding through a `pageLifecycle` rebind. A tab that leaves
+    the window's tab strips loses its binding.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 
