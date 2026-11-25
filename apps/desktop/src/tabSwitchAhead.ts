@@ -26,10 +26,8 @@ function switchAhead(fromId: string, toId: string) {
   const toTab = to?.tab();
   if (!from || !to || !fromTab || !toTab || inMovingStage(from) || inMovingStage(to)) return;
   for (const view of views.values()) if (view !== from && view.tab()?.shownViewport()) return;
-  const shownRect = fromTab.shownViewport()?.rect;
-  if (!showInPlaceOf(fromTab, toTab)) return;
+  if (!showInPlaceOf(fromTab, toTab, (shown) => to.regions.pageViewport?.(to.slot, shown.rect))) return;
   switchedAhead++;
-  if (shownRect) to.regions.pageViewport?.(to.slot, shownRect);
   to.regions.setPage(to.slot, true);
   from.regions.setPage(from.slot, false);
 }

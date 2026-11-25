@@ -330,6 +330,45 @@ test("an early switch hands the shown page's rect to the regions as the switched
   registerSwitchView("b", { tab: () => b, slot: { key: "b" }, regions: { setPage() {}, pageViewport: (slot, rect) => acknowledged.push([slot.key, rect]) } });
   const stop = watchTabSwitches(store);
   store.activate("b");
+  assert.deepEqual(acknowledged, [], "nothing is recorded before the host accepts the switched-in viewport");
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(acknowledged, [["b", RECT]]);
+  stop();
+});
+
+test("an early switch whose switched-in viewport the host refuses records no rect for that page", async () => {
+  const { host, store, view } = stage();
+  const a = await view("a");
+  const b = await view("b");
+  await a.viewport({ rect: RECT, visible: true });
+  await b.viewport({ rect: { ...RECT, x: 0 }, visible: false });
+  const areas = [];
+  const regions = createInputRegions({
+    send: null,
+    viewport: () => ({ width: 1600, height: 1000 }),
+    rectOf: (element) => element.rect,
+    receivesPointer: () => true,
+    watch: () => () => {},
+    animating: () => false,
+    conceal() {},
+    microtask: (run) => queueMicrotask(run),
+    frame: () => {},
+    frameTime: () => 0,
+    timeout: () => 0,
+    clearTimeout() {},
+    pagesChanged: (pages) => areas.push(pages.map((page) => page.rect)),
+  });
+  const domRect = { x: 5, y: 6, width: 70, height: 80 };
+  const slot = { key: "b", isConnected: true, rect: domRect, children: [] };
+  registerSwitchView("b", { tab: () => b, slot, regions });
+  const invoke = host.invoke;
+  host.invoke = (method, args) => (method === "tab.viewport" && args.id === b.identity.browserId && args.visible ? Promise.reject(new Error("refused")) : invoke(method, args));
+  const stop = watchTabSwitches(store);
+  store.activate("b");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(tabsSwitchedAhead(), 1);
+  assert.equal(b.shownViewport(), undefined, "the refused show is forgotten by the tab");
+  regions.flushNow();
+  assert.deepEqual(areas.at(-1), [domRect], "the regions never adopted the refused rect");
   stop();
 });
