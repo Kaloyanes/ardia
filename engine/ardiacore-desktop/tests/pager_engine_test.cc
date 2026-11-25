@@ -1190,6 +1190,47 @@ void ARemovedProfileDoesNotReviveItsSelectionEvent() {
   EXPECT(kept.StepFrame(0.01).selected_changed);
 }
 
+void ATouchInAnotherWindowReleasesItsOwnPreparedPager() {
+  const gesture::Target live = NativePager(7);
+  const gesture::Target held = NativePager(42);
+  for (const bool tracking : {false, true}) {
+    for (const gesture::TouchPhase finish : {gesture::TouchPhase::kEnded, gesture::TouchPhase::kCancelled}) {
+      PagerSpring spring = Configured(3, 0);
+      EXPECT(spring.SwitchTo(2));
+      double now = 0;
+      for (int i = 0; i < 4; ++i) spring.StepFrame(now += kFrame);
+      RouterHarness h;
+      const auto feed = [&](const gesture::Result& result) {
+        for (const gesture::Action& action : result.actions) {
+          if (action.target == 42) gesture::ApplyToPager(spring, action, kWidth);
+        }
+      };
+      h.Send(gesture::TouchPhase::kBegan, tracking ? -10 : 0, 0, &live, nullptr, 7);
+      EXPECT(tracking ? h.router.tracking() : h.router.pending());
+      feed(h.Send(gesture::TouchPhase::kMayBegin, 0, 0, &held, nullptr, 42));
+      EXPECT(spring.phase() == PagerPhase::kHolding);
+      const gesture::Result released = h.Send(finish, 0, 0, nullptr, nullptr, 42);
+      EXPECT(released.verdict == gesture::Verdict::kStale);
+      EXPECT(released.actions.size() == 1);
+      EXPECT(released.actions[0].target == 42 && released.actions[0].input == PagerInput::kAbandon);
+      EXPECT(!released.swallow);
+      feed(released);
+      EXPECT(spring.phase() == PagerPhase::kSettling);
+      RunFrames(spring, now);
+      EXPECT(spring.position() == 2);
+      EXPECT(!h.router.prepared());
+      EXPECT(h.router.target() == 7);
+      EXPECT(tracking ? h.router.tracking() : h.router.pending());
+      EXPECT(h.Send(finish, 0, 0, nullptr, nullptr, 42).actions.empty());
+      const gesture::Result own = h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, nullptr, 7);
+      EXPECT(own.verdict == gesture::Verdict::kTracking);
+      EXPECT(own.actions.size() == 1 && own.actions[0].target == 7);
+      EXPECT(own.actions[0].input == (tracking ? PagerInput::kChanged : PagerInput::kBegan));
+      EXPECT(own.actions[0].distance == (tracking ? 20 : 10));
+    }
+  }
+}
+
 struct Case {
   const char* name;
   void (*run)();
@@ -1230,6 +1271,7 @@ int main() {
       {"router keeps each window's state apart", RouterKeepsEachWindowsStateApart},
       {"content refusal latches for the gesture", ContentRefusalLatchesForTheGesture},
       {"a removed profile does not revive its selection event", ARemovedProfileDoesNotReviveItsSelectionEvent},
+      {"a touch in another window releases its own prepared pager", ATouchInAnotherWindowReleasesItsOwnPreparedPager},
   });
   for (const Case& test : cases) {
     current = test.name;

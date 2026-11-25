@@ -116,6 +116,7 @@ class GestureRouter {
     const bool finishing = phase == TouchPhase::kEnded || phase == TouchPhase::kCancelled;
     const bool live = gesture_.state == State::kPending || gesture_.state == State::kTracking;
     if (phase != TouchPhase::kBegan && phase != TouchPhase::kMayBegin && live && window != gesture_.window) {
+      if (finishing) ReleasePrepared(now, window, result);
       result.verdict = Verdict::kStale;
       return result;
     }
