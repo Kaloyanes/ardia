@@ -5,6 +5,7 @@ import { splitOf, splitTabIds, splitTabIdsOf, withPaneIds } from "../splits/spli
 import { hasPage } from "../tabs/pageSession";
 import { shownLiveOf } from "../tabs/tabLive";
 import { tileFolderOf } from "./tileFolders";
+import { closedTabEntry } from "./closedTabs";
 
 export type ClearedTabs = {
   windowId: string;
@@ -18,6 +19,7 @@ export type ClearedTabs = {
   selectedTabId?: string;
   blankTabIds?: string[];
   splits?: SplitView[];
+  blankPanes?: ClosedTab[];
 };
 
 const remotePinDeletions = new Map<string, number>();
@@ -35,13 +37,15 @@ function withSplitPanes(s: BrowserState, ids: string[]): Set<string> {
 }
 
 export function clearedTabIds(s: BrowserState, windowId: string): string[] {
-  const ids = unpinnedTabIds(s, windowId);
+  const all = viewTabIds(s, windowId);
+  const ids = all.filter((id) => !inPinnedContainer(s, id));
   const active = activeTabId(s, windowId);
   const playing = (id: string) => !!shownLiveOf(s, id).playingAudio;
-  const kept = withSplitPanes(s, ids.filter((id) => id === active || playing(id)));
+  const kept = withSplitPanes(s, all.filter((id) => id === active || playing(id)));
   const cleared = ids.filter((id) => !kept.has(id));
   if (cleared.length) return cleared;
-  const stillPlaying = withSplitPanes(s, ids.filter(playing));
+  if (!active || !ids.includes(active)) return [];
+  const stillPlaying = withSplitPanes(s, all.filter(playing));
   const selected = ids.filter((id) => !stillPlaying.has(id));
   return selected.every((id) => isBlankTab(s, id)) ? [] : selected;
 }
@@ -51,16 +55,24 @@ function isBlankTab(s: BrowserState, id: string): boolean {
   return !!t && !t.url && !hasPage(t) && !splitOf(s, id);
 }
 
-function windowFingerprint(s: BrowserState, windowId: string): string {
+export function blankSplitPanes(s: BrowserState, ids: string[]): ClosedTab[] {
+  const now = Date.now();
+  return ids
+    .map((id) => s.tabs[id])
+    .filter((t): t is NonNullable<typeof t> => !!t && !t.url && !!splitOf(s, t.id))
+    .map((t) => closedTabEntry(s, t, { windowId: t.windowId, index: s.windows[t.windowId]?.tabIds.indexOf(t.id) ?? 0 }, now));
+}
+
+function windowFingerprint(s: BrowserState, windowId: string, profileId: string): string {
   const w = s.windows[windowId];
   if (!w) return "";
-  const inWindow = (id: string) => s.tabs[id]?.windowId === windowId;
-  const tabs = w.tabIds.map((id) => {
+  const inWindow = (id: string) => s.tabs[id]?.windowId === windowId && s.tabs[id]?.profileId === profileId;
+  const tabs = w.tabIds.filter((id) => !s.tabs[id] || s.tabs[id]!.profileId === profileId).map((id) => {
     const t = s.tabs[id];
-    return t ? [id, t.profileId, pinSection(t), tileFolderOf(t)?.id ?? ""].join(" ") : id;
+    return t ? [id, pinSection(t), tileFolderOf(t)?.id ?? ""].join(" ") : id;
   });
   const groups = Object.values(s.groups)
-    .filter((g) => g.windowId === windowId)
+    .filter((g) => g.windowId === windowId && g.profileId === profileId)
     .map((g) => [g.id, g.parentId ?? "", g.pinned, g.tabIds.join(",")].join(" "))
     .sort();
   const splits = Object.values(s.splits)
@@ -70,19 +82,20 @@ function windowFingerprint(s: BrowserState, windowId: string): string {
   return [...tabs, "", ...groups, "", ...splits].join("\n");
 }
 
-export function undoable(before: BrowserState, after: BrowserState, windowId: string, profileId: string, entries: ClosedTab[]): ClearedTabs {
+export function undoable(before: BrowserState, after: BrowserState, windowId: string, profileId: string, entries: ClosedTab[], blankPanes: ClosedTab[] = []): ClearedTabs {
   return {
     windowId,
     entries,
     closedEntryIds: newClosedEntryIds(before, after),
     tabIds: before.windows[windowId]!.tabIds,
     groups: Object.values(before.groups).filter((g) => g.windowId === windowId),
-    fingerprint: windowFingerprint(after, windowId),
+    fingerprint: windowFingerprint(after, windowId, profileId),
     profileId,
     remoteDeletions: remotePinDeletions.get(profileId) ?? 0,
-    selectedTabId: selectedAmong(before, windowId, entries),
+    selectedTabId: selectedAmong(before, windowId, [...entries, ...blankPanes]),
     blankTabIds: (after.windows[windowId]?.tabIds ?? []).filter((id) => !before.tabs[id]),
-    splits: clearedSplits(before, entries),
+    splits: clearedSplits(before, [...entries, ...blankPanes]),
+    ...(blankPanes.length ? { blankPanes } : {}),
   };
 }
 
@@ -95,8 +108,9 @@ export function rejoinedSplits(s: BrowserState, cleared: ClearedTabs, renamed: (
   let splits = s.splits;
   for (const split of cleared.splits ?? []) {
     const panes = splitTabIds(split).map(renamed);
-    const placed = panes.every((id) => s.tabs[id]?.windowId === cleared.windowId && !splitOf({ splits }, id));
-    if (!placed || splits[split.id]) continue;
+    const placed = panes.every((id) => s.tabs[id]?.windowId === cleared.windowId && (splitOf({ splits }, id)?.id ?? split.id) === split.id);
+    const survivor = splits[split.id];
+    if (!placed || (survivor && !splitTabIds(survivor).every((id) => panes.includes(id)))) continue;
     splits = { ...splits, [split.id]: withPaneIds(split, panes) };
   }
   return splits;
@@ -112,7 +126,7 @@ export function canUndoClear(s: BrowserState, cleared: ClearedTabs): boolean {
   return (
     (remotePinDeletions.get(cleared.profileId) ?? 0) === cleared.remoteDeletions &&
     cleared.closedEntryIds.every((id) => closed.has(id)) &&
-    windowFingerprint(s, cleared.windowId) === cleared.fingerprint
+    windowFingerprint(s, cleared.windowId, cleared.profileId) === cleared.fingerprint
   );
 }
 

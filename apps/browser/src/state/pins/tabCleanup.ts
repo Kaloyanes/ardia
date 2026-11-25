@@ -13,7 +13,7 @@ import { cleanedTabsFor, closedEntries, closeQuietly, keptCleanedTabs, regroupRe
 import { activated, apply, removeTabs } from "../tabs/tabs";
 import { shownLiveOf } from "../tabs/tabLive";
 import type { CloseOptions } from "../tabs/tabs";
-import { canUndoClear, clearedTabIds, rejoinedSplits, undoable, type ClearedTabs } from "./clearedTabs";
+import { blankSplitPanes, canUndoClear, clearedTabIds, rejoinedSplits, undoable, type ClearedTabs } from "./clearedTabs";
 
 export function isClosedPin(s: BrowserState, id: string): boolean {
   const t = s.tabs[id];
@@ -287,14 +287,16 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
     const ids = clearedTabIds(s, windowId);
     if (!ids.length) return null;
     const entries = closedEntries(s, ids);
+    const blankPanes = blankSplitPanes(s, ids);
     get().closeTabs(ids, options);
-    return undoable(s, get(), windowId, s.windows[windowId]!.profileId, entries);
+    return undoable(s, get(), windowId, s.windows[windowId]!.profileId, entries, blankPanes);
   },
 
   undoClearTabs(cleared) {
     const s = get();
     if (!canUndoClear(s, cleared)) return;
-    const { windowId, entries } = cleared;
+    const { windowId } = cleared;
+    const entries = [...cleared.entries, ...(cleared.blankPanes ?? [])];
     const undone = new Set(cleared.closedEntryIds);
     const [restored, ids] = restoreSnapshots(
       { ...s, closedTabs: s.closedTabs.filter((c) => !undone.has(c.id)) },

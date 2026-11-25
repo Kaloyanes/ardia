@@ -743,6 +743,75 @@ test("Undo of a second Clear after switching profiles brings the tab back in its
   assert.equal(shown(w), "a");
 });
 
+const splitShape = (split) => ({ panes: splitTabIdsOf(split).map((id) => short(S().tabs[id].url || "(blank)")), sizes: split.slots.map((slot) => Math.round(slot.size * 1000) / 1000) });
+const splitWith = (id) => Object.values(S().splits).find((v) => splitTabIdsOf(v).includes(id));
+
+test("Undo of Clear puts an unpinned pane back into the split it shared with pinned tiles, in its place and at its size", () => {
+  reset();
+  const [w, p1, p2, u, x] = setup("p1", "p2", "u", "x");
+  S().pinTabs([p1, p2], true);
+  S().createSplit([p1, p2, u]);
+  const before = splitShape(splitWith(p1));
+  assert.deepEqual(before.panes, ["p1", "p2", "u"]);
+  assert.ok(S().tabs[p1].pin && S().tabs[p2].pin && !S().tabs[u].pin, "two pinned tiles and an unpinned pane");
+  S().activate(x);
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.deepEqual(cleared.entries.map((e) => short(e.tab.url)), ["u"]);
+  assert.deepEqual(splitShape(splitWith(p1)).panes, ["p1", "p2"]);
+  S().undoClearTabs(cleared);
+  assert.deepEqual(splitShape(splitWith(p1)), before);
+  assert.equal(Object.keys(S().splits).length, 1);
+});
+
+test("Undo of Clear brings back a split's empty pane and selects it again", () => {
+  reset();
+  const [w, a] = setup("a");
+  const blank = S().newTab(w, {});
+  S().createSplit([a, blank]);
+  S().activate(blank);
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.ok(cleared, "the split with a page in it closes");
+  assert.equal(Object.keys(S().splits).length, 0);
+  S().undoClearTabs(cleared);
+  const splits = Object.values(S().splits);
+  assert.equal(splits.length, 1);
+  assert.deepEqual(splitShape(splits[0]).panes, ["a", "(blank)"]);
+  const active = model.activeTabId(S(), w);
+  assert.equal(S().tabs[active].url, "", "the empty pane is selected again");
+  assert.ok(splitTabIdsOf(splits[0]).includes(active));
+});
+
+test("switching to a profile the window never showed keeps the Undo of a second Clear, and Undo stays on that profile", () => {
+  reset();
+  const [w] = setup("a");
+  const cleared = S().clearUnpinnedTabs(w);
+  const p = S().createProfile({ name: "Work" });
+  S().switchProfile(w, p);
+  assert.ok(S().windows[w].tabIds.some((id) => S().tabs[id].profileId === p), "Work got its first tab");
+  assert.equal(clearedTabs.canUndoClear(S(), cleared), true);
+  S().undoClearTabs(cleared);
+  assert.equal(S().windows[w].profileId, p);
+  assert.equal(short(S().tabs[S().windows[w].activeTabIds.default].url), "a");
+});
+
+for (const [name, arrange] of [
+  ["is selected", ({ p }) => S().activate(p)],
+  ["plays sound", ({ p, y }) => (S().updateLive(p, { playingAudio: true }), S().activate(y))],
+]) {
+  test(`Clear keeps the unpinned partner of a split whose pinned pane ${name}`, () => {
+    reset();
+    const [w, p, u, x, y] = setup("p", "u", "x", "y");
+    S().pinTabs([p], true);
+    S().createSplit([p, u]);
+    assert.ok(S().tabs[p].pin && !S().tabs[u].pin && splitWith(u), "a pinned pane and an unpinned partner");
+    arrange({ p, y });
+    const cleared = S().clearUnpinnedTabs(w);
+    assert.ok(cleared.entries.every((e) => !["p", "u"].includes(short(e.tab.url))), JSON.stringify(cleared.entries.map((e) => short(e.tab.url))));
+    assert.ok(cleared.entries.some((e) => short(e.tab.url) === "x"));
+    assert.deepEqual(splitShape(splitWith(p)).panes, ["p", "u"], "the split stays whole");
+  });
+}
+
 test("Clear on a lone selected tab closes it and leaves the window open", () => {
   reset({ newTabPosition: "top" });
   const [w] = setup("a");
