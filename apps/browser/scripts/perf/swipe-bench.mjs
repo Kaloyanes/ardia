@@ -353,16 +353,21 @@ function frameStats(inst, from, to) {
     text = readFileSync(join(inst.data, "bench-frames.jsonl"), "utf8");
   } catch {}
   const ts = [];
+  let before = null, after = null;
   for (const line of text.split("\n")) {
     if (!line.startsWith('{"k":"f"')) continue;
     const f = JSON.parse(line);
     if (f.now >= from && f.now <= to) ts.push(f.now);
+    else if (f.now < from) before = before === null ? f.now : Math.max(before, f.now);
+    else after = after === null ? f.now : Math.min(after, f.now);
   }
+  ts.sort((a, b) => a - b);
+  const spanning = [...(before === null ? [] : [before]), ...ts, ...(after === null ? [] : [after])];
   let gap = 0;
   const gaps = [];
-  for (let i = 1; i < ts.length; i++) {
-    gap = Math.max(gap, ts[i] - ts[i - 1]);
-    gaps.push([ts[i - 1], ts[i] - ts[i - 1]]);
+  for (let i = 1; i < spanning.length; i++) {
+    gap = Math.max(gap, spanning[i] - spanning[i - 1]);
+    gaps.push([spanning[i - 1], spanning[i] - spanning[i - 1]]);
   }
   return { ticks: ts.length, longestGapMs: Math.round(gap * 10) / 10, gaps };
 }
@@ -539,7 +544,7 @@ async function runTour(apps, c, seeded, profiles, tabsEach, layout, out, save, c
   for (const st of steps) out[st.name] ??= Object.fromEntries(apps.map((s) => [s.label, []]));
   for (let i = 0; i < reps; i++) {
     const ordered = i % 2 ? [...apps].reverse() : apps;
-    const instances = await launchSides(ordered, seeded, profiles, tabsEach, layout, "-tour");
+    const instances = await launchSides(ordered, seeded, profiles, tabsEach, layout, `-tour${i + 1}`);
     try {
       const films = filmDir ? instances.map(({ side, inst }) => filmStart(inst, join(filmDir, config.replace(/\s+/g, "-"), `${side.label}-${i + 1}.mov`))) : [];
       const offTour = new Set();
