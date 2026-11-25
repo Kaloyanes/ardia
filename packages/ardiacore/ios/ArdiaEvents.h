@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)listens:(NSString *)domain;
 + (void)emit:(NSString *)name data:(NSDictionary<NSString *, id> *)data NS_SWIFT_NAME(emit(_:data:));
 @property(class, nonatomic, copy) NSString *consentEpoch;
+@property(class, nonatomic, readonly) NSTimeInterval consentEpochSince;
 
 @end
 

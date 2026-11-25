@@ -6,18 +6,22 @@
   const perfNow = Performance.prototype.now;
   const now = () => apply(perfNow, performance, []);
   const every = setInterval;
+  const after = setTimeout;
   const listen = EventTarget.prototype.addEventListener;
   const toJSON = JSON.stringify;
   const FLUSH_MS = 60000;
   const SAMPLE_MS = 10000;
   const SCROLL_IDLE_MS = 150;
+  const SOON_MS = 5000;
   const MOST = 1000000;
   const fresh = () => ({ errors: [0, 0, 0, 0, 0], dropped: 0, frames: 0, scrolls: 0, scrollFrames: 0, scrollMs: 0, oldest: now() });
   let tally = fresh();
   const quality = new WeakMap();
   let burst = null;
+  let flushing = false;
 
   const flush = () => {
+    flushing = false;
     const t = tally;
     if (!t.errors.some(Boolean) && !t.frames && !t.scrolls) return;
     tally = fresh();
@@ -27,6 +31,12 @@
     } catch (e) {}
   };
 
+  const soon = () => {
+    if (flushing) return;
+    flushing = true;
+    after(flush, SOON_MS);
+  };
+
   apply(listen, document, [
     "error",
     (e) => {
@@ -34,6 +44,7 @@
       if (!(target instanceof HTMLMediaElement) || !target.error) return;
       const code = target.error.code;
       tally.errors[code >= 1 && code <= 4 ? code : 0]++;
+      soon();
     },
     { capture: true, passive: true },
   ]);
@@ -53,6 +64,7 @@
       if (total > 0 && dropped >= 0 && dropped <= total) {
         tally.frames = Math.min(MOST, tally.frames + total);
         tally.dropped = Math.min(MOST, tally.dropped + dropped);
+        soon();
       }
     }
   };
@@ -65,6 +77,7 @@
     tally.scrolls++;
     tally.scrollFrames = Math.min(MOST, tally.scrollFrames + b.frames);
     tally.scrollMs = Math.min(MOST, tally.scrollMs + ms);
+    soon();
   };
 
   const countFrames = (b) => {

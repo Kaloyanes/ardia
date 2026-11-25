@@ -1,8 +1,6 @@
 #import "ArdiaWebViewInternal.h"
 #import "ArdiaEvents.h"
 
-#import <QuartzCore/QuartzCore.h>
-
 #include <algorithm>
 #include <cmath>
 
@@ -23,17 +21,15 @@ NSMutableDictionary<NSString *, NSNumber *> *Metrics() {
 }
 
 NSString *gEpoch;
-CFTimeInterval gEpochSeen = 0;
 
 bool SameConsentPeriodLocked(double spanMs) {
   NSString *epoch = ArdiaEvents.consentEpoch ?: @"";
-  const CFTimeInterval now = CACurrentMediaTime();
   if (!gEpoch || ![gEpoch isEqualToString:epoch]) {
     gEpoch = [epoch copy];
-    gEpochSeen = now;
     [Metrics() removeAllObjects];
   }
-  return epoch.length && std::isfinite(spanMs) && spanMs >= 0 && spanMs <= (now - gEpochSeen) * 1000;
+  const double inForceMs = (NSProcessInfo.processInfo.systemUptime - ArdiaEvents.consentEpochSince) * 1000;
+  return epoch.length && std::isfinite(spanMs) && spanMs >= 0 && spanMs <= inForceMs;
 }
 
 double Count(id value) {
