@@ -29,7 +29,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `g_ardia_win_hosts_normal_windows` does. `BrowserFrameViewMac::OnPaint` stops painting the frame colour. The
   window is non-opaque, with a clear background, a full-size content view and a transparent, untitled titlebar
   (`ac_mac_window`).
-- **Window drag.** `ArdiaShell.startWindowMove` drags the window and `ArdiaShell.captionDoubleClick` zooms or
+- **Window drag.** `ArdiaShell.startWindowMove` drags the window on a left press or a left drag (`apps/desktop` calls it after 3 px of movement) and `ArdiaShell.captionDoubleClick` zooms or
   minimizes it as the system's `AppleActionOnDoubleClick` setting says, so `apps/desktop`'s window drag regions work.
 - **Traffic lights** sit at Ardia's position: 18 pt inset, centred 20 pt down. They come from Chrome's own
   `_titlebarHeight` and `_minXTitlebarWidgetInset`, overridden per window. `shell.trafficLights {center, hidden}`
@@ -50,7 +50,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
     pass-through.
-- **Popovers** follow Wave 3B's contract.
+- **Popovers** follow Wave 3B's contract, but `shell.popover.*` is not advertised and `shell.popover.open` is refused
+  until `apps/desktop` renders a `chrome://ardia/?popover=<id>` surface (`kPopoverRendererShipped`); until then
+  `popoverHost` uses DOM popovers.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
@@ -64,6 +66,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
+  `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

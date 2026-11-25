@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
+#include <optional>
 #include <string_view>
 
 namespace ardia_mac::shell_policy {
@@ -31,6 +33,43 @@ inline bool ValidDocumentName(std::string_view name) {
 
 inline bool SessionFits(std::size_t serialized_bytes) {
   return serialized_bytes <= kSessionLimit;
+}
+
+inline std::optional<int> ParseAdoptId(std::string_view adopt) {
+  constexpr std::string_view prefix = "tab:";
+  if (!adopt.starts_with(prefix) || adopt.size() == prefix.size() || adopt.size() > prefix.size() + 10) {
+    return std::nullopt;
+  }
+  long long value = 0;
+  for (char c : adopt.substr(prefix.size())) {
+    if (c < '0' || c > '9') return std::nullopt;
+    value = value * 10 + (c - '0');
+  }
+  if (value <= 0 || value > std::numeric_limits<int>::max()) return std::nullopt;
+  return static_cast<int>(value);
+}
+
+inline constexpr int kUnclaimedTries = 40;
+
+enum class UnclaimedStep { kWait, kPark, kDrop, kReport };
+
+inline UnclaimedStep NextUnclaimedStep(bool in_window, bool claimed, bool listening, bool blank_url, int tries) {
+  if (claimed) return UnclaimedStep::kDrop;
+  if (!in_window) return tries < kUnclaimedTries ? UnclaimedStep::kWait : UnclaimedStep::kDrop;
+  if (!listening) return UnclaimedStep::kPark;
+  if (blank_url && tries < kUnclaimedTries) return UnclaimedStep::kWait;
+  return UnclaimedStep::kReport;
+}
+
+enum class AdoptRefusal { kNone, kMalformed, kNotOffered, kOtherProfile, kGone, kAlreadyClaimed };
+
+inline AdoptRefusal CheckAdoption(bool parsed, bool offered, bool same_profile, bool present, bool bound) {
+  if (!parsed) return AdoptRefusal::kMalformed;
+  if (!offered) return AdoptRefusal::kNotOffered;
+  if (!same_profile) return AdoptRefusal::kOtherProfile;
+  if (!present) return AdoptRefusal::kGone;
+  if (bound) return AdoptRefusal::kAlreadyClaimed;
+  return AdoptRefusal::kNone;
 }
 
 enum class TabRequest { kCreate, kReclaim, kReplace };

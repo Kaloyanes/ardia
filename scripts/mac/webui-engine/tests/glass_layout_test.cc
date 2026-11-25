@@ -436,6 +436,22 @@ TEST(liquid_glass_keeps_square_corners_on_clipped_edges) {
   CHECK(glass::ShapeFor(std::numeric_limits<double>::quiet_NaN(), glass::kUpperLeft).uniform);
 }
 
+TEST(corner_shape_transitions_update_native_radius_and_mask) {
+  struct Step {
+    std::uint8_t corners;
+    double native;
+    bool masked;
+  };
+  for (const Step& step : {Step{glass::kAllCorners, 12, false}, Step{glass::kUpperRight | glass::kLowerRight, 0, true},
+                           Step{glass::kAllCorners, 12, false}, Step{glass::kUpperLeft, 0, true}}) {
+    const auto shape = glass::ShapeFor(12, step.corners);
+    CHECK(glass::NativeCornerRadius(shape, 12) == step.native);
+    CHECK(!shape.uniform == step.masked);
+  }
+  CHECK(glass::NativeCornerRadius(glass::ShapeFor(0, glass::kAllCorners), 0) == 0);
+  CHECK(glass::NativeCornerRadius(glass::ShapeFor(12, glass::kAllCorners), std::numeric_limits<double>::infinity()) == 0);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

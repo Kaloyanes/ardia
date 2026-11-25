@@ -9,6 +9,7 @@
 
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
+#include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "base/files/file_enumerator.h"
@@ -50,14 +51,17 @@ typedef void (*EngineFunction)(const char* profile_dir,
                                EngineReply reply,
                                void* context);
 
-constexpr std::string_view kCapabilities[] = {
-    "shell.inputRegions",
-    "shell.glassRegions",
-    "shell.backdropRegions",
+constexpr std::string_view kPopoverCapabilities[] = {
     "shell.popover.open",
     "shell.popover.update",
     "shell.popover.close",
     "shell.popover.beyondWindow",
+};
+
+constexpr std::string_view kCapabilities[] = {
+    "shell.inputRegions",
+    "shell.glassRegions",
+    "shell.backdropRegions",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
@@ -171,6 +175,11 @@ std::string ShellHostView::BootstrapJson() const {
   for (std::string_view capability : kCapabilities) {
     capabilities.Append(capability);
   }
+  if (popover::kPopoverRendererShipped) {
+    for (std::string_view capability : kPopoverCapabilities) {
+      capabilities.Append(capability);
+    }
+  }
   for (const auto& route : ardia::desktop_routes::kRoutes) {
     capabilities.Append(route.name);
   }
@@ -273,7 +282,7 @@ void ShellHostView::Invoke(const std::string& method,
     return StartWindowMove(std::move(done));
   }
   if (method == "ArdiaTabs.unclaimedTabs") {
-    return Reply(std::move(done), base::Value(base::ListValue()));
+    return ListUnclaimedTabs(std::move(done));
   }
   if (method == "session.read") {
     FileRunner()->PostTaskAndReplyWithResult(

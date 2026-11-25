@@ -357,6 +357,46 @@ class ContractTests(unittest.TestCase):
         self.assertLess(create.index('shell_policy::AfterReplacement('), create.index('bindings_.erase(replaced_id);'))
         self.assertIn('if (outcome.close_old_tab) {', create)
 
+    def test_nonuniform_liquid_glass_drops_the_native_radius(self):
+        style = self.read('ac_mac_glass.mm').split('void Style(NSView* view, const glass::Placement& placement) {', 1)[1]
+        self.assertIn('glass::NativeCornerRadius(shape, placement.radius)', style.split('\n}\n', 1)[0])
+
+    def test_window_drag_accepts_a_left_drag(self):
+        host = self.read('ac_mac_shell_host.mm')
+        move = host.split('void ShellHostView::StartWindowMove(Done done) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('NSEventTypeLeftMouseDragged', move)
+        self.assertIn('window::StartsWindowDrag(', move)
+        self.assertIn('performWindowDragWithEvent:event', move)
+
+    def test_browser_created_tabs_are_offered_and_adopted(self):
+        host = self.read('ac_mac_shell_host.mm')
+        changed = host.split('void ShellHostView::OnTabStripModelChanged(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('TabStripModelChange::kInserted', changed)
+        self.assertIn('NoteUnclaimedTab(', changed)
+        self.assertIn('Emit("ArdiaTabs", "unclaimed", base::Value(OfferTab(contents, active)));', host)
+        self.assertIn('.Set("adoptId", "tab:" + base::NumberToString(TabId(contents)))', host)
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('shell_policy::CheckAdoption('), create.index('Navigate(&params);'))
+        self.assertIn('return ListUnclaimedTabs(std::move(done));', self.read('ac_mac_shell_calls.mm'))
+        desktop = (REPO / 'apps/desktop/src/unclaimedTabs.ts').read_text()
+        self.assertIn('/^tab:\\d+$/', desktop)
+        self.assertIn('module === "ArdiaTabs" && event === "unclaimed"', desktop)
+
+    def test_popover_panels_are_not_advertised_until_a_renderer_ships(self):
+        policy = self.read('ac_mac_popover_policy.h')
+        shipped = re.search(r'kPopoverRendererShipped = (true|false);', policy).group(1)
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertNotIn('shell.popover', listed)
+        self.assertIn('if (popover::kPopoverRendererShipped) {', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('method == "shell.popover.open" && !popover::kPopoverRendererShipped', host)
+        if shipped == 'false':
+            main = (REPO / 'apps/desktop/src/main.tsx').read_text()
+            self.assertNotIn('bootstrap.popover', main)
+        popover_host = (REPO / 'apps/desktop/src/popoverHost.ts').read_text()
+        self.assertIn('POPOVER_CHILD_PANEL_METHODS.every((method) => hostSupports(method, host))', popover_host)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -369,6 +409,7 @@ class BoundaryTests(unittest.TestCase):
         mac = [row for row in rows if any('scripts/mac/webui-engine' in check for check in row.get('checks', []))]
         guards = ' '.join(row['guard'] for row in mac)
         for method in ('shell.glassRegions', 'shell.backdropRegions', 'shell.trafficLights', 'shell.popover.open',
+                       'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
                        'session.write', 'ArdiaShell.writeDocument'):

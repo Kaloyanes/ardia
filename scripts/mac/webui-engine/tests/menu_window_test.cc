@@ -235,6 +235,14 @@ TEST(caption_double_click_follows_the_system_setting) {
   CHECK(window::CaptionActionName(CaptionAction::kMinimize) == "minimize");
 }
 
+TEST(window_drag_starts_on_a_left_press_or_a_left_drag) {
+  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDown, true));
+  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDown, false));
+  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDragged, true));
+  CHECK(!window::StartsWindowDrag(window::MouseEvent::kLeftDragged, false));
+  CHECK(!window::StartsWindowDrag(window::MouseEvent::kOther, true));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

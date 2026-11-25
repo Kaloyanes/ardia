@@ -43,6 +43,36 @@ TEST(cross_profile_replacement_keeps_the_old_binding_until_the_new_tab_exists) {
   CHECK(stuck.keep_old_binding && !stuck.close_old_tab && stuck.bind_new && stuck.succeeded);
 }
 
+TEST(adopt_ids_are_tab_and_a_positive_int) {
+  CHECK(policy::ParseAdoptId("tab:1") == 1);
+  CHECK(policy::ParseAdoptId("tab:2147483647") == 2147483647);
+  for (const char* bad : {"", "tab:", "tab:0", "tab:-1", "tab:2147483648", "tab:12a", "tab: 1", "ardiacore:1",
+                          "TAB:1", "tab:99999999999", "tab:1\n"}) {
+    CHECK(!policy::ParseAdoptId(bad));
+  }
+}
+
+TEST(unclaimed_tabs_are_offered_once_the_shell_listens) {
+  using policy::UnclaimedStep;
+  CHECK(policy::NextUnclaimedStep(true, true, true, false, 0) == UnclaimedStep::kDrop);
+  CHECK(policy::NextUnclaimedStep(false, false, true, false, 0) == UnclaimedStep::kWait);
+  CHECK(policy::NextUnclaimedStep(false, false, true, false, policy::kUnclaimedTries) == UnclaimedStep::kDrop);
+  CHECK(policy::NextUnclaimedStep(true, false, false, false, 0) == UnclaimedStep::kPark);
+  CHECK(policy::NextUnclaimedStep(true, false, true, true, 0) == UnclaimedStep::kWait);
+  CHECK(policy::NextUnclaimedStep(true, false, true, true, policy::kUnclaimedTries) == UnclaimedStep::kReport);
+  CHECK(policy::NextUnclaimedStep(true, false, true, false, 0) == UnclaimedStep::kReport);
+}
+
+TEST(only_an_offered_unbound_tab_of_the_same_profile_is_adopted) {
+  using policy::AdoptRefusal;
+  CHECK(policy::CheckAdoption(true, true, true, true, false) == AdoptRefusal::kNone);
+  CHECK(policy::CheckAdoption(false, true, true, true, false) == AdoptRefusal::kMalformed);
+  CHECK(policy::CheckAdoption(true, false, true, true, false) == AdoptRefusal::kNotOffered);
+  CHECK(policy::CheckAdoption(true, true, false, true, false) == AdoptRefusal::kOtherProfile);
+  CHECK(policy::CheckAdoption(true, true, true, false, false) == AdoptRefusal::kGone);
+  CHECK(policy::CheckAdoption(true, true, true, true, true) == AdoptRefusal::kAlreadyClaimed);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

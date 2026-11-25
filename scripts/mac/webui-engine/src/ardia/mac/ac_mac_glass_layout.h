@@ -235,6 +235,10 @@ inline CornerShape ShapeFor(double radius, std::uint8_t corners) {
                      Radii{pick(kUpperLeft), pick(kUpperRight), pick(kLowerRight), pick(kLowerLeft)}};
 }
 
+inline double NativeCornerRadius(const CornerShape& shape, double radius) {
+  return shape.uniform && Finite(radius) && radius > 0 ? radius : 0;
+}
+
 inline int GlassStyle(Material material) {
   return material == Material::kLiquidClear ? 1 : 0;
 }

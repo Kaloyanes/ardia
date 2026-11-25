@@ -2240,14 +2240,18 @@
   {
    "id": "mac-webui-bridge:ardiaRequest",
    "source": "frame",
-   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. Tabs Chromium opens on its own (target=_blank, window.open) are offered to this window's shell as ArdiaTabs unclaimed and listed by ArdiaTabs.unclaimedTabs only after it asks; tab.create adopts one only for an adoptId of exactly tab:<1..INT_MAX> (ParseAdoptId) that this host offered, in the requested profile, still in one of this window's tab strips and not already bound (CheckAdoption); anything else is refused. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#ShellBridge::Request",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#PopoverBridge::Trusted",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#PopoverBridge::Request",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#ShellHostView::Trusted",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#AllowedPageUrl",
-    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#bridge_documents"
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#bridge_documents",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#ParseAdoptId",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#CheckAdoption",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#ListUnclaimedTabs",
+    "scripts/mac/webui-engine/tests/shell_policy_test.cc#only_an_offered_unbound_tab_of_the_same_profile_is_adopted"
    ],
    "detected": false
   },
@@ -2271,14 +2275,15 @@
   {
    "id": "mac-webui-popover:calls",
    "source": "frame",
-   "guard": "Mac WebUI host: shell.popover.open, shell.popover.update and shell.popover.close come only through the trusted shell bridge for this window's windowId; ids are 1-128 of [A-Za-z0-9_-], at most 8 popovers are open, a content route is 1-128 of [A-Za-z0-9/_.-] with no .. or //, close reasons come from a fixed list; rects must be finite within +/-1e5 and are mapped with a sane zoom and clamped to the anchor screen's visible frame, or to the window unless beyondWindow, which an update keeps from open (ValidId, ValidRoute, WindowToScreen, ClampToScreen, ResolveBeyondWindow); a panel never activates the app and is never shown in background mode; tests/popover_policy_test.cc hostile_sinks runs non-finite and huge geometry and hostile ids and routes through each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "guard": "Mac WebUI host: shell.popover.* is not advertised and shell.popover.open is refused until apps/desktop ships a popover renderer (kPopoverRendererShipped), so popoverHost uses DOM popovers; once advertised, shell.popover.open, shell.popover.update and shell.popover.close come only through the trusted shell bridge for this window's windowId; ids are 1-128 of [A-Za-z0-9_-], at most 8 popovers are open, a content route is 1-128 of [A-Za-z0-9/_.-] with no .. or //, close reasons come from a fixed list; rects must be finite within +/-1e5 and are mapped with a sane zoom and clamped to the anchor screen's visible frame, or to the window unless beyondWindow, which an update keeps from open (ValidId, ValidRoute, WindowToScreen, ClampToScreen, ResolveBeyondWindow); a panel never activates the app and is never shown in background mode; tests/popover_policy_test.cc hostile_sinks runs non-finite and huge geometry and hostile ids and routes through each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ValidRoute",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ClampToScreen",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ResolveBeyondWindow",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover.mm#PopoverHost::Open",
     "scripts/mac/webui-engine/tests/popover_policy_test.cc#hostile_sinks",
-    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#popover_guards"
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#popover_guards",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#kPopoverRendererShipped"
    ],
    "detected": false
   },

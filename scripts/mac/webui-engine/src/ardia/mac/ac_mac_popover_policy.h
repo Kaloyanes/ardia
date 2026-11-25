@@ -14,6 +14,7 @@ namespace ardia_mac::popover {
 inline constexpr double kMaxExtent = 1e5;
 inline constexpr double kMinSide = 1;
 inline constexpr std::size_t kMaxOpen = 8;
+inline constexpr bool kPopoverRendererShipped = false;
 
 struct Rect {
   double x = 0;

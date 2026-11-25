@@ -221,6 +221,12 @@ class ShellHostView : public views::View,
   void SetTrafficLights(const base::DictValue& args, Done done);
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
+  void NoteUnclaimedTab(content::WebContents* contents, bool active);
+  void AnnounceUnclaimedTab(int id, int tries);
+  base::DictValue OfferTab(content::WebContents* contents, bool active);
+  void ListUnclaimedTabs(Done done);
+  bool BindsContents(const content::WebContents* contents) const;
+  content::WebContents* MemberTab(int id, Profile* profile) const;
 
   void OnViewBoundsChanged(views::View* observed_view) override;
   void OnViewIsDeleting(views::View* observed_view) override;
@@ -241,6 +247,13 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
   std::unique_ptr<PopoverHost> popovers_;
+  struct PendingTab {
+    base::WeakPtr<content::WebContents> contents;
+    bool active = false;
+  };
+  std::map<int, PendingTab> unclaimed_;
+  std::map<int, base::WeakPtr<content::WebContents>> offered_;
+  std::optional<uint64_t> unclaimed_listener_;
 
   raw_ptr<ShellBridge> handler_ = nullptr;
   content::WeakDocumentPtr renderer_document_;

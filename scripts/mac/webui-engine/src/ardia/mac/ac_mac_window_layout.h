@@ -95,6 +95,12 @@ inline std::string_view CaptionActionName(CaptionAction action) {
   return "none";
 }
 
+enum class MouseEvent { kLeftDown, kLeftDragged, kOther };
+
+inline bool StartsWindowDrag(MouseEvent event, bool left_button_down) {
+  return event == MouseEvent::kLeftDown || (event == MouseEvent::kLeftDragged && left_button_down);
+}
+
 struct Presentation {
   bool show = false;
   bool order_out = false;

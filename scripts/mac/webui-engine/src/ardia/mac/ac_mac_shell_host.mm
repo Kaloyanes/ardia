@@ -809,6 +809,7 @@ void ShellHostView::RetireRenderer() {
     }
   }
   pass_.clear();
+  unclaimed_listener_.reset();
   if (popovers_) {
     popovers_->CloseAll(popover::Event::kShellReloaded);
   }
@@ -938,7 +939,26 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   const int replaced_id =
       request == shell_policy::TabRequest::kReplace ? existing->id() : 0;
   content::WebContents* contents = nullptr;
-  {
+  if (const std::string adopt = Text(args, "adoptId"); !adopt.empty()) {
+    const std::optional<int> wanted = shell_policy::ParseAdoptId(adopt);
+    const auto offer = wanted ? offered_.find(*wanted) : offered_.end();
+    content::WebContents* offered =
+        offer != offered_.end() ? offer->second.get() : nullptr;
+    content::WebContents* present = wanted ? MemberTab(*wanted, profile) : nullptr;
+    const shell_policy::AdoptRefusal refusal = shell_policy::CheckAdoption(
+        wanted.has_value(), offered != nullptr,
+        offered && offered->GetBrowserContext() == profile,
+        present && present == offered, BindsContents(present));
+    if (refusal != shell_policy::AdoptRefusal::kNone) {
+      return std::move(done).Run(
+          false, base::Value(refusal == shell_policy::AdoptRefusal::kMalformed
+                                 ? "Invalid tab adoption id"
+                                 : "This tab can't be adopted"));
+    }
+    offered_.erase(offer);
+    contents = present;
+  }
+  if (!contents) {
     NavigateParams params(member, *url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
     params.disposition = WindowOpenDisposition::kNewBackgroundTab;
     params.window_action = NavigateParams::WindowAction::kNoAction;
@@ -1201,7 +1221,9 @@ void ShellHostView::PopoverCall(const std::string& method,
                                base::Value("Popovers are unavailable"));
   }
   std::optional<std::string> error;
-  if (method == "shell.popover.open") {
+  if (method == "shell.popover.open" && !popover::kPopoverRendererShipped) {
+    error = "Native popover panels wait for a popover renderer in apps/desktop";
+  } else if (method == "shell.popover.open") {
     error = popovers_->Open(args, shell_contents()->GetNativeView(), ShellZoom());
   } else if (method == "shell.popover.update") {
     error = popovers_->Update(args, shell_contents()->GetNativeView(), ShellZoom());
@@ -1340,7 +1362,12 @@ void ShellHostView::StartWindowMove(Done done) {
   NSWindow* window =
       widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
   NSEvent* event = [NSApp currentEvent];
-  if (!window || !event || event.type != NSEventTypeLeftMouseDown) {
+  const window::MouseEvent kind =
+      event.type == NSEventTypeLeftMouseDown      ? window::MouseEvent::kLeftDown
+      : event.type == NSEventTypeLeftMouseDragged ? window::MouseEvent::kLeftDragged
+                                                  : window::MouseEvent::kOther;
+  if (!window || !event ||
+      !window::StartsWindowDrag(kind, (NSEvent.pressedMouseButtons & 1) != 0)) {
     return std::move(done).Run(true, base::Value(false));
   }
   [window performWindowDragWithEvent:event];
@@ -1351,7 +1378,117 @@ void ShellHostView::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
+  if (change.type() == TabStripModelChange::kInserted && !closing_) {
+    for (const auto& inserted : change.GetInsert()->contents) {
+      NoteUnclaimedTab(inserted.contents,
+                       selection.active_tab_changed() &&
+                           selection.new_contents == inserted.contents);
+    }
+  }
   ReattachViewports();
+}
+
+bool ShellHostView::BindsContents(const content::WebContents* contents) const {
+  return contents && std::ranges::any_of(bindings_, [contents](const auto& entry) {
+           return entry.second->contents() == contents;
+         });
+}
+
+void ShellHostView::NoteUnclaimedTab(content::WebContents* contents, bool active) {
+  const int id = TabId(contents);
+  if (!contents || id <= 0 || BindsContents(contents)) {
+    return;
+  }
+  unclaimed_[id] = PendingTab{contents->GetWeakPtr(), active};
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&ShellHostView::AnnounceUnclaimedTab,
+                                GetWeakPtr(), id, 0));
+}
+
+base::DictValue ShellHostView::OfferTab(content::WebContents* contents,
+                                        bool active) {
+  offered_[TabId(contents)] = contents->GetWeakPtr();
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  return base::DictValue()
+      .Set("adoptId", "tab:" + base::NumberToString(TabId(contents)))
+      .Set("url", contents->GetVisibleURL().spec())
+      .Set("profile", profile ? ProfileName(profile) : std::string())
+      .Set("active", active);
+}
+
+void ShellHostView::AnnounceUnclaimedTab(int id, int tries) {
+  const auto found = unclaimed_.find(id);
+  if (found == unclaimed_.end()) {
+    return;
+  }
+  content::WebContents* contents = found->second.contents.get();
+  const bool in_window = contents && OwnerOf(contents);
+  const GURL url = contents ? contents->GetVisibleURL() : GURL();
+  switch (shell_policy::NextUnclaimedStep(
+      in_window, BindsContents(contents),
+      handler_ && unclaimed_listener_ == renderer_generation_,
+      url.is_empty() || url.IsAboutBlank(), tries)) {
+    case shell_policy::UnclaimedStep::kWait:
+      base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&ShellHostView::AnnounceUnclaimedTab, GetWeakPtr(),
+                         id, tries + 1),
+          base::Milliseconds(25));
+      return;
+    case shell_policy::UnclaimedStep::kPark:
+      return;
+    case shell_policy::UnclaimedStep::kDrop:
+      unclaimed_.erase(found);
+      return;
+    case shell_policy::UnclaimedStep::kReport: {
+      const bool active = found->second.active;
+      unclaimed_.erase(found);
+      Emit("ArdiaTabs", "unclaimed", base::Value(OfferTab(contents, active)));
+      return;
+    }
+  }
+}
+
+void ShellHostView::ListUnclaimedTabs(Done done) {
+  if (!browser_) {
+    return std::move(done).Run(false, base::Value("This window has no tabs"));
+  }
+  unclaimed_listener_ = renderer_generation_;
+  base::ListValue tabs;
+  for (auto it = offered_.begin(); it != offered_.end();) {
+    content::WebContents* contents = it->second.get();
+    if (!contents || BindsContents(contents) || !OwnerOf(contents)) {
+      it = offered_.erase(it);
+      continue;
+    }
+    tabs.Append(OfferTab(contents, false));
+    ++it;
+  }
+  for (auto it = unclaimed_.begin(); it != unclaimed_.end();) {
+    content::WebContents* contents = it->second.contents.get();
+    const bool active = it->second.active;
+    it = unclaimed_.erase(it);
+    if (contents && OwnerOf(contents) && !BindsContents(contents)) {
+      tabs.Append(OfferTab(contents, active));
+    }
+  }
+  std::move(done).Run(true, base::Value(std::move(tabs)));
+}
+
+content::WebContents* ShellHostView::MemberTab(int id, Profile* profile) const {
+  for (BrowserWindowInterface* member : Members()) {
+    if (member->GetProfile() != profile) {
+      continue;
+    }
+    TabStripModel* model = member->GetTabStripModel();
+    for (int index = 0; index < model->count(); ++index) {
+      content::WebContents* contents = model->GetWebContentsAt(index);
+      if (TabId(contents) == id) {
+        return contents;
+      }
+    }
+  }
+  return nullptr;
 }
 
 bool ShellHostView::HandleKeyboardEvent(

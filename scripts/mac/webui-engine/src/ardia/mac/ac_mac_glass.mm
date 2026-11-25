@@ -119,7 +119,8 @@ void Style(NSView* view, const glass::Placement& placement) {
       [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
     }
     if ([view respondsToSelector:NSSelectorFromString(@"setCornerRadius:")]) {
-      [view setValue:@(placement.radius) forKey:@"cornerRadius"];
+      [view setValue:@(glass::NativeCornerRadius(shape, placement.radius))
+              forKey:@"cornerRadius"];
     }
     view.wantsLayer = YES;
     if (shape.uniform) {
