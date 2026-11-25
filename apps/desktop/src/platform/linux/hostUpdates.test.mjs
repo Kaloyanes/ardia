@@ -81,7 +81,7 @@ function lockManager() {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function harness({ version = "0.2.45", body = JSON.stringify(LIST), status = 200, launch = {}, capabilities = ["ArdiaUpdates.releases"], disk, engine, locks, slowDisk = false, wait, showsToasts } = {}) {
+function harness({ version = "0.2.45", body = JSON.stringify(LIST), status = 200, launch = {}, capabilities = ["ArdiaUpdates.releases"], disk, engine, locks, slowDisk = false, wait, showsToasts, opens = true } = {}) {
   const docs = new Map();
   const seen = { asked: [], told: [], offered: [], offeredInstalls: [], ready: [], managed: [], opened: [], requests: 0, statuses: 0 };
   const host = {
@@ -115,7 +115,7 @@ function harness({ version = "0.2.45", body = JSON.stringify(LIST), status = 200
     offerInstall: (r, run) => void seen.offeredInstalls.push({ version: r.version, run }),
     ready: (v, restart) => void seen.ready.push({ version: v, restart }),
     managed: async (r, current, asked, manager) => void seen.managed.push([r.version, current, asked, manager]),
-    open: (url) => void seen.opened.push(url),
+    open: (url) => (seen.opened.push(url), opens),
     showsToasts,
     locks,
     wait: wait ?? (async () => (engine?.advance(), tick())),
@@ -147,6 +147,16 @@ test("Check Now finds the newest stable Linux release, offers its page and recor
   assert.equal(counts.update_checks_asked, 1);
   assert.equal(counts.update_checks_found, 1);
   assert.equal(counts.update_release_page_opens, 1);
+});
+
+test("Check Now counts a release page visit only when the page opened", async () => {
+  takeUpdateCounts();
+  const { updater, seen } = harness({ opens: false });
+  await updater.methods.checkForUpdates();
+  assert.deepEqual(seen.opened, [page("v0.2.46")]);
+  const counts = takeUpdateCounts();
+  assert.equal(counts.update_checks_found, 1);
+  assert.equal(counts.update_release_page_opens, 0);
 });
 
 test("a nightly build follows nightly releases, and switching channel checks again", async () => {

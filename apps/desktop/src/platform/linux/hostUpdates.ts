@@ -59,7 +59,7 @@ type UpdateDeps = {
   offerInstall: (release: Release, install: () => void) => void;
   ready: (version: string, restart: () => void) => void;
   managed: (release: Release, current: string, asked: boolean, manager: PackageManager) => Promise<void>;
-  open: (url: string) => void;
+  open: (url: string) => boolean;
   showsToasts?: boolean;
   locks?: UpdateLocks;
   wait?: (ms: number) => Promise<void>;
@@ -201,8 +201,7 @@ export function linuxUpdater(deps: UpdateDeps) {
     switchCheck = { phase: "found", channel: switchCheck?.channel ?? channelOf(release.version), version: release.version };
     if (from === "asked" && current) {
       if (await deps.ask(release, current, true)) {
-        noteUpdatePageOpened(consent);
-        deps.open(release.url);
+        if (deps.open(release.url)) noteUpdatePageOpened(consent);
       }
       return;
     }
@@ -264,8 +263,7 @@ export function linuxUpdater(deps: UpdateDeps) {
     }
     if (asked) {
       if (await deps.ask(release, current, false)) {
-        noteUpdatePageOpened(consent);
-        deps.open(release.url);
+        if (deps.open(release.url)) noteUpdatePageOpened(consent);
       }
       return;
     }

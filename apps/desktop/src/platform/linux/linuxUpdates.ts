@@ -62,7 +62,7 @@ export function linuxUpdaterFor(host: ArdiaHost): LinuxUpdater {
       toast(windowId, `Ardia ${release.version} is available`, failed ? "Ardia couldn't install it. Download it from its release page." : "Download it from its release page.", {
         icon: UPDATE_ICON,
         sticky: true,
-        action: { title: "View", run: () => (noteUpdatePageOpened(), open(release.url)) },
+        action: { title: "View", run: () => void (open(release.url) && noteUpdatePageOpened()) },
         secondary: { title: "Later", run: noteUpdateNoticeDismissed },
       }),
     offerInstall: (release, install) =>
