@@ -267,17 +267,20 @@ struct MenuKeyboard {
 
   bool SwallowsRepeat(UINT virtualKey, LPARAM flags) noexcept {
     if ((flags & (1u << 30)) == 0) return false;
+    ActiveWindow window = ActiveArdiaWindow();
+    if (!window.hwnd) return false;
     KeyPress press = ReadKeyPress(virtualKey, flags);
     if (press.windowsKey || press.altGraph) return false;
-    CommandEntry const *entry = MenuStore::Shared().Match(press);
-    return entry && !entry->Native() && IgnoresKeyRepeat(entry->command);
+    MenuStore &store = MenuStore::Shared();
+    CommandEntry const *entry = store.Match(press);
+    if (!entry || entry->Native() || !IgnoresKeyRepeat(entry->command)) return false;
+    return WindowManager::Shared().IsPopupWindow(window.id) || store.EntryEnabled(*entry);
   }
 
   bool Dispatch(KeyPress const &press, bool repeat = false) noexcept {
     MenuStore &store = MenuStore::Shared();
     CommandEntry const *entry = store.Match(press);
     if (!entry) return false;
-    if (repeat && !entry->Native() && IgnoresKeyRepeat(entry->command)) return true;
     ActiveWindow window = ActiveArdiaWindow();
     if (entry->Native()) {
       if (!NativeActionAvailable(entry->id, window)) return false;
@@ -290,6 +293,7 @@ struct MenuKeyboard {
       return true;
     }
     if (!WindowManager::Shared().IsPopupWindow(window.id) && !store.EntryEnabled(*entry)) return false;
+    if (repeat && IgnoresKeyRepeat(entry->command)) return true;
     Emit(entry->command, entry->arg, window.id);
     if (entry->command == "tabSwitcher") OpenedSwitcher(*entry, press);
     return true;

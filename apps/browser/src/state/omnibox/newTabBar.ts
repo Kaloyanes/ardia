@@ -12,6 +12,7 @@ import type { ConsentToken } from "../telemetry/client";
 import { noteCommandBarKeyDismissal } from "../telemetry/inlineCompletionCounts";
 import { noteBarLoad } from "../telemetry/barLoadFocus";
 import { navigateTyped, noteTypedOpen } from "../plugins/typedAddresses";
+import { focusHeroBar } from "./barState";
 
 export { isEmptyCardTab };
 
@@ -49,6 +50,9 @@ export const commandKeyOpenedNewTabBar = (panel: object | undefined) => !!panel 
 
 export function dismissNewTabBarByCommandKey(windowId: string, consent: ConsentToken | null) {
   closeNewTabBar(windowId);
+  const now = store();
+  const active = activeTabId(now, windowId);
+  if (active && !now.tabs[active]?.url) focusHeroBar(windowId, active);
   noteCommandBarKeyDismissal(consent);
 }
 
