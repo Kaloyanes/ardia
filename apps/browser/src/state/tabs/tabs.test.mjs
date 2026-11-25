@@ -910,6 +910,27 @@ test("Undo of Clear in one profile keeps another profile's Recently Closed reope
   assert.ok(S().tabs[a] && S().tabs[c]);
 });
 
+test("Undo of Clear in one profile keeps a tab closed afterwards in another profile reopening in its middle slot", () => {
+  reset();
+  const [w, p1] = setup("p1", "p2");
+  S().activate(p1);
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.deepEqual(cleared.entries.map((e) => short(e.tab.url)), ["p2"]);
+  const work = S().createProfile({ name: "Work" });
+  S().switchProfile(w, work);
+  const a = S().newTab(w, { url: "a.com" });
+  const b = S().newTab(w, { url: "b.com" });
+  const c = S().newTab(w, { url: "c.com" });
+  const blank = model.viewTabIds(S(), w, work).find((id) => !S().tabs[id].url);
+  if (blank) S().closeTabs([blank]);
+  S().closeTabs([b]);
+  S().undoClearTabs(cleared);
+  S().reopenClosedTab(w);
+  assert.deepEqual(model.viewTabIds(S(), w, work).map((id) => short(S().tabs[id].url)), ["a", "b", "c"]);
+  assert.deepEqual(model.viewTabIds(S(), w, "default").map((id) => short(S().tabs[id].url)), ["p1", "p2"]);
+  assert.ok(S().tabs[a] && S().tabs[c]);
+});
+
 test("Undo of a second Clear keeps a Live Folder tab attached to its folder", async () => {
   reset();
   const { createFolder, removeFolder } = await import("../live/store.ts");

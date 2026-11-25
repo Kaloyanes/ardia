@@ -9,7 +9,7 @@ import { lastUsedOf, restoredAtOf, sharedLastUsed, sharedRestoredAt } from "../t
 import type { ClosedTab, Tab } from "../browser/types";
 import { withoutFragment } from "../../lib/url";
 import { orderSections, syncGroupOrder, withParent } from "../groups/groups";
-import { cleanedTabsFor, closedEntries, closeQuietly, keptCleanedTabs, regroupRestored, restoreSnapshots, restoreTarget } from "./closedTabs";
+import { cleanedTabsFor, closedEntries, closeQuietly, keptCleanedTabs, regroupRestored, restoreIndex, restoreSnapshots, restoreTarget } from "./closedTabs";
 import { activated, apply, removeTabs } from "../tabs/tabs";
 import { shownLiveOf } from "../tabs/tabLive";
 import type { CloseOptions } from "../tabs/tabs";
@@ -274,7 +274,9 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
     for (const e of entries) {
       const windowId = privateId ? (next.windows[privateId]?.kind === "private" ? privateId : undefined) : restoreTarget(next, e.windowId);
       if (!windowId || (isIncognitoProfile(e.tab.profileId) && e.windowId !== windowId)) continue;
-      const [restored, [id]] = restoreSnapshots(next, windowId, [{ tab: e.tab, tabId: e.restoreFrom ?? e.tabId, index: windowId === e.windowId ? e.index : undefined }]);
+      const w = next.windows[windowId]!;
+      const profileId = next.profiles[e.tab.profileId] || w.kind === "private" ? e.tab.profileId : w.profileId;
+      const [restored, [id]] = restoreSnapshots(next, windowId, [{ tab: e.tab, tabId: e.restoreFrom ?? e.tabId, index: profileId === e.tab.profileId ? restoreIndex(next, windowId, profileId, e) : undefined }]);
       next = restored;
       if (id && e.group) next = regroupRestored(next, windowId, [e], [id]);
       if (id && typeof entryIds === "string") next = apply(next, activated(next, id));
