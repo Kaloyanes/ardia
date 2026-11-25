@@ -911,6 +911,74 @@ void CommittedWidthsNeverAutoCollapse() {
   CHECK(session.Snapshot().sidebar_width == 0);
 }
 
+void ClockJumpsSurviveBegin() {
+  sync::SurfaceSyncTracker tracker(16667);
+  CHECK(tracker.Decide(100).reason == sync::PresentReason::kIdle);
+  CHECK(tracker.Decide(5).reason == sync::PresentReason::kIdle);
+  CHECK(tracker.Counts().clock_jumps == 1);
+  tracker.Begin();
+  CHECK(tracker.ExpectLayout(1, {0, 0, 100, 100}, {{4, {0, 0, 50, 50}}}, 6).has_value());
+  const auto fallback = tracker.Decide(7);
+  CHECK(fallback.reason == sync::PresentReason::kDeadline && fallback.present);
+  CHECK(!tracker.IsStalled(4) && tracker.Counts().stalls == 0);
+  CHECK(tracker.ExpectLayout(2, {0, 0, 100, 100}, {{4, {0, 0, 60, 60}}}, 8).has_value());
+  CHECK(tracker.Decide(9).reason == sync::PresentReason::kHolding);
+  tracker.End();
+  CHECK(tracker.Decide(3).reason == sync::PresentReason::kIdle);
+  tracker.Begin();
+  CHECK(tracker.ExpectLayout(3, {0, 0, 100, 100}, {{4, {0, 0, 70, 70}}}, 4).has_value());
+  CHECK(tracker.Decide(5).reason == sync::PresentReason::kDeadline);
+  CHECK(tracker.Counts().clock_jumps == 2 && !tracker.IsStalled(4));
+}
+
+void LastSequenceFinishesInsteadOfStranding() {
+  constexpr uint64_t kLast = std::numeric_limits<uint64_t>::max();
+  for (const int change : {0, 1, 2}) {
+    sync::LayoutDragSession session(Window(1200, 800), kLast - 4);
+    CHECK(session.BeginSidebar(190));
+    const auto release = session.End(900);
+    CHECK(release && release->needs_settle && session.Sequence() == kLast - 1);
+    if (change == 0) CHECK(session.ResizeWindow(1100, 800));
+    if (change == 1) CHECK(session.SetDeviceScale(2));
+    if (change == 2) CHECK(session.ResizeWindow(600, 800));
+    const double expected = change == 2 ? 290 : 400;
+    CHECK(session.Sequence() == kLast && session.Active() == sync::DragKind::kNone && !session.SettleTarget());
+    CHECK(session.Snapshot().sidebar_width == expected && !session.Input().sidebar_live);
+    CHECK(!session.Snapshot().settle_target.has_value());
+  }
+
+  sync::LayoutDragSession live(Window(1200, 800), kLast - 3);
+  CHECK(live.BeginSidebar(190));
+  CHECK(live.Sequence() == kLast - 1);
+  CHECK(!live.Move(300));
+  CHECK(live.Active() == sync::DragKind::kSidebar && live.Sequence() == kLast - 1);
+  CHECK(live.ResizeWindow(1100, 800));
+  CHECK(live.Sequence() == kLast && live.Active() == sync::DragKind::kNone);
+  CHECK(live.Snapshot().sidebar_width == 190 && !live.Input().sidebar_live);
+
+  sync::LayoutDragSession ended(Window(1200, 800), kLast - 3);
+  CHECK(ended.BeginSidebar(190));
+  CHECK(!ended.Move(300));
+  const auto finished = ended.End(300);
+  CHECK(finished && finished->target == 300 && ended.Sequence() == kLast);
+  CHECK(ended.Active() == sync::DragKind::kNone);
+
+  sync::LayoutDragSession late_begin(Window(1200, 800), kLast - 2);
+  CHECK(late_begin.Sequence() == kLast - 1);
+  CHECK(!late_begin.BeginSidebar(190));
+  CHECK(late_begin.Active() == sync::DragKind::kNone && late_begin.Sequence() == kLast - 1);
+
+  sync::LayoutInput input = Window(1200, 800);
+  input.sidebar_shown = false;
+  input.card_insets = {};
+  input.split_slots = Slots({0.5, 0.5});
+  sync::LayoutDragSession split(input, kLast - 3);
+  CHECK(split.BeginSplit(Root(0), 600));
+  CHECK(split.SetDeviceScale(2));
+  CHECK(split.Sequence() == kLast && split.Active() == sync::DragKind::kNone);
+  CHECK(Near(split.Snapshot().split_ratio, 0.5) && split.Snapshot().device_scale == 2);
+}
+
 int main() {
   SidebarLimitMatchesTheBrowserUi();
   RubberBandRoundTrips();
@@ -945,6 +1013,8 @@ int main() {
   EndSpendsOneSequence();
   IdleClockJumpsPresentTheNextLayout();
   CommittedWidthsNeverAutoCollapse();
+  ClockJumpsSurviveBegin();
+  LastSequenceFinishesInsteadOfStranding();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return EXIT_FAILURE;

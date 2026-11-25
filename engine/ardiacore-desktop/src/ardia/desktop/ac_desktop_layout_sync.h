@@ -213,6 +213,7 @@ class LayoutDragSession {
 
   bool Apply(const LayoutInput& next, const Drag& drag);
   bool Reapply(LayoutInput next);
+  bool FinishOnLastSequence(LayoutInput next, const Drag& drag);
   bool Step(double pointer, LayoutInput& next, Drag& drag) const;
   std::optional<Release> FinishSidebar(const LayoutInput& from, const Drag& drag, bool released);
   std::optional<Release> FinishSplit(const LayoutInput& from);

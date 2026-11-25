@@ -391,6 +391,7 @@ LayoutDragSession::~LayoutDragSession() = default;
 
 bool LayoutDragSession::Apply(const LayoutInput& next, const Drag& drag) {
   if (sequence_ == std::numeric_limits<uint64_t>::max()) return false;
+  if (drag.kind != DragKind::kNone && sequence_ + 1 == std::numeric_limits<uint64_t>::max()) return false;
   const std::optional<DividerRef> active =
       drag.kind == DragKind::kSplit ? std::optional<DividerRef>(drag.divider) : std::nullopt;
   std::optional<LayoutSnapshot> layout = ComputeLayout(next, sequence_ + 1, active);
@@ -493,7 +494,21 @@ bool LayoutDragSession::Reapply(LayoutInput next) {
     if (!slots) return false;
     next.split_slots = std::move(*slots);
   }
+  if (drag.kind != DragKind::kNone && sequence_ + 1 == std::numeric_limits<uint64_t>::max()) {
+    return FinishOnLastSequence(next, drag);
+  }
   return Apply(next, drag);
+}
+
+bool LayoutDragSession::FinishOnLastSequence(LayoutInput next, const Drag& drag) {
+  if (drag.kind == DragKind::kSplit) return FinishSplit(next).has_value();
+  if (drag.settle_target) {
+    next.sidebar_live = false;
+    next.sidebar_width =
+        KeptSidebarWidth(*drag.settle_target, SidebarWidthLimit(next.window.width), before_drag_.sidebar_width);
+    return Apply(next, Drag{});
+  }
+  return FinishSidebar(next, drag, false).has_value();
 }
 
 bool LayoutDragSession::ResizeWindow(double width, double height) {
@@ -623,13 +638,11 @@ void SurfaceSyncTracker::SetDeviceScale(double device_scale) {
 void SurfaceSyncTracker::Begin() {
   active_ = true;
   pending_ = false;
-  clock_jump_fallback_ = false;
 }
 
 void SurfaceSyncTracker::End() {
   active_ = false;
   pending_ = false;
-  clock_jump_fallback_ = false;
   shell_.participating = false;
   for (Surface& child : children_) child.participating = false;
 }
