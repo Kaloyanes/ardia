@@ -166,112 +166,363 @@ class PathTextTests(unittest.TestCase):
 
 
 
-PATCH = REPO / 'engine/patches/chromium-linux-webui-process-per-site.patch'
 HOSTS = (LINUX / 'ac_linux_host.cc', WIN / 'webui/webui_host_view.cc')
 
-PRINCIPAL_PROGRAM = r"""
+HOST_HARNESS = r"""
 #include <cassert>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
-#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "ardia/desktop/ac_desktop_webui_process_policy.h"
 
-struct Url {
-  std::string text;
-  const std::string& spec() const { return text; }
-};
-
-struct Principal {
-  std::string scheme;
-  std::string host;
-  Url site;
-  bool webui = false;
-  bool guest = false;
-  bool sandboxed = false;
-  bool SchemeIs(std::string_view wanted) const { return scheme == wanted; }
-  std::string_view GetHost() const { return host; }
-  const Url& GetDeprecatedSiteURL() const { return site; }
-  bool IsWebUI() const { return webui; }
-  bool IsGuest() const { return guest; }
-  bool IsSandboxed() const { return sandboxed; }
-};
+#define FROM_HERE 0
 
 struct Profile {
   bool off_the_record = false;
   bool IsOffTheRecord() const { return off_the_record; }
 };
 
-bool ShouldUseProcessPerSite(const Profile* profile, const Principal& security_principal) {
-@CALL@
-  return false;
+namespace base {
+enum TerminationStatus {
+  TERMINATION_STATUS_NORMAL_TERMINATION,
+  TERMINATION_STATUS_ABNORMAL_TERMINATION,
+  TERMINATION_STATUS_PROCESS_WAS_KILLED,
+  TERMINATION_STATUS_PROCESS_CRASHED,
+  TERMINATION_STATUS_STILL_RUNNING,
+  TERMINATION_STATUS_LAUNCH_FAILED,
+  TERMINATION_STATUS_OOM,
+};
+template <typename Signature>
+class RepeatingCallback;
+template <typename R>
+class RepeatingCallback<R()> {
+ public:
+  RepeatingCallback() = default;
+  explicit RepeatingCallback(std::function<R()> run) : run_(std::move(run)) {}
+  R Run() const { return run_(); }
+ private:
+  std::function<R()> run_;
+};
+template <typename T>
+struct WeakPtr {
+  T* target = nullptr;
+  std::shared_ptr<bool> alive;
+  T* get() const { return alive && *alive ? target : nullptr; }
+};
+template <typename T>
+class WeakPtrFactory {
+ public:
+  explicit WeakPtrFactory(T* target) : target_(target), alive_(std::make_shared<bool>(true)) {}
+  ~WeakPtrFactory() { *alive_ = false; }
+  WeakPtr<T> GetWeakPtr() { return {target_, alive_}; }
+ private:
+  T* target_;
+  std::shared_ptr<bool> alive_;
+};
+using OnceClosure = std::function<void()>;
+template <typename T>
+OnceClosure BindOnce(void (T::*method)(), WeakPtr<T> weak) {
+  return [method, weak] {
+    if (T* target = weak.get()) (target->*method)();
+  };
+}
+inline std::vector<OnceClosure>& Tasks() {
+  static std::vector<OnceClosure> tasks;
+  return tasks;
+}
+struct TaskRunner {
+  void PostTask(int, OnceClosure task) { Tasks().push_back(std::move(task)); }
+};
+struct SequencedTaskRunner {
+  static TaskRunner* GetCurrentDefault() {
+    static TaskRunner runner;
+    return &runner;
+  }
+};
+struct TimeDelta {
+  double seconds;
+  double InSecondsF() const { return seconds; }
+};
+struct TimeTicks {
+  double seconds = 0;
+  static double& Clock() {
+    static double clock = 100;
+    return clock;
+  }
+  static TimeTicks Now() { return {Clock()}; }
+  TimeDelta operator-(TimeTicks other) const { return {seconds - other.seconds}; }
+};
+}
+
+namespace browser_shutdown {
+inline bool& Quitting() {
+  static bool quitting = false;
+  return quitting;
+}
+inline bool IsTryingToQuit() { return Quitting(); }
+}
+
+struct GURL {
+  explicit GURL(const char* spec) : spec(spec) {}
+  std::string spec;
+};
+
+namespace ui {
+enum PageTransition { PAGE_TRANSITION_AUTO_TOPLEVEL };
+}
+
+namespace content {
+struct Referrer {};
+enum class ReloadType { NORMAL };
+struct NavigationEntry {
+  bool initial = false;
+  bool IsInitialEntry() const { return initial; }
+};
+struct NavigationController {
+  NavigationEntry* last = nullptr;
+  int reloads = 0;
+  std::vector<std::string> loads;
+  NavigationEntry* GetLastCommittedEntry() { return last; }
+  void Reload(ReloadType, bool check_for_repost) {
+    assert(!check_for_repost);
+    ++reloads;
+  }
+  void LoadURL(const GURL& url, const Referrer&, ui::PageTransition, const std::string&) { loads.push_back(url.spec); }
+};
+struct WebContents {
+  struct PrivilegedParams {
+    int32_t feature_id = 0;
+    bool disallow_service_worker_control = false;
+    bool disallow_shared_workers = false;
+  };
+  struct CreateParams {
+    explicit CreateParams(Profile* context) : browser_context(context) {}
+    Profile* browser_context;
+    std::optional<PrivilegedParams> privileged_params;
+  };
+  static std::unique_ptr<WebContents> Create(const CreateParams& params) {
+    auto contents = std::make_unique<WebContents>();
+    contents->privileged = params.privileged_params;
+    return contents;
+  }
+  NavigationController& GetController() { return controller; }
+  std::optional<PrivilegedParams> privileged;
+  NavigationController controller;
+};
+struct Page {};
+class WebContentsObserver {
+ public:
+  explicit WebContentsObserver(WebContents* contents) : contents_(contents) {}
+  virtual ~WebContentsObserver() = default;
+  WebContents* web_contents() const { return contents_; }
+  virtual void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) {}
+  virtual void PrimaryPageChanged(Page&) {}
+ private:
+  WebContents* contents_;
+};
+}
+
+namespace ardia {
+@HOST@
+}
+
+namespace {
+
+using ardia::desktop_webui_process::WindowState;
+
+void RunTasks() {
+  auto tasks = std::move(base::Tasks());
+  base::Tasks().clear();
+  for (auto& task : tasks) task();
+}
+
+struct Shell {
+  content::NavigationEntry committed;
+  content::WebContents contents;
+  WindowState window = WindowState::kOpen;
+  ardia::ShellRecovery recovery{&contents, base::RepeatingCallback<WindowState()>([this] { return window; })};
+  Shell() { contents.controller.last = &committed; }
+  void Crash(base::TerminationStatus status = base::TERMINATION_STATUS_PROCESS_CRASHED) {
+    recovery.PrimaryMainFrameRenderProcessGone(status);
+    RunTasks();
+  }
+  int reloads() const { return contents.controller.reloads; }
+};
+
+void TestOnlyRegularWindowsGetTheSharedRenderer() {
+  Profile regular;
+  Profile incognito{true};
+  const auto shared = ardia::CreateShellContents(&regular, false);
+  assert(shared->privileged && shared->privileged->feature_id == ardia::desktop_webui_process::kSharedShellRendererFeature);
+  assert(!shared->privileged->disallow_service_worker_control && !shared->privileged->disallow_shared_workers);
+  assert(!ardia::CreateShellContents(&regular, true)->privileged);
+  assert(!ardia::CreateShellContents(&incognito, false)->privileged);
+  assert(!ardia::CreateShellContents(&incognito, true)->privileged);
+}
+
+void TestACrashReloadsTheShell() {
+  Shell shell;
+  shell.Crash();
+  assert(shell.reloads() == 1 && shell.contents.controller.loads.empty());
+  shell.Crash(base::TERMINATION_STATUS_NORMAL_TERMINATION);
+  shell.Crash(base::TERMINATION_STATUS_STILL_RUNNING);
+  assert(shell.reloads() == 1);
+}
+
+void TestACrashBeforeTheFirstCommitLoadsTheShellUrl() {
+  Shell none;
+  none.contents.controller.last = nullptr;
+  none.Crash(base::TERMINATION_STATUS_LAUNCH_FAILED);
+  assert(none.reloads() == 0 && none.contents.controller.loads == std::vector<std::string>{"chrome://ardia/"});
+  Shell initial;
+  initial.committed.initial = true;
+  initial.Crash(base::TERMINATION_STATUS_OOM);
+  assert(initial.reloads() == 0 && initial.contents.controller.loads == std::vector<std::string>{"chrome://ardia/"});
+}
+
+void TestACrashDuringAReversibleCloseResumesWhenTheCloseIsCancelled() {
+  Shell shell;
+  shell.window = WindowState::kClosingReversibly;
+  for (int crash = 0; crash < 6; ++crash) shell.Crash();
+  assert(shell.reloads() == 0);
+  shell.recovery.Resume();
+  RunTasks();
+  assert(shell.reloads() == 0);
+  shell.window = WindowState::kOpen;
+  shell.recovery.Resume();
+  RunTasks();
+  assert(shell.reloads() == 1);
+  shell.recovery.Resume();
+  RunTasks();
+  assert(shell.reloads() == 1);
+}
+
+void TestANewDocumentSettlesAWaitingRecovery() {
+  Shell shell;
+  shell.window = WindowState::kClosingReversibly;
+  shell.Crash();
+  content::Page page;
+  shell.recovery.PrimaryPageChanged(page);
+  shell.window = WindowState::kOpen;
+  shell.recovery.Resume();
+  RunTasks();
+  assert(shell.reloads() == 0);
+}
+
+void TestNoReloadWhenGoneOrQuitting() {
+  Shell gone;
+  gone.window = WindowState::kGone;
+  gone.Crash();
+  assert(gone.reloads() == 0);
+  Shell quitting;
+  browser_shutdown::Quitting() = true;
+  quitting.Crash();
+  browser_shutdown::Quitting() = false;
+  quitting.recovery.Resume();
+  RunTasks();
+  assert(quitting.reloads() == 0);
+}
+
+void TestACrashLoopStops() {
+  Shell shell;
+  for (int crash = 0; crash < 20; ++crash) {
+    base::TimeTicks::Clock() += 0.5;
+    shell.Crash(base::TERMINATION_STATUS_PROCESS_WAS_KILLED);
+  }
+  assert(shell.reloads() == static_cast<int>(ardia::desktop_webui_process::kShellReloadsAllowed));
+  base::TimeTicks::Clock() += ardia::desktop_webui_process::kShellReloadWindowSeconds;
+  shell.Crash();
+  assert(shell.reloads() == static_cast<int>(ardia::desktop_webui_process::kShellReloadsAllowed) + 1);
+}
+
+void TestAPostedRecoveryOutlivesItsWindowSafely() {
+  auto shell = std::make_unique<Shell>();
+  shell->recovery.PrimaryMainFrameRenderProcessGone(base::TERMINATION_STATUS_PROCESS_CRASHED);
+  shell.reset();
+  RunTasks();
+}
+
 }
 
 int main() {
-  const Profile regular;
-  const Profile incognito{true};
-  const Principal shell{"chrome", "ardia", {"chrome://ardia/"}, true};
-  assert(ShouldUseProcessPerSite(&regular, shell));
-  assert(!ShouldUseProcessPerSite(&incognito, shell));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "settings", {"chrome://settings/"}, true}));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"https", "ardia", {"https://ardia/"}, false}));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome-extension", "ardia", {"chrome-extension://ardia/"}, false}));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, true, true}));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, true, false, true}));
-  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, false}));
+  TestOnlyRegularWindowsGetTheSharedRenderer();
+  TestACrashReloadsTheShell();
+  TestACrashBeforeTheFirstCommitLoadsTheShellUrl();
+  TestACrashDuringAReversibleCloseResumesWhenTheCloseIsCancelled();
+  TestANewDocumentSettlesAWaitingRecovery();
+  TestNoReloadWhenGoneOrQuitting();
+  TestACrashLoopStops();
+  TestAPostedRecoveryOutlivesItsWindowSafely();
   return 0;
 }
 """
 
 
-def patch_call():
-    added = [line[1:] for line in PATCH.read_text().splitlines() if line.startswith('+') and not line.startswith('+++')]
-    start = next(i for i, line in enumerate(added) if 'SharesShellProcess(' in line)
-    end = next(i for i in range(start, len(added)) if added[i].strip() == '#endif')
-    return '\n'.join(added[start:end])
+def host_recovery_source(host):
+    text = host.read_text()
+    start = text.index('std::unique_ptr<content::WebContents> CreateShellContents(')
+    end = text.index('\n};\n', text.index('class ShellRecovery : public content::WebContentsObserver {', start)) + 4
+    return text[start:end]
 
 
 class WebUIProcessPolicyTests(unittest.TestCase):
-    def test_the_patch_asks_the_policy_only_on_linux_and_windows(self):
-        text = PATCH.read_text()
-        self.assertIn('+++ b/chrome/browser/chrome_content_browser_client.cc', text)
-        self.assertEqual(text.count('+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)'), 2)
-        self.assertIn('+#include "ardia/desktop/ac_desktop_webui_process_policy.h"  // nogncheck', text)
-        self.assertRegex((REPO / 'engine/patches/series').read_text(),
-                         r'(?m)^chromium chromium-linux-webui-process-per-site\.patch linux$')
-        self.assertRegex((REPO / 'scripts/windows/engine/series-win').read_text(),
-                         r'(?m)^take chromium-linux-webui-process-per-site\.patch$')
+    def test_no_chromium_patch_changes_the_process_model(self):
+        self.assertFalse((REPO / 'engine/patches/chromium-linux-webui-process-per-site.patch').exists())
+        self.assertNotIn('webui-process-per-site', (REPO / 'engine/patches/series').read_text())
+        self.assertNotIn('webui-process-per-site', (REPO / 'scripts/windows/engine/series-win').read_text())
 
-    def test_each_host_loads_the_shell_site_the_policy_shares(self):
+    def test_each_host_builds_its_shell_contents_from_the_policy(self):
         for host in HOSTS:
             text = host.read_text()
             with self.subTest(host=host.name):
                 self.assertIn('#include "ardia/desktop/ac_desktop_webui_process_policy.h"', text)
                 self.assertEqual(text.count('"chrome://ardia/"'), 0)
+                owned = text.index('SetOwnedWebContents(')
+                self.assertRegex(text[owned:owned + 120], r'CreateShellContents\(app_profile[^,]*,\s*private_window\(\)\)')
+                self.assertLess(owned, text.index('LoadInitialURL(GURL('))
                 self.assertRegex(text, r'LoadInitialURL\(GURL\((ardia::)?desktop_webui_process::kShellUrl\)\)')
-                self.assertRegex(text, r'class ShellRecovery : public content::WebContentsObserver')
-                self.assertRegex(text, r'desktop_webui_process::ShellReloadBudget budget_;')
+                self.assertRegex(text, r'privileged_params =\s*content::WebContents::PrivilegedParams\{\.feature_id = \*feature\}')
                 self.assertRegex(text, r'std::make_unique<ShellRecovery>\(')
         for config in (LINUX / 'ac_linux_host.cc', WIN / 'webui/webui_shell.cc'):
             with self.subTest(config=config.name):
                 self.assertRegex(config.read_text(), r'DefaultWebUIConfig\((ardia::)?desktop_webui_process::kShellScheme,'
                                                      r'\s*(ardia::)?desktop_webui_process::kShellHost\)')
 
+    def test_linux_resumes_a_recovery_when_a_close_is_cancelled(self):
+        text = (LINUX / 'ac_linux_host.cc').read_text()
+        self.assertRegex(text, r'if \(!host->close_\.Cancelled\(identity\)\) return;\n\s*'
+                               r'if \(host->shell_recovery_\) host->shell_recovery_->Resume\(\);')
+        self.assertRegex(text, r'host->close_\.Irreversible\(\)\)\s*return desktop_webui_process::WindowState::kGone;')
+        self.assertRegex(text, r'host->closing\(\) \? desktop_webui_process::WindowState::kClosingReversibly')
+
+    def test_a_windows_close_is_final(self):
+        text = (WIN / 'webui/webui_host_view.cc').read_text()
+        self.assertNotIn('kClosingReversibly', text)
+        self.assertNotRegex(text, r'closing_ = false')
+
     @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
     def test_the_policy_program_passes(self):
         self.compile_and_run((ROOT / 'tests/webui_process_policy_test.cc').read_text())
 
     @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
-    def test_the_patched_chromium_call_compiles_and_answers_as_the_policy(self):
-        self.compile_and_run(PRINCIPAL_PROGRAM.replace('@CALL@', patch_call()))
+    def test_each_hosts_shell_recovery_runs_against_stubbed_content(self):
+        for host in HOSTS:
+            with self.subTest(host=host.name):
+                self.compile_and_run(HOST_HARNESS.replace('@HOST@', host_recovery_source(host)), '-Wno-unused-parameter')
 
-    def compile_and_run(self, program):
+    def compile_and_run(self, program, *flags):
         compiler = os.environ.get('CXX', 'c++')
         with tempfile.TemporaryDirectory(prefix='ardia-desktop-webui-process-') as scratch:
             unit = pathlib.Path(scratch, 'program.cc')
             unit.write_text(program)
             binary = pathlib.Path(scratch, 'program')
-            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', str(SOURCE), str(unit),
-                                    '-o', str(binary)], capture_output=True, text=True, timeout=120)
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', *flags, '-I', str(SOURCE),
+                                    str(unit), '-o', str(binary)], capture_output=True, text=True, timeout=120)
             self.assertEqual(built.returncode, 0, built.stderr)
             ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
             self.assertEqual(ran.returncode, 0, ran.stderr)

@@ -35,14 +35,26 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
 - **Assets.** These come from `lib/ardia/ardia-ui` beside the executable, or from `--ardia-ui-dir` during development.
   The data source serves them only to a host's own shell `WebContents`. An ordinary tab that navigates to
   `chrome://ardia/` gets nothing.
-- **One shell renderer.** Every window's shell document shares one renderer process per profile instead of one
-  each: `chromium-linux-webui-process-per-site.patch` makes `ShouldUseProcessPerSite` answer yes for exactly
-  `chrome://ardia/` in a regular profile (`SharesShellProcess`, `ac_desktop_webui_process_policy.h`); web pages, other
-  WebUI, extensions, guests and off-the-record profiles keep Chromium's answer, and Chromium never shares a process
-  across profiles. Each window still has its own document, `WebUI` and bridge (`Trusted`, `OwnsHandler` and the renderer
-  generation are per `WebContents`), so sharing changes no trust. A crash now blanks every window at once, so each
-  window reloads its shell after an abnormal exit (`ShellRecovery`), at most 3 times a minute (`ShellReloadBudget`),
-  and never while it closes or the app quits; the first reload starts the new renderer and the rest join it.
+- **One shell renderer.** The shells of every regular window (Little Ardia and the settings and import windows
+  included) share one renderer per profile instead of one each. Each host builds its shell `WebContents` itself
+  (`CreateShellContents`) and gives it `PrivilegedParams` with Ardia's feature id when `SharedRendererFeature`
+  (`ac_desktop_webui_process_policy.h`) allows it, which is never for a private window or an off-the-record profile.
+  Chromium uses one process per site for privileged contents and keys that by profile, site (`chrome://ardia/`, the
+  site Chromium derives for any shell URL) and feature id, and it never puts privileged and ordinary contents in the
+  same process, so a private window's shell gets a renderer of its own even under the renderer-process limit. No
+  Chromium patch is involved. Each window still has its own document, `WebUI` and bridge (`Trusted`, `OwnsHandler` and
+  the renderer generation belong to one `WebContents`). Privileged contents can't open windows (`window.open` returns
+  null), which the shell never does.
+- **Shell recovery.** One crash now blanks every regular window, so each window reloads its shell after an abnormal
+  renderer exit (`ShellRecovery`, driven by `ShellRecoveryState`), at most 3 times a minute. A crash before the
+  shell's first commit loads `chrome://ardia/` instead of reloading. A crash while a reversible close is pending
+  spends nothing and waits: a cancelled close resumes it, a finished close drops it, and so does a quit. The first
+  reload starts the new renderer and the rest join it.
+- **What the tests cover.** `engine/ardiacore-desktop/tests/test_desktop_layer.py` runs the policy test
+  (`webui_process_policy_test.cc`) and compiles each host's real `CreateShellContents` and `ShellRecovery` against
+  stubbed content and base types to drive crashes, close waits, cancellations and pre-commit crashes. Only a built
+  engine shows the rest: three windows on one `chrome://ardia/` renderer, a private window on its own, and every
+  window coming back after the renderer is killed.
 - **Code cache.** `chromium-linux-auto-pip.patch` turns on Chromium's `WebUICodeCache`, so V8 keeps the shell's
   compiled scripts between launches. Chromium keys each entry by the script's URL and a hash of its source, so an
   updated bundle never runs old code. On an existing profile (Xvfb, llvmpipe, a shared box, median of 5 interleaved

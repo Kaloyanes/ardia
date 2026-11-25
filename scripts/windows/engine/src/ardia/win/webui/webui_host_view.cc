@@ -59,6 +59,7 @@
 #include "ui/aura/window_targeter.h"
 #include "ui/base/base_window.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_type.h"
@@ -160,38 +161,78 @@ class ShellTransparency : public content::WebContentsObserver {
   }
 };
 
+std::unique_ptr<content::WebContents> CreateShellContents(Profile* profile,
+                                                          bool private_window) {
+  content::WebContents::CreateParams params(profile);
+  if (const auto feature =
+          ardia::desktop_webui_process::SharedRendererFeature(
+              {.private_window = private_window,
+               .off_the_record_profile = profile->IsOffTheRecord()})) {
+    params.privileged_params =
+        content::WebContents::PrivilegedParams{.feature_id = *feature};
+  }
+  return content::WebContents::Create(params);
+}
+
 class ShellRecovery : public content::WebContentsObserver {
  public:
-  ShellRecovery(content::WebContents* shell,
-                base::RepeatingCallback<bool()> may_reload)
+  ShellRecovery(
+      content::WebContents* shell,
+      base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
+          window_state)
       : content::WebContentsObserver(shell),
-        may_reload_(std::move(may_reload)) {}
+        window_state_(std::move(window_state)) {}
 
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override {
-    const bool normal_exit =
-        status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
-        status == base::TERMINATION_STATUS_STILL_RUNNING;
-    if (!budget_.Allow((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
-                       normal_exit)) {
+    state_.RendererGone(status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
+                        status == base::TERMINATION_STATUS_STILL_RUNNING);
+    Resume();
+  }
+
+  void PrimaryPageChanged(content::Page& page) override {
+    state_.DocumentCommitted();
+  }
+
+  void Resume() {
+    if (!state_.owed()) {
       return;
     }
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&ShellRecovery::Reload,
-                                  weak_factory_.GetWeakPtr()));
+        FROM_HERE,
+        base::BindOnce(&ShellRecovery::Step, weak_factory_.GetWeakPtr()));
   }
 
  private:
-  void Reload() {
-    if (!web_contents() || browser_shutdown::IsTryingToQuit() ||
-        !may_reload_.Run()) {
+  void Step() {
+    if (!web_contents()) {
       return;
     }
-    web_contents()->GetController().Reload(content::ReloadType::NORMAL, false);
+    content::NavigationController& controller = web_contents()->GetController();
+    const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
+    switch (state_.Next(
+        (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
+        browser_shutdown::IsTryingToQuit()
+            ? ardia::desktop_webui_process::WindowState::kGone
+            : window_state_.Run(),
+        entry && !entry->IsInitialEntry())) {
+      case ardia::desktop_webui_process::RecoveryStep::kReloadDocument:
+        controller.Reload(content::ReloadType::NORMAL, false);
+        break;
+      case ardia::desktop_webui_process::RecoveryStep::kLoadShellUrl:
+        controller.LoadURL(GURL(ardia::desktop_webui_process::kShellUrl),
+                           content::Referrer(),
+                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+        break;
+      case ardia::desktop_webui_process::RecoveryStep::kNothing:
+      case ardia::desktop_webui_process::RecoveryStep::kWaitForClose:
+        break;
+    }
   }
 
-  base::RepeatingCallback<bool()> may_reload_;
-  ardia::desktop_webui_process::ShellReloadBudget budget_;
+  base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
+      window_state_;
+  ardia::desktop_webui_process::ShellRecoveryState state_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -448,13 +489,17 @@ void ShellHostView::Initialize() {
   }
   focus_manager_ = GetFocusManager();
   shell_ = AddChildView(std::make_unique<views::WebView>(app_profile_.get()));
+  shell_->SetOwnedWebContents(
+      CreateShellContents(app_profile_.get(), private_window()));
   shell_->GetWebContents()->SetDelegate(this);
   transparency_ = std::make_unique<ShellTransparency>(shell_->GetWebContents());
   recovery_ = std::make_unique<ShellRecovery>(
       shell_->GetWebContents(),
       base::BindRepeating(
           [](base::WeakPtr<ShellHostView> host) {
-            return host && host->browser_ && !host->closing();
+            return host && host->browser_ && !host->closing()
+                       ? ardia::desktop_webui_process::WindowState::kOpen
+                       : ardia::desktop_webui_process::WindowState::kGone;
           },
           weak_factory_.GetWeakPtr()));
   ObserveMember(browser_);

@@ -908,9 +908,12 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   offered as unclaimed. It tracks activation order (focus, links from other apps), private window ordinals
   (`ArdiaShell.privateWindows`), placement (`window-placement.txt`, the RNW format, cascaded 28 px from the window
   in front, fitted to the display's work area) and quits when the last browser window closes.
-- Every window's `chrome://ardia/` shell shares one renderer per profile, as on Linux (the taken
-  `chromium-linux-webui-process-per-site.patch`, `SharesShellProcess`), and reloads after an abnormal renderer exit
-  at most 3 times a minute (`ShellRecovery`, `ShellReloadBudget`); `tests/webui_process_policy_test.cc` covers both.
+- Every regular window's `chrome://ardia/` shell shares one renderer per profile, as on Linux: `CreateShellContents`
+  gives it `PrivilegedParams` with Ardia's feature id (`SharedRendererFeature`), and a private window's shell gets
+  none, so it never joins that renderer. A crashed shell reloads at most 3 times a minute, or loads
+  `chrome://ardia/` if it crashed before its first commit (`ShellRecovery`); a Windows close is final, so a crash
+  while closing is dropped. `tests/webui_process_policy_test.cc` and `test_desktop_layer.py` (which compiles this
+  host's recovery code against stubs) cover the rules; sharing and recovery themselves need a built engine.
 - `ShellHostView` (`webui_host_view.cc`) is a child view over the `BrowserView`: the `chrome://ardia/` shell
   `WebView` on top and one viewport `WebView` per shown tab under it. Tabs are real `TabStripModel` tabs created with
   `Navigate` (`kNewBackgroundTab`), so popups, `beforeunload`, session tab ids and tab helpers are Chromium's own. A

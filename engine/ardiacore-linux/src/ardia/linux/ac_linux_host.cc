@@ -408,27 +408,58 @@ class ShellTransparency : public content::WebContentsObserver {
   }
 };
 
+std::unique_ptr<content::WebContents> CreateShellContents(Profile* profile, bool private_window) {
+  content::WebContents::CreateParams params(profile);
+  if (const auto feature = desktop_webui_process::SharedRendererFeature(
+          {.private_window = private_window, .off_the_record_profile = profile->IsOffTheRecord()})) {
+    params.privileged_params = content::WebContents::PrivilegedParams{.feature_id = *feature};
+  }
+  return content::WebContents::Create(params);
+}
+
 class ShellRecovery : public content::WebContentsObserver {
  public:
-  ShellRecovery(content::WebContents* shell, base::RepeatingCallback<bool()> may_reload)
-      : content::WebContentsObserver(shell), may_reload_(std::move(may_reload)) {}
+  ShellRecovery(content::WebContents* shell,
+                base::RepeatingCallback<desktop_webui_process::WindowState()> window_state)
+      : content::WebContentsObserver(shell), window_state_(std::move(window_state)) {}
 
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override {
-    const bool normal_exit =
-        status == base::TERMINATION_STATUS_NORMAL_TERMINATION || status == base::TERMINATION_STATUS_STILL_RUNNING;
-    if (!budget_.Allow((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(), normal_exit)) return;
+    state_.RendererGone(status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
+                        status == base::TERMINATION_STATUS_STILL_RUNNING);
+    Resume();
+  }
+  void PrimaryPageChanged(content::Page&) override { state_.DocumentCommitted(); }
+
+  void Resume() {
+    if (!state_.owed()) return;
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&ShellRecovery::Reload, weak_factory_.GetWeakPtr()));
+        FROM_HERE, base::BindOnce(&ShellRecovery::Step, weak_factory_.GetWeakPtr()));
   }
 
  private:
-  void Reload() {
-    if (!web_contents() || browser_shutdown::IsTryingToQuit() || !may_reload_.Run()) return;
-    web_contents()->GetController().Reload(content::ReloadType::NORMAL, false);
+  void Step() {
+    if (!web_contents()) return;
+    content::NavigationController& controller = web_contents()->GetController();
+    const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
+    switch (state_.Next((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
+                        browser_shutdown::IsTryingToQuit() ? desktop_webui_process::WindowState::kGone
+                                                           : window_state_.Run(),
+                        entry && !entry->IsInitialEntry())) {
+      case desktop_webui_process::RecoveryStep::kReloadDocument:
+        controller.Reload(content::ReloadType::NORMAL, false);
+        break;
+      case desktop_webui_process::RecoveryStep::kLoadShellUrl:
+        controller.LoadURL(GURL(desktop_webui_process::kShellUrl), content::Referrer(),
+                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+        break;
+      case desktop_webui_process::RecoveryStep::kNothing:
+      case desktop_webui_process::RecoveryStep::kWaitForClose:
+        break;
+    }
   }
 
-  base::RepeatingCallback<bool()> may_reload_;
-  desktop_webui_process::ShellReloadBudget budget_;
+  base::RepeatingCallback<desktop_webui_process::WindowState()> window_state_;
+  desktop_webui_process::ShellRecoveryState state_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -2903,6 +2934,8 @@ ShellHostView::~ShellHostView() {
 }
 
 void ShellHostView::Initialize() {
+  if (Profile* app_profile = app_profile_.get())
+    shell_->SetOwnedWebContents(CreateShellContents(app_profile, private_window()));
   sized_by_default_ = ArdiaLinuxTakeDefaultSizedBrowser(browser_);
   documents_ = DocumentsFor(profile());
   dialogs_ = std::make_unique<LinuxWindowDialogs>(window_id_, DialogProfile(), GetWidget(),
@@ -2968,7 +3001,10 @@ void ShellHostView::Initialize() {
   shell_recovery_ = std::make_unique<ShellRecovery>(
       shell(), base::BindRepeating(
                    [](base::WeakPtr<ShellHostView> host) {
-                     return host && !host->closing() && host->GetWidget() && !host->GetWidget()->IsClosed();
+                     if (!host || !host->GetWidget() || host->GetWidget()->IsClosed() || host->close_.Irreversible())
+                       return desktop_webui_process::WindowState::kGone;
+                     return host->closing() ? desktop_webui_process::WindowState::kClosingReversibly
+                                            : desktop_webui_process::WindowState::kOpen;
                    },
                    GetWeakPtr()));
   curtain_timer_.Start(FROM_HERE, kShellCurtainLimit,
@@ -4597,6 +4633,7 @@ void ShellHostView::CancelDocumentSeal(LinuxClose::Identity identity, bool chrom
               return;
             }
             if (!host->close_.Cancelled(identity)) return;
+            if (host->shell_recovery_) host->shell_recovery_->Resume();
             for (const auto& companion : host->companions_) {
               if (companion) UnloadController::From(companion.get())->ResetBeforeUnloadForShutdown();
             }
