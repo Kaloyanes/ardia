@@ -178,6 +178,34 @@ class LayoutSyncTests(unittest.TestCase):
             ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
             self.assertEqual(ran.returncode, 0, ran.stderr)
 
+class PagerEngineTests(unittest.TestCase):
+    def test_the_pager_spring_and_gesture_router_match_the_mac_pager(self):
+        compiler = os.environ.get('CXX', 'c++')
+        with tempfile.TemporaryDirectory(prefix='ardia-desktop-pager-') as scratch:
+            binary = pathlib.Path(scratch, 'pager_engine_test')
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wshadow',
+                                    '-I', str(SOURCE), str(ROOT / 'tests' / 'pager_engine_test.cc'), '-o', str(binary)],
+                                   capture_output=True, text=True, timeout=180)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertIn('0 failure(s)', ran.stdout)
+
+    def test_the_pager_constants_match_the_mac_pager(self):
+        swift = (REPO / 'packages/ardiacore/ios/Pager.swift').read_text()
+        spring = (DESKTOP / 'ac_desktop_pager_spring.h').read_text()
+        pairs = {'trackingScale': 'kTrackingScale', 'rubberDimension': 'kRubberDimension',
+                 'rubberCoefficient': 'kRubberCoefficient', 'flickVelocity': 'kFlickVelocity',
+                 'restDisplacement': 'kRestDisplacement', 'restSpeed': 'kRestSpeed', 'historyWindow': 'kHistoryWindow'}
+        for mac, desktop in pairs.items():
+            with self.subTest(constant=mac):
+                mac_value = float(re.search(rf'private let {mac} = ([0-9.]+)', swift).group(1))
+                desktop_value = float(re.search(rf'inline constexpr double {desktop} = ([0-9.]+);', spring).group(1))
+                self.assertEqual(mac_value, desktop_value)
+        self.assertIn('private let omega = 2 * Double.pi / 0.25', swift)
+        self.assertIn('inline constexpr double kOmega = 2 * std::numbers::pi / 0.25;', spring)
+
+
 
 def compiler_is_clang(compiler):
     found = subprocess.run([compiler, '--version'], capture_output=True, text=True, timeout=60)
