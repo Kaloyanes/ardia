@@ -219,9 +219,11 @@ void PopoverBridge::Request(const base::ListValue& arguments) {
   }
   if (method == "shell.popover.message") {
     const base::Value* message = payload->Find("message");
-    if (message &&
-        !popover::MessageFits(base::WriteJson(*message).value_or(std::string()).size())) {
-      return Reply(id, false, base::Value("The popover message is too large"));
+    const std::optional<std::string> serialized =
+        message ? base::WriteJson(*message) : std::optional<std::string>("null");
+    if (!popover::MessageFits(serialized ? std::optional<std::size_t>(serialized->size())
+                                         : std::nullopt)) {
+      return Reply(id, false, base::Value("The popover message must serialize within 64 KiB"));
     }
     data.Set("message", message ? message->Clone() : base::Value());
     host->EmitShellEvent("shell.popoverMessage", base::Value(std::move(data)));

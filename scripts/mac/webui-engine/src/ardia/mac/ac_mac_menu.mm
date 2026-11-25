@@ -3,6 +3,7 @@
 #import <AppKit/AppKit.h>
 
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <set>
 #include <utility>
@@ -13,6 +14,9 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/current_thread.h"
 #include "base/task/sequenced_task_runner.h"
+
+@interface ArdiaMacMainMenu : NSMenu
+@end
 
 @interface ArdiaMacMenuTarget : NSObject
 @property(nonatomic, nullable) NSDictionary* chosen;
@@ -34,14 +38,41 @@ MenuCommandHandler& MainHandler() {
   return *handler;
 }
 
-std::optional<menu::State>& KnownState() {
-  static base::NoDestructor<std::optional<menu::State>> state;
-  return *state;
+struct WindowMenu {
+  std::optional<menu::Item> root;
+  std::optional<menu::State> state;
+  std::optional<menu::Bookmarks> bookmarks;
+};
+
+std::map<std::string, WindowMenu>& WindowMenus() {
+  static base::NoDestructor<std::map<std::string, WindowMenu>> menus;
+  return *menus;
 }
 
-std::optional<menu::Bookmarks>& KnownBookmarks() {
-  static base::NoDestructor<std::optional<menu::Bookmarks>> bookmarks;
-  return *bookmarks;
+menu::MenuOwner& Owner() {
+  static base::NoDestructor<menu::MenuOwner> owner;
+  return *owner;
+}
+
+menu::KeySuppression& Suppression() {
+  static base::NoDestructor<menu::KeySuppression> suppression;
+  return *suppression;
+}
+
+MenuWindowResolver& Resolver() {
+  static base::NoDestructor<MenuWindowResolver> resolver;
+  return *resolver;
+}
+
+std::optional<std::string> WindowIdOf(NSWindow* window) {
+  if (!window || !Resolver()) return std::nullopt;
+  if (std::optional<std::string> id = Resolver().Run(gfx::NativeWindow(window))) return id;
+  NSWindow* parent = window.parentWindow;
+  return parent ? Resolver().Run(gfx::NativeWindow(parent)) : std::nullopt;
+}
+
+std::optional<std::string> KeyWindowId() {
+  return WindowIdOf(NSApp.keyWindow);
 }
 
 struct BookmarksSlot {
@@ -221,22 +252,19 @@ void ApplyState(NSMenu* built, const menu::State& state, std::size_t depth) {
   }
 }
 
-void FillBookmarks() {
+void FillBookmarks(const std::optional<menu::Bookmarks>& known) {
   NSMenu* bookmarks = MainBookmarks().menu;
-  if (!bookmarks || !KnownBookmarks()) return;
+  if (!bookmarks || !known) return;
   const NSInteger fixed = std::min(MainBookmarks().fixed, bookmarks.numberOfItems);
   while (bookmarks.numberOfItems > fixed) {
     [bookmarks removeItemAtIndex:bookmarks.numberOfItems - 1];
   }
-  const std::vector<menu::Item> items = menu::BookmarkMenuItems(*KnownBookmarks());
+  const std::vector<menu::Item> items = menu::BookmarkMenuItems(*known);
   if (!items.empty() && fixed > 0) {
     [bookmarks addItem:[NSMenuItem separatorItem]];
   }
   for (const menu::Item& item : items) {
     [bookmarks addItem:BuildItem(item, MainTarget(), false)];
-  }
-  if (KnownState()) {
-    ApplyState(bookmarks, *KnownState(), 1);
   }
 }
 
@@ -281,6 +309,60 @@ NSMenu* BuildMenu(const menu::Item& item, ArdiaMacMenuTarget* target, bool app_m
     [built addItem:BuildItem(child, target, app_menus)];
   }
   return built;
+}
+
+void BuildBar(const menu::Item& root) {
+  MainBookmarks() = BookmarksSlot();
+  NSMenu* bar = [[ArdiaMacMainMenu alloc] initWithTitle:@""];
+  for (const menu::Item& top : root.children) {
+    NSMenuItem* entry = BuildItem(top, MainTarget(), true);
+    if (!entry.submenu) {
+      entry.submenu = [[NSMenu alloc] initWithTitle:entry.title];
+    }
+    [bar addItem:entry];
+  }
+  NSApp.mainMenu = bar;
+}
+
+void Present(const WindowMenu& record, bool rebuild) {
+  if (rebuild && record.root) {
+    BuildBar(*record.root);
+  }
+  FillBookmarks(record.bookmarks);
+  if (record.state) {
+    ApplyState(NSApp.mainMenu, *record.state, 0);
+  }
+}
+
+void ActivateKeyWindow(NSWindow* window) {
+  const std::optional<std::string> id = WindowIdOf(window);
+  if (!id) return;
+  auto found = WindowMenus().find(*id);
+  const bool has_menu = found != WindowMenus().end() && found->second.root.has_value();
+  if (Owner().Activate(*id, has_menu)) {
+    Present(found->second, true);
+  }
+}
+
+void WatchKeyWindows() {
+  static bool watching = false;
+  if (watching) return;
+  watching = true;
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center addObserverForName:NSWindowDidBecomeKeyNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* note) {
+                    ActivateKeyWindow(note.object);
+                  }];
+  [center addObserverForName:NSWindowDidResignKeyNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* note) {
+                    if (std::optional<std::string> id = WindowIdOf(note.object)) {
+                      Suppression().Set(*id, false);
+                    }
+                  }];
 }
 
 void LogMenu(const std::string& what, const menu::Item& root) {
@@ -353,38 +435,59 @@ std::optional<menu::Bookmarks> ParseMenuBookmarks(const base::Value& update) {
   return bookmarks;
 }
 
-std::optional<std::string> SetMenuState(const base::Value& update) {
+void SetMenuWindowResolver(MenuWindowResolver resolver) {
+  Resolver() = std::move(resolver);
+  WatchKeyWindows();
+}
+
+void SetWindowMainMenu(const std::string& window_id, menu::Item root, MenuCommandHandler handler) {
+  MainHandler() = std::move(handler);
+  WindowMenu& record = WindowMenus()[window_id];
+  record.root = std::move(root);
+  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+    Present(record, true);
+  }
+}
+
+std::optional<std::string> SetWindowMenuState(const std::string& window_id, const base::Value& update) {
   std::optional<menu::State> state = ParseMenuState(update);
   if (!state) return "Menu state must be an object";
-  KnownState() = std::move(*state);
-  ApplyState(NSApp.mainMenu, *KnownState(), 0);
+  WindowMenu& record = WindowMenus()[window_id];
+  record.state = std::move(*state);
+  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+    ApplyState(NSApp.mainMenu, *record.state, 0);
+  }
   return std::nullopt;
 }
 
-std::optional<std::string> SetMenuBookmarks(const base::Value& update) {
+std::optional<std::string> SetWindowMenuBookmarks(const std::string& window_id, const base::Value& update) {
   std::optional<menu::Bookmarks> bookmarks = ParseMenuBookmarks(update);
   if (!bookmarks) return "Menu bookmarks must be an object";
-  KnownBookmarks() = std::move(*bookmarks);
-  FillBookmarks();
+  WindowMenu& record = WindowMenus()[window_id];
+  record.bookmarks = std::move(*bookmarks);
+  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+    Present(record, false);
+  }
   return std::nullopt;
+}
+
+void ForgetWindowMenu(const std::string& window_id) {
+  WindowMenus().erase(window_id);
+  Suppression().Set(window_id, false);
+  Owner().Forget(window_id);
+}
+
+void SetMenuKeysSuppressed(const std::string& window_id, bool suppressed) {
+  Suppression().Set(window_id, suppressed);
+}
+
+bool MenuKeysSuppressed() {
+  return !Suppression().empty() && Suppression().Suppresses(KeyWindowId());
 }
 
 void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler) {
   MainHandler() = std::move(handler);
-  MainBookmarks() = BookmarksSlot();
-  NSMenu* bar = [[NSMenu alloc] initWithTitle:@""];
-  for (const menu::Item& top : root.children) {
-    NSMenuItem* entry = BuildItem(top, MainTarget(), true);
-    if (!entry.submenu) {
-      entry.submenu = [[NSMenu alloc] initWithTitle:entry.title];
-    }
-    [bar addItem:entry];
-  }
-  NSApp.mainMenu = bar;
-  FillBookmarks();
-  if (KnownState()) {
-    ApplyState(bar, *KnownState(), 0);
-  }
+  BuildBar(root);
 }
 
 void InstallDefaultMainMenu(MenuCommandHandler handler) {
@@ -436,6 +539,17 @@ void ShowContextMenu(LiveMenuView live_view,
 }
 
 }
+
+@implementation ArdiaMacMainMenu
+
+- (BOOL)performKeyEquivalent:(NSEvent*)event {
+  if (ardia_mac::MenuKeysSuppressed()) {
+    return NO;
+  }
+  return [super performKeyEquivalent:event];
+}
+
+@end
 
 @implementation ArdiaMacMenuTarget
 

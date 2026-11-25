@@ -297,7 +297,7 @@ class ContractTests(unittest.TestCase):
         clear = glass.split('void GlassRegions::Clear() {', 1)[1].split('\n}\n', 1)[0]
         for step in ('gate_.Invalidate();', 'weak_factory_.InvalidateWeakPtrs();', 'regions_.clear();', 'backdrops_.clear();'):
             self.assertIn(step, clear)
-        self.assertIn('glass::MountedGlass(mounted.placements)', glass)
+        self.assertIn('glass::MountedGlass(mounted)', glass)
         relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1]
         self.assertRegex(relayout, r'if \(!content \|\| !frame\) \{\n\s+return glass::Layout\{\};')
         self.assertIn('region.source = glass::Source::kBackdrop;', glass)
@@ -410,8 +410,10 @@ class ContractTests(unittest.TestCase):
         if shipped == 'false':
             self.assertNotIn('popoverBoot(', main)
         else:
-            self.assertIn('popoverBoot(ardiaHost)', main)
-            self.assertIn('import("./PopoverRoot")', main)
+            self.assertIn('popoverBoot(ardiaHost, location.search)', main)
+            self.assertIn('import("./popoverEntry")', main)
+            self.assertIn('import("./shellEntry")', main)
+            self.assertNotIn('browser/src', main)
             self.assertIn('bootstrap.popover', surface)
             self.assertIn('bootstrap.surface !== POPOVER_SURFACE', surface)
             self.assertIn('POPOVER_SURFACE = "popover"', surface)
@@ -448,17 +450,35 @@ class ContractTests(unittest.TestCase):
         listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
         self.assertIn('"ArdiaShell.setMenuState"', listed)
         self.assertIn('"ArdiaShell.setMenuBookmarks"', listed)
-        self.assertIn('SetMenuState((*values)[0])', calls)
-        self.assertIn('SetMenuBookmarks((*values)[0])', calls)
+        self.assertIn('SetWindowMenuState(window_id_, (*values)[0])', calls)
+        self.assertIn('SetWindowMenuBookmarks(window_id_, (*values)[0])', calls)
         menu = self.read('ac_mac_menu.mm')
-        install = menu.split('void InstallMainMenu(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('FillBookmarks();', install)
-        self.assertIn('ApplyState(bar, *KnownState(), 0);', install)
-        self.assertIn('menu::BookmarkMenuItems(*KnownBookmarks())', menu)
+        present = menu.split('void Present(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('FillBookmarks(record.bookmarks);', present)
+        self.assertIn('ApplyState(NSApp.mainMenu, *record.state, 0);', present)
+        self.assertIn('menu::BookmarkMenuItems(*known)', menu)
+        for setter in ('SetWindowMainMenu', 'SetWindowMenuState', 'SetWindowMenuBookmarks'):
+            body = menu.split('void ' + setter + '(' if setter == 'SetWindowMainMenu' else 'std::optional<std::string> ' + setter + '(', 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('Owner().Claims(window_id, KeyWindowId() == window_id)', body)
+        self.assertIn('NSWindowDidBecomeKeyNotification', menu)
+
+    def test_shortcut_recording_suppresses_menu_key_equivalents(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('if (method == "ArdiaShell.setShortcutRecording") {', calls)
+        self.assertIn('SetMenuKeysSuppressed(window_id_, (*values)[0].GetBool());', calls)
+        menu = self.read('ac_mac_menu.mm')
+        key = menu.split('- (BOOL)performKeyEquivalent:(NSEvent*)event {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(key.index('MenuKeysSuppressed()'), key.index('[super performKeyEquivalent:event]'))
+        self.assertIn('[[ArdiaMacMainMenu alloc] initWithTitle:@""]', menu)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('SetMenuKeysSuppressed(window_id_, false);', host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('ForgetWindowMenu(window_id_);', host.split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0])
         self.assertIn('menu::AddStateEntry(', menu)
         self.assertIn('menu::AddStateTitle(', menu)
         desktop = (REPO / 'apps/desktop/src/nativeMenuBar.ts').read_text()
         self.assertIn('"ArdiaShell.setMainMenu"', desktop)
+        self.assertIn('SetWindowMainMenu(window_id_, std::move(parsed.root), MainMenuHandler());', self.read('ac_mac_shell_host.mm'))
+        self.assertIn('SetMenuWindowResolver(ShellMenuWindows());', self.read('ac_mac_webui.mm'))
         self.assertIn('"menu:Bookmarks": "bookmarksMenu"', desktop)
 
     def test_glass_regions_carry_tint_group_and_appearance(self):
@@ -500,6 +520,7 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'ArdiaShell.setMenuState', 'ArdiaShell.setMenuBookmarks', 'shell.popover.props',
+                       'ArdiaShell.setShortcutRecording',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
                        'session.write', 'ArdiaShell.writeDocument'):
             self.assertIn(method, guards)

@@ -44,6 +44,21 @@ const ITEM_ROLES: Record<string, string> = {
   "std:toggleFullScreen:": "toggleFullScreen",
 };
 const SKIPPED: ReadonlySet<string> = new Set(["window:minimizeAll"]);
+const MAC_SHORTCUTS: Record<string, Pick<NativeMenuItem, "key" | "modifiers">> = {
+  "std:quit:": { key: "q", modifiers: MODIFIER_BITS.command },
+  "std:toggleFullScreen:": { key: "f", modifiers: MODIFIER_BITS.control! | MODIFIER_BITS.command! },
+};
+const APP_MENU = "menu:Ardia";
+const QUIT = "std:quit:";
+const appMenuStandardItems = (appName: string): NativeMenuItem[] => [
+  { separator: true },
+  { title: "Services", role: "services", children: [] },
+  { separator: true },
+  { title: `Hide ${appName}`, role: "hide", key: "h", modifiers: MODIFIER_BITS.command },
+  { title: "Hide Others", role: "hideOthers", key: "h", modifiers: MODIFIER_BITS.command! | MODIFIER_BITS.option! },
+  { title: "Show All", role: "showAll" },
+  { separator: true },
+];
 const NAMED_KEYS: Record<string, string> = {
   "\r": "Enter", "\t": "Tab", "\u0008": "Backspace", "\u001b": "Escape", " ": "Space",
   "": "Up", "": "Down", "": "Left", "": "Right", "": "Delete", "": "Home", "": "End",
@@ -83,6 +98,8 @@ export function nativeMenuKey(key: string | undefined): string | undefined {
 }
 
 const shortcutOf = (item: Extract<MenuItem, { id: string }>): Pick<NativeMenuItem, "key" | "modifiers"> => {
+  const fixed = MAC_SHORTCUTS[item.id];
+  if (fixed) return fixed;
   const key = nativeMenuKey(item.key);
   if (!key) return {};
   const modifiers = (item.modifiers ?? []).reduce((bits, modifier) => bits | (MODIFIER_BITS[modifier] ?? 0), 0);
@@ -101,7 +118,7 @@ export function structuralMenuState(state: MenuState): MenuState {
   return { ...state, bookmarkFolders: [], recentBookmarks: [], bookmarksBar: [], otherBookmarks: [], disabled: state.disabled.filter((id) => STRUCTURAL_DISABLED.has(id)), checked: [], titles: {} };
 }
 
-export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO_MENU_FLAGS): NativeMenuItem[] {
+export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO_MENU_FLAGS, appName = "Ardia"): NativeMenuItem[] {
   const disabled = new Set(flags.disabled);
   const checked = new Set(flags.checked);
   let budget = NATIVE_MENU_MAX_ITEMS;
@@ -119,8 +136,10 @@ export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO
       if (depth >= NATIVE_MENU_MAX_DEPTH || !take()) return null;
       const role = SUBMENU_ROLES[item.id];
       const source = role === "bookmarksMenu" ? staticBookmarkItems(item.children) : item.children;
-      const children = tidy(source.map((child) => convert(child, depth + 1)).filter((child): child is NativeMenuItem => !!child));
-      return { title: title || "Untitled", ...(role ? { role } : {}), children };
+      const converted = source.map((child) => convert(child, depth + 1)).filter((child): child is NativeMenuItem => !!child);
+      const quit = item.id === APP_MENU ? converted.findIndex((child) => child.id === QUIT) : -1;
+      if (quit >= 0) converted.splice(quit, 0, ...appMenuStandardItems(appName).filter(() => take()));
+      return { title: title || "Untitled", ...(role ? { role } : {}), children: tidy(converted) };
     }
     if (!title) return null;
     const role = ITEM_ROLES[item.id];
@@ -156,10 +175,6 @@ export type NativeMenuBarDeps = {
   invoke(method: string, args: Record<string, unknown>): Promise<unknown>;
   build(): { items: readonly MenuItem[]; flags: MenuFlags };
   subscribe(changed: () => void): () => void;
-  onPick(listener: (id: string) => void): () => void;
-  pick(id: string): void;
-  focused(): boolean;
-  onFocus(listener: () => void): () => void;
   timeout(run: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
   report?(error: unknown): void;
@@ -169,7 +184,6 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
   if (!deps.supports(SET_MAIN_MENU_METHOD)) return { stop: () => {}, flush: () => {}, active: false };
   const followsState = deps.supports(SET_MENU_STATE_METHOD);
   let sentKey = "";
-  let pushed = false;
   let timer: unknown = null;
   let inFlight = false;
   let again = false;
@@ -178,7 +192,6 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
   const flush = (forced = false) => {
     timer = null;
     if (stopped) return;
-    if (!forced && pushed && !deps.focused()) return;
     if (inFlight) {
       again = true;
       return;
@@ -188,7 +201,6 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
     const key = JSON.stringify([followsState ? nativeMenuSpec(items) : spec]);
     if (key === sentKey && !forced) return;
     sentKey = key;
-    pushed = true;
     inFlight = true;
     void Promise.resolve()
       .then(() => deps.invoke(SET_MAIN_MENU_METHOD, { items: spec }))
@@ -211,12 +223,6 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
   };
 
   const stopChanges = deps.subscribe(schedule);
-  const stopFocus = deps.onFocus(() => {
-    if (timer !== null) deps.clearTimeout(timer);
-    timer = null;
-    flush(true);
-  });
-  const stopPicks = deps.onPick((id) => deps.pick(id));
   flush(true);
 
   return {
@@ -227,8 +233,13 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
       if (timer !== null) deps.clearTimeout(timer);
       timer = null;
       stopChanges();
-      stopFocus();
-      stopPicks();
     },
   };
+}
+
+export type MenuPickEvent = { command?: unknown; arg?: unknown; windowId?: unknown } | null;
+
+export function menuPickFor(windowId: string, event: MenuPickEvent): string | null {
+  if (event?.command !== MENU_PICK || typeof event.arg !== "string") return null;
+  return event.windowId === undefined || event.windowId === null || event.windowId === windowId ? event.arg : null;
 }

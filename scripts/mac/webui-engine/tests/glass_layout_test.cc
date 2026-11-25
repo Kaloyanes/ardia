@@ -388,7 +388,8 @@ TEST(a_page_without_a_native_view_mounts_nothing_on_it) {
 TEST(mounted_glass_names_a_region_on_two_pages_once) {
   const std::vector<Page> pages{{1, {0, 0, 600, 800}}, {2, {610, 0, 670, 800}}};
   const auto split = glass::Lay(glass::Mounted({}, {Make("peek", {500, 100, 300, 200}, Layer::kOverPage)}), pages, kWindow, 1);
-  CHECK(split.placements.size() == 2);
+  CHECK(split.placements.size() == 3);
+  CHECK(Find(split, "peek", 0) && Find(split, "peek", 0)->plane == Plane::kBehindWindow);
   CHECK(glass::MountedGlass(split.placements) == (std::vector<std::string>{"peek"}));
 }
 
@@ -512,6 +513,25 @@ TEST(tint_and_group_changes_update_the_same_view) {
   const auto after = glass::Lay({region}, {}, kWindow, 1);
   const auto diff = glass::DiffPlacements(before.placements, after.placements, true);
   CHECK(diff.update.size() == 1 && diff.create.empty() && diff.remove.empty());
+}
+
+TEST(a_region_straddling_the_sidebar_and_a_page_is_glass_on_both_sides) {
+  const std::vector<Page> pages{{1, {300, 0, 980, 800}}};
+  const auto layout = glass::Lay({Make("menu", {200, 100, 300, 200})}, pages, kWindow, 1);
+  CHECK(layout.placements.size() == 2);
+  const Placement* page = Find(layout, "menu", 1);
+  const Placement* behind = Find(layout, "menu", 0);
+  CHECK(page && page->plane == Plane::kOverPage && page->visible == (Rect{0, 100, 200, 200}));
+  CHECK(behind && behind->plane == Plane::kBehindWindow && behind->visible == (Rect{200, 100, 300, 200}));
+  const auto inside = glass::Lay({Make("inside", {400, 100, 300, 200})}, pages, kWindow, 1);
+  CHECK(inside.placements.size() == 1 && inside.placements[0].plane == Plane::kOverPage);
+  const auto page_only = glass::KeepAttached(layout, {glass::KeyOf(*page)});
+  CHECK(glass::MountedGlass(page_only).empty());
+  CHECK(glass::MountedGlass(page_only.placements) == (std::vector<std::string>{"menu"}));
+  const auto both = glass::KeepAttached(layout, {glass::KeyOf(*page), glass::KeyOf(*behind)});
+  CHECK(glass::MountedGlass(both) == (std::vector<std::string>{"menu"}));
+  const auto off_window = glass::Lay({Make("edge", {900, 700, 600, 300})}, {{1, {0, 0, 1280, 800}}}, kWindow, 1);
+  CHECK(off_window.placements.size() == 1 && off_window.placements[0].plane == Plane::kOverPage);
 }
 
 int main(int argc, char** argv) {

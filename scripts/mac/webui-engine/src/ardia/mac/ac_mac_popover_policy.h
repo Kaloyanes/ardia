@@ -454,12 +454,12 @@ inline bool ValidId(std::string_view id) {
   });
 }
 
-inline bool MessageFits(std::size_t serialized_bytes) {
-  return serialized_bytes <= kMaxMessageBytes;
+inline bool MessageFits(std::optional<std::size_t> serialized_bytes) {
+  return serialized_bytes && *serialized_bytes <= kMaxMessageBytes;
 }
 
-inline bool PropsFit(std::size_t serialized_bytes) {
-  return serialized_bytes <= kMaxPropsBytes;
+inline bool PropsFit(std::optional<std::size_t> serialized_bytes) {
+  return serialized_bytes && *serialized_bytes <= kMaxPropsBytes;
 }
 
 inline bool ValidRoute(std::string_view route) {

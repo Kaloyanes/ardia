@@ -69,6 +69,7 @@ std::vector<ShellHostView*>& Hosts();
 ShellHostView* HostForShell(content::WebContents* contents);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
+MenuWindowResolver ShellMenuWindows();
 bool BackgroundInstance();
 std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
                                            const char* host_bootstrap);

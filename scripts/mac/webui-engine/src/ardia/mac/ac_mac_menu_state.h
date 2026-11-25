@@ -220,6 +220,51 @@ class BookmarkMenu {
   std::size_t left_;
 };
 
+class MenuOwner {
+ public:
+  bool Claims(const std::string& window, bool key_window) {
+    if (window.empty()) return false;
+    if (key_window || active_.empty()) active_ = window;
+    return active_ == window;
+  }
+
+  bool Activate(const std::string& window, bool has_menu) {
+    if (window.empty() || !has_menu || window == active_) return false;
+    active_ = window;
+    return true;
+  }
+
+  void Forget(const std::string& window) {
+    if (window == active_) active_.clear();
+  }
+
+  const std::string& active() const { return active_; }
+
+ private:
+  std::string active_;
+};
+
+class KeySuppression {
+ public:
+  void Set(const std::string& window, bool suppressed) {
+    if (window.empty()) return;
+    if (suppressed) {
+      windows_.insert(window);
+    } else {
+      windows_.erase(window);
+    }
+  }
+
+  bool Suppresses(const std::optional<std::string>& key_window) const {
+    return key_window && windows_.contains(*key_window);
+  }
+
+  bool empty() const { return windows_.empty(); }
+
+ private:
+  std::set<std::string> windows_;
+};
+
 inline std::vector<Item> BookmarkMenuItems(const Bookmarks& bookmarks, std::size_t budget = kMaxBookmarkItems) {
   return BookmarkMenu(budget).Build(bookmarks);
 }

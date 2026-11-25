@@ -15,6 +15,9 @@ test("only a popover surface with a valid id and route boots the popover rendere
   assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }, { windowKind: "browser" })), null);
   for (const route of ["", "/list", "list/", "a/../b", "a//b", "a b", "x".repeat(129), 7]) assert.equal(popoverBoot(bootstrap({ id: "p1", route })), null, String(route));
   for (const id of ["", "a b", "a:b", "x".repeat(129), null]) assert.equal(popoverBoot(bootstrap({ id, route: "list" })), null, String(id));
+  assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p1")?.id, "p1");
+  assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), "?popover=p2"), null);
+  assert.equal(popoverBoot(bootstrap({ id: "p1", route: "list" }), ""), null);
 });
 
 test("the channel closes, messages and reads its own props, and hears only its own props events", async () => {
@@ -59,5 +62,30 @@ test("the renderer draws only the requested popover's content, never the browser
   assert.doesNotMatch(html, /ardia-window|ardia-desktop/);
   assert.equal(renderToStaticMarkup(createElement(PopoverRoot, { boot: { id: "p1", route: "missing", props: {} }, channel })), "");
   assert.equal(renderToStaticMarkup(createElement(PopoverRoot, { boot: { id: "p1", route: "toString", props: {} }, channel })), "");
-  assert.deepEqual(Object.keys(POPOVER_ROUTES), ["list"]);
+  assert.deepEqual(Object.keys(POPOVER_ROUTES), ["list", "downloads"]);
+});
+
+test("the downloads route draws its rows, actions and footer from props alone", () => {
+  const rows = [
+    { id: "run", title: "big.iso", status: "1 MB of 2 MB", warning: false, missing: false, progress: 0.5, paused: false, actions: ["pause", "cancel"] },
+    { id: "done", title: "notes.pdf", status: "2 KB", warning: false, missing: false, progress: null, paused: false, actions: ["open", "reveal", "bogus"] },
+    { id: "risky", title: "x.exe", status: "Blocked: not secure", warning: true, missing: false, progress: 7, paused: false, actions: ["keep", "discard"] },
+    { title: "no id" },
+  ];
+  const html = renderToStaticMarkup(createElement(PopoverRoot, { boot: { id: "p1", route: "downloads", props: { rows, clearable: true, dark: true, revealTitle: "Show in Finder" } }, channel }));
+  assert.match(html, /RECENT DOWNLOADS/);
+  assert.match(html, /data-ardia-dark="true"/);
+  assert.match(html, />Clear</);
+  assert.match(html, /big\.iso/);
+  assert.match(html, /width:50%/);
+  assert.match(html, /width:100%/);
+  assert.match(html, />Pause<.*>Cancel</);
+  assert.match(html, /title="Show in Finder"/);
+  assert.match(html, />Keep<.*>Discard</);
+  assert.match(html, /data-warning="true"/);
+  assert.doesNotMatch(html, /bogus|no id/);
+  assert.match(html, /View all downloads/);
+  const empty = renderToStaticMarkup(createElement(PopoverRoot, { boot: { id: "p1", route: "downloads", props: {} }, channel }));
+  assert.match(empty, /No downloads yet/);
+  assert.doesNotMatch(empty, />Clear</);
 });

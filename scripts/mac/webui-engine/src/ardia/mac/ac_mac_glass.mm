@@ -349,7 +349,7 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
                                   weak_factory_.GetWeakPtr(),
                                   gate_.Issue(*presentable)));
   }
-  for (const std::string& id : glass::MountedGlass(mounted.placements)) {
+  for (const std::string& id : glass::MountedGlass(mounted)) {
     accepted.Append(id);
   }
   reply.Set("accepted", std::move(accepted));

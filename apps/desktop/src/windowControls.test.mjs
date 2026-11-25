@@ -815,7 +815,7 @@ test("HTMAXBUTTON hover and press events drive the maximize button visual state 
 
   const wrapper = readFileSync(new URL("./WindowControls.tsx", import.meta.url), "utf8");
   const shared = readFileSync(new URL("../../browser/src/components/window/WindowControls.tsx", import.meta.url), "utf8");
-  const entry = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const entry = readFileSync(new URL("./shellEntry.tsx", import.meta.url), "utf8");
   assert.match(wrapper, /useMaximizeButtonState\(props\.windowId\)/);
   assert.match(wrapper, /maximizeState=\{maximizeState\}/);
   assert.match(shared, /forced=\{button === "maximize" \? maximizeState : undefined\}/);

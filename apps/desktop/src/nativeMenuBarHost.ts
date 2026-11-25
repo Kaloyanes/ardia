@@ -6,12 +6,22 @@ import { hiddenAppMenuCommands, runAppMenuChoice } from "./appMenuActions";
 import { hostSupports, invokeHost, reportHostError, type ArdiaHost } from "./host";
 import { linuxMenuShortcuts } from "./shortcuts";
 import { onLinuxCommand } from "./shims/expo-modules-core";
-import { createNativeMenuBar, MENU_PICK, structuralMenuState } from "./nativeMenuBar";
+import { createNativeMenuBar, menuPickFor, SET_MAIN_MENU_METHOD, structuralMenuState, type MenuPickEvent } from "./nativeMenuBar";
 
 const EDIT_ROLES = { disabled: new Set<string>() };
 
+export function startNativeMenuPicks(host: ArdiaHost, windowId: string) {
+  if (!hostSupports(SET_MAIN_MENU_METHOD, host)) return () => {};
+  const subscription = onLinuxCommand((event) => {
+    const id = menuPickFor(windowId, event as MenuPickEvent);
+    if (id) void Promise.resolve(runAppMenuChoice(windowId, appMenuChoice(id))).catch(reportHostError);
+  });
+  return () => subscription.remove();
+}
+
 export function startNativeMenuBar(host: ArdiaHost, windowId: string) {
-  return createNativeMenuBar({
+  const stopPicks = startNativeMenuPicks(host, windowId);
+  const bar = createNativeMenuBar({
     supports: (method) => hostSupports(method, host),
     invoke: (method, args) => invokeHost(method, args, host),
     build: () => {
@@ -35,21 +45,12 @@ export function startNativeMenuBar(host: ArdiaHost, windowId: string) {
         stopExtensions();
       };
     },
-    onPick: (listener) => {
-      const subscription = onLinuxCommand((event) => {
-        const pick = event as { command?: unknown; arg?: unknown; windowId?: unknown } | null;
-        if (pick?.command === MENU_PICK && typeof pick.arg === "string" && (pick.windowId === undefined || pick.windowId === windowId)) listener(pick.arg);
-      });
-      return () => subscription.remove();
-    },
-    pick: (id) => void Promise.resolve(runAppMenuChoice(windowId, appMenuChoice(id))).catch(reportHostError),
-    focused: () => document.hasFocus(),
-    onFocus: (listener) => {
-      window.addEventListener("focus", listener);
-      return () => window.removeEventListener("focus", listener);
-    },
     timeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     report: reportHostError,
   });
+  return () => {
+    bar.stop();
+    stopPicks();
+  };
 }

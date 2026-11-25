@@ -425,6 +425,55 @@ TEST(group_links_need_web_or_file_urls) {
   CHECK(!menu::GroupLink("javascript:alert(1)") && !menu::GroupLink("chrome://settings") && !menu::GroupLink(""));
 }
 
+TEST(a_menu_of_exactly_400_items_is_valid_and_401_is_not) {
+  const auto bar = [](std::size_t count) {
+    menu::Item root;
+    menu::Item top;
+    top.title = "File";
+    for (std::size_t index = 1; index < count; ++index) {
+      menu::Item item;
+      item.title = "Item";
+      item.command = "go";
+      top.children.push_back(item);
+    }
+    root.children.push_back(top);
+    return root;
+  };
+  CHECK(menu::Validate(bar(menu::kMaxItems)).empty());
+  const auto problems = menu::Validate(bar(menu::kMaxItems + 1));
+  CHECK(problems.size() == 1 && problems[0].reason == "too many items");
+}
+
+TEST(the_key_window_owns_the_shared_menu_bar) {
+  menu::MenuOwner owner;
+  CHECK(owner.Claims("w1", false));
+  CHECK(!owner.Claims("w2", false));
+  CHECK(owner.active() == "w1");
+  CHECK(owner.Claims("w2", true));
+  CHECK(!owner.Claims("w1", false));
+  CHECK(!owner.Activate("w1", false));
+  CHECK(owner.Activate("w1", true) && owner.active() == "w1");
+  CHECK(!owner.Activate("w1", true));
+  owner.Forget("w2");
+  CHECK(owner.active() == "w1");
+  owner.Forget("w1");
+  CHECK(owner.active().empty() && owner.Claims("w3", false));
+  CHECK(!owner.Claims("", true));
+}
+
+TEST(shortcut_recording_suppresses_menu_keys_only_in_its_key_window) {
+  menu::KeySuppression keys;
+  CHECK(keys.empty() && !keys.Suppresses(std::string("settings")));
+  keys.Set("settings", true);
+  CHECK(keys.Suppresses(std::string("settings")));
+  CHECK(!keys.Suppresses(std::string("main")));
+  CHECK(!keys.Suppresses(std::nullopt));
+  keys.Set("settings", false);
+  CHECK(keys.empty());
+  keys.Set("", true);
+  CHECK(keys.empty());
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

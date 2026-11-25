@@ -290,6 +290,19 @@ MenuCommandHandler MainMenuHandler() {
   });
 }
 
+MenuWindowResolver ShellMenuWindows() {
+  return base::BindRepeating([](gfx::NativeWindow window) -> std::optional<std::string> {
+    NSWindow* wanted = window.GetNativeNSWindow();
+    for (ShellHostView* host : Hosts()) {
+      views::Widget* widget = host->GetWidget();
+      if (wanted && widget && widget->GetNativeWindow().GetNativeNSWindow() == wanted) {
+        return host->window_id();
+      }
+    }
+    return std::nullopt;
+  });
+}
+
 ShellHostView* HostForPopover(content::WebContents* contents) {
   for (ShellHostView* host : Hosts()) {
     if (contents && host->popovers() && host->popovers()->Owns(contents)) {
@@ -463,6 +476,7 @@ void ShellHostView::DetachBrowser() {
   }
   closing_ = true;
   RetireRenderer();
+  ForgetWindowMenu(window_id_);
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
   for (auto& [id, binding] : bindings_) {
@@ -804,6 +818,7 @@ void ShellHostView::RetireRenderer() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   ++renderer_generation_;
+  SetMenuKeysSuppressed(window_id_, false);
   if (!had_document) {
     return;
   }
@@ -1281,7 +1296,7 @@ void ShellHostView::SetMainMenu(const base::DictValue& args, Done done) {
         false, base::Value("Invalid menu at " + parsed.problems[0].path + ": " +
                            parsed.problems[0].reason));
   }
-  InstallMainMenu(parsed.root, MainMenuHandler());
+  SetWindowMainMenu(window_id_, std::move(parsed.root), MainMenuHandler());
   std::move(done).Run(true, base::Value());
 }
 

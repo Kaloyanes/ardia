@@ -122,6 +122,7 @@ struct Layout {
   std::vector<Placement> placements;
   std::vector<std::string> accepted;
   std::vector<Rejection> rejected;
+  std::set<std::string> partial;
 };
 
 struct SlotKey {
@@ -350,6 +351,25 @@ inline double SanitizedScale(double scale) {
   return Finite(scale) && scale > 0.05 && scale < 20 ? scale : 1;
 }
 
+inline void Subtract(std::vector<Rect>& region, const Rect& cut) {
+  if (cut.empty()) return;
+  std::vector<Rect> remaining;
+  for (const Rect& piece : region) {
+    const Rect overlap = Intersect(piece, cut);
+    if (overlap.empty()) {
+      remaining.push_back(piece);
+      continue;
+    }
+    if (overlap.y > piece.y) remaining.push_back(Rect{piece.x, piece.y, piece.width, overlap.y - piece.y});
+    if (overlap.bottom() < piece.bottom())
+      remaining.push_back(Rect{piece.x, overlap.bottom(), piece.width, piece.bottom() - overlap.bottom()});
+    if (overlap.x > piece.x) remaining.push_back(Rect{piece.x, overlap.y, overlap.x - piece.x, overlap.height});
+    if (overlap.right() < piece.right())
+      remaining.push_back(Rect{overlap.right(), overlap.y, piece.right() - overlap.right(), overlap.height});
+  }
+  region = std::move(remaining);
+}
+
 inline Layout Lay(const std::vector<Region>& regions,
                   const std::vector<Page>& pages,
                   const Rect& window,
@@ -406,6 +426,11 @@ inline Layout Lay(const std::vector<Region>& regions,
       return true;
     };
     bool on_page = false;
+    std::vector<Rect> uncovered;
+    if (ValidRect(window)) {
+      const Rect shown = Intersect(rect, window);
+      if (!shown.empty()) uncovered.push_back(shown);
+    }
     if (region.layer != Layer::kBehind) {
       for (std::size_t index = 0; index < pages.size(); ++index) {
         const Page& page = pages[index];
@@ -413,10 +438,12 @@ inline Layout Lay(const std::vector<Region>& regions,
         if (place(Plane::kOverPage, page.id, page.rect, page.rect, page_order[index])) {
           ++page_order[index];
           on_page = true;
+          Subtract(uncovered, page.rect);
         }
       }
     }
-    if (!on_page && ValidRect(window) && place(Plane::kBehindWindow, 0, Rect{}, window, behind_order)) {
+    if ((!on_page || !uncovered.empty()) && ValidRect(window) &&
+        place(Plane::kBehindWindow, 0, Rect{}, window, behind_order)) {
       ++behind_order;
     }
   }
@@ -456,8 +483,11 @@ inline std::vector<Page> MountablePages(const std::vector<Page>& pages, const st
 }
 
 inline Layout KeepAttached(Layout layout, const std::set<SlotKey>& attached) {
-  std::erase_if(layout.placements,
-                [&attached](const Placement& placement) { return !attached.contains(SlotKey{placement.plane, placement.page, placement.source, placement.id}); });
+  std::erase_if(layout.placements, [&attached, &layout](const Placement& placement) {
+    const bool kept = attached.contains(SlotKey{placement.plane, placement.page, placement.source, placement.id});
+    if (!kept) layout.partial.insert(placement.id);
+    return !kept;
+  });
   return layout;
 }
 
@@ -468,6 +498,12 @@ inline std::vector<std::string> MountedGlass(const std::vector<Placement>& place
     if (placement.source == Source::kGlass && seen.insert(placement.id).second) mounted.push_back(placement.id);
   }
   return mounted;
+}
+
+inline std::vector<std::string> MountedGlass(const Layout& mounted) {
+  std::vector<std::string> whole = MountedGlass(mounted.placements);
+  std::erase_if(whole, [&mounted](const std::string& id) { return mounted.partial.contains(id); });
+  return whole;
 }
 
 class PresentedGate {
@@ -544,25 +580,6 @@ inline Diff DiffPlacements(const std::vector<Placement>& before,
     if (!still) diff.remove.push_back(key);
   }
   return diff;
-}
-
-inline void Subtract(std::vector<Rect>& region, const Rect& cut) {
-  if (cut.empty()) return;
-  std::vector<Rect> remaining;
-  for (const Rect& piece : region) {
-    const Rect overlap = Intersect(piece, cut);
-    if (overlap.empty()) {
-      remaining.push_back(piece);
-      continue;
-    }
-    if (overlap.y > piece.y) remaining.push_back(Rect{piece.x, piece.y, piece.width, overlap.y - piece.y});
-    if (overlap.bottom() < piece.bottom())
-      remaining.push_back(Rect{piece.x, overlap.bottom(), piece.width, piece.bottom() - overlap.bottom()});
-    if (overlap.x > piece.x) remaining.push_back(Rect{piece.x, overlap.y, overlap.x - piece.x, overlap.height});
-    if (overlap.right() < piece.right())
-      remaining.push_back(Rect{overlap.right(), overlap.y, piece.right() - overlap.right(), overlap.height});
-  }
-  region = std::move(remaining);
 }
 
 inline std::vector<Rect> PassThrough(const std::vector<Rect>& pages, const std::vector<Rect>& overlays) {

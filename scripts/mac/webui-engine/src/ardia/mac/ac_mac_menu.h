@@ -22,6 +22,7 @@ struct MenuChoice {
 using MenuCommandHandler = base::RepeatingCallback<void(const MenuChoice&)>;
 using ContextMenuDone = base::OnceCallback<void(std::optional<MenuChoice>)>;
 using LiveMenuView = base::OnceCallback<gfx::NativeView()>;
+using MenuWindowResolver = base::RepeatingCallback<std::optional<std::string>(gfx::NativeWindow)>;
 
 struct ParsedMenu {
   menu::Item root;
@@ -34,8 +35,13 @@ std::optional<menu::Bookmarks> ParseMenuBookmarks(const base::Value& update);
 
 void InstallMainMenu(const menu::Item& root, MenuCommandHandler handler);
 void InstallDefaultMainMenu(MenuCommandHandler handler);
-std::optional<std::string> SetMenuState(const base::Value& update);
-std::optional<std::string> SetMenuBookmarks(const base::Value& update);
+void SetMenuWindowResolver(MenuWindowResolver resolver);
+void SetWindowMainMenu(const std::string& window_id, menu::Item root, MenuCommandHandler handler);
+std::optional<std::string> SetWindowMenuState(const std::string& window_id, const base::Value& update);
+std::optional<std::string> SetWindowMenuBookmarks(const std::string& window_id, const base::Value& update);
+void ForgetWindowMenu(const std::string& window_id);
+void SetMenuKeysSuppressed(const std::string& window_id, bool suppressed);
+bool MenuKeysSuppressed();
 
 void ShowContextMenu(LiveMenuView live_view,
                      const gfx::Point& point,

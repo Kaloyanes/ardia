@@ -4,6 +4,7 @@ import { appMenuItems } from "./appMenu.ts";
 import {
   createNativeMenuBar,
   MENU_PICK,
+  menuPickFor,
   NATIVE_MENU_MAX_DEPTH,
   NATIVE_MENU_MAX_ITEMS,
   NATIVE_MENU_SYNC_MS,
@@ -151,16 +152,12 @@ test("titles and keys are cleaned the way the native menu validates them", () =>
   assert.equal(nativeMenuKey("é"), undefined);
 });
 
-function barHarness({ supports = [SET_MAIN_MENU_METHOD, SET_MENU_STATE_METHOD], focused = true, overrides = {} } = {}) {
+function barHarness({ supports = [SET_MAIN_MENU_METHOD, SET_MENU_STATE_METHOD], overrides = {} } = {}) {
   const sent = [];
   const timers = new Map();
   let next = 0;
   let changed = null;
-  let focus = null;
-  let pick = null;
-  const picked = [];
   let current = { ...overrides };
-  let isFocused = focused;
   const bar = createNativeMenuBar({
     supports: (method) => supports.includes(method),
     invoke: async (method, args) => void sent.push({ method, args }),
@@ -168,16 +165,6 @@ function barHarness({ supports = [SET_MAIN_MENU_METHOD, SET_MENU_STATE_METHOD], 
     subscribe: (listener) => {
       changed = listener;
       return () => void (changed = null);
-    },
-    onPick: (listener) => {
-      pick = listener;
-      return () => void (pick = null);
-    },
-    pick: (id) => picked.push(id),
-    focused: () => isFocused,
-    onFocus: (listener) => {
-      focus = listener;
-      return () => void (focus = null);
     },
     timeout: (run, ms) => {
       timers.set(++next, { run, ms });
@@ -195,15 +182,12 @@ function barHarness({ supports = [SET_MAIN_MENU_METHOD, SET_MENU_STATE_METHOD], 
     await settle();
   };
   return {
-    bar, sent, timers, picked, settle, fire,
+    bar, sent, timers, settle, fire,
     change: (next) => {
       current = { ...current, ...next };
       changed?.();
     },
-    focus: () => focus?.(),
-    pick: (id) => pick?.(id),
-    blur: () => void (isFocused = false),
-    listening: () => !!changed || !!focus || !!pick,
+    listening: () => !!changed,
   };
 }
 
@@ -215,7 +199,7 @@ test("without setMainMenu nothing is sent or watched", async () => {
   assert.equal(h.listening(), false);
 });
 
-test("the bar is pushed at start, rebuilt only for structural changes, and pushed again when the window takes focus", async () => {
+test("every window pushes its own bar at start and on structural changes, and the host shows the key window's", async () => {
   const h = barHarness();
   await h.settle();
   assert.equal(h.sent.length, 1);
@@ -230,22 +214,10 @@ test("the bar is pushed at start, rebuilt only for structural changes, and pushe
   await h.fire();
   assert.equal(h.sent.length, 2);
   assert.equal(find(h.sent[1].args.items, (item) => item.command === "openExtension"), undefined);
-  h.focus();
-  await h.settle();
-  assert.equal(h.sent.length, 3);
-});
-
-test("an unfocused window leaves the shared bar alone after its first push", async () => {
-  const h = barHarness();
-  await h.settle();
-  h.blur();
   h.change({ profiles: [{ id: "p1", title: "Personal", current: true }] });
   await h.fire();
-  assert.equal(h.sent.length, 1);
-  h.focus();
-  await h.settle();
-  assert.equal(h.sent.length, 2);
-  assert.equal(byTitle(h.sent[1].args.items[8].children, "Profiles"), undefined);
+  assert.equal(h.sent.length, 3);
+  assert.equal(byTitle(h.sent[2].args.items[8].children, "Profiles"), undefined);
 });
 
 test("without setMenuState a flag change rebuilds the bar", async () => {
@@ -257,13 +229,42 @@ test("without setMenuState a flag change rebuilds the bar", async () => {
   assert.equal(find(h.sent[1].args.items, (item) => item.id === "forward").enabled, false);
 });
 
-test("menu picks reach the window's app menu actions, and stop removes every listener", async () => {
+test("stop removes the store listener and any pending push", async () => {
   const h = barHarness();
   await h.settle();
-  h.pick("window:close");
-  assert.deepEqual(h.picked, ["window:close"]);
   h.change({ extensions: [] });
   h.bar.stop();
   assert.equal(h.listening(), false);
   assert.equal(h.timers.size, 0);
+});
+
+test("menu picks reach only the window the host sent them to", () => {
+  assert.equal(menuPickFor("w1", { command: MENU_PICK, arg: "window:close", windowId: "w1" }), "window:close");
+  assert.equal(menuPickFor("w1", { command: MENU_PICK, arg: "window:close" }), "window:close");
+  assert.equal(menuPickFor("w1", { command: MENU_PICK, arg: "window:close", windowId: "w2" }), null);
+  assert.equal(menuPickFor("w1", { command: "newTab", arg: "x", windowId: "w1" }), null);
+  assert.equal(menuPickFor("w1", { command: MENU_PICK, arg: 7, windowId: "w1" }), null);
+  assert.equal(menuPickFor("w1", null), null);
+});
+
+test("Quit and full screen keep the Mac's own shortcuts, and the Ardia menu has Services, Hide and Show All before Quit", () => {
+  const bar = spec();
+  const quit = find(bar, (item) => item.command === "quit");
+  assert.deepEqual([quit.key, quit.modifiers], ["q", 8]);
+  const full = find(bar, (item) => item.role === "toggleFullScreen");
+  assert.deepEqual([full.key, full.modifiers], ["f", 10]);
+  const app = bar[0].children;
+  const titles = app.map((item) => (item.separator ? "---" : item.title));
+  const at = titles.indexOf("Services");
+  assert.deepEqual(titles.slice(at - 1), ["---", "Services", "---", "Hide Ardia", "Hide Others", "Show All", "---", "Quit Ardia"]);
+  assert.deepEqual(app.slice(at, at + 4).map((item) => [item.role, item.key, item.modifiers]), [["services", undefined, undefined], [undefined, undefined, undefined], ["hide", "h", 8], ["hideOthers", "h", 12]]);
+  assert.deepEqual(app[at].children, []);
+  assert.equal(new Set(app.filter((item) => item.key).map((item) => `${item.key}:${item.modifiers}`)).size, app.filter((item) => item.key).length);
+});
+
+test("a menu that fills the budget uses the native limit, which counts items but not the bar itself, and never passes it", () => {
+  const windows = Array.from({ length: 900 }, (_, index) => ({ id: `w${index}`, title: `W${index}` }));
+  let count = 0;
+  walk(spec({ windows }), () => count++);
+  assert.ok(count <= NATIVE_MENU_MAX_ITEMS && count >= NATIVE_MENU_MAX_ITEMS - 4, String(count));
 });

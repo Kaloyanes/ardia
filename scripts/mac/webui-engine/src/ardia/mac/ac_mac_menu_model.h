@@ -247,7 +247,10 @@ inline void Check(const Item& item,
 inline std::vector<Problem> Validate(const Item& root) {
   std::vector<Problem> problems;
   std::size_t count = 0;
-  Check(root, 0, "", count, problems);
+  for (std::size_t index = 0; index < root.children.size(); ++index) {
+    Check(root.children[index], 1, "/" + std::to_string(index), count, problems);
+    if (count > kMaxItems) break;
+  }
   return problems;
 }
 

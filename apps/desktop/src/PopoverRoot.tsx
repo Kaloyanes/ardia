@@ -2,6 +2,7 @@ import { useEffect, useState, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import type { ArdiaHost } from "./host";
 import { reportHostError } from "./host";
+import { DownloadsPopoverRoute } from "./popoverDownloads";
 import { popoverChannel, type PopoverBoot, type PopoverChannel, type PopoverProps } from "./popoverSurface";
 
 export const POPOVER_SURFACE_CLASS = "ardia-popover-surface";
@@ -43,7 +44,7 @@ function ListPopover({ props, send, close }: PopoverRouteProps) {
   );
 }
 
-export const POPOVER_ROUTES: Readonly<Record<string, ComponentType<PopoverRouteProps>>> = { list: ListPopover };
+export const POPOVER_ROUTES: Readonly<Record<string, ComponentType<PopoverRouteProps>>> = { list: ListPopover, downloads: DownloadsPopoverRoute };
 
 export function PopoverRoot({ boot, channel, routes = POPOVER_ROUTES }: { boot: PopoverBoot; channel: PopoverChannel; routes?: Readonly<Record<string, ComponentType<PopoverRouteProps>>> }) {
   const [props, setProps] = useState(boot.props);

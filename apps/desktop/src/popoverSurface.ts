@@ -21,11 +21,12 @@ export type PopoverChannel = {
 
 const isProps = (value: unknown): value is PopoverProps => !!value && typeof value === "object" && !Array.isArray(value);
 
-export function popoverBoot(host: Pick<ArdiaHost, "bootstrap"> | undefined): PopoverBoot | null {
+export function popoverBoot(host: Pick<ArdiaHost, "bootstrap"> | undefined, search?: string): PopoverBoot | null {
   const bootstrap = host?.bootstrap;
   if (!bootstrap || bootstrap.surface !== POPOVER_SURFACE || bootstrap.windowKind !== POPOVER_SURFACE) return null;
   const popover = bootstrap.popover;
   if (!popover || typeof popover.id !== "string" || !ID.test(popover.id)) return null;
+  if (search !== undefined && new URLSearchParams(search).get(POPOVER_SURFACE) !== popover.id) return null;
   if (typeof popover.route !== "string" || !ROUTE.test(popover.route)) return null;
   return { id: popover.id, route: popover.route, props: isProps(popover.props) ? popover.props : {} };
 }

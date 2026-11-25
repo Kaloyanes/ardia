@@ -274,6 +274,7 @@ TEST(popover_renderer_ships_with_bounded_messages_and_props) {
   CHECK(popover::MessageFits(0) && popover::MessageFits(popover::kMaxMessageBytes));
   CHECK(!popover::MessageFits(popover::kMaxMessageBytes + 1));
   CHECK(popover::PropsFit(popover::kMaxPropsBytes) && !popover::PropsFit(popover::kMaxPropsBytes + 1));
+  CHECK(!popover::MessageFits(std::nullopt) && !popover::PropsFit(std::nullopt));
 }
 
 int main(int argc, char** argv) {

@@ -107,6 +107,15 @@ std::string Text(const base::DictValue& dict, std::string_view key) {
   return found ? *found : std::string();
 }
 
+std::optional<std::size_t> SerializedSize(const base::Value& value) {
+  const std::optional<std::string> json = base::WriteJson(value);
+  return json ? std::optional<std::size_t>(json->size()) : std::nullopt;
+}
+
+bool PropsAccepted(const base::Value& props) {
+  return props.is_dict() && popover::PropsFit(SerializedSize(props));
+}
+
 NSView* MakeBackground() {
   if (LiquidGlassAvailable()) {
     NSView* view = [[NSClassFromString(@"NSGlassEffectView") alloc] initWithFrame:NSZeroRect];
@@ -419,11 +428,10 @@ std::optional<std::string> PopoverHost::Open(const base::DictValue& args,
   auto panel = std::make_unique<Panel>(this, key);
   panel->route = route;
   const base::Value* props = content->Find("props");
-  if (props && props->is_dict() &&
-      !popover::PropsFit(base::WriteJson(*props).value_or(std::string()).size())) {
-    return "Popover props are too large";
+  if (props && !PropsAccepted(*props)) {
+    return "Popover props must be an object of at most 256 KiB";
   }
-  panel->props = props && props->is_dict() ? props->Clone() : base::Value(base::DictValue());
+  panel->props = props ? props->Clone() : base::Value(base::DictValue());
   panel->options.takes_focus = args.FindBool("takesFocus").value_or(true);
   panel->panel = [[ArdiaMacPopoverPanel alloc]
       initWithContentRect:NSMakeRect(0, 0, 10, 10)
@@ -487,9 +495,8 @@ std::optional<std::string> PopoverHost::Update(const base::DictValue& args,
   }
   const base::DictValue* content = args.FindDict("content");
   if (const base::Value* props = content ? content->Find("props") : nullptr) {
-    if (!props->is_dict() ||
-        !popover::PropsFit(base::WriteJson(*props).value_or(std::string()).size())) {
-      return "Popover props must be a small object";
+    if (!PropsAccepted(*props)) {
+      return "Popover props must be an object of at most 256 KiB";
     }
     panel.props = props->Clone();
     if (panel.sink) {
