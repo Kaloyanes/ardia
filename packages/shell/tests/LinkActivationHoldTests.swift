@@ -147,8 +147,35 @@ final class LinkActivationHoldTests: XCTestCase {
 
   func testAWindowTheListDoesNotKnowKeepsTheHold() {
     let scene = [window(linkSource, clickable: CGRect(x: 100, y: 100, width: 900, height: 700))]
+    var refreshes = 0
     XCTAssertFalse(
-      LinkActivationHold.leftToWindowManager(own: own, windowManagers: managers, frontToBack: scene.map(\.listed)) { _ in 9999 })
+      LinkActivationHold.leftToWindowManager(
+        own: own, windowManagers: managers, frontToBack: scene.map(\.listed),
+        refresh: {
+          refreshes += 1
+          return scene.map(\.listed)
+        }
+      ) { _ in 9999 })
+    XCTAssertEqual(refreshes, 1)
+  }
+
+  func testATransientOverlayAfterTheSnapshotRefreshesOnceAndFindsMissionControl() {
+    let missionControl = window(dock, layer: 20, clickable: screen)
+    let source = window(linkSource, clickable: CGRect(x: 100, y: 100, width: 900, height: 700))
+    let transientOverlay = window(600, layer: Int(CGWindowLevelForKey(.assistiveTechHighWindow)), clickable: screen)
+    let stale = [missionControl, source]
+    let live = [transientOverlay, missionControl, source]
+    let liveListed = live.map(\.listed)
+    var refreshes = 0
+    XCTAssertTrue(
+      LinkActivationHold.leftToWindowManager(
+        own: own, windowManagers: managers, frontToBack: stale.map(\.listed),
+        refresh: {
+          refreshes += 1
+          return liveListed
+        },
+        clickedBelow: clickedBelow(live, at: pointer)))
+    XCTAssertEqual(refreshes, 1)
   }
 
   func testAHitTestThatRepeatsItselfEnds() {
