@@ -50,10 +50,29 @@ inline SessionFile SessionFileFor(bool exists, std::size_t bytes, bool parsed_ob
   return SessionFile::kUse;
 }
 
-inline std::string SetAsideSessionName(std::uint64_t unix_ms) {
-  return std::string(kSetAsideSessionPrefix) + std::to_string(unix_ms) + ".json";
+inline constexpr int kSetAsideAttempts = 64;
+
+inline std::string SetAsideSessionName(std::uint64_t unix_ms, int attempt) {
+  return std::string(kSetAsideSessionPrefix) + std::to_string(unix_ms) + "-" + std::to_string(attempt) + ".json";
 }
 
+enum class SessionLoad { kAbsent, kUse, kQuarantined, kBlocked };
+
+inline SessionLoad SessionLoadFor(SessionFile file, bool moved_aside) {
+  switch (file) {
+    case SessionFile::kAbsent:
+      return SessionLoad::kAbsent;
+    case SessionFile::kUse:
+      return SessionLoad::kUse;
+    case SessionFile::kSetAside:
+      return moved_aside ? SessionLoad::kQuarantined : SessionLoad::kBlocked;
+  }
+  return SessionLoad::kBlocked;
+}
+
+inline bool SessionWritable(SessionLoad load) {
+  return load != SessionLoad::kBlocked;
+}
 inline std::optional<int> ParseAdoptId(std::string_view adopt) {
   constexpr std::string_view prefix = "tab:";
   if (!adopt.starts_with(prefix) || adopt.size() == prefix.size() || adopt.size() > prefix.size() + 10) {
@@ -202,143 +221,10 @@ inline bool AcceleratorsLive(bool attached, bool renderer, bool recording) {
   return attached && renderer && !recording;
 }
 
-struct CloseIdentity {
-  std::uint64_t renderer = 0;
-  std::uint64_t close = 0;
-  bool operator==(const CloseIdentity&) const = default;
-};
-
-inline std::optional<std::uint64_t> ParseGeneration(std::string_view text) {
-  if (text.empty() || text.size() > 20 || text.front() == '0') return std::nullopt;
-  std::uint64_t value = 0;
-  for (char c : text) {
-    if (c < '0' || c > '9') return std::nullopt;
-    const std::uint64_t digit = static_cast<std::uint64_t>(c - '0');
-    if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) return std::nullopt;
-    value = value * 10 + digit;
-  }
-  return value;
-}
-
-class CloseLedger {
- public:
-  enum class Phase { kIdle, kRequested, kDraining, kSealed };
-
-  std::optional<CloseIdentity> Request(std::uint64_t renderer) {
-    if (renderer == 0) return std::nullopt;
-    if (phase_ == Phase::kSealed) return std::nullopt;
-    if (phase_ != Phase::kIdle && identity_.renderer == renderer) return identity_;
-    identity_ = CloseIdentity{renderer, ++generation_};
-    phase_ = Phase::kRequested;
-    return identity_;
-  }
-
-  bool BeginDrain(const CloseIdentity& identity, std::uint64_t renderer) {
-    if (!Matches(identity, renderer) || (phase_ != Phase::kRequested && phase_ != Phase::kDraining)) return false;
-    phase_ = Phase::kDraining;
-    return true;
-  }
-
-  bool Seal(const CloseIdentity& identity, std::uint64_t renderer) {
-    if (!Matches(identity, renderer) || phase_ != Phase::kDraining) return false;
-    phase_ = Phase::kSealed;
-    return true;
-  }
-
-  bool Cancel(const CloseIdentity& identity, std::uint64_t renderer) {
-    if (!Matches(identity, renderer) || phase_ == Phase::kIdle || phase_ == Phase::kSealed) return false;
-    phase_ = Phase::kIdle;
-    return true;
-  }
-
-  bool Reopen(const CloseIdentity& identity, std::uint64_t renderer) {
-    if (!Commits(identity)) return false;
-    phase_ = identity.renderer == renderer ? Phase::kDraining : Phase::kIdle;
-    return true;
-  }
-
-  bool Commits(const CloseIdentity& identity) const { return phase_ == Phase::kSealed && identity_ == identity; }
-
-  bool AlreadyCancelled(const CloseIdentity& identity) const {
-    return phase_ == Phase::kIdle && identity_ == identity && identity.close != 0;
-  }
-
-  std::optional<CloseIdentity> Unseal() {
-    if (phase_ != Phase::kSealed) return std::nullopt;
-    phase_ = Phase::kIdle;
-    return identity_;
-  }
-
-  void RendererRetired() {
-    if (phase_ != Phase::kSealed) phase_ = Phase::kIdle;
-  }
-
-  bool Leaving() const { return phase_ == Phase::kDraining || phase_ == Phase::kSealed; }
-
-  bool BlocksWrites() const { return phase_ == Phase::kSealed; }
-  Phase phase() const { return phase_; }
-  const CloseIdentity& identity() const { return identity_; }
-
- private:
-  bool Matches(const CloseIdentity& identity, std::uint64_t renderer) const {
-    return phase_ != Phase::kIdle && identity == identity_ && identity.renderer == renderer;
-  }
-
-  Phase phase_ = Phase::kIdle;
-  CloseIdentity identity_;
-  std::uint64_t generation_ = 0;
-};
-
-inline bool EndsSessionFor(bool utility, std::size_t staying_browser_windows) {
-  return !utility && staying_browser_windows == 0;
-}
-
-enum class FinalStep { kCloseWindow, kQuit, kWaitForPeers, kCloseAgainWithDeparture };
-
-inline FinalStep FinalStepFor(bool utility, bool ends_session, std::size_t staying_peers, std::size_t leaving_peers) {
-  if (utility || !ends_session) return FinalStep::kCloseWindow;
-  if (staying_peers > 0) return FinalStep::kCloseAgainWithDeparture;
-  if (leaving_peers > 0) return FinalStep::kWaitForPeers;
-  return FinalStep::kQuit;
-}
-
-class UnloadRound {
- public:
-  enum class Outcome { kWaiting, kProceed, kStay };
-
-  explicit UnloadRound(std::size_t pages) : waiting_(pages) {}
-
-  Outcome Answer(bool proceed) {
-    if (outcome_ != Outcome::kWaiting) return outcome_;
-    if (!proceed) return outcome_ = Outcome::kStay;
-    if (waiting_ > 0) --waiting_;
-    if (waiting_ == 0) outcome_ = Outcome::kProceed;
-    return outcome_;
-  }
-
-  Outcome outcome() const { return outcome_; }
-
- private:
-  std::size_t waiting_;
-  Outcome outcome_ = Outcome::kWaiting;
-};
-
-inline bool CloseCancelledFor(bool denied_by_user, bool denied_by_policy, bool unload_handlers_need_time) {
-  return !unload_handlers_need_time && (denied_by_user || denied_by_policy);
-}
-
 enum class RecordingRoute { kNormal, kToShell };
 
 inline RecordingRoute RecordingRouteFor(bool recording, bool in_this_window, bool command_or_control) {
   return recording && in_this_window && command_or_control ? RecordingRoute::kToShell : RecordingRoute::kNormal;
-}
-
-enum class CloseAction { kRefuse, kCloseWindow, kQuit };
-
-inline CloseAction CloseActionFor(bool found, bool utility, std::size_t browser_windows) {
-  if (!found) return CloseAction::kRefuse;
-  if (utility) return CloseAction::kCloseWindow;
-  return browser_windows > 1 ? CloseAction::kCloseWindow : CloseAction::kQuit;
 }
 
 inline std::string_view OfferedProfile(std::string_view profile_name) {

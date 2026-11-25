@@ -202,166 +202,11 @@ TEST(windows_open_as_their_kind_with_the_page_profile_they_name) {
   CHECK(policy::PageProfileFor("", "").empty());
 }
 
-TEST(closing_a_window_closes_that_window_and_only_the_last_browser_window_quits) {
-  using policy::CloseAction;
-  CHECK(policy::CloseActionFor(false, false, 2) == CloseAction::kRefuse);
-  CHECK(policy::CloseActionFor(true, true, 1) == CloseAction::kCloseWindow);
-  CHECK(policy::CloseActionFor(true, true, 0) == CloseAction::kCloseWindow);
-  CHECK(policy::CloseActionFor(true, false, 2) == CloseAction::kCloseWindow);
-  CHECK(policy::CloseActionFor(true, false, 1) == CloseAction::kQuit);
-}
-
 TEST(recording_a_shortcut_lets_every_key_reach_the_recorder) {
   CHECK(policy::AcceleratorsLive(true, true, false));
   CHECK(!policy::AcceleratorsLive(true, true, true));
   CHECK(!policy::AcceleratorsLive(false, true, false));
   CHECK(!policy::AcceleratorsLive(true, false, false));
-}
-
-TEST(close_generations_are_positive_decimal_strings) {
-  CHECK(policy::ParseGeneration("1") == 1u);
-  CHECK(policy::ParseGeneration("18446744073709551615") == 18446744073709551615u);
-  for (const char* bad : {"", "0", "01", "-1", "1.0", "1e3", " 1", "18446744073709551616", "999999999999999999999"}) {
-    CHECK(!policy::ParseGeneration(bad));
-  }
-}
-
-TEST(a_close_request_drains_seals_and_only_its_own_identity_moves_it) {
-  policy::CloseLedger ledger;
-  CHECK(!ledger.Request(0));
-  const auto first = ledger.Request(4);
-  CHECK(first && first->renderer == 4 && first->close == 1);
-  CHECK(ledger.phase() == policy::CloseLedger::Phase::kRequested);
-  CHECK(ledger.Request(4) == first);
-  CHECK(!ledger.BeginDrain({4, 2}, 4));
-  CHECK(!ledger.BeginDrain(*first, 5));
-  CHECK(!ledger.Seal(*first, 4));
-  CHECK(ledger.BeginDrain(*first, 4));
-  CHECK(!ledger.BlocksWrites());
-  CHECK(ledger.Seal(*first, 4));
-  CHECK(ledger.BlocksWrites());
-  CHECK(!ledger.Cancel(*first, 4));
-  CHECK(!ledger.Request(4));
-  ledger.RendererRetired();
-  CHECK(ledger.BlocksWrites());
-  CHECK(ledger.Commits(*first));
-  CHECK(ledger.Reopen(*first, 5));
-  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
-  CHECK(!ledger.Commits(*first));
-}
-
-TEST(a_rejected_close_frees_the_window_and_the_next_request_is_new) {
-  policy::CloseLedger ledger;
-  const auto first = ledger.Request(2);
-  CHECK(ledger.Cancel(*first, 2));
-  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
-  CHECK(!ledger.Cancel(*first, 2));
-  CHECK(!ledger.BeginDrain(*first, 2));
-  const auto second = ledger.Request(2);
-  CHECK(second && second->close == 2);
-  ledger.RendererRetired();
-  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
-  const auto reloaded = ledger.Request(3);
-  CHECK(reloaded && reloaded->renderer == 3 && reloaded->close == 3);
-  CHECK(!ledger.BeginDrain(*second, 3));
-}
-
-TEST(a_failed_departure_reopens_the_drain_and_a_vetoed_teardown_unseals) {
-  policy::CloseLedger ledger;
-  const auto identity = *ledger.Request(6);
-  CHECK(ledger.BeginDrain(identity, 6) && ledger.Seal(identity, 6));
-  CHECK(!ledger.Reopen(policy::CloseIdentity{6, 99}, 6));
-  CHECK(ledger.Reopen(identity, 6));
-  CHECK(!ledger.BlocksWrites() && ledger.Leaving());
-  CHECK(ledger.Cancel(identity, 6));
-  const auto next = *ledger.Request(6);
-  CHECK(ledger.BeginDrain(next, 6) && ledger.Seal(next, 6));
-  CHECK(ledger.Unseal() == next);
-  CHECK(!ledger.BlocksWrites() && !ledger.Leaving());
-  CHECK(!ledger.Unseal());
-  CHECK(ledger.Request(6)->close == next.close + 1);
-}
-
-TEST(only_the_last_staying_browser_window_ends_the_session) {
-  CHECK(policy::EndsSessionFor(false, 0));
-  CHECK(!policy::EndsSessionFor(false, 1));
-  CHECK(!policy::EndsSessionFor(true, 0));
-  policy::CloseLedger first;
-  policy::CloseLedger second;
-  const auto a = *first.Request(1);
-  const auto b = *second.Request(1);
-  CHECK(first.BeginDrain(a, 1));
-  const bool first_ends = policy::EndsSessionFor(false, second.Leaving() ? 0 : 1);
-  CHECK(second.BeginDrain(b, 1));
-  const bool second_ends = policy::EndsSessionFor(false, first.Leaving() ? 0 : 1);
-  CHECK(!first_ends && second_ends);
-}
-
-TEST(the_final_window_waits_for_a_draining_peer_and_never_quits_ahead_of_it) {
-  using policy::FinalStep;
-  CHECK(policy::FinalStepFor(false, true, 0, 1) == FinalStep::kWaitForPeers);
-  CHECK(policy::FinalStepFor(false, true, 0, 0) == FinalStep::kQuit);
-  CHECK(policy::FinalStepFor(false, false, 0, 1) == FinalStep::kCloseWindow);
-  CHECK(policy::FinalStepFor(true, true, 0, 0) == FinalStep::kCloseWindow);
-}
-
-TEST(when_a_peer_stays_after_all_the_final_window_closes_again_with_its_departure) {
-  using policy::FinalStep;
-  CHECK(policy::FinalStepFor(false, true, 1, 0) == FinalStep::kCloseAgainWithDeparture);
-  CHECK(policy::FinalStepFor(false, true, 1, 1) == FinalStep::kCloseAgainWithDeparture);
-  policy::CloseLedger a;
-  policy::CloseLedger b;
-  const auto first = *a.Request(1);
-  const auto second = *b.Request(1);
-  CHECK(a.BeginDrain(first, 1));
-  CHECK(b.BeginDrain(second, 1) && b.Seal(second, 1));
-  CHECK(policy::FinalStepFor(false, true, a.Leaving() ? 0 : 1, a.Leaving() ? 1 : 0) == FinalStep::kWaitForPeers);
-  CHECK(a.Cancel(first, 1));
-  CHECK(policy::FinalStepFor(false, true, a.Leaving() ? 0 : 1, a.Leaving() ? 1 : 0) == FinalStep::kCloseAgainWithDeparture);
-  CHECK(b.Unseal() == second);
-  const auto again = *b.Request(1);
-  CHECK(again.close == second.close + 1);
-  CHECK(!policy::EndsSessionFor(false, a.Leaving() ? 0 : 1));
-}
-
-TEST(when_the_peer_finishes_first_the_final_window_then_quits) {
-  policy::CloseLedger b;
-  const auto second = *b.Request(1);
-  CHECK(b.BeginDrain(second, 1) && b.Seal(second, 1));
-  CHECK(policy::FinalStepFor(false, true, 0, 1) == policy::FinalStep::kWaitForPeers);
-  CHECK(b.Commits(second));
-  CHECK(policy::FinalStepFor(false, true, 0, 0) == policy::FinalStep::kQuit);
-}
-
-TEST(every_page_must_agree_before_a_close_commits) {
-  using Outcome = policy::UnloadRound::Outcome;
-  policy::UnloadRound round(2);
-  CHECK(round.Answer(true) == Outcome::kWaiting);
-  CHECK(round.Answer(true) == Outcome::kProceed);
-  CHECK(round.Answer(false) == Outcome::kProceed);
-  policy::UnloadRound stay(3);
-  CHECK(stay.Answer(true) == Outcome::kWaiting);
-  CHECK(stay.Answer(false) == Outcome::kStay);
-  CHECK(stay.Answer(true) == Outcome::kStay);
-}
-
-TEST(an_already_cancelled_close_rejects_cleanly) {
-  policy::CloseLedger ledger;
-  const auto identity = *ledger.Request(2);
-  CHECK(!ledger.AlreadyCancelled(identity));
-  CHECK(ledger.BeginDrain(identity, 2) && ledger.Seal(identity, 2));
-  CHECK(ledger.Unseal() == identity);
-  CHECK(ledger.AlreadyCancelled(identity));
-  CHECK(!ledger.AlreadyCancelled(policy::CloseIdentity{2, identity.close + 1}));
-  CHECK(!policy::CloseLedger().AlreadyCancelled(policy::CloseIdentity{}));
-}
-
-TEST(only_a_refused_teardown_counts_as_cancelled) {
-  CHECK(policy::CloseCancelledFor(true, false, false));
-  CHECK(policy::CloseCancelledFor(false, true, false));
-  CHECK(!policy::CloseCancelledFor(false, false, true));
-  CHECK(!policy::CloseCancelledFor(true, false, true));
-  CHECK(!policy::CloseCancelledFor(false, false, false));
 }
 
 TEST(recording_sends_this_windows_key_equivalents_to_the_shell) {
@@ -381,10 +226,31 @@ TEST(a_session_on_disk_the_merge_cannot_take_is_set_aside_not_wedged) {
   CHECK(policy::SessionFileFor(true, 64u * 1024u * 1024u + 1, false, false) == SessionFile::kSetAside);
   CHECK(policy::SessionFileFor(true, 4096, true, false) == SessionFile::kSetAside);
   CHECK(policy::SessionFileFor(true, 4096, false, false) == SessionFile::kSetAside);
-  const std::string name = policy::SetAsideSessionName(1795642159057u);
-  CHECK(name == "session-backup-oversized-1795642159057.json");
-  CHECK(policy::ValidDocumentName(name));
-  CHECK(name.starts_with("session-backup"));
+}
+
+TEST(set_aside_sessions_never_overwrite_an_earlier_backup) {
+  CHECK(policy::SetAsideSessionName(1795642159057u, 0) == "session-backup-oversized-1795642159057-0.json");
+  CHECK(policy::SetAsideSessionName(1795642159057u, 1) != policy::SetAsideSessionName(1795642159057u, 0));
+  CHECK(policy::SetAsideSessionName(1795642159058u, 0) != policy::SetAsideSessionName(1795642159057u, 0));
+  for (int attempt = 0; attempt < policy::kSetAsideAttempts; ++attempt) {
+    const std::string name = policy::SetAsideSessionName(1u, attempt);
+    CHECK(policy::ValidDocumentName(name) && name.starts_with("session-backup"));
+    for (int other = 0; other < attempt; ++other) {
+      CHECK(name != policy::SetAsideSessionName(1u, other));
+    }
+  }
+}
+
+TEST(a_backup_that_cannot_be_moved_blocks_saves_instead_of_looking_absent) {
+  using policy::SessionFile;
+  using policy::SessionLoad;
+  CHECK(policy::SessionLoadFor(SessionFile::kSetAside, false) == SessionLoad::kBlocked);
+  CHECK(!policy::SessionWritable(SessionLoad::kBlocked));
+  CHECK(policy::SessionLoadFor(SessionFile::kSetAside, true) == SessionLoad::kQuarantined);
+  CHECK(policy::SessionWritable(SessionLoad::kQuarantined));
+  CHECK(policy::SessionLoadFor(SessionFile::kAbsent, false) == SessionLoad::kAbsent);
+  CHECK(policy::SessionLoadFor(SessionFile::kUse, false) == SessionLoad::kUse);
+  CHECK(policy::SessionWritable(SessionLoad::kAbsent) && policy::SessionWritable(SessionLoad::kUse));
 }
 
 int main(int argc, char** argv) {

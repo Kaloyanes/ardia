@@ -11,10 +11,13 @@
 
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
+#include "ardia/mac/generated/ac_desktop_window_commands.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -30,7 +33,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -75,16 +77,10 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    ardia::desktop_commands::kEditCapability,
     "ArdiaShell.openWindow",
-    "ArdiaShell.closeWindow",
     "ArdiaShell.focusWindow",
     "ArdiaShell.windowIds",
-    "ArdiaShell.utilityReady",
-    "ArdiaShell.requestWindowClose",
-    "ArdiaShell.beginWindowCloseDrain",
-    "ArdiaShell.acknowledgeWindowClose",
-    "ArdiaShell.rejectWindowClose",
-    "ArdiaShell.setShortcutRecording",
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
@@ -102,11 +98,30 @@ bool ValidDocumentName(const std::string& name) {
   return shell_policy::ValidDocumentName(name);
 }
 
-std::optional<base::DictValue> ReadSessionFile() {
+bool MoveSessionAside(const base::FilePath& path) {
+  const std::uint64_t now = static_cast<std::uint64_t>(
+      std::max<int64_t>(0, base::Time::Now().InMillisecondsSinceUnixEpoch()));
+  for (int attempt = 0; attempt < shell_policy::kSetAsideAttempts; ++attempt) {
+    const base::FilePath backup =
+        DataDirectory().Append(shell_policy::SetAsideSessionName(now, attempt));
+    if (base::PathExists(backup)) {
+      continue;
+    }
+    return base::Move(path, backup);
+  }
+  return false;
+}
+
+struct SessionRead {
+  shell_policy::SessionLoad load = shell_policy::SessionLoad::kAbsent;
+  std::optional<base::DictValue> session;
+};
+
+SessionRead ReadSessionForMerge() {
   const base::FilePath path = DataDirectory().Append("session.json");
   const std::optional<int64_t> size = base::GetFileSize(path);
   if (!size) {
-    return std::nullopt;
+    return SessionRead{};
   }
   const std::size_t bytes = static_cast<std::size_t>(std::max<int64_t>(0, *size));
   std::string text;
@@ -116,19 +131,21 @@ std::optional<base::DictValue> ReadSessionFile() {
     parsed = base::JSONReader::Read(text, base::JSON_PARSE_RFC);
   }
   const bool object = parsed && parsed->is_dict();
-  switch (shell_policy::SessionFileFor(true, bytes, object,
-                                       object && ardia::ValidLinuxSession(parsed->GetDict()))) {
-    case shell_policy::SessionFile::kAbsent:
-      return std::nullopt;
-    case shell_policy::SessionFile::kSetAside:
-      base::Move(path, DataDirectory().Append(shell_policy::SetAsideSessionName(
-                           static_cast<std::uint64_t>(std::max<int64_t>(
-                               0, base::Time::Now().InMillisecondsSinceUnixEpoch())))));
-      return std::nullopt;
-    case shell_policy::SessionFile::kUse:
-      return std::move(parsed->GetDict());
+  const shell_policy::SessionFile file = shell_policy::SessionFileFor(
+      true, bytes, object, object && ardia::ValidLinuxSession(parsed->GetDict()));
+  const bool moved = file == shell_policy::SessionFile::kSetAside && MoveSessionAside(path);
+  SessionRead read{shell_policy::SessionLoadFor(file, moved), std::nullopt};
+  if (read.load == shell_policy::SessionLoad::kBlocked) {
+    LOG(WARNING) << "Ardia Mac WebUI: session.json cannot be merged or set aside; saves are refused";
   }
-  return std::nullopt;
+  if (read.load == shell_policy::SessionLoad::kUse) {
+    read.session = std::move(parsed->GetDict());
+  }
+  return read;
+}
+
+std::optional<base::DictValue> ReadSessionFile() {
+  return ReadSessionForMerge().session;
 }
 
 bool WriteSessionFile(const base::DictValue& session) {
@@ -187,8 +204,13 @@ scoped_refptr<base::SequencedTaskRunner> SessionFiles() {
 
 MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local) {
   MergedSession result;
-  if (std::optional<base::DictValue> previous = ReadSessionFile()) {
-    result.previous = std::move(*previous);
+  SessionRead read = ReadSessionForMerge();
+  if (!shell_policy::SessionWritable(read.load)) {
+    result.blocked = true;
+    return result;
+  }
+  if (read.session) {
+    result.previous = std::move(*read.session);
   }
   std::optional<base::DictValue> merged =
       ardia::MergeLinuxSession(base, local, result.previous);
@@ -243,8 +265,14 @@ std::string ShellHostView::BootstrapJson() const {
       capabilities.Append(capability);
     }
   }
+  for (std::string_view capability : LifecycleCapabilities()) {
+    capabilities.Append(capability);
+  }
   for (const auto& route : ardia::desktop_routes::kRoutes) {
     capabilities.Append(route.name);
+  }
+  for (std::string_view route : page_policy::kZoomRoutes) {
+    capabilities.Append(route);
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
@@ -291,6 +319,9 @@ std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
 void ShellHostView::Invoke(const std::string& method,
                            const base::DictValue& args,
                            Done done) {
+  if (HandlesLifecycleCall(method)) {
+    return LifecycleCall(method, args, std::move(done));
+  }
   const base::ListValue* values = Arguments(args);
   const auto first_string = [values]() -> std::string {
     return values && !values->empty() && (*values)[0].is_string()
@@ -367,41 +398,6 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "session.write") {
     return WriteSession(args, std::move(done));
   }
-  if (method == "ArdiaShell.requestWindowClose") {
-    if (!values || values->size() != 1 || !(*values)[0].is_string()) {
-      return std::move(done).Run(false, base::Value("Window identity required"));
-    }
-    ShellHostView* target = HostForWindow(first_string());
-    if (!target) {
-      return std::move(done).Run(false, base::Value("No such native window"));
-    }
-    base::DictValue request = target->RequestWindowClose();
-    if (request.empty()) {
-      return std::move(done).Run(
-          false, Failure("ERR_WINDOW_CLOSE_UNAVAILABLE", "Target renderer unavailable"));
-    }
-    return Reply(std::move(done), base::Value(std::move(request)));
-  }
-  if (method == "ArdiaShell.beginWindowCloseDrain" ||
-      method == "ArdiaShell.acknowledgeWindowClose" ||
-      method == "ArdiaShell.rejectWindowClose") {
-    const base::DictValue* request =
-        values && values->size() == 1 ? (*values)[0].GetIfDict() : nullptr;
-    if (method == "ArdiaShell.beginWindowCloseDrain") {
-      return BeginWindowCloseDrain(request, std::move(done));
-    }
-    if (method == "ArdiaShell.acknowledgeWindowClose") {
-      return AcknowledgeWindowClose(request, std::move(done));
-    }
-    return RejectWindowClose(request, std::move(done));
-  }
-  if (method == "ArdiaShell.setShortcutRecording") {
-    if (!values || values->size() != 1 || !(*values)[0].is_bool()) {
-      return std::move(done).Run(false, base::Value("A recording flag is required"));
-    }
-    SetShortcutRecording((*values)[0].GetBool());
-    return Reply(std::move(done), base::Value());
-  }
   if (method == "ArdiaShell.readDocument") {
     const std::string name = first_string();
     if (!ValidDocumentName(name)) {
@@ -426,12 +422,6 @@ void ShellHostView::Invoke(const std::string& method,
             },
             std::move(done)));
     return;
-  }
-  if (ClosingBlocksWrites() &&
-      (method == "ArdiaShell.writeDocument" || method == "ArdiaShell.saveDocument" ||
-       method == "ArdiaShell.removeDocument")) {
-    return std::move(done).Run(
-        false, Failure("ERR_DOCUMENT_CLOSING", "Window is closing"));
   }
   if (method == "ArdiaShell.writeDocument" ||
       method == "ArdiaShell.saveDocument") {
@@ -492,13 +482,6 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.openWindow") {
     return OpenWindow(values, std::move(done));
   }
-  if (method == "ArdiaShell.utilityReady") {
-    if (!is_utility() || (!first_string().empty() && first_string() != window_id_)) {
-      return std::move(done).Run(false, base::Value("No such utility renderer"));
-    }
-    utility_ready_ = true;
-    return Reply(std::move(done), base::Value(utility_.Clone()));
-  }
   if (method == "ArdiaShell.windowFrame") {
     const gfx::Rect bounds = browser_ ? browser_->GetWindow()->GetBounds()
                                       : gfx::Rect();
@@ -507,14 +490,6 @@ void ShellHostView::Invoke(const std::string& method,
                                                   .Append(bounds.y())
                                                   .Append(bounds.width())
                                                   .Append(bounds.height())));
-  }
-  if (method == "ArdiaShell.windowState") {
-    return Reply(std::move(done),
-                 base::Value(base::DictValue()
-                                 .Set("windowId", window_id_)
-                                 .Set("maximized", false)
-                                 .Set("tiled", false)
-                                 .Set("fullScreen", false)));
   }
   if (method == "ArdiaShell.windowButtonLayout") {
     return Reply(std::move(done),
@@ -583,15 +558,6 @@ void ShellHostView::Invoke(const std::string& method,
                     GetWeakPtr(), std::move(done)));
     return;
   }
-  if (method == "ArdiaShell.closeWindow") {
-    return CloseWindowCall(first_string(), std::move(done));
-  }
-  if (method == "ArdiaShell.quit") {
-    Reply(std::move(done), base::Value());
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&chrome::AttemptExit));
-    return;
-  }
   if (method.starts_with("ArdiaTelemetry.") || method.starts_with("ArdiaUpdates.") ||
       method == "ArdiaShell.fetchBangList") {
     return std::move(done).Run(
@@ -624,6 +590,18 @@ void ShellHostView::EngineCall(const std::string& name,
         true, base::Value(base::WriteJson(base::DictValue().Set(
                                               "profiles", std::move(loaded)))
                               .value_or("{}")));
+  }
+  if (page_policy::IsZoomRoute(name)) {
+    return WithProfile(profile,
+                       base::BindOnce(
+                           [](std::string name, std::optional<base::Value> args,
+                              Done done, Profile* resolved) {
+                             SiteZoomCall(name, resolved, args ? &*args : nullptr,
+                                          std::move(done));
+                           },
+                           name, args ? std::optional<base::Value>(args->Clone())
+                                      : std::nullopt,
+                           std::move(done)));
   }
   const auto* route = ardia::desktop_routes::FindRoute(name);
   EngineFunction call =

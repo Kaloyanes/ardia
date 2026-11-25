@@ -8,18 +8,27 @@
 #include <set>
 #include <utility>
 
+#include "ardia/mac/ac_mac_dialog.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_delegate.h"
+#include "ardia/mac/ac_mac_page_events.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
-#include "base/apple/owned_objc.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
+#include "ui/compositor/layer.h"
+#include "content/public/browser/render_widget_host.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "base/apple/owned_objc.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -31,7 +40,6 @@
 #include "components/zoom/zoom_controller.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -48,10 +56,6 @@
 #include "content/public/browser/page.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
-#include "components/input/native_web_keyboard_event.h"
-#include "components/javascript_dialogs/app_modal_dialog_manager.h"
-#include "content/public/browser/javascript_dialog_manager.h"
-#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -63,7 +67,6 @@
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/views/controls/webview/webview.h"
@@ -98,30 +101,6 @@ class ShellTransparency : public content::WebContentsObserver {
       view->SetBackgroundColor(SK_ColorTRANSPARENT);
     }
   }
-};
-
-class BackgroundDialogs : public content::JavaScriptDialogManager {
- public:
-  void RunJavaScriptDialog(content::WebContents* web_contents,
-                           content::RenderFrameHost* render_frame_host,
-                           content::JavaScriptDialogType dialog_type,
-                           const std::u16string& message_text,
-                           const std::u16string& default_prompt_text,
-                           DialogClosedCallback callback,
-                           bool* did_suppress_message) override {
-    LOG(WARNING) << "Ardia Mac WebUI: dialog (background, not shown, cancelled): "
-                 << base::UTF16ToUTF8(message_text);
-    std::move(callback).Run(false, std::u16string());
-  }
-
-  void RunBeforeUnloadDialog(content::WebContents* web_contents,
-                             content::RenderFrameHost* render_frame_host,
-                             bool is_reload,
-                             DialogClosedCallback callback) override {
-    std::move(callback).Run(true, std::u16string());
-  }
-
-  void CancelDialogs(content::WebContents* web_contents, bool reset_state) override {}
 };
 
 std::map<content::WebContents*, std::unique_ptr<ShellTransparency>>&
@@ -318,6 +297,8 @@ MenuCommandHandler MainMenuHandler() {
     }
     if (target) {
       target->OnMenuCommand(choice.command, choice.argument);
+    } else if (choice.command == "quit") {
+      QuitWithoutShell();
     }
   });
 }
@@ -339,9 +320,15 @@ PageBinding::PageBinding(ShellHostView* owner,
       owner_(owner),
       id_(TabId(contents)),
       key_(std::move(key)),
-      profile_(std::move(profile)) {}
+      profile_(std::move(profile)) {
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  commands_ = std::make_unique<PageCommands>(this);
+}
 
 PageBinding::~PageBinding() {
+  commands_.reset();
+  events_.reset();
   if (viewport && owner_) {
     viewport->SetWebContents(nullptr);
     owner_->RemoveChildViewT(viewport.get());
@@ -360,8 +347,9 @@ base::DictValue PageBinding::NavigationEvent() const {
     data.Set("isLoading", contents->IsLoading());
     data.Set("committedUrl", contents->GetLastCommittedURL().spec());
   }
-  data.Set("themeColor", base::Value());
-  data.Set("themeColorSource", base::Value());
+  const std::optional<std::string> theme = PageThemeColor(contents);
+  data.Set("themeColor", theme ? base::Value(*theme) : base::Value());
+  data.Set("themeColorSource", theme ? base::Value("meta") : base::Value());
   return base::DictValue().Set("name", "navigation").Set("data", std::move(data));
 }
 
@@ -370,9 +358,38 @@ base::DictValue PageBinding::Envelope(std::string_view type) {
       .Set("type", type)
       .Set("claim", claim)
       .Set("rendererGeneration", base::NumberToString(renderer_generation))
-      .Set("bindingGeneration", "1")
+      .Set("bindingGeneration", base::NumberToString(binding_generation))
       .Set("documentEpoch", "1")
       .Set("sequence", static_cast<double>(++sequence));
+}
+
+base::DictValue PageBinding::CreationState() {
+  base::DictValue lease;
+  lease.Set("claim", claim);
+  lease.Set("rendererGeneration", base::NumberToString(renderer_generation));
+  lease.Set("bindingGeneration", base::NumberToString(binding_generation));
+  lease.Set("documentEpoch", "1");
+  base::ListValue events = base::ListValue().Append(NavigationEvent());
+  if (events_) {
+    events_->AppendSnapshot(events);
+  }
+  base::DictValue snapshot;
+  snapshot.Set("watermark", static_cast<double>(sequence));
+  snapshot.Set("events", std::move(events));
+  return base::DictValue()
+      .Set("browserId", id_)
+      .Set("chromeTabId", id_)
+      .Set("lease", std::move(lease))
+      .Set("snapshot", std::move(snapshot));
+}
+
+void PageBinding::Rebind(content::WebContents* contents) {
+  commands_->Reset();
+  events_.reset();
+  Observe(contents);
+  id_ = TabId(contents);
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
 }
 
 void PageBinding::ReportNavigation() {
@@ -381,6 +398,16 @@ void PageBinding::ReportNavigation() {
   }
   base::DictValue delivery = Envelope("pageEvent");
   delivery.Set("event", NavigationEvent());
+  owner_->Emit("ArdiaWebView", base::NumberToString(id_),
+               base::Value(std::move(delivery)));
+}
+
+void PageBinding::Report(std::string_view name, base::Value data) {
+  if (!owner_ || claim.empty() || !web_contents()) {
+    return;
+  }
+  base::DictValue delivery = Envelope("pageEvent");
+  delivery.Set("event", PageEvent(name, std::move(data)));
   owner_->Emit("ArdiaWebView", base::NumberToString(id_),
                base::Value(std::move(delivery)));
 }
@@ -415,8 +442,14 @@ void PageBinding::DidStopLoading() {
   ReportNavigation();
 }
 
+void PageBinding::DidChangeThemeColor() {
+  ReportNavigation();
+}
+
 void PageBinding::WebContentsDestroyed() {
   ReportClosed();
+  commands_->Reset();
+  events_->Reset();
   if (viewport) {
     viewport->SetWebContents(nullptr);
   }
@@ -426,55 +459,6 @@ void PageBinding::WebContentsDestroyed() {
   }
 }
 
-struct ShellHostView::WindowDrag {
-  NSEvent* mouse_down = nil;
-  id monitor = nil;
-  NSMutableArray* observers = [NSMutableArray array];
-};
-
-struct ShellHostView::PendingCommit {
-  shell_policy::CloseIdentity identity;
-  std::optional<base::DictValue> base;
-  std::optional<base::DictValue> session;
-  Done done;
-};
-
-class ShellHostView::UnloadAnswer : public content::WebContentsObserver {
- public:
-  UnloadAnswer(content::WebContents* contents,
-               base::WeakPtr<ShellHostView> host,
-               shell_policy::CloseIdentity identity)
-      : content::WebContentsObserver(contents),
-        host_(std::move(host)),
-        identity_(identity) {}
-
-  void BeforeUnloadFired(bool proceed) override { Answer(proceed); }
-  void BeforeUnloadDialogCancelled() override { Answer(false); }
-  void WebContentsDestroyed() override { Answer(true); }
-
- private:
-  void Answer(bool proceed) {
-    if (answered_) {
-      return;
-    }
-    answered_ = true;
-    Observe(nullptr);
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](base::WeakPtr<ShellHostView> host,
-                          shell_policy::CloseIdentity identity, bool proceed) {
-                         if (host) {
-                           host->UnloadAnswered(identity, proceed);
-                         }
-                       },
-                       host_, identity_, proceed));
-  }
-
-  base::WeakPtr<ShellHostView> host_;
-  shell_policy::CloseIdentity identity_;
-  bool answered_ = false;
-};
-
 struct ShellHostView::RecordingKeys {
   id monitor = nil;
   ~RecordingKeys() {
@@ -482,6 +466,12 @@ struct ShellHostView::RecordingKeys {
       [NSEvent removeMonitor:monitor];
     }
   }
+};
+
+struct ShellHostView::WindowDrag {
+  NSEvent* mouse_down = nil;
+  id monitor = nil;
+  NSMutableArray* observers = [NSMutableArray array];
 };
 
 ShellHostView::ShellHostView(BrowserWindowInterface* browser,
@@ -503,7 +493,6 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser,
 ShellHostView::~ShellHostView() {
   DetachBrowser();
   std::erase(Hosts(), this);
-  ReconsiderFinalCloses();
 }
 
 void ShellHostView::Initialize() {
@@ -544,23 +533,8 @@ void ShellHostView::Initialize() {
                                  base::Value(std::move(data)));
           },
           GetWeakPtr()));
+  StartLifecycle();
   browser_->GetTabStripModel()->AddObserver(this);
-  close_cancelled_ = browser_->RegisterBrowserCloseCancelled(base::BindRepeating(
-      [](base::WeakPtr<ShellHostView> host, BrowserWindowInterface*,
-         BrowserWindowInterface::ClosingStatus status) {
-        if (host) {
-          host->CloseCancelled(status);
-        }
-      },
-      GetWeakPtr()));
-  RouteCloseButton(browser_view_->GetWidget(),
-                   base::BindRepeating(
-                       [](base::WeakPtr<ShellHostView> host) {
-                         if (host) {
-                           host->CloseFromNativeButton();
-                         }
-                       },
-                       GetWeakPtr()));
   WatchWindowDrag();
   LayoutOverlay();
   shell_->LoadInitialURL(GURL(kShellUrl));
@@ -572,12 +546,7 @@ void ShellHostView::DetachBrowser() {
     return;
   }
   closing_ = true;
-  close_cancelled_ = base::CallbackListSubscription();
   recording_keys_.reset();
-  unload_answers_.clear();
-  unload_round_.reset();
-  pending_commit_.reset();
-  waiting_final_ = false;
   RetireRenderer();
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
@@ -588,6 +557,7 @@ void ShellHostView::DetachBrowser() {
   }
   bindings_.clear();
   StopWatchingWindowDrag();
+  StopLifecycle();
   popovers_.reset();
   glass_.reset();
   if (focus_manager_) {
@@ -931,6 +901,7 @@ void ShellHostView::RetireRenderer() {
   }
   for (auto& [id, binding] : bindings_) {
     binding->claim.clear();
+    binding->commands()->CancelEvaluations();
     binding->renderer_generation = 0;
     binding->visible = false;
     if (binding->viewport) {
@@ -950,9 +921,8 @@ void ShellHostView::RetireRenderer() {
     focus_manager_->UnregisterAccelerators(this);
   }
   shortcuts_.clear();
-  shortcut_recording_ = false;
+  RetireLifecycle();
   recording_keys_.reset();
-  close_.RendererRetired();
 }
 
 void ShellHostView::DeliverReply(base::WeakPtr<ShellBridge> handler,
@@ -1000,20 +970,50 @@ PageBinding* ShellHostView::ClaimedBinding(const base::DictValue& args) const {
 }
 
 base::DictValue ShellHostView::Identity(PageBinding* binding) const {
-  base::DictValue lease;
-  lease.Set("claim", binding->claim);
-  lease.Set("rendererGeneration",
-            base::NumberToString(binding->renderer_generation));
-  lease.Set("bindingGeneration", "1");
-  lease.Set("documentEpoch", "1");
-  base::DictValue snapshot;
-  snapshot.Set("watermark", static_cast<double>(binding->sequence));
-  snapshot.Set("events", base::ListValue().Append(binding->NavigationEvent()));
-  return base::DictValue()
-      .Set("browserId", binding->id())
-      .Set("chromeTabId", binding->id())
-      .Set("lease", std::move(lease))
-      .Set("snapshot", std::move(snapshot));
+  return binding->CreationState();
+}
+
+void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
+                                   content::WebContents* contents) {
+  PageBinding* binding = BindingForContents(old_contents);
+  const int old_id = binding ? binding->id() : 0;
+  const int id = TabId(contents);
+  if (!binding || !contents ||
+      !page_policy::RebindAllowed(old_id, id, id != old_id && bindings_.contains(id))) {
+    return;
+  }
+  const std::optional<uint64_t> generation =
+      page_policy::NextBindingGeneration(binding->binding_generation);
+  if (!generation) {
+    return;
+  }
+  base::DictValue delivery = binding->Envelope("pageLifecycle");
+  binding->Rebind(contents);
+  binding->binding_generation = *generation;
+  if (id != old_id) {
+    std::unique_ptr<PageBinding> owned = std::move(bindings_[old_id]);
+    bindings_.erase(old_id);
+    bindings_[id] = std::move(owned);
+  }
+  if (binding->claim.empty()) {
+    return;
+  }
+  delivery.Set("action", "rebind");
+  delivery.Set("creation", binding->CreationState());
+  Emit("ArdiaWebView", base::NumberToString(old_id), base::Value(std::move(delivery)));
+}
+
+void ShellHostView::DropDetachedBinding(int id,
+                                        base::WeakPtr<content::WebContents> contents) {
+  const auto found = bindings_.find(id);
+  if (!contents || found == bindings_.end() ||
+      found->second->contents() != contents.get() ||
+      page_policy::StripExitFor(false, OwnerOf(contents.get()) != nullptr) !=
+          page_policy::StripExit::kDrop) {
+    return;
+  }
+  bindings_.erase(found);
+  ReattachViewports();
 }
 
 void ShellHostView::CreateTab(const base::DictValue& args, Done done) {
@@ -1045,6 +1045,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
     return std::move(done).Run(
         false, base::Value("The shell document that asked for this tab is gone"));
   }
+  AssertPageHooks();
   if (!profile || !browser_) {
     return std::move(done).Run(
         false, Failure("ERR_PROFILE_UNAVAILABLE", "The tab's profile did not load"));
@@ -1091,6 +1092,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
                                : "This tab can't be adopted"));
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
+    existing->commands()->CancelEvaluations();
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1199,12 +1201,21 @@ void ShellHostView::SetPresentations(const base::DictValue& args, Done done) {
 
 void ShellHostView::TabCommand(const base::DictValue& args, Done done) {
   PageBinding* binding = ClaimedBinding(args);
+  const std::string command = Text(args, "command");
   if (!binding) {
+    if (PageCommands::Handles(command)) {
+      return std::move(done).Run(
+          false, Failure("ERR_PAGE_STALE_TARGET", "No such live tab"));
+    }
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   content::WebContents* contents = binding->contents();
-  const std::string command = Text(args, "command");
   const base::ListValue* values = Arguments(args);
+  if (PageCommands::Handles(command)) {
+    static const base::NoDestructor<base::ListValue> kNoArguments;
+    return binding->commands()->Run(command, values ? *values : *kNoArguments,
+                                    std::move(done));
+  }
   content::NavigationController& controller = contents->GetController();
   if (command == "loadUrl") {
     const std::optional<GURL> url =
@@ -1270,6 +1281,7 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   binding->claim.clear();
+  binding->commands()->CancelEvaluations();
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {
@@ -1382,8 +1394,11 @@ std::optional<std::string> ShellHostView::PopoverBootstrapJson(
 
 void ShellHostView::OnMenuCommand(const std::string& command,
                                   const std::string& argument) {
-  if (command.empty()) {
+  if (command.empty() || shortcut_recording_) {
     return;
+  }
+  if (command == "quit" && !RendererLive()) {
+    return QuitWithoutShell();
   }
   if (command == "focusCommandBar" || command == "newTab") {
     FocusShell();
@@ -1485,12 +1500,6 @@ void ShellHostView::ActivateWindow() {
   }
 }
 
-void ShellHostView::CloseWindow() {
-  if (browser_) {
-    browser_->GetWindow()->Close();
-  }
-}
-
 void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
   const std::string id = values && !values->empty() && (*values)[0].is_string()
                              ? (*values)[0].GetString()
@@ -1564,110 +1573,44 @@ void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
   std::move(done).Run(true, base::Value());
 }
 
-base::DictValue ShellHostView::RequestWindowClose() {
-  if (!browser_ || !handler_ || !handler_->Live() || closing_) {
-    return base::DictValue();
+void ShellHostView::WriteSession(const base::DictValue& args, Done done) {
+  const base::DictValue* base = args.FindDict("base");
+  const base::DictValue* local = args.FindDict("session");
+  if (!base || !local || !ardia::ValidLinuxSession(*base) ||
+      !ardia::ValidLinuxSession(*local)) {
+    return std::move(done).Run(
+        false, base::Value("session.write requires bounded base and session objects"));
   }
-  const std::optional<shell_policy::CloseIdentity> identity =
-      close_.Request(renderer_generation_);
-  if (!identity) {
-    return base::DictValue();
+  if (close_.phase() == window_policy::ClosePhase::kAcknowledged ||
+      close_.phase() == window_policy::ClosePhase::kClosing) {
+    return std::move(done).Run(
+        false, Failure("ERR_DOCUMENT_CLOSING", "Window is closing"));
   }
-  base::DictValue request;
-  request.Set("windowId", window_id_);
-  request.Set("rendererGeneration", base::NumberToString(identity->renderer));
-  request.Set("closeGeneration", base::NumberToString(identity->close));
-  if (close_.phase() == shell_policy::CloseLedger::Phase::kRequested) {
-    Emit("ArdiaShell", "shell",
-         base::Value(base::DictValue()
-                         .Set("name", "shell.closeRequested")
-                         .Set("data", request.Clone())
-                         .Set("quitting", false)));
-  }
-  return request;
+  SessionFiles()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&MergeAndWriteSession, base->Clone(), local->Clone()),
+      base::BindOnce(
+          [](std::string window, base::DictValue source, Done done,
+             MergedSession merged) {
+            if (!merged.ok) {
+              return std::move(done).Run(
+                  false, base::Value("Could not merge and persist the session"));
+            }
+            std::move(done).Run(true, base::Value(merged.session.Clone()));
+            BroadcastSession(merged, window, &source);
+          },
+          window_id_, local->Clone(), std::move(done)));
 }
 
-std::optional<shell_policy::CloseIdentity> ShellHostView::OwnCloseIdentity(
-    const base::DictValue* request,
-    std::size_t fields) const {
-  if (!request || request->size() != fields ||
-      Text(*request, "windowId") != window_id_) {
-    return std::nullopt;
-  }
-  const std::optional<std::uint64_t> renderer =
-      shell_policy::ParseGeneration(Text(*request, "rendererGeneration"));
-  const std::optional<std::uint64_t> close =
-      shell_policy::ParseGeneration(Text(*request, "closeGeneration"));
-  if (!renderer || !close) {
-    return std::nullopt;
-  }
-  return shell_policy::CloseIdentity{*renderer, *close};
-}
-
-bool ShellHostView::EndsSession() const {
-  const std::size_t staying = static_cast<std::size_t>(
-      std::ranges::count_if(Hosts(), [this](ShellHostView* host) {
-        return host != this && host->browser() && !host->is_utility() &&
-               !host->LeavingSession();
-      }));
-  return shell_policy::EndsSessionFor(is_utility(), staying);
-}
-
-void ShellHostView::CloseFromNativeButton() {
-  if (close_.Leaving()) {
-    return;
-  }
-  if (!RequestWindowClose().empty()) {
-    return;
-  }
-  if (EndsSession()) {
-    chrome::AttemptExit();
-    return;
-  }
-  CloseWindow();
-}
-
-void ShellHostView::EmitCloseCancelled(const shell_policy::CloseIdentity& identity) {
-  Emit("ArdiaShell", "shell",
-       base::Value(base::DictValue()
-                       .Set("name", "shell.closeCancelled")
-                       .Set("data", base::DictValue()
-                                        .Set("windowId", window_id_)
-                                        .Set("rendererGeneration",
-                                             base::NumberToString(identity.renderer))
-                                        .Set("closeGeneration",
-                                             base::NumberToString(identity.close)))));
-}
-
-void ShellHostView::CloseCancelled(BrowserWindowInterface::ClosingStatus status) {
-  using Status = BrowserWindowInterface::ClosingStatus;
-  if (!shell_policy::CloseCancelledFor(status == Status::kDeniedByUser,
-                                       status == Status::kDeniedByPolicy,
-                                       status == Status::kDeniedUnloadHandlersNeedTime)) {
-    return;
-  }
-  if (const std::optional<shell_policy::CloseIdentity> identity = close_.Unseal()) {
-    AbandonCommit(*identity);
+void ShellHostView::ForwardRecordedKey(const input::NativeWebKeyboardEvent& event) {
+  content::WebContents* shell = shell_contents();
+  content::RenderWidgetHostView* view = shell ? shell->GetRenderWidgetHostView() : nullptr;
+  if (view && view->GetRenderWidgetHost()) {
+    view->GetRenderWidgetHost()->ForwardKeyboardEvent(event);
   }
 }
 
-void ShellHostView::AbandonCommit(const shell_policy::CloseIdentity& identity) {
-  ends_session_ = false;
-  waiting_final_ = false;
-  unload_answers_.clear();
-  unload_round_.reset();
-  if (pending_commit_) {
-    Done done = std::move(pending_commit_->done);
-    pending_commit_.reset();
-    std::move(done).Run(false, Failure("ERR_WINDOW_CLOSE_CANCELLED",
-                                       "A page asked to stay open"));
-  }
-  EmitCloseCancelled(identity);
-  ReconsiderFinalCloses();
-}
-
-void ShellHostView::SetShortcutRecording(bool recording) {
-  shortcut_recording_ = recording;
+void ShellHostView::WatchRecordedKeys(bool recording) {
   if (!recording) {
     recording_keys_.reset();
     return;
@@ -1701,295 +1644,6 @@ void ShellHostView::SetShortcutRecording(bool recording) {
                                          gfx::NativeEvent(base::apple::OwnedNSEvent(event))));
                                      return nil;
                                    }];
-}
-
-void ShellHostView::ForwardRecordedKey(const input::NativeWebKeyboardEvent& event) {
-  content::WebContents* shell = shell_contents();
-  content::RenderWidgetHostView* view = shell ? shell->GetRenderWidgetHostView() : nullptr;
-  if (view && view->GetRenderWidgetHost()) {
-    view->GetRenderWidgetHost()->ForwardKeyboardEvent(event);
-  }
-}
-
-void ShellHostView::BeginWindowCloseDrain(const base::DictValue* request,
-                                          Done done) {
-  const std::optional<shell_policy::CloseIdentity> identity =
-      OwnCloseIdentity(request, 3);
-  if (!handler_ || !identity ||
-      !close_.BeginDrain(*identity, renderer_generation_)) {
-    return std::move(done).Run(
-        false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close drain"));
-  }
-  ends_session_ = EndsSession();
-  std::move(done).Run(true, base::Value(base::DictValue()
-                                            .Set("accepted", true)
-                                            .Set("endsSession", ends_session_)));
-}
-
-void ShellHostView::RejectWindowClose(const base::DictValue* request,
-                                      Done done) {
-  const std::optional<shell_policy::CloseIdentity> identity =
-      OwnCloseIdentity(request, 3);
-  if (identity && close_.AlreadyCancelled(*identity)) {
-    return std::move(done).Run(true, base::Value());
-  }
-  if (!identity || !close_.Cancel(*identity, renderer_generation_)) {
-    return std::move(done).Run(
-        false, Failure("ERR_WINDOW_CLOSE_STALE", "Close request is not current"));
-  }
-  ends_session_ = false;
-  std::move(done).Run(true, base::Value());
-  ReconsiderFinalCloses();
-}
-
-void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
-                                           Done done) {
-  const base::DictValue* departure =
-      request ? request->FindDict("departure") : nullptr;
-  const bool departure_valid =
-      !departure || (departure->size() == 2 && departure->FindDict("base") &&
-                     departure->FindDict("session"));
-  base::DictValue identity_fields;
-  if (request) {
-    for (const char* key : {"windowId", "rendererGeneration", "closeGeneration"}) {
-      if (const base::Value* value = request->Find(key)) {
-        identity_fields.Set(key, value->Clone());
-      }
-    }
-  }
-  const std::size_t expected = departure ? 5u : 4u;
-  const std::optional<shell_policy::CloseIdentity> identity =
-      OwnCloseIdentity(&identity_fields, 3);
-  if (!handler_ || !request || request->size() != expected || !departure_valid ||
-      !request->FindInt("watermark") || !identity ||
-      !close_.Seal(*identity, renderer_generation_)) {
-    return std::move(done).Run(
-        false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close acknowledgment"));
-  }
-  pending_commit_ = std::make_unique<PendingCommit>();
-  pending_commit_->identity = *identity;
-  pending_commit_->done = std::move(done);
-  if (departure) {
-    pending_commit_->base = departure->FindDict("base")->Clone();
-    pending_commit_->session = departure->FindDict("session")->Clone();
-  }
-  std::vector<content::WebContents*> asking;
-  for (BrowserWindowInterface* member : Members()) {
-    TabStripModel* model = member->GetTabStripModel();
-    for (int index = 0; index < model->count(); ++index) {
-      content::WebContents* contents = model->GetWebContentsAt(index);
-      if (contents && contents->NeedToFireBeforeUnload()) {
-        asking.push_back(contents);
-      }
-    }
-  }
-  if (asking.empty()) {
-    return CommitClose();
-  }
-  unload_round_ = std::make_unique<shell_policy::UnloadRound>(asking.size());
-  for (content::WebContents* contents : asking) {
-    unload_answers_.push_back(
-        std::make_unique<UnloadAnswer>(contents, GetWeakPtr(), *identity));
-  }
-  for (content::WebContents* contents : asking) {
-    contents->DispatchBeforeUnload(false);
-  }
-}
-
-void ShellHostView::UnloadAnswered(const shell_policy::CloseIdentity& identity,
-                                   bool proceed) {
-  if (!unload_round_ || !pending_commit_ ||
-      !(pending_commit_->identity == identity) || !close_.Commits(identity)) {
-    return;
-  }
-  switch (unload_round_->Answer(proceed)) {
-    case shell_policy::UnloadRound::Outcome::kWaiting:
-      return;
-    case shell_policy::UnloadRound::Outcome::kStay:
-      if (close_.Unseal()) {
-        AbandonCommit(identity);
-      }
-      return;
-    case shell_policy::UnloadRound::Outcome::kProceed:
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&ShellHostView::CommitClose, GetWeakPtr()));
-      return;
-  }
-}
-
-void ShellHostView::CommitClose() {
-  if (!pending_commit_ || !close_.Commits(pending_commit_->identity)) {
-    return;
-  }
-  unload_answers_.clear();
-  unload_round_.reset();
-  std::unique_ptr<PendingCommit> commit = std::move(pending_commit_);
-  const shell_policy::CloseIdentity identity = commit->identity;
-  const bool departing = commit->base.has_value();
-  SessionFiles()->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(
-          [](std::optional<base::DictValue> base,
-             std::optional<base::DictValue> session) -> std::optional<MergedSession> {
-            if (!base || !session) {
-              return std::nullopt;
-            }
-            return MergeAndWriteSession(std::move(*base), std::move(*session));
-          },
-          std::move(commit->base), std::move(commit->session)),
-      base::BindOnce(
-          [](base::WeakPtr<ShellHostView> host, std::string window,
-             shell_policy::CloseIdentity identity, bool departing, Done done,
-             std::optional<MergedSession> merged) {
-            if (departing && (!merged || !merged->ok)) {
-              if (host && host->close_.Reopen(identity, host->renderer_generation_)) {
-                host->ReconsiderFinalCloses();
-              }
-              return std::move(done).Run(
-                  false, Failure("ERR_WINDOW_DEPARTURE",
-                                 "The window's departure could not be saved"));
-            }
-            if (merged) {
-              BroadcastSession(*merged, window, nullptr);
-            }
-            std::move(done).Run(true, base::Value());
-            if (host) {
-              base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-                  FROM_HERE,
-                  base::BindOnce(&ShellHostView::FinishClose, host, identity));
-            }
-          },
-          GetWeakPtr(), window_id_, identity, departing, std::move(commit->done)));
-}
-
-void ShellHostView::DiscardPages() {
-  for (BrowserWindowInterface* member : Members()) {
-    TabStripModel* model = member->GetTabStripModel();
-    while (model->count() > 0) {
-      model->DetachAndDeleteWebContentsAt(model->count() - 1);
-    }
-  }
-}
-
-void ShellHostView::FinishClose(shell_policy::CloseIdentity identity) {
-  if (!close_.Commits(identity)) {
-    return;
-  }
-  waiting_final_ = false;
-  std::size_t staying = 0;
-  std::size_t leaving = 0;
-  for (ShellHostView* host : Hosts()) {
-    if (host == this || !host->browser() || host->is_utility()) {
-      continue;
-    }
-    if (!host->LeavingSession()) {
-      ++staying;
-    } else if (!host->waiting_final_) {
-      ++leaving;
-    }
-  }
-  switch (shell_policy::FinalStepFor(is_utility(), ends_session_, staying, leaving)) {
-    case shell_policy::FinalStep::kWaitForPeers:
-      waiting_final_ = true;
-      return;
-    case shell_policy::FinalStep::kCloseAgainWithDeparture:
-      if (close_.Unseal()) {
-        AbandonCommit(identity);
-        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-            FROM_HERE, base::BindOnce(
-                           [](base::WeakPtr<ShellHostView> host) {
-                             if (host) {
-                               host->RequestWindowClose();
-                             }
-                           },
-                           GetWeakPtr()));
-      }
-      return;
-    case shell_policy::FinalStep::kQuit:
-      DiscardPages();
-      chrome::AttemptExit();
-      return;
-    case shell_policy::FinalStep::kCloseWindow:
-      DiscardPages();
-      CloseWindow();
-      return;
-  }
-}
-
-void ShellHostView::ReconsiderFinalCloses() {
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce([] {
-        std::vector<base::WeakPtr<ShellHostView>> waiting;
-        for (ShellHostView* host : Hosts()) {
-          if (host->waiting_final_) {
-            waiting.push_back(host->GetWeakPtr());
-          }
-        }
-        for (const base::WeakPtr<ShellHostView>& host : waiting) {
-          if (host && host->waiting_final_) {
-            host->FinishClose(host->close_.identity());
-          }
-        }
-      }));
-}
-
-void ShellHostView::WriteSession(const base::DictValue& args, Done done) {
-  const base::DictValue* base = args.FindDict("base");
-  const base::DictValue* local = args.FindDict("session");
-  if (!base || !local || !ardia::ValidLinuxSession(*base) ||
-      !ardia::ValidLinuxSession(*local)) {
-    return std::move(done).Run(
-        false, base::Value("session.write requires bounded base and session objects"));
-  }
-  if (close_.BlocksWrites()) {
-    return std::move(done).Run(
-        false, Failure("ERR_DOCUMENT_CLOSING", "Window is closing"));
-  }
-  SessionFiles()->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(&MergeAndWriteSession, base->Clone(), local->Clone()),
-      base::BindOnce(
-          [](std::string window, base::DictValue source, Done done,
-             MergedSession merged) {
-            if (!merged.ok) {
-              return std::move(done).Run(
-                  false, base::Value("Could not merge and persist the session"));
-            }
-            std::move(done).Run(true, base::Value(merged.session.Clone()));
-            BroadcastSession(merged, window, &source);
-          },
-          window_id_, local->Clone(), std::move(done)));
-}
-
-void ShellHostView::CloseWindowCall(const std::string& id, Done done) {
-  ShellHostView* target = HostForWindow(id.empty() ? window_id_ : id);
-  const std::size_t browser_windows = static_cast<std::size_t>(
-      std::ranges::count_if(Hosts(), [](ShellHostView* host) {
-        return host->browser() && !host->is_utility();
-      }));
-  switch (shell_policy::CloseActionFor(target != nullptr,
-                                       target && target->is_utility(),
-                                       browser_windows)) {
-    case shell_policy::CloseAction::kRefuse:
-      return std::move(done).Run(false, base::Value("No such native window"));
-    case shell_policy::CloseAction::kCloseWindow: {
-      std::move(done).Run(true, base::Value());
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(
-                         [](base::WeakPtr<ShellHostView> host) {
-                           if (host) {
-                             host->CloseWindow();
-                           }
-                         },
-                         target->GetWeakPtr()));
-      return;
-    }
-    case shell_policy::CloseAction::kQuit:
-      std::move(done).Run(true, base::Value());
-      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&chrome::AttemptExit));
-      return;
-  }
 }
 
 void ShellHostView::CaptionDoubleClick(Done done) {
@@ -2088,7 +1742,20 @@ void ShellHostView::OnTabStripModelChanged(
       const int id = TabId(removed.contents);
       offered_.Forget(id);
       unclaimed_.erase(id);
+      const bool deleted =
+          removed.remove_reason == TabRemovedReason::kDeleted ||
+          removed.remove_reason == TabRemovedReason::kDeletedAndExpandSidePanel;
+      if (page_policy::StripExitFor(deleted, true) != page_policy::StripExit::kDestroyed &&
+          BindsContents(removed.contents)) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(&ShellHostView::DropDetachedBinding, GetWeakPtr(),
+                                      id, removed.contents->GetWeakPtr()));
+      }
     }
+  }
+  if (change.type() == TabStripModelChange::kReplaced) {
+    const TabStripModelChange::Replace* replace = change.GetReplace();
+    ReplaceBinding(replace->old_contents, replace->new_contents);
   }
   if (change.type() == TabStripModelChange::kInserted && !closing_) {
     for (const auto& inserted : change.GetInsert()->contents) {
@@ -2218,18 +1885,6 @@ bool ShellHostView::HandleKeyboardEvent(
   return unhandled_keys_.HandleKeyboardEvent(event, focus_manager_);
 }
 
-content::JavaScriptDialogManager* ShellHostView::GetJavaScriptDialogManager(
-    content::WebContents* source) {
-  if (!source || source != shell_contents()) {
-    return nullptr;
-  }
-  if (BackgroundInstance()) {
-    static base::NoDestructor<BackgroundDialogs> background;
-    return background.get();
-  }
-  return javascript_dialogs::AppModalDialogManager::GetInstance();
-}
-
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
   if (!CanHandleAccelerators()) {
     return false;
@@ -2244,7 +1899,10 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
     return true;
   }
   const std::string command = Text(found->second, "command");
-  if (command == "focusCommandBar" || command == "newTab") {
+  if (command == "tabSwitcher" && !switcher_capture_) {
+    NoteSwitcherSource();
+  }
+  if (command == "focusCommandBar" || command == "newTab" || command == "tabSwitcher") {
     FocusShell();
   }
   base::DictValue payload;

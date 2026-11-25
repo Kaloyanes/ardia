@@ -16,7 +16,11 @@ TEST(default_menu_is_valid_and_has_standard_roles) {
   CHECK(root.children[0].title == "Ardia");
   CHECK(root.children[4].role == menu::Role::kWindowMenu);
   bool quit = false;
-  for (const menu::Item& item : root.children[0].children) quit |= item.role == menu::Role::kQuit && item.key == "q";
+  for (const menu::Item& item : root.children[0].children) {
+    quit |= item.role == menu::Role::kNone && item.command == "quit" && item.key == "q" &&
+            item.modifiers == menu::kCommand;
+    CHECK(item.role != menu::Role::kQuit);
+  }
   CHECK(quit);
 }
 

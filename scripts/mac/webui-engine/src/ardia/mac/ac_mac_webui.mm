@@ -12,6 +12,7 @@
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_hooks.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_page_delegate.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
@@ -26,6 +27,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -94,7 +96,7 @@ bool ValidAssetPath(std::string_view path) {
 std::optional<std::string> ReadAsset(base::FilePath directory,
                                      std::string path,
                                      std::string bootstrap_json) {
-  if (path == "host-bootstrap.js") {
+  if (path == webui_policy::kBootstrapAsset) {
     return BootstrapScript(bootstrap_json, ardia::kArdiaHostBootstrap);
   }
   if (!ValidAssetPath(path) || MimeType(path).empty()) {
@@ -172,10 +174,15 @@ class ShellDataSource : public content::URLDataSource {
     if (!host || !bootstrap || url.scheme() != "chrome" || url.host() != "ardia") {
       return std::move(callback).Run(nullptr);
     }
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-        base::BindOnce(&ReadAsset, AssetDirectory(), AssetPath(url),
-                       std::move(*bootstrap)),
+    const std::string path = AssetPath(url);
+    const scoped_refptr<base::TaskRunner> reader =
+        webui_policy::ReadsSession(path)
+            ? scoped_refptr<base::TaskRunner>(SessionFiles())
+            : base::ThreadPool::CreateTaskRunner(
+                  {base::MayBlock(), base::TaskPriority::USER_BLOCKING});
+    reader->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&ReadAsset, AssetDirectory(), path, std::move(*bootstrap)),
         base::BindOnce(
             [](GotDataCallback callback, std::optional<std::string> contents) {
               std::move(callback).Run(
@@ -392,6 +399,7 @@ void StartWebUIShell() {
   g_ardia_viewless_browsers = false;
   g_ardia_keeps_window_without_tabs = &KeepsWindowWithoutTabs;
   g_ardia_mac_shell_passes_point = &PassesPoint;
+  InstallPageDelegate();
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<ShellConfig>());
   InstallDefaultMainMenu(MainMenuHandler());
