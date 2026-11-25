@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { forgetSettingsScroll, goToSettingsPane, rememberSettingsScrollOffset, replaceSettingsPlace, settingsBack, settingsForward, useSettingsNav } = await import("./settingsWindows.ts");
 const { settingsScrollFor } = await import("./settingsWindows.ts");
-const { SCROLL_SETTLE_MS, settingsLayoutKey, settingsScroller } = await import("./paneScroll.ts");
+const { SCROLL_SETTLE_MS, revealScrollTarget, settingsLayoutKey, settingsScroller } = await import("./paneScroll.ts");
 globalThis.__browserStore = await import("../browser/store.ts");
 
 const nav = () => useSettingsNav.getState();
@@ -135,18 +135,41 @@ function window(viewport = 600) {
   const memory = settingsScroller((outcome) => reports.push(outcome), () => clock.now);
   memory.resized(viewport);
   const reported = (move, before) => (move ? { y: move.y, restore: reports.length > before ? reports.at(-1) : null } : null);
+  let mounts = 0;
+  let current = null;
+  let pending = null;
+  const latest = new Map();
+  const mountAt = (layout) => {
+    const mount = { layout, mount: ++mounts };
+    latest.set(layout, mount.mount);
+    return mount;
+  };
+  const sourceOf = (layout, explicit) => {
+    if (current?.layout === layout) return current.mount;
+    if (explicit && latest.has(layout)) return latest.get(layout);
+    pending = pending?.layout === layout ? pending : mountAt(layout);
+    return pending.mount;
+  };
   return {
     reports,
     memory,
+    mount: () => current?.mount ?? 0,
     show: () => {
+      const layout = settingsLayoutKey(nav());
+      if (current?.layout !== layout) current = pending?.layout === layout ? pending : mountAt(layout);
+      pending = null;
       const before = reports.length;
-      return reported(memory.begin(nav().visit, settingsScrollFor(nav().visit), nav(), null), before);
+      return reported(memory.begin(nav().visit, settingsScrollFor(nav().visit), nav(), null, current.mount), before);
     },
-    lay: (height, place = nav()) => {
+    lay: (height, place, mount) => {
+      const layout = settingsLayoutKey(place ?? nav());
       const before = reports.length;
-      return reported(memory.laidOut(settingsLayoutKey(place), height), before);
+      return reported(memory.laidOut(layout, height, mount ?? sourceOf(layout, !!place)), before);
     },
-    scrolled: (y, max = 1e9, contentHeight = -1, place) => memory.scrolled(y, max, contentHeight, place ? settingsLayoutKey(place) : undefined),
+    scrolled: (y, max = 1e9, contentHeight = -1, place, mount) => {
+      const layout = place ? settingsLayoutKey(place) : null;
+      memory.scrolled(y, max, contentHeight, layout === null ? undefined : { layout, mount: mount ?? sourceOf(layout, true) });
+    },
   };
 }
 
@@ -585,4 +608,79 @@ test("R4-2: fallback profile keeps its own scroll offset and default switch neve
   assert.equal(nav().scroll, 0, "switching to previous default never restores the new default's 260");
   replaceSettingsPlace(alt);
   assert.equal(nav().scroll, 260, "the new default kept its own 260");
+});
+
+test("R5-1: a search reveal judges the row against the mounted scroll view's own offset, not the page left behind", () => {
+  fresh();
+  const settings = window(600);
+  goToSettingsPane("tabs");
+  const tabs = nav();
+  settings.show();
+  settings.lay(3000);
+  later();
+  settings.scrolled(1200, 2400, 3000, tabs);
+  assert.equal(settings.memory.revealTop(), 1200);
+  const left = settings.mount();
+  goToSettingsPane("advanced");
+  const advanced = nav();
+  settings.show();
+  settings.lay(3000);
+  assert.equal(settings.memory.revealTop(), 0, "the remounted view starts at the top");
+  settings.scrolled(1300, 2400, 3000, tabs, left);
+  assert.equal(settings.memory.revealTop(), 0, "a late event from the unmounted view doesn't move it");
+  assert.equal(revealScrollTarget(1500, 40, settings.memory.revealTop(), 600), 1300, "a row at 1500 is offscreen at the top, so the reveal scrolls to it");
+  later();
+  settings.scrolled(1300, 2400, 3000, advanced);
+  assert.equal(settings.memory.revealTop(), 1300);
+  assert.equal(revealScrollTarget(1500, 40, settings.memory.revealTop(), 600), null, "once it's on screen nothing moves");
+});
+
+test("R5-1: a reveal that scrolls before the page settles isn't undone by the restore", () => {
+  returnToSaved(800);
+  const settings = window(600);
+  settings.show();
+  settings.memory.moved();
+  assert.equal(settings.lay(1400), null, "the saved 800 doesn't pull the revealed row offscreen");
+  settings.scrolled(300, 800, 1400, nav());
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 300);
+});
+
+test("R5-2: a quick Back before the page left reports layout waits for the destination's fresh layout", () => {
+  fresh();
+  const settings = window(500);
+  goToSettingsPane("profiles", "tall");
+  const tall = nav();
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(900, 1000, 1500, tall);
+  const first = settings.mount();
+  goToSettingsPane("profiles", "short");
+  settings.show();
+  settingsBack();
+  assert.equal(nav().scroll, 900);
+  assert.deepEqual(settings.show(), { y: 0, restore: null }, "the remounted overview never settles from its earlier mount's 1500");
+  assert.deepEqual(settings.reports, []);
+  assert.equal(settings.lay(1500, tall, first), null, "a late layout from the earlier mount settles nothing");
+  assert.deepEqual(settings.lay(1000), { y: 0, restore: "unreachable" }, "the fresh 1000 decides: 900 is out of reach");
+});
+
+test("R5-2: the remounted page restores once its own layout can reach the saved offset", () => {
+  fresh();
+  const settings = window(500);
+  goToSettingsPane("tabs");
+  const tabs = nav();
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(900, 1000, 1500, tabs);
+  goToSettingsPane("general");
+  settings.show();
+  settingsBack();
+  assert.deepEqual(settings.show(), { y: 0, restore: null });
+  assert.deepEqual(settings.lay(1600), { y: 900, restore: null });
+  settings.scrolled(900, 1100, 1600, tabs);
+  assert.deepEqual(settings.reports, ["applied"]);
 });
