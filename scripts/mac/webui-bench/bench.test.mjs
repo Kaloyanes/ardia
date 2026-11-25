@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { blockScript, instanceName, overlapMs, parseBenchArgs, phasesFor, planBench, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, validWindow } from "./bench.mjs";
+import { blockScript, blockedMotion, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow } from "./bench.mjs";
 import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { analyze, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
 import { RULES, evaluate, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
 import {
-  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isOwnedDir,
+  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
   makeOwnedDir, makeOwnedRoot, ownedTree, parseFootprint, parseProcessRows, parseRss, processIdentity, readProcessRows, removeOwnedDir, sameProcess, stopOwned,
 } from "./hidden.mjs";
 import { PROFILES, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
@@ -48,7 +48,8 @@ test("frames: splitting refuses a zero-byte or ragged first frame instead of loo
   assert.throws(() => splitFrames(Buffer.alloc(10), NaN), /bytes/);
   assert.throws(() => splitFrames(Buffer.alloc(10), 4), /whole number/);
   assert.equal(splitFrames(Buffer.alloc(12), 4).length, 3);
-  assert.equal(splitFrames(Buffer.alloc(0), 4).length, 0);
+  assert.throws(() => splitFrames(Buffer.alloc(0), 4), /no frames/);
+  assert.throws(() => splitFrames(null, 4), /no frames/);
 });
 
 test("frames: blank detection needs one flat colour", () => {
@@ -407,17 +408,15 @@ test("cdp: trace helpers align marks and screenshots", () => {
 
 test("blocked swipe: the block is armed relative to dispatch and must overlap the motion", () => {
   const script = blockScript(150, 500);
-  assert.match(script, /}, 150\), 1\)$/);
-  assert.match(script, /Date\.now\(\) - t < 500/);
+  assert.match(script, /}, 150\);/);
+  assert.match(script, /Date\.now\(\) - block\.start < 500/);
   assert.equal(overlapMs({ start: 100, end: 600 }, { start: 0, end: 400 }), 300);
   assert.equal(overlapMs({ start: 500, end: 1000 }, { start: 0, end: 400 }), 0);
   assert.equal(overlapMs({ start: 0, end: 100 }, { start: 100, end: 400 }), 0);
   assert.equal(overlapMs({ start: 0, end: null }, { start: 0, end: 1 }), null);
-  globalThis.__ardiaBenchBlock = undefined;
-  assert.equal(new Function(`return ${blockScript(0, 1)}`)(), 1);
 });
 
-const run = (side, phase, extra) => ({ side, phase, rep: 1, status: "ok", errors: [], launchClock: "commitMark", newTabPollFailures: 0, ...extra });
+const run = (side, phase, extra) => ({ side, phase, status: "ok", errors: [], launchClock: "commitMark", newTabPollFailures: 0, ...extra });
 const fixture = (phase) => {
   const f = expectedFixture({ small: smallSession, large: benchSession, multi: multiSession }[phase]());
   return { expected: f, restored: { ...f } };
@@ -430,12 +429,12 @@ const swipe = (p95, rest, rows) => ({
 const sampleRuns = () => {
   const runs = [];
   for (let rep = 0; rep < 3; rep++) {
-    runs.push(run("rn", "small", { launchMs: 500 + rep, memory: { rssMb: 900, footprintMb: 300 }, fixture: fixture("small") }));
-    runs.push(run("webui", "small", { launchMs: 580 + rep, memory: { rssMb: 770, footprintMb: 260 }, fixture: fixture("small") }));
-    runs.push(run("rn", "large", { launchMs: 514, newTabFrames: 0, memory: { rssMb: 966, footprintMb: 342 }, fixture: fixture("large"), swipe: swipe(50, 480, 200), scroll: { p95GapMs: 20, maxGapMs: 40 }, typing: { latenciesMs: [20, 22, 25, 30, 18, 21], missed: 0 } }));
-    runs.push(run("webui", "large", { launchMs: 588, newTabFrames: 0, memory: { rssMb: 823, footprintMb: 295 }, fixture: fixture("large"), swipe: swipe(37, 460, 0), scroll: { p95GapMs: 17, maxGapMs: 33 }, typing: { latenciesMs: [12, 14, 16, 15, 13, 20], missed: 0 } }));
-    runs.push(run("rn", "multi", { launchMs: 600, memory: { rssMb: 1100, footprintMb: 400 }, fixture: fixture("multi"), windows: 2, peek: true }));
-    runs.push(run("webui", "multi", { launchMs: 650, memory: { rssMb: 950, footprintMb: 350 }, fixture: fixture("multi"), windows: 2, peek: true }));
+    runs.push(run("rn", "small", { rep: rep + 1, launchMs: 500 + rep, memory: { rssMb: 900, footprintMb: 300 }, fixture: fixture("small") }));
+    runs.push(run("webui", "small", { rep: rep + 1, launchMs: 580 + rep, memory: { rssMb: 770, footprintMb: 260 }, fixture: fixture("small") }));
+    runs.push(run("rn", "large", { rep: rep + 1, launchMs: 514, newTabFrames: 0, memory: { rssMb: 966, footprintMb: 342 }, fixture: fixture("large"), swipe: swipe(50, 480, 200), scroll: { p95GapMs: 20, maxGapMs: 40 }, typing: { latenciesMs: [20, 22, 25, 30, 18, 21], missed: 0 } }));
+    runs.push(run("webui", "large", { rep: rep + 1, launchMs: 588, newTabFrames: 0, memory: { rssMb: 823, footprintMb: 295 }, fixture: fixture("large"), swipe: swipe(37, 460, 0), scroll: { p95GapMs: 17, maxGapMs: 33 }, typing: { latenciesMs: [12, 14, 16, 15, 13, 20], missed: 0 } }));
+    runs.push(run("rn", "multi", { rep: rep + 1, launchMs: 600, memory: { rssMb: 1100, footprintMb: 400 }, fixture: fixture("multi"), windows: 2, peek: true }));
+    runs.push(run("webui", "multi", { rep: rep + 1, launchMs: 650, memory: { rssMb: 950, footprintMb: 350 }, fixture: fixture("multi"), windows: 2, peek: true }));
   }
   return runs;
 };
@@ -455,9 +454,15 @@ test("summary: per-side metrics roll up into median and p95", () => {
 });
 
 test("summary: a failed swipe is never counted as zero blank frames", () => {
-  assert.equal(swipeBlankFrames({ fwd: { blankFrames: 0 }, back: { error: "x" }, blocked: { blankFrames: 0 } }), null);
-  assert.equal(swipeBlankFrames({ fwd: { blankFrames: 1 }, back: { blankFrames: 2 } }), null);
-  assert.equal(swipeBlankFrames({ fwd: { blankFrames: 1 }, back: { blankFrames: 2 }, blocked: { blankFrames: 0 } }), 3);
+  const ok = (n) => ({ blankFrames: n, arrived: true });
+  assert.equal(swipeBlankFrames({ fwd: ok(0), back: { error: "x" }, blocked: ok(0) }), null);
+  assert.equal(swipeBlankFrames({ fwd: ok(1), back: ok(2) }), null);
+  assert.equal(swipeBlankFrames({ fwd: ok(1), back: ok(2), blocked: ok(0) }), 3);
+  assert.equal(swipeBlankFrames({ fwd: ok(1), back: ok(2) }, "rn"), 3);
+  assert.equal(swipeBlankFrames({ fwd: ok(0), back: { blankFrames: 0, arrived: false }, blocked: ok(0) }), null);
+  assert.equal(swipeBlankFrames({ fwd: ok(0), back: { blankFrames: 0 } }, "rn"), null);
+  assert.deepEqual(swipesFor("rn"), ["fwd", "back"]);
+  assert.deepEqual(swipesFor("webui"), ["fwd", "back", "blocked"]);
   const runs = edit((r) => r.side === "webui" && r.phase === "large", (r) => ((r.swipe.back = { error: "selfrec did not start" }), r));
   const s = summarizeRuns(runs);
   assert.equal(s.webui["swipe.blankFrames"], undefined);
@@ -489,7 +494,7 @@ test("gate: integrity fails when a side restores a different fixture or skips 2 
   const short = edit((r) => r.side === "webui" && r.phase === "large", (r) => ((r.fixture.restored.tabs = 169), r));
   assert.match(failing(evaluate(report(short)))["integrity.fixture"].why, /restored other/);
   const cross = edit((r) => r.side === "webui" && r.phase === "large", (r) => ((r.fixture = { expected: { profiles: 3, tabs: 20, windows: 1 }, restored: { profiles: 3, tabs: 20, windows: 1 } }), r));
-  assert.match(failing(evaluate(report(cross)))["integrity.fixture"].why, /seeded differently: large/);
+  assert.match(failing(evaluate(report(cross)))["integrity.fixture"].why, /runs seeded differently: large/);
   const noPeek = edit((r) => r.side === "webui" && r.phase === "multi", (r) => ((r.peek = false), r));
   assert.ok(failing(evaluate(report(noPeek)))["integrity.multi"]);
   const oneWindow = edit((r) => r.side === "rn" && r.phase === "multi", (r) => ((r.windows = 1), r));
@@ -606,4 +611,146 @@ test("gate: the CLI exits 0 on PASS, 1 on FAIL, 64 on bad input", () => {
   assert.equal(node("gate.mjs", good, "--regression", "-1").status, 64);
   assert.equal(node("gate.mjs", "--help").status, 0);
   assert.equal(parseGateArgs(["r.json", "--allow-fallback-clock"]).allowFallbackClock, true);
+});
+
+test("round 2: a folder named ..bench inside a protected root is still inside it", () => {
+  assert.equal(isInside("/a/..bench", "/a"), true);
+  assert.equal(isInside("/a/b/..c/d", "/a/b"), true);
+  assert.equal(isInside("/a", "/a/b"), false);
+  assert.equal(isInside("/b", "/a"), false);
+  assert.throws(() => assertScratch(join(HOME, "Documents", "..bench")), /refusing/);
+  assert.throws(() => assertScratch(join(HOME, "Library", "..x", "y")), /refusing/);
+  assert.throws(() => assertBuild("/Applications/..hidden/Ardia.app"), /installed/);
+});
+
+test("round 2: the RN app copy lives inside the run's own fresh folder", () => {
+  const owned = makeOwnedRoot(scratch());
+  const dir = rnCopyDir(owned.root);
+  assert.ok(isInside(dir, owned.root));
+  assert.notEqual(dir, join(dirname(owned.root), "apps", "rn"));
+  assert.ok(!existsSync(dir));
+});
+
+test("round 2: a helper reparented to launchd is still tracked and stopped by pid and start time", async () => {
+  const identity = processIdentity({ owner: "tok-a", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const ghost = (pid) => 2147480000 + pid;
+  const line = (pid, ppid, started, command) => `${ghost(pid)} ${ppid === 1 ? 1 : ghost(ppid)} ${started} ${command}`;
+  const T = "Tue Nov 24 05:06:18 2026";
+  const before = parseProcessRows([line(100, 1, T, "/tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-a"), line(101, 100, T, "/tmp/b/W.app/Contents/Frameworks/Helper --type=gpu")].join("\n"));
+  const orphaned = parseProcessRows(line(101, 1, T, "/tmp/b/W.app/Contents/Frameworks/Helper --type=gpu"));
+  const reused = parseProcessRows(line(101, 1, "Wed Nov 25 09:00:00 2026", "/tmp/b/W.app/Contents/Frameworks/Helper --type=gpu"));
+  assert.deepEqual(trackOwned(identity, before).map((r) => r.pid), [ghost(100), ghost(101)]);
+  assert.deepEqual(ownedTree(orphaned, identity), []);
+  assert.deepEqual(trackOwned(identity, orphaned).map((r) => r.pid), [ghost(101)]);
+  assert.deepEqual(trackOwned(identity, reused), []);
+  const signals = [];
+  let reads = 0;
+  const gone = await stopOwned(identity, { graceMs: 300, killMs: 300, read: () => (++reads <= 4 ? orphaned : []), kill: (pid, sig) => signals.push([pid, sig]) });
+  assert.equal(gone, true);
+  assert.deepEqual(signals, [[ghost(101), "SIGTERM"]]);
+  const stuckSignals = [];
+  assert.equal(await stopOwned(identity, { graceMs: 50, killMs: 50, read: () => orphaned, kill: (pid, sig) => stuckSignals.push(sig) }), false);
+  assert.deepEqual(stuckSignals, ["SIGTERM", "SIGKILL"]);
+  const reuseSignals = [];
+  assert.equal(await stopOwned(identity, { read: () => reused, kill: (pid, sig) => reuseSignals.push(sig) }), true);
+  assert.deepEqual(reuseSignals, []);
+});
+
+test("round 2: a failed teardown after a failed start surfaces as fatal, never swallowed", async () => {
+  const start = new Error("no DevTools listener");
+  await assert.rejects(teardownAfter(start, async () => {}), (e) => e === start);
+  await assert.rejects(teardownAfter(start, async () => { throw new Error("instance x did not exit"); }), (e) => e.fatal === true && /no DevTools listener; teardown: instance x did not exit/.test(e.message) && e.cause === start);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.ok(!/finish\([^)]*\)\.catch\(/.test(source));
+  assert.match(readFileSync(join(here, "../../lib/instance.mjs"), "utf8"), /if \(opts\.teardown\) \{\s*await opts\.teardown\(\);\s*throw e;/);
+});
+
+const waitFor = async (check, ms = 1000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (check()) return true;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return check();
+};
+
+test("round 2: the block arms on the gesture itself and fires after the delay", async () => {
+  const listeners = new Map();
+  const saved = { add: globalThis.addEventListener, remove: globalThis.removeEventListener };
+  globalThis.addEventListener = (name, fn) => listeners.set(name, fn);
+  globalThis.removeEventListener = (name) => listeners.delete(name);
+  try {
+    assert.equal(new Function(`return ${blockScript(5, 10)}`)(), 1);
+    const block = globalThis.__ardiaBenchBlock;
+    assert.equal(block.armedBy, null);
+    assert.equal(await waitFor(() => block.start !== null, 30), false);
+    listeners.get("wheel")();
+    assert.equal(block.armedBy, "wheel");
+    assert.ok(!listeners.has("wheel"));
+    assert.ok(await waitFor(() => block.end !== null));
+    assert.ok(block.start >= block.triggeredAt + 5);
+    assert.ok(block.end - block.start >= 10);
+    new Function(`return ${blockScript(0, 1)}`)();
+    performance.mark("ardia-pager-moving");
+    assert.ok(await waitFor(() => globalThis.__ardiaBenchBlock.armedBy === "pager"));
+  } finally {
+    globalThis.addEventListener = saved.add;
+    globalThis.removeEventListener = saved.remove;
+    delete globalThis.__ardiaBenchBlock;
+  }
+});
+
+test("round 2: blocked-swipe overlap needs a measured motion interval", () => {
+  assert.equal(blockedMotion({ fresh: [], origin: 1000 }), null);
+  assert.equal(blockedMotion({ movingAt: 1000 }), null);
+  assert.deepEqual(blockedMotion({ movingAt: 1000, restAt: 1500 }), { start: 1000, end: 1500, source: "mark" });
+  assert.deepEqual(blockedMotion({ fresh: [20, 40, 300], origin: 1000, framesRestAt: 300 }), { start: 1020, end: 1300, source: "frames" });
+  assert.equal(blockedMotion({ fresh: [20, 40], origin: 1000, framesRestAt: null }), null);
+  const ran = { armedBy: "wheel", start: 1100, end: 1600 };
+  assert.deepEqual(judgeBlock(ran, { start: 1000, end: 1400 }), { overlapMs: 300 });
+  assert.match(judgeBlock(ran, null).error, /no measured motion/);
+  assert.match(judgeBlock({ ...ran, armedBy: null }, { start: 1000, end: 1400 }).error, /never armed/);
+  assert.match(judgeBlock({ armedBy: "wheel", start: null, end: null }, { start: 1, end: 2 }).error, /never ran/);
+  assert.match(judgeBlock({ armedBy: "pager", start: 2000, end: 2500 }, { start: 1000, end: 1400 }).error, /did not overlap/);
+  assert.match(judgeBlock(null, { start: 1, end: 2 }).error, /never armed/);
+});
+
+test("round 2: the gate wants each rep exactly once and the same fixture in every run", () => {
+  const fixed = sampleRuns();
+  assert.equal(evaluate(report(fixed)).verdict, "PASS", JSON.stringify(Object.values(failing(evaluate(report(fixed))))));
+  const twice = fixed.map((r) => (r.side === "webui" && r.phase === "large" && r.rep === 2 ? { ...r, rep: 1 } : r));
+  const row = failing(evaluate(report(twice)))["integrity.runs"];
+  assert.match(row.why, /webui large has reps \[1,1,3\], wants \[1,2,3\]/);
+  const third = fixed.map((r) => (r.side === "rn" && r.phase === "large" && r.rep === 3 ? { ...r, fixture: { expected: { profiles: 3, tabs: 20, windows: 1 }, restored: { profiles: 3, tabs: 20, windows: 1 } } } : r));
+  assert.match(failing(evaluate(report(third)))["integrity.fixture"].why, /runs seeded differently: large/);
+  const stray = [...fixed, { ...fixed[0], phase: "huge" }];
+  assert.ok(failing(evaluate(report(stray)))["integrity.runs"]);
+  const notArrived = fixed.map((r) => (r.side === "webui" && r.phase === "large" && r.rep === 2 ? { ...r, swipe: { ...r.swipe, back: { ...r.swipe.back, arrived: false } } } : r));
+  const s = summarizeRuns(notArrived);
+  assert.equal(s.webui["swipe.blankFrames"].n, 2);
+  assert.ok(failing(evaluate(report(notArrived)))["integrity.arrived"]);
+  const rnNoBlocked = fixed.map((r) => (r.side === "rn" && r.swipe ? { ...r, swipe: { fwd: r.swipe.fwd, back: r.swipe.back } } : r));
+  assert.equal(evaluate(report(rnNoBlocked)).verdict, "PASS");
+});
+
+test("round 2: codesign and cp in the app copier have finite timeouts", () => {
+  const source = readFileSync(join(here, "../../lib/app-copy.mjs"), "utf8");
+  const calls = source.split("\n").filter((l) => /(?:spawnSync|execFileSync)\("(?:codesign|cp)"/.test(l));
+  assert.ok(calls.length >= 6);
+  for (const call of calls) assert.match(call, /timeout: (?:CODESIGN|COPY)_TIMEOUT_MS/, call);
+});
+
+test("round 2: null runs and bad rule types are rejected with exit 64", () => {
+  const good = report();
+  assert.ok(validateReport({ ...good, runs: [null] }).some((p) => p.includes("runs[0] is not an object")));
+  assert.ok(validateReport({ ...good, runs: [{ side: "ios", phase: "large", rep: 1 }] }).some((p) => p.includes("runs[0] needs side")));
+  assert.ok(validateReport({ ...good, runs: [{ side: "rn", phase: "large", rep: 0 }] }).some((p) => p.includes("runs[0] needs side")));
+  assert.match(validateRules([{ key: "a", label: "a", vsRn: "yes" }])[0], /vsRn is not true or false/);
+  assert.match(validateRules([{ key: "a", label: "a", stat: "p99" }])[0], /stat is not one of median, p95, max/);
+  assert.deepEqual(validateRules([{ key: "a", label: "a", vsRn: false, stat: "max" }]), []);
+  const dir = scratch();
+  const file = (name, value) => (writeFileSync(join(dir, name), JSON.stringify(value)), join(dir, name));
+  assert.equal(node("gate.mjs", file("nullrun.json", { ...good, runs: [...good.runs, null] })).status, 64);
+  assert.equal(node("gate.mjs", file("g.json", good), "--rules", file("r.json", [{ key: "a", label: "a", stat: "p99" }])).status, 64);
+  assert.equal(node("gate.mjs", file("g2.json", good), "--rules", file("r2.json", [{ key: "a", label: "a", vsRn: 1 }])).status, 64);
 });

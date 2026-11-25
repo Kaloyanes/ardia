@@ -389,6 +389,10 @@ export async function launch(app, opts = {}) {
     }
     if (!owned) throw new Error(`the app didn't listen on DevTools port ${port} within ${(opts.startTimeout ?? 60000) / 1000} s (log: ${log})`);
   } catch (e) {
+    if (opts.teardown) {
+      await opts.teardown();
+      throw e;
+    }
     const dirs = [...new Set([data, realPath(data)])];
     let spawned = [];
     for (const end = Date.now() + 10000; !spawned.length && Date.now() < end; await sleep(250)) spawned = spawnedPids(binary, before, port, dirs);

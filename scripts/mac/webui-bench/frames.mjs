@@ -34,6 +34,7 @@ export function decode(spec, ffmpeg = process.env.FFMPEG ?? "/opt/homebrew/bin/f
 
 export function splitFrames(raw, size) {
   if (!Number.isInteger(size) || size <= 0) throw new Error(`the first frame decoded to ${size} bytes`);
+  if (!raw?.length) throw new Error("ffmpeg decoded no frames");
   if (raw.length % size) throw new Error(`decoded ${raw.length} bytes, not a whole number of ${size}-byte frames`);
   const frames = [];
   for (let at = 0; at + size <= raw.length; at += size) frames.push(raw.subarray(at, at + size));

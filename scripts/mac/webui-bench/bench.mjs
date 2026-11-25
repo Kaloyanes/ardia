@@ -10,7 +10,7 @@ import { connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs"
 import { analyze, decode, restFromFrames, settleMs } from "./frames.mjs";
 import {
   ACFRAMES, ACSWIPE, OPEN_TIMEOUT_MS, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, cleanupRegistry, fileProbe, hiddenOpenArgs,
-  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, stopOwned,
+  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, stopOwned, trackOwned,
 } from "./hidden.mjs";
 import { SESSIONS, expectedFixture, selectedUrl, validateSession } from "./seed.mjs";
 import { percentile, summarize } from "./stats.mjs";
@@ -35,9 +35,11 @@ Per rep and side:
            than the seeded selection (a lingering New Tab); failed polls are counted, never skipped
   memory   RSS and phys_footprint summed over the instance's process tree after --idle seconds, for 3 profiles × 1 tab
            (small), 150 + 15 + 5 tabs (large), and two windows with a Peek open (multi)
-  swipe    Personal → Work, Work → Personal (selected tab 130 rows down), then Personal → Work with the UI thread
-           blocked 500 ms starting 150 ms after the gesture is sent (the sample fails unless the block overlaps the
-           motion): frame gaps p50/p95/max, motion → rest, deep row arrival, blank sidebar frames
+  swipe    Personal → Work, Work → Personal (selected tab 130 rows down): frame gaps p50/p95/max, motion → rest, deep
+           row arrival, blank sidebar frames. On the WebUI, a third swipe blocks the shell's main thread for 500 ms,
+           armed in the page by the gesture itself (its first wheel event or the pager's moving mark) and fired
+           150 ms later; the sample fails unless the block overlaps the measured motion (pager marks, else frame
+           differences), never the time the command was sent. React Native has no page to block, so it skips it
   scroll   a trackpad flick up the 150-tab sidebar: frame gaps p50/p95/max
   typing   the command bar opened with ⌘T and "github" typed 150 ms apart: keystroke → next new frame
 Gestures come from acswipe.m and acframes.m and keys from acperf postkeys (apps/browser/scripts/perf); frames come
@@ -127,11 +129,12 @@ export function planBench(o, port = 9720) {
 
 const RUN_METRICS = ["p50GapMs", "p95GapMs", "maxGapMs", "longGaps", "restMs", "rowsPaintedMs", "slideMs"];
 const SWIPES = ["fwd", "back", "blocked"];
+export const swipesFor = (side) => (side === "webui" ? SWIPES : ["fwd", "back"]);
 
-export function swipeBlankFrames(swipe) {
+export function swipeBlankFrames(swipe, side = "webui") {
   if (!swipe) return null;
-  const parts = SWIPES.map((d) => swipe[d]);
-  if (parts.some((s) => !s || s.error || !Number.isInteger(s.blankFrames))) return null;
+  const parts = swipesFor(side).map((d) => swipe[d]);
+  if (parts.some((s) => !s || s.error || s.arrived !== true || !Number.isInteger(s.blankFrames))) return null;
   return parts.reduce((sum, s) => sum + s.blankFrames, 0);
 }
 
@@ -151,8 +154,8 @@ export function summarizeRuns(runs) {
     }
     put("launch.newTabFrames", mine.map((r) => r.newTabFrames));
     for (const dir of SWIPES) for (const k of RUN_METRICS) put(`swipe.${dir}.${k}`, mine.map((r) => (r.swipe?.[dir]?.error ? null : r.swipe?.[dir]?.[k])));
-    put("swipe.blankFrames", mine.filter((r) => r.phase === "large" && r.swipe).map((r) => swipeBlankFrames(r.swipe)));
-    put("swipe.arrived", mine.filter((r) => r.swipe).map((r) => SWIPES.filter((d) => r.swipe[d]?.arrived === true).length));
+    put("swipe.blankFrames", mine.filter((r) => r.phase === "large" && r.swipe).map((r) => swipeBlankFrames(r.swipe, side)));
+    put("swipe.arrived", mine.filter((r) => r.swipe).map((r) => swipesFor(side).filter((d) => r.swipe[d]?.arrived === true).length));
     for (const k of ["p50GapMs", "p95GapMs", "maxGapMs", "longGaps"]) put(`scroll.${k}`, mine.map((r) => (r.scroll?.error ? null : r.scroll?.[k])));
     const typed = mine.filter((r) => r.typing && !r.typing.error);
     put("typing.p50Ms", typed.map((r) => percentile(r.typing.latenciesMs, 50)));
@@ -217,8 +220,59 @@ const TAB_OF = "((s, id) => (Array.isArray(s.tabs) ? s.tabs.find((x) => x.id ===
 const ACTIVE_URL = `(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; const t = ${TAB_OF}(s, w.activeTabIds?.[w.profileId]); return t?.url ?? ""; })()`;
 const PROFILE = `(() => { const s = ${STORE}.getState(); return s.windows[s.windowOrder[0]].profileId; })()`;
 const FIXTURE = `(() => { const s = ${STORE}.getState(); return { profiles: s.profileOrder.length, tabs: Array.isArray(s.tabs) ? s.tabs.length : Object.keys(s.tabs).length, windows: s.windowOrder.length }; })()`;
-export const blockScript = (delayMs = BLOCK_DELAY_MS, blockMs = BLOCK_MS) =>
-  `(globalThis.__ardiaBenchBlock = null, setTimeout(() => { const start = Date.now(); globalThis.performance?.mark?.("ardia-block-start"); const t = Date.now(); while (Date.now() - t < ${blockMs}); globalThis.performance?.mark?.("ardia-block-end"); globalThis.__ardiaBenchBlock = { start, end: Date.now() }; }, ${delayMs}), 1)`;
+export const blockScript = (delayMs = BLOCK_DELAY_MS, blockMs = BLOCK_MS) => `(() => {
+  const block = { armedAt: Date.now(), armedBy: null, triggeredAt: null, start: null, end: null };
+  globalThis.__ardiaBenchBlock = block;
+  let observer = null;
+  let fired = false;
+  const onWheel = () => fire("wheel");
+  const fire = (by) => {
+    if (fired) return;
+    fired = true;
+    observer?.disconnect();
+    globalThis.removeEventListener?.("wheel", onWheel, true);
+    block.armedBy = by;
+    block.triggeredAt = Date.now();
+    setTimeout(() => {
+      block.start = Date.now();
+      globalThis.performance?.mark?.("ardia-block-start");
+      while (Date.now() - block.start < ${blockMs});
+      block.end = Date.now();
+      globalThis.performance?.mark?.("ardia-block-end");
+    }, ${delayMs});
+  };
+  try {
+    observer = new PerformanceObserver((list) => { if (list.getEntries().some((e) => e.name === "ardia-pager-moving")) fire("pager"); });
+    observer.observe({ type: "mark" });
+  } catch {}
+  globalThis.addEventListener?.("wheel", onWheel, { capture: true, passive: true });
+  return 1;
+})()`;
+
+export function blockedMotion({ movingAt = null, restAt = null, fresh = [], origin = 0, framesRestAt = null }) {
+  const start = movingAt ?? (fresh.length ? origin + fresh[0] : null);
+  const end = restAt ?? (framesRestAt != null ? origin + framesRestAt : null);
+  return start != null && end != null && end > start ? { start, end, source: movingAt != null ? "mark" : "frames" } : null;
+}
+
+export async function teardownAfter(error, finish) {
+  try {
+    await finish();
+  } catch (teardown) {
+    throw Object.assign(new Error(`${error.message}; teardown: ${teardown.message}`), { fatal: true, cause: error });
+  }
+  throw error;
+}
+
+export const rnCopyDir = (runDir) => join(runDir, "apps", "rn");
+
+export function judgeBlock(block, motion) {
+  if (!block?.armedBy) return { error: "the block was never armed by the gesture" };
+  if (!Number.isFinite(block.start) || !Number.isFinite(block.end)) return { error: "the block never ran" };
+  if (!motion) return { error: "no measured motion interval for the blocked swipe" };
+  const overlap = overlapMs(block, motion);
+  return overlap > 0 ? { overlapMs: overlap } : { error: `the ${BLOCK_MS} ms block did not overlap the swipe motion`, overlapMs: overlap };
+}
 
 async function until(test, ms, every = 25) {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(every)) {
@@ -251,7 +305,7 @@ class Bench {
     this.selfrec = dylib(this.tools, "selfrec", join(repo, "apps/videos/scripts/fixes/selfrec.m"), ["AppKit", "QuartzCore", "AVFoundation", "CoreMedia", "CoreVideo"]);
     this.acperf = buildTool(this.tools, "acperf", join(perf, "acperf.swift"), (out) => execFileSync("swiftc", ["-O", join(perf, "acperf.swift"), "-o", out], { stdio: "inherit", timeout: TOOL_TIMEOUT_MS }));
     const { INJECTION_ENTITLEMENTS, prepareApp } = await import("../../lib/app-copy.mjs");
-    this.rnApp = prepareApp(this.o.rn, join(this.o.out, "apps", "rn"), { entitlements: INJECTION_ENTITLEMENTS });
+    this.rnApp = prepareApp(this.o.rn, rnCopyDir(this.owned.root), { entitlements: INJECTION_ENTITLEMENTS });
     this.server = await originServer();
     this.cleanup.closer(() => this.server.close());
     this.instance = await import("../../lib/instance.mjs");
@@ -259,6 +313,12 @@ class Bench {
 
   save() {
     writeFileSync(join(this.o.out, "bench.json"), JSON.stringify({ meta: this.meta, runs: this.runs, summary: summarizeRuns(this.runs) }, null, 1));
+  }
+
+  track(side) {
+    try {
+      trackOwned(side.identity, readProcessRows());
+    } catch {}
   }
 
   async finish(side) {
@@ -278,16 +338,19 @@ class Bench {
     try {
       inst = await launch(this.rnApp, {
         data, session, onboarded: true, port, js: "none", files: { "perf-probe": "" }, args: [`${OWNER_SWITCH}=${owner}`], startTimeout: 60000,
+        teardown: async () => {
+          if (!(await stopOwned(identity))) throw Object.assign(new Error(`instance ${owner} did not exit after a failed launch`), { fatal: true });
+        },
         env: {
           DYLD_INSERT_LIBRARIES: [this.acswipe, this.acframes, this.selfrec].join(":"), AC_BENCH_SWIPE: "1", AC_BENCH_FRAMES: "1",
           FIXES_SELFREC_DIR: join(data, "selfrec"), FIXES_SELFREC_LAYERS: "1", FIXES_SELFREC_CROP: "0,0,1360,820", FIXES_SELFREC_SCALE: String(RN_SCALE),
         },
       });
     } catch (e) {
-      await this.finish({ identity, forget, data, forgetDir }).catch(() => {});
-      throw e;
+      await teardownAfter(e, () => this.finish({ identity, forget, data, forgetDir }));
     }
     mkdirSync(join(data, "selfrec"), { recursive: true });
+    this.track({ identity });
     return {
       kind: "rn", t0: inst.launchedAt, pid: inst.pid, data, port, identity, forget, forgetDir,
       js: (expression) => inst.eval(`return (${expression});`, { timeout: 15000 }),
@@ -320,9 +383,9 @@ class Bench {
       if (!side.cdp) throw new Error(`no chrome://ardia shell target on port ${port}`);
     } catch (e) {
       side.cdp?.close();
-      await this.finish(side).catch(() => {});
-      throw e;
+      await teardownAfter(e, () => this.finish(side));
     }
+    this.track(side);
     const unclose = this.cleanup.closer(() => side.cdp.close());
     return {
       ...side,
@@ -450,6 +513,7 @@ class Bench {
     let origin = cap.value;
     let rest = null;
     let restSource = null;
+    let movingAt = null;
     if (side.kind === "rn") {
       const s = settleMs(samples);
       if (s.startAt != null) origin = s.startAt;
@@ -457,7 +521,7 @@ class Bench {
     } else {
       const moving = cap.marks.find((m) => m.name === "ardia-pager-moving");
       const restMark = cap.marks.filter((m) => m.name === "ardia-pager-rest").at(-1);
-      if (moving) origin = moving.at;
+      if (moving) [origin, movingAt] = [moving.at, moving.at];
       if (restMark) [rest, restSource] = [restMark.at, "mark"];
     }
     const times = cap.times.map((t) => t - origin);
@@ -471,11 +535,10 @@ class Bench {
     };
     if (blocked) {
       const block = await side.js("globalThis.__ardiaBenchBlock ?? null");
-      const motion = { start: origin, end: rest ?? origin + (fresh.at(-1) ?? 0) };
-      result.block = block;
-      result.blockOverlapMs = block ? overlapMs(block, motion) : null;
-      if (!block) throw Object.assign(new Error("the UI-thread block never ran"), { result });
-      if (!(result.blockOverlapMs > 0)) throw Object.assign(new Error(`the ${BLOCK_MS} ms block did not overlap the swipe motion`), { result });
+      const motion = blockedMotion({ movingAt, restAt: restSource === "mark" ? rest : null, fresh, origin, framesRestAt: metrics.restAt });
+      const verdict = judgeBlock(block, motion);
+      Object.assign(result, { block, motion, blockOverlapMs: verdict.overlapMs ?? null });
+      if (verdict.error) throw Object.assign(new Error(verdict.error), { result });
     }
     return result;
   }
@@ -521,6 +584,7 @@ class Bench {
       await sleep(500);
       run.peek = !!peekId && !!(await side.js(`!!${TAB_OF}(${STORE}.getState(), ${JSON.stringify(peekId)})`).catch(() => false));
     }
+    this.track(side);
     if (o.only.includes("memory")) {
       await sleep(o.idle * 1000);
       run.memory = memoryOf(side.identity);
@@ -533,7 +597,7 @@ class Bench {
       for (const direction of ["fwd", "back"]) run.swipe[direction] = await sample(() => this.swipe(side, win, direction));
     }
     if (o.only.includes("scroll")) run.scroll = await sample(() => this.scroll(side, win));
-    if (o.only.includes("swipe")) run.swipe.blocked = await sample(() => this.swipe(side, win, "blocked"));
+    if (o.only.includes("swipe") && swipesFor(side.kind).includes("blocked")) run.swipe.blocked = await sample(() => this.swipe(side, win, "blocked"));
     if (o.only.includes("typing")) run.typing = await sample(() => this.typing(side));
   }
 
@@ -546,20 +610,29 @@ class Bench {
       const owner = `${this.owned.token}-${name}`;
       const run = { rep: rep + 1, side: kind, phase, errors: [] };
       let side = null;
+      let pushed = false;
       try {
         side = await (kind === "rn" ? this.startRn(data, session, owner, forgetDir) : this.startWebui(data, session, owner, forgetDir));
         await this.measure(side, run, phase, session);
       } catch (e) {
         run.error = e.message;
+        if (e.fatal) {
+          run.status = "error";
+          this.runs.push(run);
+          pushed = true;
+          this.save();
+          throw e;
+        }
       } finally {
         if (side) {
+          this.track(side);
           await side.quit();
           try {
             await this.finish(side);
           } catch (e) {
             run.error ??= e.message;
             run.status = "error";
-            this.runs.push(run);
+            if (!pushed) this.runs.push(run);
             this.save();
             throw e;
           }

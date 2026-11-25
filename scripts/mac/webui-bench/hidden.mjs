@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const WEBUI_SWITCHES = [
   "--ardia-shell=webui",
@@ -37,7 +37,7 @@ export function canonicalPath(path, { caseInsensitive = process.platform === "da
 
 export const isInside = (child, parent) => {
   const rel = relative(parent, child);
-  return rel === "" || (!!rel && !rel.startsWith("..") && !rel.startsWith(sep) && rel !== "..");
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 
 export function protectedRoots(home = homedir()) {
@@ -156,7 +156,16 @@ export function sameProcess(a, b) {
 
 export function processIdentity({ owner, app, binary }) {
   const binaries = [...new Set([binary, canonicalPath(binary, { caseInsensitive: false })].filter(Boolean))];
-  return { owner, app, binaries };
+  return { owner, app, binaries, seen: new Map() };
+}
+
+const keyOf = (row) => `${row.pid} ${row.started}`;
+
+export function trackOwned(identity, rows) {
+  identity.seen ??= new Map();
+  for (const row of ownedTree(rows, identity)) identity.seen.set(keyOf(row), { pid: row.pid, started: row.started, command: row.command });
+  const live = new Map(rows.map((r) => [keyOf(r), r]));
+  return [...identity.seen.values()].filter((s) => live.has(keyOf(s)));
 }
 
 export function parseFootprint(text) {
@@ -172,7 +181,7 @@ export function parseRss(text) {
 }
 
 export function memoryOf(identity) {
-  const tree = ownedTree(readProcessRows(), identity);
+  const tree = trackOwned(identity, readProcessRows());
   if (!tree.length) return { rssMb: null, footprintMb: null, processes: 0 };
   const pids = tree.map((r) => r.pid);
   const rss = parseRss(execFileSync("ps", ["-o", "pid=,rss=", "-p", pids.join(",")], { encoding: "utf8", timeout: PS_TIMEOUT_MS }));
@@ -183,26 +192,28 @@ export function memoryOf(identity) {
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function signalOwned(identity, signal, read) {
-  const tree = ownedTree(read(), identity);
-  const fresh = ownedTree(read(), identity);
-  for (const row of tree) if (fresh.some((f) => sameProcess(f, row))) try { process.kill(row.pid, signal); } catch {}
-  return tree.length;
+function signalOwned(identity, signal, read, kill) {
+  const alive = trackOwned(identity, read());
+  const fresh = new Set(trackOwned(identity, read()).map(keyOf));
+  for (const row of alive) if (fresh.has(keyOf(row))) try { kill(row.pid, signal); } catch {}
+  return alive.length;
 }
 
-export async function stopOwned(identity, { graceMs = 5000, killMs = 3000, read = readProcessRows } = {}) {
-  if (!signalOwned(identity, "SIGTERM", read)) return true;
-  for (const end = Date.now() + graceMs; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (!ownedTree(read(), identity).length) return true;
-  signalOwned(identity, "SIGKILL", read);
-  for (const end = Date.now() + killMs; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (!ownedTree(read(), identity).length) return true;
+const killer = (pid, signal) => process.kill(pid, signal);
+
+export async function stopOwned(identity, { graceMs = 5000, killMs = 3000, read = readProcessRows, kill = killer } = {}) {
+  if (!signalOwned(identity, "SIGTERM", read, kill)) return true;
+  for (const end = Date.now() + graceMs; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (!trackOwned(identity, read()).length) return true;
+  signalOwned(identity, "SIGKILL", read, kill);
+  for (const end = Date.now() + killMs; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (!trackOwned(identity, read()).length) return true;
   return false;
 }
 
 export function stopOwnedSync(identity, { read = readProcessRows, waitMs = 3000 } = {}) {
   try {
-    signalOwned(identity, "SIGKILL", read);
-    for (const end = Date.now() + waitMs; Date.now() < end; sleepSync(100)) if (!ownedTree(read(), identity).length) return true;
-    return !ownedTree(read(), identity).length;
+    signalOwned(identity, "SIGKILL", read, killer);
+    for (const end = Date.now() + waitMs; Date.now() < end; sleepSync(100)) if (!trackOwned(identity, read()).length) return true;
+    return !trackOwned(identity, read()).length;
   } catch {
     return false;
   }

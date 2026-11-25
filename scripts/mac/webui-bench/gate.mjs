@@ -94,6 +94,11 @@ export function validateReport(report, name = "report") {
     if (!Array.isArray(report.meta.measures)) problems.push(`${name} meta.measures is not a list`);
   }
   if (!Array.isArray(report.runs)) problems.push(`${name} has no runs list`);
+  else
+    report.runs.forEach((r, i) => {
+      if (!isObject(r)) problems.push(`${name} runs[${i}] is not an object`);
+      else if (!["rn", "webui"].includes(r.side) || typeof r.phase !== "string" || !Number.isInteger(r.rep) || r.rep < 1) problems.push(`${name} runs[${i}] needs side rn|webui, a phase and a rep ≥ 1`);
+    });
   if (!isObject(report.summary) || !isObject(report.summary.rn) || !isObject(report.summary.webui)) problems.push(`${name} has no summary.rn and summary.webui`);
   return problems;
 }
@@ -103,11 +108,17 @@ export function validateRules(rules) {
   return rules.flatMap((r, i) =>
     !isObject(r) || typeof r.key !== "string" || !r.key || typeof r.label !== "string"
       ? [`rule ${i} needs a key and a label`]
-      : ["tolerance", "budget", "cap", "ratio"].filter((k) => r[k] != null && !Number.isFinite(r[k])).map((k) => `rule ${r.key} ${k} is not a number`),
+      : [
+          ...["tolerance", "budget", "cap", "ratio"].filter((k) => r[k] != null && !Number.isFinite(r[k])).map((k) => `rule ${r.key} ${k} is not a number`),
+          ...("vsRn" in r && typeof r.vsRn !== "boolean" ? [`rule ${r.key} vsRn is not true or false`] : []),
+          ...("stat" in r && !STATS.includes(r.stat) ? [`rule ${r.key} stat is not one of ${STATS.join(", ")}`] : []),
+        ],
   );
 }
 
+export const STATS = ["median", "p95", "max"];
 const SIDES = ["rn", "webui"];
+const SWIPES_BY_SIDE = { rn: ["fwd", "back"], webui: ["fwd", "back", "blocked"] };
 const sameFixture = (a, b) => !!a && !!b && a.profiles === b.profiles && a.tabs === b.tabs && a.windows === b.windows;
 
 export function integrity(report, { allowFallbackClock = false } = {}) {
@@ -120,22 +131,32 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
   const row = (key, label, values, ok, limit, why) => ({ key, label, stat: "integrity", rn: values.rn, webui: values.webui, limit, baseline: null, verdict: ok ? "PASS" : "FAIL", why: ok ? "" : why });
   const rows = [];
   const done = per((mine) => mine.filter((r) => r.status === "ok").length);
-  rows.push(row("integrity.runs", "Integrity: finished runs (reps × phases)", done, expected > 0 && SIDES.every((s) => done[s] === expected), expected, `expected ${expected} on each side`));
+  const wanted = Array.from({ length: Number.isInteger(meta.reps) ? meta.reps : 0 }, (_, i) => i + 1).join(",");
+  const repProblems = SIDES.flatMap((side) =>
+    phases.flatMap((phase) => {
+      const reps = runs.filter((r) => r.side === side && r.phase === phase && r.status === "ok").map((r) => r.rep).sort((a, b) => a - b).join(",");
+      return reps === wanted ? [] : [`${side} ${phase} has reps [${reps}], wants [${wanted}]`];
+    }),
+  );
+  const strays = runs.filter((r) => !phases.includes(r.phase)).length;
+  const repsOk = expected > 0 && SIDES.every((s) => done[s] === expected) && !repProblems.length && !strays;
+  rows.push(row("integrity.runs", "Integrity: finished runs (reps × phases)", done, repsOk, expected, repProblems[0] ?? (strays ? `${strays} run(s) in an unplanned phase` : `expected ${expected} on each side`)));
   const errored = per((mine) => mine.filter((r) => r.status !== "ok" || (r.errors ?? []).length > 0).length);
   rows.push(row("integrity.errors", "Integrity: runs with an error", errored, SIDES.every((s) => errored[s] === 0), 0, "a run failed"));
   const mismatched = per((mine) => mine.filter((r) => !sameFixture(r.fixture?.expected, r.fixture?.restored)).length);
   const crossSide = phases.filter((phase) => {
-    const [a, b] = SIDES.map((side) => runs.find((r) => r.side === side && r.phase === phase)?.fixture?.expected);
-    return !sameFixture(a, b);
+    const inPhase = runs.filter((r) => r.phase === phase);
+    const first = inPhase[0]?.fixture?.expected;
+    return !inPhase.length || inPhase.some((r) => !sameFixture(r.fixture?.expected, first));
   });
-  rows.push(row("integrity.fixture", "Integrity: runs not restoring the seeded fixture", mismatched, SIDES.every((s) => mismatched[s] === 0) && !crossSide.length, 0, crossSide.length ? `sides seeded differently: ${crossSide.join(", ")}` : "a side restored other profiles, tabs or windows"));
+  rows.push(row("integrity.fixture", "Integrity: runs not restoring the seeded fixture", mismatched, SIDES.every((s) => mismatched[s] === 0) && !crossSide.length, 0, crossSide.length ? `runs seeded differently: ${crossSide.join(", ")}` : "a side restored other profiles, tabs or windows"));
   if (phases.includes("multi")) {
     const short = per((mine) => mine.filter((r) => r.phase === "multi" && !(r.windows === 2 && r.peek === true)).length);
     const ran = per((mine) => mine.filter((r) => r.phase === "multi").length);
     rows.push(row("integrity.multi", "Integrity: multi runs without 2 windows + Peek", short, SIDES.every((s) => short[s] === 0 && ran[s] > 0), 0, "a multi run missed its second window or Peek"));
   }
   if (measures.includes("swipe")) {
-    const missed = per((mine) => mine.filter((r) => r.phase === "large").reduce((n, r) => n + ["fwd", "back", "blocked"].filter((d) => r.swipe?.[d]?.arrived !== true).length, 0));
+    const missed = Object.fromEntries(SIDES.map((side) => [side, runs.filter((r) => r.side === side && r.phase === "large").reduce((n, r) => n + SWIPES_BY_SIDE[side].filter((d) => r.swipe?.[d]?.arrived !== true || r.swipe?.[d]?.error).length, 0)]));
     rows.push(row("integrity.arrived", "Integrity: swipes that did not reach the other profile", missed, SIDES.every((s) => missed[s] === 0), 0, "a swipe did not arrive"));
   }
   if (measures.includes("launch")) {
