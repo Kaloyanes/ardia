@@ -290,7 +290,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
     cosmeticOnly = false;
     schedule(SAVE_DELAY_MS);
   }
-  if (realignedAtLaunch || retiredDefaultsApplied) {
+  if (realignedAtLaunch || retiredDefaultsApplied || (launch.rowTables && launch.session.state === "usable")) {
     dirty.add(DOCS.find((d) => d.name === SESSION_DOCUMENT)!);
     cosmeticOnly = false;
     schedule(SAVE_DELAY_MS);

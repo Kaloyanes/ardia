@@ -21,7 +21,7 @@ import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
 import { isOwnId, pageFromDisk, SESSION_ROWS, sessionWithListedRows, tableRows } from "../../browser/src/state/session/savedShapes";
 import { savedProfileRows } from "../../browser/src/state/session/savedSession";
-import { isFields } from "../../browser/src/lib/decode";
+import { isFields, isString } from "../../browser/src/lib/decode";
 
 type StoredWindow = Partial<BrowserWindow> & { incognito?: unknown; originalProfileId?: unknown; sidebarOpen?: unknown };
 
@@ -30,9 +30,18 @@ const shapedWindow = ({ incognito: _i, originalProfileId: _o, ...w }: StoredWind
 const ROW_REFERENCES = ["windowId", "profileId"] as const;
 const savedRow = (v: unknown): v is Record<string, unknown> & { id: string } =>
   isFields(v) && isOwnId(v.id) && ROW_REFERENCES.every((key) => !(key in v) || isOwnId(v[key]));
-const keyedById = <T,>(list: unknown): Record<string, T> | undefined =>
-  Array.isArray(list) ? Object.fromEntries(list.filter(savedRow).map((v) => [v.id, v])) as Record<string, T> : undefined;
-const keyedTable = (table: Record<string, unknown>) => Object.entries(table).every(([key, row]) => savedRow(row) && row.id === key);
+type SessionRows = (typeof SESSION_ROWS)[number];
+const tabIdList = (v: unknown) => Array.isArray(v) && v.every(isString);
+const ROW_SHAPES: Record<SessionRows, (row: Record<string, unknown>) => boolean> = {
+  windows: (w) => tabIdList(w.tabIds) && isFields(w.activeTabIds) && Object.values(w.activeTabIds).every(isString),
+  tabs: () => true,
+  groups: (g) => tabIdList(g.tabIds),
+  splits: () => true,
+};
+const rowOf = (rows?: SessionRows) => (v: unknown): v is Record<string, unknown> & { id: string } => savedRow(v) && (!rows || ROW_SHAPES[rows](v));
+const keyedById = <T,>(list: unknown, rows?: SessionRows): Record<string, T> | undefined =>
+  Array.isArray(list) ? Object.fromEntries(list.filter(rowOf(rows)).map((v) => [v.id, v])) as Record<string, T> : undefined;
+const keyedTable = (table: Record<string, unknown>, rows: SessionRows) => Object.entries(table).every(([key, row]) => rowOf(rows)(row) && row.id === key);
 
 function currentSessionShape(saved: HydrateData): HydrateData {
   const doc = { ...saved, tabs: Object.values(saved.tabs ?? {}), splits: Object.values(saved.splits ?? {}) } as unknown as SavedObject;
@@ -120,16 +129,11 @@ const withoutWindowTabsShown = (session: HydrateData): HydrateData => {
 
 const withRowsKeyed = (saved: HydrateData): HydrateData => {
   const rowsOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : isFields(value) ? tableRows(value) : []);
-  const reshaped = SESSION_ROWS.filter((key) => saved[key] !== undefined && !(isFields(saved[key]) && keyedTable(saved[key])));
+  const reshaped = SESSION_ROWS.filter((key) => saved[key] !== undefined && !(isFields(saved[key]) && keyedTable(saved[key], key)));
   const profiles = saved.profiles === undefined ? undefined : savedProfileRows(saved.profiles);
   const profilesChanged = !!profiles && (!isFields(saved.profiles) || Object.keys(profiles).length !== Object.keys(saved.profiles).length);
   if (!reshaped.length && !profilesChanged) return saved;
-  return { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key])) ?? {}])), ...(profilesChanged ? { profiles } : {}) };
-};
-
-const withListRowsKeyed = (saved: HydrateData): HydrateData => {
-  const lists = SESSION_ROWS.filter((key) => Array.isArray(saved[key]));
-  return lists.length ? { ...saved, ...Object.fromEntries(lists.map((key) => [key, keyedById(saved[key]) ?? {}])) } : saved;
+  return { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key]), key) ?? {}])), ...(profilesChanged ? { profiles } : {}) };
 };
 
 const sniffedSessionShape = (saved: HydrateData): HydrateData => {
@@ -348,7 +352,16 @@ export function snapshotHostSession(s: BrowserState): HydrateData {
 type SessionPair = { base: HydrateData; session: HydrateData };
 const sessionObject = (value: unknown): value is HydrateData => value !== null && typeof value === "object" && !Array.isArray(value);
 
-export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, onCanonical?: (base: HydrateData, session: HydrateData) => void) {
+const listedOnDisk = (onDisk: unknown) => new Set(SESSION_ROWS.filter((key) => sessionObject(onDisk) && Array.isArray(onDisk[key])));
+const inDiskForm = (session: HydrateData, listed: ReadonlySet<SessionRows>): HydrateData => {
+  const tables = [...listed].filter((key) => isFields(session[key]));
+  return tables.length ? { ...session, ...Object.fromEntries(tables.map((key) => [key, Object.values(session[key]!)])) } as HydrateData : session;
+};
+
+export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, onCanonical?: (base: HydrateData, session: HydrateData) => void, onDisk: unknown = initial) {
+  let listed = listedOnDisk(onDisk);
+  const noteDisk = (raw: unknown) => void (sessionObject(raw) && (listed = listedOnDisk(raw)));
+  const diskPair = (pair: SessionPair): SessionPair => listed.size ? { base: inDiskForm(pair.base, listed), session: inDiskForm(pair.session, listed) } : pair;
   let writes = Promise.resolve();
   let canonical = cloneSessionValue(initial);
   let observation = 0;
@@ -387,7 +400,8 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
       const observed = observation;
       inFlight = pair;
       try {
-        const reply = await host.invoke("session.write", pair);
+        const reply = await host.invoke("session.write", diskPair(pair));
+        noteDisk(reply);
         if (finalized) return;
         const reconciled = generation;
         if (observed === observation && sessionObject(reply)) {
@@ -444,13 +458,13 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
     const final = inFlight ? { base: mergeSession(inFlight.base, inFlight.session, latest.base), session: latest.session } : latest;
     issued = latest;
     try {
-      finalWrite = Promise.resolve(host.invoke("session.write", final)).then(() => {});
+      finalWrite = Promise.resolve(host.invoke("session.write", diskPair(final))).then(() => {});
     } catch (error) {
       finalWrite = Promise.reject(error);
     }
     return finalWrite;
   };
-  return { queue: (session: HydrateData) => reconcile(session, true), reconcile, acceptCanonical, flush, drain, flushFinal };
+  return { queue: (session: HydrateData) => reconcile(session, true), reconcile, acceptCanonical, noteDisk, diskPair, flush, drain, flushFinal };
 }
 
 type SessionStore = {
@@ -489,8 +503,8 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
   const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical);
-  const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : withListRowsKeyed(stored), stored);
-  const writer = createSessionWriter(host, written, (base, session) => receive(base, session));
+  const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : stored, stored);
+  const writer = createSessionWriter(host, written, (base, session) => receive(base, session), stored);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(equalSessionValue({ ...initial, version: undefined }, { ...written, version: undefined }) ? initial : written)!;
   let lastSources: unknown[] = [];
@@ -568,6 +582,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     const update = payload as { base?: unknown; session?: unknown };
     if (!sessionObject(update.base) || !sessionObject(update.session)) return;
     const session = sessionOnDisk(update.session);
+    writer.noteDisk(update.session);
     writer.acceptCanonical(session);
     receive(linuxSessionShape(update.base), session);
   });
@@ -575,6 +590,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     void Promise.resolve(host.invoke("session.read", {})).then((saved) => {
       if (closing || !sessionObject(saved)) return;
       const session = sessionOnDisk(saved);
+      writer.noteDisk(saved);
       writer.acceptCanonical(session);
       receive(canonical, session);
     }).catch(reportHostError);
@@ -603,7 +619,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   };
   const departure = (windowId: string) => {
     const state = store.getState();
-    return { base: snapshotOf(state), session: snapshotOf(windowDeparture(state, windowId)) };
+    return writer.diskPair({ base: snapshotOf(state), session: snapshotOf(windowDeparture(state, windowId)) });
   };
   return Object.assign(dispose, { flush: () => { queue(store.getState()); clearTimeout(timer); timer = undefined; return writer.drain(); }, departure });
 }

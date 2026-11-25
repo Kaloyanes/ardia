@@ -238,24 +238,30 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   empty entries dropped). The snapshot saves every field the shared session saves except the Mac's early launch tab,
   including which settings were chosen (`settingsMeta`); `session.test.mjs` fails when the shared session adds one.
 - **One session format for both shells.** The React Native Mac app saves `windows`, `tabs`, `groups` and `splits` as
-  lists; the WebUI shells save them as tables keyed by row id, which the Linux engine's startup tab reads. Both readers
-  take either form, row collection by row collection, so a file mixing the two (a native merge keeps an unchanged
-  collection in the form it found) loads whole. The Mac app lists tables before its migrations and its row checks
-  (`sessionWithListedRows`), and the WebUI keys lists before shaping, so shaping a second time changes nothing.
-  A file stamped with an older version runs the shared migrations from that version in both shells; only a file with
-  no stamp starts the WebUI at version 9. The WebUI's first write after shaping changed the file merges against the
-  file as read, so every collection is written back in its shaped form. It keeps what only the Mac app uses: a
-  sleeping tab's `page.wake` restore handle (left out of the WebUI's live tab, written back while the tab keeps its
-  address) and the early launch hints (`launchTab`, `launchBackdrop`, `linkProfile`), kept while the focused
-  window, its active tabs, the profiles and Restore Session are unchanged. Rows that aren't objects and ids the object prototype holds (`__proto__`, `constructor`, `toString`) are dropped
-  by both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy
-  exists (the correctly keyed row wins), and the Mac app keeps any file with dropped or misfiled rows aside first.
-  Native startup prewarm reads only its own shell's form. `ArdiaSavedSession.mm` on the Mac needs every row
+  lists; a WebUI shell's own file keeps them as tables keyed by row id, which the Linux engine's startup tab reads. Both
+  readers take either form, row collection by row collection, so a mixed file loads whole. The Mac app lists tables
+  before its migrations and its row checks (`sessionWithListedRows`), and the WebUI keys lists before shaping, so
+  shaping a second time changes nothing.
+- **Writing.** The native merges (`MergeLinuxSession` and `mergeSession`) only merge row by row when the base, the
+  save and the file use the same form; otherwise the save replaces the collection. So the WebUI's writer sends each
+  collection in the form the file holds it in, as last seen at launch, in a write reply or in a session event, and a
+  WebUI window on a Mac list file keeps writing lists. Its first write after shaping changed the file merges against
+  the file as read, so migrated, repaired or cleaned collections are written back whole. The Mac app saves a table
+  file back as lists at launch, edited or not. A Mac app write that changes a collection's form while a WebUI window is
+  running is the one case still replaced whole; the two shells don't run on one profile at once.
+- **What the WebUI keeps for the Mac app.** A sleeping tab's `page.wake` restore handle (left out of the WebUI's live
+  tab, written back while the tab keeps its address) and the early launch hints (`launchTab`, `launchBackdrop`,
+  `linkProfile`), kept while the focused window's profile, tabs and active tabs, the profiles, Restore Session and the
+  engine mode are unchanged.
+- **Rows the readers drop.** Rows that aren't objects, ids the object prototype holds (`__proto__`, `constructor`,
+  `toString`), windows without a `tabIds` list and `activeTabIds`, and groups without a `tabIds` list are dropped by
+  both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy exists
+  (the correctly keyed row wins), and the Mac app keeps any file with dropped or misfiled rows aside first.
+- **Startup prewarm.** Native prewarm reads only its own form. `ArdiaSavedSession.mm` on the Mac needs every row
   collection as a list; `ac_linux_startup_tab.cc` on Linux needs `windows` and `tabs` as tables (list-shaped `groups`
-  or `splits` alone don't stop it). On the first launch after switching shells, a file that misses that finds no
-  launch tab and is left to the JS session loader, which loads it losslessly and saves it in its own form, so the
-  next launch prewarms again.
-  `sessionShells.test.mjs` (desktop and browser) round-trips Mac → WebUI → Mac and WebUI → Mac → WebUI. Telemetry
+  or `splits` alone don't stop it). A file that misses that finds no launch tab and is left to the JS session loader,
+  which loads it losslessly.
+- `sessionShells.test.mjs` (desktop and browser) round-trips Mac → WebUI → Mac and WebUI → Mac → WebUI. Telemetry
   counts launches whose file held collections in the other shell's form, before any migration, as
   `session_from_other_shell`.
 

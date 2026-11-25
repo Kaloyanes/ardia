@@ -118,3 +118,13 @@ for (const version of [SESSION_VERSION, 10, 4]) test(`a v${version} table sessio
   assert.ok(Object.hasOwn(JSON.parse(stub.docs.get(aside[0])).tabs, "misfiled"));
   assert.ok(Array.isArray(JSON.parse(stub.docs.get("session.json")).tabs));
 });
+
+test("the Mac app saves a WebUI table session back as lists at launch, with no edit", async () => {
+  const stop = await launchOn(webuiTables());
+  await settle();
+  stop();
+  const written = JSON.parse(stub.docs.get("session.json"));
+  for (const rows of ["windows", "tabs", "groups", "splits"]) assert.ok(Array.isArray(written[rows]), rows);
+  assert.deepEqual(written.tabs.map((t) => t.id).sort(), ["a", "g", "left", "right", "tile"]);
+  assert.deepEqual([...stub.docs.keys()].filter((name) => name.includes("unreadable")), []);
+});

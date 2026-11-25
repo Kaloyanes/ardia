@@ -463,3 +463,94 @@ test("two windows saving their first edits to the same Mac list session before h
     if (version === 2) assert.deepEqual(mac.seen.splits["w1|horizontal"], [{ size: 0.4, tab: T("left") }, { size: 0.6, tab: T("right") }]);
   }
 });
+
+async function webuiSavingAfter(json, edit, concurrent) {
+  let disk = JSON.parse(json);
+  const host = {
+    bootstrap: launch("w1").bootstrap,
+    invoke: async (method, pair) => {
+      if (method !== "session.write") return {};
+      disk = JSON.parse(JSON.stringify(mergeSession(pair.base, pair.session, disk)));
+      return structuredClone(disk);
+    },
+    onEvent: () => () => {},
+  };
+  hydrateFresh(initialLinuxSession(host, JSON.parse(json)));
+  edit();
+  let state = S();
+  const store = { getState: () => state, setState: (patch) => void (state = { ...state, ...patch }), subscribe: () => () => {} };
+  const persistence = startHostPersistence(host, store, JSON.parse(json));
+  disk = concurrent(disk);
+  await persistence.flush();
+  persistence();
+  return disk;
+}
+const retitled = (id, title) => () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, [id]: { ...s.tabs[id], title } } }));
+
+test("a Mac app list write landing before the WebUI's first save is merged row by row, as is a table write", async () => {
+  const lists = macLaunch(JSON.stringify(macSession())).written;
+  const macEdit = (disk) => {
+    const mac = macLaunch(JSON.stringify(disk));
+    useBrowser.setState((s) => ({ tabs: { ...s.tabs, b: { ...s.tabs.b, title: "Mac edit" } } }));
+    return mac && JSON.parse(savedDocumentJson(SESSION_DOCUMENT, S()));
+  };
+  const fromLists = await webuiSavingAfter(lists, retitled("a", "WebUI edit"), macEdit);
+  assert.ok(Array.isArray(fromLists.tabs), "the WebUI keeps the Mac app's list form");
+  const listed = linuxSessionShape(fromLists);
+  assert.equal(listed.tabs.a.title, "WebUI edit");
+  assert.equal(listed.tabs.b.title, "Mac edit");
+  macLaunch(JSON.stringify(fromLists));
+  assert.equal(S().tabs.a.title, "WebUI edit");
+  assert.equal(S().tabs.b.title, "Mac edit");
+
+  const tables = await tableFile();
+  const tableEdit = (disk) => ({ ...disk, tabs: { ...disk.tabs, b: { ...disk.tabs.b, title: "Other window" } } });
+  const fromTables = await webuiSavingAfter(tables, retitled("a", "WebUI edit"), tableEdit);
+  assert.equal(Array.isArray(fromTables.tabs), false);
+  assert.equal(fromTables.tabs.a.title, "WebUI edit");
+  assert.equal(fromTables.tabs.b.title, "Other window");
+});
+
+test("window rows without a tabIds list, or group rows without one, are dropped by both shells instead of throwing", async () => {
+  const broken = (rows) => ({ ...rows, bad: { id: "bad", profileId: "default", kind: "main" }, odd: { id: "odd", profileId: "default", tabIds: "a", activeTabIds: {} } });
+  const lists = macSession();
+  lists.windows = [...lists.windows, ...Object.values(broken({}))];
+  lists.groups = [...lists.groups, { id: "loose", windowId: "w1", profileId: "default", name: "Loose" }];
+  const tables = JSON.parse(await tableFile());
+  tables.windows = broken(tables.windows);
+  tables.groups = { ...tables.groups, loose: { id: "loose", windowId: "w1", profileId: "default", name: "Loose" } };
+  for (const saved of [lists, tables]) {
+    const json = JSON.stringify(saved);
+    const shaped = linuxSessionShape(JSON.parse(json));
+    assert.deepEqual(Object.keys(shaped.windows).sort(), ["w1", "w2"]);
+    assert.equal(shaped.groups.loose, undefined);
+    const webui = await webuiLaunch(json);
+    assert.deepEqual(Object.keys(webui.live.windows).sort(), ["w1", "w2"]);
+    assert.deepEqual(webui.seen.windows.w1.tabs, w1Tabs());
+    const adopted = await webuiLaunch(json, "main");
+    assert.ok(adopted.live.windows.main.tabIds.length);
+    macLaunch(json, { damaged: true });
+    assert.deepEqual(Object.keys(S().windows).sort(), ["w1", "w2"]);
+  }
+  const onlyBroken = { ...macSession(), windows: Object.values(broken({})), focusedWindowId: "bad", windowOrder: ["bad"] };
+  const seeded = await webuiLaunch(JSON.stringify(onlyBroken), "main");
+  assert.equal(seeded.live.windows.main.kind, "main");
+  assert.equal(seeded.live.windows.bad, undefined);
+});
+
+test("a version-current list session holding only an invalid group row is written back without it", async () => {
+  for (const groups of [[null], [null, 7]]) {
+    const saved = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+    saved.groups = [...saved.groups, ...groups];
+    const webui = await webuiLaunch(JSON.stringify(saved));
+    const written = JSON.parse(webui.written);
+    assert.ok(Array.isArray(written.groups));
+    assert.deepEqual(written.groups.map((g) => g.id), ["grp"]);
+    macLaunch(webui.written);
+    assert.deepEqual(Object.keys(S().groups), ["grp"]);
+  }
+  const onlyNull = JSON.parse(macLaunch(JSON.stringify({ ...macSession(), groups: [] })).written);
+  onlyNull.groups = [null];
+  const cleaned = JSON.parse((await webuiLaunch(JSON.stringify(onlyNull))).written);
+  assert.deepEqual(cleaned.groups, []);
+});
