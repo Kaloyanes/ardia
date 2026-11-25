@@ -856,8 +856,59 @@ void EndSpendsOneSequence() {
   sync::LayoutDragSession spring(Window(1200, 800), kLast - 3);
   CHECK(spring.BeginSidebar(190));
   const auto stretched = spring.End(900);
-  CHECK(stretched && stretched->needs_settle && spring.SettleTarget() == 400.0);
-  CHECK(spring.Sequence() == kLast && spring.Input().sidebar_width > 400);
+  CHECK(stretched && !stretched->needs_settle && stretched->target == 400 && stretched->kept == 400);
+  CHECK(spring.Sequence() == kLast && spring.Active() == sync::DragKind::kNone && !spring.SettleTarget());
+  CHECK(spring.Snapshot().sidebar_width == 400 && !spring.Input().sidebar_live);
+
+  sync::LayoutDragSession roomy(Window(1200, 800), kLast - 4);
+  CHECK(roomy.BeginSidebar(190));
+  const auto springing = roomy.End(900);
+  CHECK(springing && springing->needs_settle && roomy.SettleTarget() == 400.0);
+  CHECK(roomy.Sequence() == kLast - 1);
+  CHECK(roomy.Settle(420));
+  CHECK(roomy.Sequence() == kLast && roomy.Active() == sync::DragKind::kNone);
+  CHECK(roomy.Snapshot().sidebar_width == 400 && !roomy.Input().sidebar_live);
+}
+
+void IdleClockJumpsPresentTheNextLayout() {
+  sync::SurfaceSyncTracker tracker(16667);
+  tracker.Begin();
+  CHECK(tracker.ExpectLayout(1, {0, 0, 100, 100}, {{4, {0, 0, 50, 50}}}, 1000000).has_value());
+  CHECK(tracker.ShellSubmitted(tracker.ExpectedShell()));
+  const auto expected = tracker.Expected(4);
+  if (expected) CHECK(tracker.ChildSubmitted(4, *expected));
+  CHECK(tracker.Decide(1000001).reason == sync::PresentReason::kMatched);
+  CHECK(tracker.Decide(5).reason == sync::PresentReason::kIdle);
+  CHECK(tracker.Counts().clock_jumps == 1);
+  CHECK(tracker.ExpectLayout(2, {0, 0, 100, 100}, {{4, {0, 0, 60, 60}}}, 6).has_value());
+  const auto fallback = tracker.Decide(7);
+  CHECK(fallback.reason == sync::PresentReason::kDeadline && fallback.present);
+  CHECK(!tracker.IsStalled(4) && tracker.Counts().clock_jumps == 1);
+  CHECK(tracker.ExpectLayout(3, {0, 0, 100, 100}, {{4, {0, 0, 61, 61}}}, 8).has_value());
+  CHECK(tracker.Decide(9).reason == sync::PresentReason::kHolding);
+}
+
+void CommittedWidthsNeverAutoCollapse() {
+  sync::LayoutInput input = Window(1200, 800);
+  input.collapse_below = 170;
+  sync::LayoutDragSession session(input);
+  CHECK(session.BeginSidebar(190));
+  CHECK(session.Move(0));
+  CHECK(session.Snapshot().sidebar_collapsed);
+  const auto terminated = session.Terminate();
+  CHECK(terminated && !terminated->collapsed && terminated->target == 160);
+  CHECK(!session.Snapshot().sidebar_collapsed && session.Snapshot().sidebar_width == 160);
+  CHECK(session.Snapshot().sidebar.width == 160 && session.Snapshot().css.sidebar_width == 160);
+  sync::LayoutInput narrow = Window(1200, 800);
+  narrow.collapse_below = 170;
+  narrow.sidebar_width = 160;
+  const auto layout = sync::ComputeLayout(narrow, 1);
+  CHECK(layout && !layout->sidebar_collapsed && layout->sidebar_width == 160);
+  CHECK(session.BeginSidebar(160));
+  CHECK(session.Move(0));
+  const auto released = session.End(0);
+  CHECK(released && released->collapsed && session.Snapshot().sidebar_collapsed);
+  CHECK(session.Snapshot().sidebar_width == 0);
 }
 
 int main() {
@@ -892,6 +943,8 @@ int main() {
   ClockJumpsNeverChargeAMiss();
   TerminateNeverCollapsesTheSidebar();
   EndSpendsOneSequence();
+  IdleClockJumpsPresentTheNextLayout();
+  CommittedWidthsNeverAutoCollapse();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return EXIT_FAILURE;

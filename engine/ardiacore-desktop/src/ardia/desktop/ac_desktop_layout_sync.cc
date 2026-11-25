@@ -302,8 +302,8 @@ std::optional<LayoutSnapshot> ComputeLayout(const LayoutInput& input, uint64_t s
                                       std::max(kSidebarMinWidth - kRubberBand,
                                                Finite(input.sidebar_width) ? input.sidebar_width : kDefaultSidebarWidth))
                            : ShownSidebarWidth(input.sidebar_width, input.window.width);
-  const bool collapsed = !input.sidebar_shown || (Finite(input.collapse_below) && input.collapse_below > 0 &&
-                                                  width < input.collapse_below);
+  const bool collapsed = !input.sidebar_shown || (input.sidebar_live && Finite(input.collapse_below) &&
+                                                  input.collapse_below > 0 && width < input.collapse_below);
   const double window_right = Px(input.window.width, scale);
   const double window_bottom = Px(input.window.height, scale);
   const double sidebar_px = collapsed ? 0 : std::clamp(Px(width, scale), 0.0, window_right);
@@ -537,7 +537,7 @@ std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(const
   }
   const double target = ClampWidth(raw, kSidebarMinWidth, max);
   const double kept = KeptSidebarWidth(target, max, before_drag_.sidebar_width);
-  if (released && raw != target) {
+  if (released && raw != target && sequence_ < std::numeric_limits<uint64_t>::max() - 1) {
     Drag settling = drag;
     settling.settle_target = target;
     if (!Apply(from, settling)) return std::nullopt;
@@ -569,7 +569,9 @@ std::optional<LayoutDragSession::Release> LayoutDragSession::Terminate() {
 
 bool LayoutDragSession::Settle(double width) {
   if (drag_.kind != DragKind::kSidebar || !drag_.settle_target || !Finite(width)) return false;
-  if (std::abs(width - *drag_.settle_target) < 1e-6) return FinishSettle().has_value();
+  if (std::abs(width - *drag_.settle_target) < 1e-6 || sequence_ >= std::numeric_limits<uint64_t>::max() - 1) {
+    return FinishSettle().has_value();
+  }
   LayoutInput next = input_;
   next.sidebar_width = width;
   return Apply(next, drag_);
@@ -759,8 +761,7 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
   PresentDecision decision;
   decision.frame_sequence = frame_sequence_;
   if (!active_ || !pending_) {
-    has_clock_ = true;
-    last_now_micros_ = now_micros;
+    if (ClockWentBack(now_micros)) clock_jump_fallback_ = true;
     return decision;
   }
   const bool clock_jumped = ClockWentBack(now_micros) || clock_jump_fallback_;
