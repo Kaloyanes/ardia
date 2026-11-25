@@ -36,7 +36,7 @@ import { WindowControls } from "../window/WindowControls";
 import { LeadingWindowControls } from "../window/LeadingWindowControls";
 import { useWindowChrome } from "../../state/windows/windowButtons";
 import { noteSettingsScroll } from "../../state/settings/growingRows";
-import { paneScroll } from "../../state/settings/paneScroll";
+import { paneScroll, restorePlan, settingsLayoutKey } from "../../state/settings/paneScroll";
 
 const SIDEBAR = settingsLayout.sidebarWidth;
 const TOOLBAR = pageToolbar.window.height;
@@ -111,14 +111,21 @@ export function SettingsWindow() {
   const visit = shown?.visit ?? 0;
   const paneScroller = useMemo(() => paneScroll(visit, settingsScrollFor(visit)), [visit]);
   const contentHeight = useRef(0);
-  const laidOutPage = useRef("");
+  const laidOut = useRef("");
+  const layout = shown ? settingsLayoutKey(shown) : "";
   const settle = (height: number, evenToTop: boolean) => {
     const y = paneScroller.firstLayout(viewport.current, height + settingsLayout.paneBottom);
     if (y !== null && (y > 0 || evenToTop)) scroller.current?.scrollTo({ y, animated: false });
   };
+  const noteLayout = (height: number) => {
+    contentHeight.current = height;
+    laidOut.current = layout;
+  };
   useLayoutEffect(() => {
-    if (laidOutPage.current === page) return settle(contentHeight.current, true);
-    scroller.current?.scrollTo({ y: 0, animated: false });
+    if (!shown) return;
+    const plan = restorePlan(laidOut.current, shown);
+    if (plan === "cached") return settle(contentHeight.current, true);
+    if (plan === "top") scroller.current?.scrollTo({ y: 0, animated: false });
   }, [visit]);
   useEffect(() => forgetSettingsScroll, []);
   useEffect(() => closeProfileIconPickerIn(SETTINGS_WINDOW_ID), [key]);
@@ -197,9 +204,8 @@ export function SettingsWindow() {
             collapsable={false}
             style={PANE_COLUMN}
             onLayout={(e) => {
-              contentHeight.current = e.nativeEvent.layout.height;
-              laidOutPage.current = page;
-              settle(contentHeight.current, false);
+              noteLayout(e.nativeEvent.layout.height);
+              settle(e.nativeEvent.layout.height, false);
             }}>
             {shown ? (
               <NativeFormContext.Provider value>
@@ -208,6 +214,13 @@ export function SettingsWindow() {
                 </SettingsPaneContext.Provider>
               </NativeFormContext.Provider>
             ) : null}
+            <View
+              key={layout}
+              onLayout={(e) => {
+                noteLayout(e.nativeEvent.layout.y);
+                settle(e.nativeEvent.layout.y, true);
+              }}
+            />
           </View>
         </ScrollView>
       </View>

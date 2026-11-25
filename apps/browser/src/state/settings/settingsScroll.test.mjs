@@ -201,3 +201,26 @@ test("scroll events before the destination's first layout are ignored", () => {
   settingsBack();
   assert.equal(nav().scroll, 0);
 });
+
+test("Back from a short profile's overview to a taller one measures the taller one before judging its saved offset", async () => {
+  const { restorePlan, settingsLayoutKey } = await import("./paneScroll.ts");
+  fresh();
+  goToSettingsPane("profiles", "tall");
+  const tall = mount();
+  tall.firstLayout(500, 1500);
+  tall.scrolled(900);
+  const tallLayout = settingsLayoutKey(nav());
+  goToSettingsPane("profiles", "short");
+  mount().firstLayout(500, 1000);
+  const shortLayout = settingsLayoutKey(nav());
+  settingsBack();
+  assert.equal(nav().profileId, "tall");
+  assert.equal(nav().scroll, 900);
+  assert.equal(restorePlan(shortLayout, nav()), "measure", "the short profile's cached height says nothing about the tall one");
+  const back = mount();
+  assert.equal(back.firstLayout(500, 1000), 0, "judged at the short profile's height, 900 looks out of reach");
+  assert.equal(mount().firstLayout(500, 1500), 900, "measured at its own height, the tall profile's offset is reachable");
+  assert.equal(restorePlan(tallLayout, nav()), "cached", "the same profile's geometry can be reused");
+  assert.equal(restorePlan(settingsLayoutKey({ pane: "general", profileId: null, detail: null }), nav()), "top", "another page lays out afresh");
+  assert.equal(restorePlan("", nav()), "top");
+});

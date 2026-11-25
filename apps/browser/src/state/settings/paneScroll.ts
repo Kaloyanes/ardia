@@ -1,4 +1,4 @@
-import { rememberSettingsScrollOffset } from "./settingsWindows";
+import { rememberSettingsScrollOffset, settingsPageKey, type SettingsPlace } from "./settingsWindows";
 
 export function paneScroll(visit: number, saved: number) {
   let laidOut = false;
@@ -15,4 +15,11 @@ export function paneScroll(visit: number, saved: number) {
       return y;
     },
   };
+}
+
+export const settingsLayoutKey = (s: SettingsPlace) => `${settingsPageKey(s)}\u0000${s.profileId ?? ""}`;
+
+export function restorePlan(laidOut: string, shown: SettingsPlace): "cached" | "measure" | "top" {
+  if (laidOut === settingsLayoutKey(shown)) return "cached";
+  return laidOut.startsWith(`${settingsPageKey(shown)}\u0000`) ? "measure" : "top";
 }
