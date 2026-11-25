@@ -15,13 +15,21 @@ export type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 export type SettingsPlace = { pane: SettingsPane; profileId: string | null; detail: string | null };
 
-type SettingsStop = SettingsPlace & { scroll: number; visit: number };
+type SettingsStop = SettingsPlace & { scroll: number; visit: number; shownProfile: string | null };
 
 type Nav = SettingsStop & { back: SettingsStop[]; forward: SettingsStop[] };
 
 export const settingsPlaceKey = (s: SettingsPlace) => `${s.pane}:${s.profileId ?? ""}:${s.detail ?? ""}`;
 
 export const settingsPageKey = (s: SettingsPlace) => (s.pane === "profiles" && !s.detail ? "profiles::" : settingsPlaceKey(s));
+
+export function shownSettingsProfile(s: SettingsPlace): string | null {
+  if (s.pane !== "profiles") return s.profileId;
+  const { profiles, settings } = useBrowser.getState();
+  return s.profileId && profiles[s.profileId] ? s.profileId : settings.defaultProfileId;
+}
+
+const shownPlaceKey = (s: SettingsPlace) => settingsPlaceKey({ ...s, profileId: shownSettingsProfile(s) });
 
 let lastVisit = 0;
 export const newSettingsVisit = () => ++lastVisit;
@@ -32,14 +40,14 @@ export function rememberSettingsScrollOffset(visit: number, y: number) {
   if (visit === useSettingsNav.getState().visit) shownOffset = { visit, y };
 }
 
-const stopOf = (s: SettingsStop): SettingsStop => ({ pane: s.pane, profileId: s.profileId, detail: s.detail, visit: s.visit, scroll: shownOffset.visit === s.visit ? shownOffset.y : s.scroll });
+const stopOf = (s: SettingsStop): SettingsStop => ({ pane: s.pane, profileId: s.profileId, detail: s.detail, visit: s.visit, shownProfile: s.shownProfile, scroll: shownOffset.visit === s.visit ? shownOffset.y : s.scroll });
 
-export const useSettingsNav = create<Nav>()(() => ({ pane: "general", profileId: null, detail: null, scroll: 0, visit: newSettingsVisit(), back: [], forward: [] }));
+export const useSettingsNav = create<Nav>()(() => ({ pane: "general", profileId: null, detail: null, scroll: 0, visit: newSettingsVisit(), shownProfile: null, back: [], forward: [] }));
 
 export function goToSettingsPane(pane: SettingsPane, profileId: string | null = null, detail: string | null = null) {
   const current = useSettingsNav.getState();
   if (current.pane === pane && current.profileId === profileId && current.detail === detail) return;
-  useSettingsNav.setState({ pane, profileId, detail, scroll: 0, visit: newSettingsVisit(), back: [...current.back, stopOf(current)].slice(-30), forward: [] });
+  useSettingsNav.setState({ pane, profileId, detail, scroll: 0, visit: newSettingsVisit(), shownProfile: shownSettingsProfile({ pane, profileId, detail }), back: [...current.back, stopOf(current)].slice(-30), forward: [] });
 }
 
 const replacedOffsets = new Map<string, number>();
@@ -47,10 +55,13 @@ const replacedOffsets = new Map<string, number>();
 export function replaceSettingsPlace(profileId: string | null, detail: string | null = null) {
   const current = useSettingsNav.getState();
   const { pane, back } = current;
-  replacedOffsets.set(settingsPlaceKey(current), stopOf(current).scroll);
+  replacedOffsets.set(shownPlaceKey(current), stopOf(current).scroll);
   const prev = back.at(-1);
   const same = prev?.pane === pane && prev.profileId === profileId && prev.detail === detail;
-  const stop = same ? { scroll: prev.scroll, visit: prev.visit } : { scroll: replacedOffsets.get(settingsPlaceKey({ pane, profileId, detail })) ?? 0, visit: newSettingsVisit() };
+  const place = { pane, profileId, detail };
+  const stop = same
+    ? { scroll: prev.scroll, visit: prev.visit, shownProfile: prev.shownProfile }
+    : { scroll: replacedOffsets.get(shownPlaceKey(place)) ?? 0, visit: newSettingsVisit(), shownProfile: shownSettingsProfile(place) };
   useSettingsNav.setState({ profileId, detail, ...stop, back: same ? back.slice(0, -1) : back, forward: [] });
 }
 
@@ -77,7 +88,7 @@ export function forgetSettingsScroll() {
 
 export function settingsScrollFor(visit: number) {
   const nav = useSettingsNav.getState();
-  return nav.visit === visit ? nav.scroll : 0;
+  return nav.visit === visit && nav.shownProfile === shownSettingsProfile(nav) ? nav.scroll : 0;
 }
 
 export const SETTINGS_DETAIL = {

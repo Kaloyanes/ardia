@@ -24,7 +24,7 @@ test("Linux Settings shares navigation actions and opens the requested native ut
     title: "Settings",
     settings: { pane: "profiles", profileId: "work", detail: null },
   });
-  assert.deepEqual(shared.useSettingsNav.getState().back, [{ pane: "general", profileId: null, detail: null, scroll: 0, visit: 1 }]);
+  assert.deepEqual(shared.useSettingsNav.getState().back, [{ pane: "general", profileId: null, detail: null, scroll: 0, visit: 1, shownProfile: null }]);
 
   linux.settingsBack();
   assert.equal(shared.useSettingsNav.getState().pane, "general");

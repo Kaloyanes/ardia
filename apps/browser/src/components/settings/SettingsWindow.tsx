@@ -38,7 +38,7 @@ import { useWindowChrome } from "../../state/windows/windowButtons";
 import { noteSettingsScroll } from "../../state/settings/growingRows";
 import { settingsLayoutKey, settingsScroller, type ScrollMove } from "../../state/settings/paneScroll";
 import { noteSettingsScrollRestore } from "../../state/telemetry/usage";
-import { consentToken, type ConsentToken } from "../../state/telemetry/choice";
+import { consentToken } from "../../state/telemetry/choice";
 
 const SIDEBAR = settingsLayout.sidebarWidth;
 const TOOLBAR = pageToolbar.window.height;
@@ -112,17 +112,23 @@ export function SettingsWindow() {
   const page = shown ? settingsPageKey(shown) : "";
   const visit = shown?.visit ?? 0;
   const layout = shown ? settingsLayoutKey(shown) : "";
-  const [scrollMemory] = useState(settingsScroller);
-  const restoreConsent = useRef<ConsentToken | null>(null);
+  const [scrollMemory] = useState(() => settingsScroller(noteSettingsScrollRestore));
+  const begun = useRef<number | null>(null);
+  const pendingMove = useRef<ScrollMove | null>(null);
   const move = (to: ScrollMove | null) => {
     if (!to) return;
-    scroller.current?.scrollTo({ y: to.y, animated: false });
-    if (to.restore) noteSettingsScrollRestore(to.restore, restoreConsent.current);
+    pendingMove.current = null;
+    if (scroller.current) scroller.current.scrollTo({ y: to.y, animated: false });
+    else pendingMove.current = to;
   };
+  if (shown && begun.current !== visit) {
+    begun.current = visit;
+    pendingMove.current = scrollMemory.begin(visit, settingsScrollFor(visit), shown, consentToken());
+  }
   useLayoutEffect(() => {
-    if (!shown) return;
-    restoreConsent.current = consentToken();
-    move(scrollMemory.begin(visit, settingsScrollFor(visit), shown));
+    const due = pendingMove.current;
+    pendingMove.current = null;
+    move(due);
   }, [visit]);
   useEffect(() => forgetSettingsScroll, []);
   useEffect(() => closeProfileIconPickerIn(SETTINGS_WINDOW_ID), [key]);
@@ -147,7 +153,10 @@ export function SettingsWindow() {
         (_x, y, _w, h) => {
           const top = animated ? scrollTop.current : 0;
           const inView = y >= top + REVEAL_MARGIN && y + h <= top + viewport.current - REVEAL_MARGIN;
-          if (!inView) scroller.current?.scrollTo({ y: Math.max(0, y - viewport.current / 3), animated });
+          if (!inView) {
+            scrollMemory.moved();
+            scroller.current?.scrollTo({ y: Math.max(0, y - viewport.current / 3), animated });
+          }
           flashSetting(resolveSettingId(reveal.id));
         },
         () => flashSetting(resolveSettingId(reveal.id)),
@@ -190,7 +199,7 @@ export function SettingsWindow() {
           scrollEventThrottle={16}
           onScroll={({ nativeEvent: { contentOffset, layoutMeasurement, contentSize } }) => {
             scrollTop.current = contentOffset.y;
-            scrollMemory.scrolled(contentOffset.y);
+            scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height);
             noteSettingsScroll(contentOffset.y, layoutMeasurement.height, contentSize.height);
           }}
           onLayout={(e) => {

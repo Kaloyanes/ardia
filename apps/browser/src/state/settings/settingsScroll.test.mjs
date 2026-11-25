@@ -3,6 +3,7 @@ import { test } from "node:test";
 const { forgetSettingsScroll, goToSettingsPane, rememberSettingsScrollOffset, replaceSettingsPlace, settingsBack, settingsForward, useSettingsNav } = await import("./settingsWindows.ts");
 const { settingsScrollFor } = await import("./settingsWindows.ts");
 const { SCROLL_SETTLE_MS, settingsLayoutKey, settingsScroller } = await import("./paneScroll.ts");
+globalThis.__browserStore = await import("../browser/store.ts");
 
 const nav = () => useSettingsNav.getState();
 const scrollShown = (y) => rememberSettingsScrollOffset(nav().visit, y);
@@ -129,12 +130,22 @@ test("closing Settings forgets every entry's position", () => {
 const clock = { now: 0 };
 
 function window(viewport = 600) {
-  const memory = settingsScroller(() => clock.now);
+  const reports = [];
+  const memory = settingsScroller((outcome) => reports.push(outcome), () => clock.now);
   memory.resized(viewport);
+  const reported = (move, before) => (move ? { y: move.y, restore: reports.length > before ? reports.at(-1) : null } : null);
   return {
-    show: () => memory.begin(nav().visit, settingsScrollFor(nav().visit), nav()),
-    lay: (height, place = nav()) => memory.laidOut(settingsLayoutKey(place), height),
-    scrolled: (y) => memory.scrolled(y),
+    reports,
+    memory,
+    show: () => {
+      const before = reports.length;
+      return reported(memory.begin(nav().visit, settingsScrollFor(nav().visit), nav(), null), before);
+    },
+    lay: (height, place = nav()) => {
+      const before = reports.length;
+      return reported(memory.laidOut(settingsLayoutKey(place), height), before);
+    },
+    scrolled: (y, max = 1e9) => memory.scrolled(y, max),
   };
 }
 
@@ -152,7 +163,9 @@ test("the saved offset is restored when the page first lays out tall enough to r
   returnToSaved(800);
   const settings = window();
   assert.deepEqual(settings.show(), { y: 0, restore: null }, "a new page goes to the top while it lays out");
-  assert.deepEqual(settings.lay(1400), { y: 800, restore: "applied" });
+  assert.deepEqual(settings.lay(1400), { y: 800, restore: null }, "applied once the scroll view reports it");
+  settings.scrolled(800);
+  assert.deepEqual(settings.reports, ["applied"]);
   assert.equal(settings.lay(3000), null);
   settingsForward();
   settingsBack();
@@ -216,7 +229,7 @@ test("after a restore, a queued offset delivered through the current handler is 
   returnToSaved(500);
   const settings = window();
   settings.show();
-  assert.deepEqual(settings.lay(1400), { y: 500, restore: "applied" });
+  assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
   settings.scrolled(120);
   settingsForward();
   settingsBack();
@@ -280,10 +293,13 @@ test("Back from a short profile's overview to a taller one judges the saved offs
   goToSettingsPane("profiles", "short");
   settings.show();
   settings.lay(1000);
+  settings.scrolled(0);
   settingsBack();
   assert.equal(nav().scroll, 900);
   assert.equal(settings.show(), null, "the short profile's height says nothing about the tall one");
-  assert.deepEqual(settings.lay(1500), { y: 900, restore: "applied" });
+  assert.deepEqual(settings.lay(1500), { y: 900, restore: null });
+  settings.scrolled(900);
+  assert.equal(settings.reports.at(-1), "applied");
   goToSettingsPane("profiles", "tall", "passwords");
   settings.show();
   settings.lay(800);
@@ -308,27 +324,132 @@ test("the same profile's page, laid out already, settles at once from its known 
 
 test("switching profiles with the pills keeps each profile's position, without adding history", () => {
   fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const home = useBrowser.getState().createProfile({ name: "Home" });
   const settings = window(500);
-  goToSettingsPane("profiles", "work");
+  goToSettingsPane("profiles", work);
   const history = nav().back.length;
   settings.show();
   settings.lay(1500);
   later();
   settings.scrolled(350);
-  replaceSettingsPlace("home");
+  replaceSettingsPlace(home);
   assert.equal(nav().scroll, 0, "a profile not seen yet starts at the top");
   settings.show();
   settings.lay(1500);
   later();
   settings.scrolled(180);
-  replaceSettingsPlace("work");
+  replaceSettingsPlace(work);
   assert.equal(nav().scroll, 350);
   assert.equal(settings.show(), null);
-  assert.deepEqual(settings.lay(1500), { y: 350, restore: "applied" });
-  replaceSettingsPlace("home");
+  assert.deepEqual(settings.lay(1500), { y: 350, restore: null });
+  settings.scrolled(350);
+  assert.equal(settings.reports.at(-1), "applied");
+  replaceSettingsPlace(home);
   assert.equal(nav().scroll, 180);
   assert.equal(nav().back.length, history);
   forgetSettingsScroll();
-  replaceSettingsPlace("work");
+  replaceSettingsPlace(work);
   assert.equal(nav().scroll, 0, "closing Settings forgets them too");
+});
+
+test("S1 (round 2): a marker that reports before the visit begins, as on Linux and Windows, still settles that visit", () => {
+  fresh();
+  const settings = window(500);
+  goToSettingsPane("profiles", "work");
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(300);
+  goToSettingsPane("general");
+  settings.show();
+  settings.lay(900);
+  settings.scrolled(0);
+  settingsBack();
+  assert.equal(nav().scroll, 300);
+  assert.equal(settings.lay(1500), null, "the destination's marker fires before begin");
+  assert.deepEqual(settings.show(), { y: 300, restore: null }, "begin takes that report instead of waiting for one that won't come again");
+  settings.scrolled(300);
+  assert.equal(settings.reports.at(-1), "applied");
+  later();
+  settings.scrolled(340);
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 340, "the user's scroll is saved, not 0");
+});
+
+test("S2 (round 2): a restore the view is already at concludes at once, so a scroll right after it counts", () => {
+  fresh();
+  const settings = window(500);
+  goToSettingsPane("profiles", "work");
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(450);
+  replaceSettingsPlace("work");
+  assert.deepEqual(settings.show(), { y: 450, restore: "applied" });
+  settings.scrolled(470);
+  goToSettingsPane("general");
+  settingsBack();
+  assert.equal(nav().scroll, 470, "no 250 ms wait swallowed the user's scroll");
+});
+
+test("S2 (round 2): a search reveal right after a restore is recorded", () => {
+  returnToSaved(500);
+  const settings = window();
+  settings.show();
+  settings.lay(1400);
+  settings.memory.moved();
+  settings.scrolled(700);
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 700);
+  assert.deepEqual(settings.reports, ["applied"]);
+});
+
+test("S2 (round 2): a restore the scroll view clamps keeps the offset it landed on and is counted as clamped", () => {
+  returnToSaved(500);
+  const settings = window();
+  settings.show();
+  assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
+  settings.scrolled(480, 480);
+  assert.deepEqual(settings.reports, ["clamped"]);
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 480);
+});
+
+test("S3 (round 2): the default profile opened without an id and its own pill share one remembered position", () => {
+  fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const personal = useBrowser.getState().settings.defaultProfileId;
+  const settings = window(500);
+  goToSettingsPane("profiles", null);
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(310);
+  replaceSettingsPlace(work);
+  replaceSettingsPlace(personal);
+  assert.equal(nav().scroll, 310);
+});
+
+test("S5 (round 2): Back to a deleted profile, now shown as another one, doesn't take the deleted profile's offset", () => {
+  fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const personal = useBrowser.getState().settings.defaultProfileId;
+  goToSettingsPane("profiles", work);
+  scrollShown(400);
+  goToSettingsPane("profiles", personal);
+  useBrowser.setState((s) => {
+    const { [work]: _gone, ...profiles } = s.profiles;
+    return { profiles, profileOrder: s.profileOrder.filter((id) => id !== work) };
+  });
+  settingsBack();
+  assert.equal(nav().profileId, work);
+  assert.equal(nav().scroll, 400);
+  assert.equal(settingsScrollFor(nav().visit), 0, "the page shows the default profile, so 400 isn't restored on it");
 });

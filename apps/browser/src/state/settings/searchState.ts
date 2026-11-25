@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { goToSettingsPane, newSettingsVisit, onTargetedSettingsOpen, type SettingsPane, useSettingsNav } from "./settingsWindows";
+import { goToSettingsPane, newSettingsVisit, onTargetedSettingsOpen, shownSettingsProfile, type SettingsPane, useSettingsNav } from "./settingsWindows";
 import { settingsProfileFor } from "../extensions/store";
 import { noteSettingsSearch, noteSettingsSearchReveal } from "../telemetry/usage";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
@@ -107,7 +107,7 @@ export function previewSetting({ id, pane, section }: Target) {
 function showWithoutHistory(pane: SettingsPane) {
   const nav = useSettingsNav.getState();
   const profileId = settingsProfileFor(pane, nav);
-  if (nav.pane !== pane || nav.profileId !== profileId || nav.detail) useSettingsNav.setState({ pane, profileId, detail: null, scroll: 0, visit: newSettingsVisit(), forward: [] });
+  if (nav.pane !== pane || nav.profileId !== profileId || nav.detail) useSettingsNav.setState({ pane, profileId, detail: null, scroll: 0, visit: newSettingsVisit(), shownProfile: shownSettingsProfile({ pane, profileId, detail: null }), forward: [] });
 }
 
 export const flashSetting = (id: string) => useSettingsSearch.setState({ reveal: null, flash: { id, at: Date.now() } });
