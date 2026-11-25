@@ -1,5 +1,7 @@
+import type { PageEngine } from "../../platform/tabs";
 import type { Tab } from "../browser/types";
 import { useBrowser } from "../browser/store";
+import { tabEngine } from "./engines";
 import { webviews } from "../../platform/webviews";
 import { withDeadline } from "../../lib/deadline";
 import { adoptKind } from "../tabs/adoptIds";
@@ -7,12 +9,12 @@ import { adoptOf } from "../tabs/pageSession";
 
 export type OpenerState = "live" | "none" | "unknown";
 
-const pageMade = new Set<string>();
+const pageMade = new Map<string, PageEngine>();
 let unwatch: (() => void) | null = null;
 
-function forgetClosedTabs() {
+function forgetReplacedPages() {
   unwatch ??= useBrowser.subscribeTo(["tabs"], (s) => {
-    for (const id of pageMade) if (!s.tabs[id]) pageMade.delete(id);
+    for (const [id, engine] of pageMade) if (!s.tabs[id] || tabEngine(s, id) !== engine) pageMade.delete(id);
   });
 }
 
@@ -22,11 +24,19 @@ export function madeByPage(t: Tab | undefined): boolean {
 }
 
 export function notePageMadeTab(tabId: string) {
-  pageMade.add(tabId);
-  forgetClosedTabs();
+  const s = useBrowser.getState();
+  if (!s.tabs[tabId]) return;
+  pageMade.set(tabId, tabEngine(s, tabId));
+  forgetReplacedPages();
 }
 
-export const openedByPage = (tabId: string) => pageMade.has(tabId);
+export function openedByPage(tabId: string): boolean {
+  const s = useBrowser.getState();
+  const t = s.tabs[tabId];
+  if (madeByPage(t)) return true;
+  const engine = pageMade.get(tabId);
+  return !!t && engine !== undefined && tabEngine(s, tabId) === engine;
+}
 
 export const forgetPageMadeTab = (tabId: string) => void pageMade.delete(tabId);
 

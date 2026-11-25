@@ -33,8 +33,8 @@ import { webviews } from "../../platform/webviews";
 import { withDeadline } from "../../lib/deadline";
 import { loadedPage, navigationOf } from "../tabs/pageSession";
 import { noteStreamingListVisit } from "../telemetry/streamingSiteCounts";
-import { noteEngineModeChange, noteEngineModeVideoNotice, noteSiteMove } from "../telemetry/engineSwitchCounts";
-import { forgetPageMadeTab, openedByPage, openerState } from "./openedPages";
+import { noteEngineModeChange, noteEngineModeVideoNotice } from "../telemetry/engineSwitchCounts";
+import { forgetPageMadeTab } from "./openedPages";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { showToast } from "../app/toasts";
 import { openSettings } from "../settings/settingsWindows";
@@ -47,7 +47,6 @@ export const useEngineOffers = create<Record<string, EngineOffer>>()(() => ({}))
 const store = () => useBrowser.getState();
 const declinedSites = new Set<string>();
 const toldInChromiumMode = new Set<string>();
-const movingTabs = new Set<string>();
 const webKitSites = new Map<string, string>();
 const hostLabel = (site: string) => new URL(site).hostname.replace(/^www\./, "");
 
@@ -131,7 +130,7 @@ export async function goBackAcrossEngines(tabId: string, mayAct: () => boolean =
   return true;
 }
 
-type MoveOptions = { rule?: PageEngine | null; checkWork?: boolean; mayWrite?: () => boolean; routedHere?: (url: string) => boolean };
+type MoveOptions = { rule?: PageEngine | null; checkWork?: boolean; mayWrite?: () => boolean; routedHere?: (url: string) => boolean; onStayed?: () => void };
 
 const switchingTabs = new Set<string>();
 
@@ -153,6 +152,7 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
   if (!canSwitchEngine(url) && !(engine === "chromium" && webStorePage(url))) return false;
   const forced = modeEngineFor(store(), t, url);
   if (forced && forced !== engine) return false;
+  if (options.routedHere && !options.routedHere(url)) return false;
   const saveRule = () => options.rule !== undefined && !isIncognitoProfile(t.profileId) && setWebsiteEngine(url, options.rule);
   clearEngineOffer(tabId);
   if (tabEngine(store(), tabId) === engine) {
@@ -160,8 +160,13 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
     return true;
   }
   const holds = modeStillHolds();
-  if (options.checkWork !== false && !(await mayLeavePage(t, `Open this page in ${ENGINE_NAMES[engine]}?`, `The page reloads in ${ENGINE_NAMES[engine]}, so changes you made on it may not be saved.`, `Open in ${ENGINE_NAMES[engine]}`))) return false;
+  if (options.checkWork !== false && !(await mayLeavePage(t, `Open this page in ${ENGINE_NAMES[engine]}?`, `The page reloads in ${ENGINE_NAMES[engine]}, so changes you made on it may not be saved.`, `Open in ${ENGINE_NAMES[engine]}`))) {
+    options.onStayed?.();
+    return false;
+  }
   if (!holds()) return false;
+  const afterPrompt = pageUrl(store().tabs[tabId]);
+  if (options.routedHere && (siteOf(afterPrompt) !== siteOf(url) || !options.routedHere(afterPrompt))) return false;
   if (carriesSiteData()) await carrySignIn(tabId, url, engine, consent, holds);
   if (!holds()) return false;
   const from = tabEngine(store(), tabId);
@@ -187,21 +192,10 @@ export const togglePageEngine = (tabId: string, mayWrite?: () => boolean) => ope
 
 export const refusedVideoSiteOf = (tabId: string) => refusedVideoSite(store(), store().tabs[tabId]?.url);
 
-export function offerWebKit(tabId: string, { keySystem }: ProtectedMediaRequest) {
-  const s = store();
-  const t = s.tabs[tabId];
-  if (!t || tabEngine(s, tabId) === "webkit") return;
-  const site = siteOf(t.url);
-  if (!site) return;
-  if (singleEngine(s) === "chromium") return tellChromiumModeBlocks(t, site);
-  if (singleEngine(s)) return;
-  const rule = chosenEngine(s, t.url);
-  if (rule === "chromium" || declinedSites.has(site)) return;
-  if (rule === "webkit") return void moveForProtectedVideo(tabId, site, keySystem);
-  showEngineOffer(tabId, site, keySystem);
-}
+export const siteDeclined = (site: string) => declinedSites.has(site);
+export const declineSite = (site: string) => void declinedSites.add(site);
 
-function showEngineOffer(tabId: string, site: string, keySystem: string) {
+export function showEngineOffer(tabId: string, site: string, keySystem: string) {
   const s = store();
   const t = s.tabs[tabId];
   if (!t || !s.settings.offerWebKitForProtectedVideo) return;
@@ -209,18 +203,7 @@ function showEngineOffer(tabId: string, site: string, keySystem: string) {
   useEngineOffers.setState({ [tabId]: { site, host: hostLabel(site), keySystem, canRemember: !isIncognitoProfile(t.profileId) } });
 }
 
-const routedToWebKit = (site: string) => (url: string) => siteOf(url) === site && chosenEngine(store(), url) === "webkit" && canSwitchEngine(url);
-
-async function openerKeepsPage(tabId: string, site: string, holds: () => boolean, consent: ConsentToken | null): Promise<boolean> {
-  if (!openedByPage(tabId)) return false;
-  const onSite = () => holds() && siteOf(pageUrl(store().tabs[tabId])) === site && tabEngine(store(), tabId) !== "webkit";
-  const opener = await openerState(tabId, onSite);
-  if (!onSite() || opener === "none") return !onSite();
-  noteSiteMove(opener === "live" ? "keptForOpener" : "dropped", true, consent);
-  return true;
-}
-
-function tellChromiumModeBlocks(t: Tab, site: string) {
+export function tellChromiumModeBlocks(t: Tab, site: string) {
   if (!PLATFORM_FEATURES.webKit || toldInChromiumMode.has(site)) return;
   toldInChromiumMode.add(site);
   noteEngineModeVideoNotice("shown", consentToken());
@@ -253,25 +236,6 @@ export function stayOnPage(tabId: string, remember = false) {
 }
 
 export const acceptEngineOffer = (tabId: string) => openPageIn(tabId, "webkit", { rule: "webkit" });
-
-async function moveForProtectedVideo(tabId: string, site: string, keySystem: string) {
-  if (movingTabs.has(tabId)) return;
-  movingTabs.add(tabId);
-  const holds = modeStillHolds();
-  const consent = consentToken();
-  try {
-    if (await openerKeepsPage(tabId, site, holds, consent)) {
-      if (holds() && tabEngine(store(), tabId) !== "webkit" && siteOf(pageUrl(store().tabs[tabId])) === site) showEngineOffer(tabId, site, keySystem);
-      return;
-    }
-    if (!(await openPageIn(tabId, "webkit", { routedHere: routedToWebKit(site) })) && holds()) {
-      declinedSites.add(site);
-      return;
-    }
-  } finally {
-    movingTabs.delete(tabId);
-  }
-}
 
 const MODE_NAMES: Record<EngineMode, string> = { automatic: "Automatic", chromium: ENGINE_NAMES.chromium, webkit: ENGINE_NAMES.webkit };
 

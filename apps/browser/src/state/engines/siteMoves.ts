@@ -1,8 +1,8 @@
-import type { PageEngine } from "../../platform/tabs";
+import type { PageEngine, ProtectedMediaRequest } from "../../platform/tabs";
 import { useBrowser } from "../browser/store";
 import { patchPage } from "../tabs/pageState";
 import { canSwitchEngine, chosenEngine, chromiumOnly, modeEngineFor, needsChromium, singleEngine, siteOf, tabEngine, webStorePage } from "./engines";
-import { modeStillHolds, openPageIn, pageUrl } from "./actions";
+import { declineSite, modeStillHolds, openPageIn, pageUrl, showEngineOffer, siteDeclined, tellChromiumModeBlocks } from "./actions";
 import { openedByPage, openerState } from "./openedPages";
 import { noteSiteMove } from "../telemetry/engineSwitchCounts";
 import { consentToken, type ConsentToken } from "../telemetry/client";
@@ -10,10 +10,11 @@ import { consentToken, type ConsentToken } from "../telemetry/client";
 const store = () => useBrowser.getState();
 const SITE_MOVE_SPACING_MS = 10_000;
 
-type Move = { from: PageEngine; to: PageEngine; previousUrl: string; consent: ConsentToken | null };
+type Move = { from: PageEngine; to: PageEngine; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string } };
 type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null };
 
 const tabMoves = new Map<string, TabMoves>();
+const probingVideo = new Set<string>();
 let unwatch: (() => void) | null = null;
 
 function movesOf(tabId: string): TabMoves {
@@ -43,13 +44,17 @@ export const routedTo = (tabId: string, engine: PageEngine) => (url: string) => 
 function startMove(tabId: string, move: Move) {
   const moves = movesOf(tabId);
   if (moves.moving) return void (moves.pending = move);
-  if (Date.now() - moves.lastMovedAt < SITE_MOVE_SPACING_MS) return;
+  if (!move.forVideo && Date.now() - moves.lastMovedAt < SITE_MOVE_SPACING_MS) return;
   moves.moving = true;
   const holds = modeStillHolds();
   const opened = openedByPage(tabId);
-  void openPageIn(tabId, move.to, { checkWork: false, routedHere: routedTo(tabId, move.to) }).then((moved) => {
+  const video = move.forVideo;
+  const options = video
+    ? { routedHere: routedTo(tabId, move.to), onStayed: () => declineSite(video.site) }
+    : { checkWork: false, routedHere: routedTo(tabId, move.to) };
+  void openPageIn(tabId, move.to, options).then((moved) => {
     moves.moving = false;
-    if (moved || !moves.pending) noteSiteMove(moved ? "moved" : "dropped", opened, move.consent);
+    if (!video && (moved || !moves.pending)) noteSiteMove(moved ? "moved" : "dropped", opened, move.consent);
     if (moved) {
       moves.lastMovedAt = Date.now();
       moves.pending = null;
@@ -99,4 +104,41 @@ export function followSiteChoice(tabId: string, engine: PageEngine, url: string,
   const move = { from: engine, to: chosen, previousUrl, consent };
   if (openedByPage(tabId)) return void moveOpenedTab(tabId, url, move);
   startMove(tabId, move);
+}
+
+async function moveForProtectedVideo(tabId: string, site: string, keySystem: string) {
+  if (probingVideo.has(tabId)) return;
+  const holds = modeStillHolds();
+  const consent = consentToken();
+  const onSite = () => holds() && siteOf(pageUrl(store().tabs[tabId])) === site && tabEngine(store(), tabId) !== "webkit";
+  const stillRouted = () => onSite() && routedTo(tabId, "webkit")(pageUrl(store().tabs[tabId]));
+  let opener: "live" | "none" | "unknown" = "none";
+  if (openedByPage(tabId)) {
+    probingVideo.add(tabId);
+    try {
+      opener = await openerState(tabId, onSite);
+    } finally {
+      probingVideo.delete(tabId);
+    }
+  }
+  if (!stillRouted()) return;
+  if (opener !== "none") {
+    noteSiteMove(opener === "live" ? "keptForOpener" : "dropped", true, consent);
+    return showEngineOffer(tabId, site, keySystem);
+  }
+  startMove(tabId, { from: tabEngine(store(), tabId), to: "webkit", previousUrl: "", consent, forVideo: { site } });
+}
+
+export function offerWebKit(tabId: string, { keySystem }: ProtectedMediaRequest) {
+  const s = store();
+  const t = s.tabs[tabId];
+  if (!t || tabEngine(s, tabId) === "webkit") return;
+  const site = siteOf(t.url);
+  if (!site) return;
+  if (singleEngine(s) === "chromium") return tellChromiumModeBlocks(t, site);
+  if (singleEngine(s)) return;
+  const rule = chosenEngine(s, t.url);
+  if (rule === "chromium" || siteDeclined(site)) return;
+  if (rule === "webkit") return void moveForProtectedVideo(tabId, site, keySystem);
+  showEngineOffer(tabId, site, keySystem);
 }
