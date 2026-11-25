@@ -21,7 +21,7 @@ export function decode(spec) {
   const input = spec.movie ? ["-i", spec.movie] : ["-framerate", "1000", "-i", spec.pattern];
   const crop = spec.crop ? `crop=${spec.crop[2]}:${spec.crop[3]}:${spec.crop[0]}:${spec.crop[1]},` : "";
   const probe = execFileSync(ffmpeg, ["-v", "error", ...input, "-frames:v", "1", "-vf", `${crop}scale=trunc(iw/4)*2:trunc(ih/4)*2`, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer: 256 * 1024 * 1024 });
-  const raw = execFileSync(ffmpeg, ["-v", "error", ...input, "-vsync", "passthrough", "-vf", `${crop}scale=trunc(iw/4)*2:trunc(ih/4)*2`, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer: 1024 * 1024 * 1024 });
+  const raw = execFileSync(ffmpeg, ["-v", "error", ...input, "-fps_mode", "passthrough", "-vf", `${crop}scale=trunc(iw/4)*2:trunc(ih/4)*2`, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer: 1024 * 1024 * 1024 });
   const size = probe.length;
   const frames = [];
   for (let at = 0; at + size <= raw.length; at += size) frames.push(raw.subarray(at, at + size));
