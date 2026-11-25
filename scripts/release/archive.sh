@@ -34,7 +34,7 @@ check_release_settings() {
   local name=$1 required=$2
   shift 2
   (cd "$root/apps/browser" && "$root/scripts/agent/locked" pod --wait 1800 -- \
-    xcodebuild "$@" "${build_settings[@]}" -showBuildSettings) > "$dist/release-settings-$name.txt" 2>&1 ||
+    xcodebuild "$@" "${build_settings[@]}" ACTION=install -showBuildSettings) > "$dist/release-settings-$name.txt" 2>&1 ||
     die "couldn't read the $name's Release build settings ($dist/release-settings-$name.txt)"
   "$(dirname "$0")/no-debug-build.sh" --effective --require-targets "$required" < "$dist/release-settings-$name.txt" ||
     die "the $name's Release build settings would compile in Debug-only code ($dist/release-settings-$name.txt)"

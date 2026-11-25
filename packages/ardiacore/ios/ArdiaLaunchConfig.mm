@@ -27,6 +27,7 @@ NSString *const kWebUIDevDataFolder = @"Library/Application Support/Ardia WebUI 
 NSString *const kApplicationSupportFolder = @"Library/Application Support";
 NSString *const kInstalledBundleIdentifier = @"com.ardia.browser";
 NSString *const kLegacyProfileFolder = @"Ardia";
+NSString *const kEngineDataFolder = @"Chromium";
 
 NSArray<NSString *> *InstanceKeys() {
   return @[
@@ -222,8 +223,9 @@ NSArray<NSString *> *LiveProfileRoots(NSString *home) {
 }
 
 BOOL InsideLiveProfile(NSString *path, NSString *home) {
+  NSString *engineData = [path stringByAppendingPathComponent:kEngineDataFolder];
   for (NSString *root in LiveProfileRoots(home))
-    if (PathWithin(path, root)) return YES;
+    if (PathWithin(path, root) || PathWithin(engineData, root)) return YES;
   return NO;
 }
 #endif

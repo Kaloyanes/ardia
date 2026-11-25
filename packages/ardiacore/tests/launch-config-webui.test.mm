@@ -34,6 +34,10 @@ static void MakeHome() {
   [files createSymbolicLinkAtPath:InHome(@"scratch/live-link") withDestinationPath:InHome(@"Library/Application Support/com.ardia.browser") error:nil];
   [files createSymbolicLinkAtPath:InHome(@"scratch/legacy-link") withDestinationPath:InHome(@"Library/Application Support/Ardia") error:nil];
   [files createSymbolicLinkAtPath:InHome(@"scratch/deep") withDestinationPath:InHome(@"Library/Application Support/com.ardia.browser/Chromium") error:nil];
+  for (NSString *folder in @[ @"scratch/engine-link", @"scratch/engine-legacy", @"scratch/engine-own/Chromium" ])
+    [files createDirectoryAtPath:InHome(folder) withIntermediateDirectories:YES attributes:nil error:nil];
+  [files createSymbolicLinkAtPath:InHome(@"scratch/engine-link/Chromium") withDestinationPath:InHome(@"Library/Application Support/com.ardia.browser/Chromium") error:nil];
+  [files createSymbolicLinkAtPath:InHome(@"scratch/engine-legacy/Chromium") withDestinationPath:InHome(@"Library/Application Support/Ardia") error:nil];
 }
 
 static void EveryRequest(void (^check)(ArdiaLaunchConfig *config)) {
@@ -87,6 +91,8 @@ static void RefusesLiveProfiles() {
     @"scratch/deep/../made-later",
     @"scratch/missing/../live-link",
     @"scratch/missing/../deep/../made-later",
+    @"scratch/engine-link",
+    @"scratch/engine-legacy",
   ];
   for (NSString *path in live) {
     ArdiaLaunchConfig *config = Config(@{@"ARDIA_SHELL" : @"webui", @"ARDIA_DATA_DIR" : InHome(path), @"ARDIA_WEBUI_APP" : @"/tmp/Ardia WebUI.app"});
@@ -98,7 +104,7 @@ static void RefusesLiveProfiles() {
     CHECK(!config.isolated);
     CHECK([config.snapshot[@"webUIRefusedDataDirectory"] isEqual:@YES]);
   }
-  for (NSString *path in @[ @"scratch", @"scratch/webui", @"Library/Application Support/Ardia WebUI Dev", @"Library/Application Support/com.ardia.browser-copy", @"Library/Application Support/Ardia copy", @"scratch/../scratch/fresh", @"scratch/deep/../../../../scratch/after-climb" ]) {
+  for (NSString *path in @[ @"scratch", @"scratch/webui", @"Library/Application Support/Ardia WebUI Dev", @"Library/Application Support/com.ardia.browser-copy", @"Library/Application Support/Ardia copy", @"scratch/../scratch/fresh", @"scratch/engine-own", @"scratch/deep/../../../../scratch/after-climb" ]) {
     ArdiaLaunchConfig *config = Config(@{@"ARDIA_SHELL" : @"webui", @"ARDIA_DATA_DIR" : InHome(path)});
     if (!config.webUIShell) std::printf("FAIL safe directory refused: %s\n", path.UTF8String);
     CHECK(!config.webUIRefusedDataDirectory);

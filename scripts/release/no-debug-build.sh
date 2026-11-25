@@ -35,14 +35,14 @@ case "${1:-}" in
       required=$3
     fi
     awk -v token="$DEBUG_TOKEN" -v required="$required" '
-      /Could not get build settings|xcodebuild: error|Ignoring provided run destination|^[ \t]*error: / {
+      /Could not get build settings|xcodebuild: error|Ignoring provided run destination|^[ \t]*(xcodebuild:[ \t]+)?error:([ \t]|$)/ {
         print "no-debug-build: xcodebuild did not give every setting: " $0 > "/dev/stderr"; bad++; next
       }
       /^Build settings for action / { target = $0; sub(/^.* and target "?/, "", target); sub(/"?:$/, "", target); targets++; name[targets] = target; seen[target] = 1; next }
       targets && /^[ \t]+[A-Za-z_][A-Za-z0-9_]* = / { settings[targets]++ }
       targets && /^[ \t]+CONFIGURATION = / { configuration[targets] = $3 }
       targets && /^[ \t]+SDK_NAME = / { sdk[targets] = $3 }
-      /^[ \t]+(SWIFT_ACTIVE_COMPILATION_CONDITIONS|GCC_PREPROCESSOR_DEFINITIONS|OTHER_SWIFT_FLAGS|OTHER_CFLAGS|OTHER_CPLUSPLUSFLAGS) = / {
+      /^[ \t]+([A-Z_]*PREPROCESSOR_DEFINITIONS[A-Z_]*|SWIFT_ACTIVE_COMPILATION_CONDITIONS|OTHER_SWIFT_FLAGS|OTHER_CFLAGS|OTHER_CPLUSPLUSFLAGS) = / {
         value = $0; sub(/^[ \t]+[A-Z_]+ = /, "", value)
         if (value ~ token) { key = $1; print "no-debug-build: target " target " defines DEBUG in " key > "/dev/stderr"; bad++ }
       }

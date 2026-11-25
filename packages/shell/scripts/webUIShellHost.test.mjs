@@ -144,7 +144,7 @@ test("a release fails when the effective Release settings of the app or any pod 
 test("the archive step checks the app's and the pods' effective Release settings apart, with the archive's own settings, before it archives", () => {
   const archive = read("scripts/release/archive.sh");
   assert.match(archive, /build_settings=\(-configuration Release ARCHS=arm64 ARDIACORE_STAGE_DIR="\$build\/ArdiaCoreFramework" "\$@" "\$\{archive_signing\[@\]\}"\)\nrelease_settings=\(-destination 'generic\/platform=macOS' "\$\{build_settings\[@\]\}"\)/);
-  assert.match(archive, /xcodebuild "\$@" "\$\{build_settings\[@\]\}" -showBuildSettings\) > "\$dist\/release-settings-\$name\.txt" 2>&1/, "each query is saved on its own, with what xcodebuild says on stderr");
+  assert.match(archive, /xcodebuild "\$@" "\$\{build_settings\[@\]\}" ACTION=install -showBuildSettings\) > "\$dist\/release-settings-\$name\.txt" 2>&1/, "each query is saved on its own, as the archive's install action, with what xcodebuild says on stderr");
   assert.match(archive, /no-debug-build\.sh" --effective --require-targets "\$required" < "\$dist\/release-settings-\$name\.txt"/, "each dump is checked on its own");
   assert.match(archive, /^check_release_settings app Ardia-macOS -workspace macos\/Ardia\.xcworkspace -scheme Ardia-macOS -destination 'generic\/platform=macOS'$/m);
   assert.match(archive, /^check_release_settings pods ArdiaCore,ArdiaShell -project macos\/Pods\/Pods\.xcodeproj -alltargets -sdk macosx$/m, "the pods query names the macOS SDK, since xcodebuild drops a destination without a scheme");
@@ -281,6 +281,10 @@ test("a dump xcodebuild couldn't fill, or one that isn't a macOS Release build, 
   assert.equal(effective("xcodebuild: error: The project named \"Pods\" does not contain a scheme\n" + good).status, 1);
   assert.equal(effective("    error: settings query failed\n" + good).status, 1, "an indented error: line");
   assert.equal(effective(good + "\terror: settings query failed\n").status, 1, "a tab-indented error: line after the settings");
+  assert.equal(effective("error:\tsettings query failed\n" + good).status, 1, "a tab after error:");
+  assert.equal(effective("  xcodebuild:\terror:\tsettings query failed\n" + good).status, 1, "an xcodebuild error with tabs");
+  assert.equal(effective("error:\n" + good).status, 1, "a bare error:");
+  assert.equal(effective(settingsDump("ArdiaCore", ["ERROR_REPORTING = error: never"]) + settingsDump("ArdiaShell", [])).status, 0, "a setting whose value mentions error: is not a diagnostic");
 });
 
 test("each settings block is checked on its own, even when a target name repeats", () => {
@@ -296,4 +300,14 @@ test("each settings block is checked on its own, even when a target name repeats
   const iosFirst = effective(settingsDump("ArdiaShell", [], ["CONFIGURATION = Release", "SDK_NAME = iphoneos27.2"]) + good);
   assert.match(iosFirst.stderr, /target ArdiaShell \(block 1\) builds for iphoneos27\.2, not macOS/);
   assert.equal(effective(settingsDump("ArdiaCore", []) + settingsDump("ArdiaCore", [])).status, 1, "repeating one target doesn't stand in for another required one");
+});
+
+test("DEBUG in any preprocessor-definitions setting, such as the product type's, fails the release", () => {
+  const effective = (input) => spawnSync(guard, ["--effective", "--require-targets", "Ardia-macOS"], { input, encoding: "utf8" });
+  for (const line of ["GCC_PRODUCT_TYPE_PREPROCESSOR_DEFINITIONS = DEBUG=1", "GCC_PREPROCESSOR_DEFINITIONS_NOT_USED_IN_PRECOMPS = DEBUG", "INFOPLIST_PREPROCESSOR_DEFINITIONS = DEBUG=1", "OTHER_CPLUSPLUSFLAGS = -DDEBUG=1"]) {
+    const failed = effective(settingsDump("Ardia-macOS", [line]));
+    assert.equal(failed.status, 1, line);
+    assert.match(failed.stderr, new RegExp(`defines DEBUG in ${line.split(" ")[0]}`));
+  }
+  assert.equal(effective(settingsDump("Ardia-macOS", ["GCC_PRODUCT_TYPE_PREPROCESSOR_DEFINITIONS = ", "DEBUG_INFORMATION_FORMAT = dwarf-with-dsym"])).status, 0);
 });
