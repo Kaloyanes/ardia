@@ -1,5 +1,5 @@
 import { Button, ListRow, NativeFormContext, space, Symbol, Text, VisualEffect, WindowDragRegion } from "../ui";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { useProfile } from "../../state/browser/hooks";
 import { usePluginTitle } from "../../state/plugins/hooks";
@@ -48,7 +48,7 @@ const CONTROLS_ROOM = WINDOW_CONTROLS.edge + windowControlsWidth() + WINDOW_CONT
 const HOLD_CAP_MS = 250;
 const PREFETCH_DELAY_MS = 150;
 
-let scrollMounts = 0;
+let layoutGenerations = 0;
 
 type ShownPane = SettingsPlace & { visit: number };
 
@@ -108,9 +108,9 @@ function PaneScrollView({
   scrollMemory: ReturnType<typeof settingsScroller>;
   move: (to: ScrollMove | null) => void;
 }) {
-  const [mount] = useState(() => ++scrollMounts);
+  const generation = useMemo(() => ++layoutGenerations, [layout]);
   useLayoutEffect(() => {
-    if (shown) move(scrollMemory.begin(visit, settingsScrollFor(visit), shown, consentToken(), mount));
+    if (shown) move(scrollMemory.begin(visit, settingsScrollFor(visit), shown, consentToken(), generation));
   }, [visit]);
 
   return (
@@ -118,7 +118,7 @@ function PaneScrollView({
       ref={scroller}
       scrollEventThrottle={16}
       onScroll={({ nativeEvent: { contentOffset, layoutMeasurement, contentSize } }) => {
-        scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height, contentSize.height, { layout, mount });
+        scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height, contentSize.height, { layout, generation });
         noteSettingsScroll(contentOffset.y, layoutMeasurement.height, contentSize.height);
       }}
       onLayout={(e) => {
@@ -138,7 +138,7 @@ function PaneScrollView({
             </SettingsPaneContext.Provider>
           </NativeFormContext.Provider>
         ) : null}
-        <View key={layout} onLayout={(e) => move(scrollMemory.laidOut(layout, e.nativeEvent.layout.y + settingsLayout.paneBottom, mount))} />
+        <View key={layout} onLayout={(e) => move(scrollMemory.laidOut(layout, e.nativeEvent.layout.y + settingsLayout.paneBottom, generation))} />
       </View>
     </ScrollView>
   );
@@ -243,7 +243,6 @@ export function SettingsWindow() {
           </Text>
         </PageToolbar>
         <PaneScrollView
-          key={layout}
           layout={layout}
           page={page}
           shown={shown}

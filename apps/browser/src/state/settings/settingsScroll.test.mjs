@@ -135,40 +135,40 @@ function window(viewport = 600) {
   const memory = settingsScroller((outcome) => reports.push(outcome), () => clock.now);
   memory.resized(viewport);
   const reported = (move, before) => (move ? { y: move.y, restore: reports.length > before ? reports.at(-1) : null } : null);
-  let mounts = 0;
+  let generations = 0;
   let current = null;
   let pending = null;
   const latest = new Map();
-  const mountAt = (layout) => {
-    const mount = { layout, mount: ++mounts };
-    latest.set(layout, mount.mount);
-    return mount;
+  const generationOf = (layout) => {
+    const next = { layout, generation: ++generations };
+    latest.set(layout, next.generation);
+    return next;
   };
   const sourceOf = (layout, explicit) => {
-    if (current?.layout === layout) return current.mount;
+    if (current?.layout === layout) return current.generation;
     if (explicit && latest.has(layout)) return latest.get(layout);
-    pending = pending?.layout === layout ? pending : mountAt(layout);
-    return pending.mount;
+    pending = pending?.layout === layout ? pending : generationOf(layout);
+    return pending.generation;
   };
   return {
     reports,
     memory,
-    mount: () => current?.mount ?? 0,
+    generation: () => current?.generation ?? 0,
     show: () => {
       const layout = settingsLayoutKey(nav());
-      if (current?.layout !== layout) current = pending?.layout === layout ? pending : mountAt(layout);
+      if (current?.layout !== layout) current = pending?.layout === layout ? pending : generationOf(layout);
       pending = null;
       const before = reports.length;
-      return reported(memory.begin(nav().visit, settingsScrollFor(nav().visit), nav(), null, current.mount), before);
+      return reported(memory.begin(nav().visit, settingsScrollFor(nav().visit), nav(), null, current.generation), before);
     },
-    lay: (height, place, mount) => {
+    lay: (height, place, generation) => {
       const layout = settingsLayoutKey(place ?? nav());
       const before = reports.length;
-      return reported(memory.laidOut(layout, height, mount ?? sourceOf(layout, !!place)), before);
+      return reported(memory.laidOut(layout, height, generation ?? sourceOf(layout, !!place)), before);
     },
-    scrolled: (y, max = 1e9, contentHeight = -1, place, mount) => {
+    scrolled: (y, max = 1e9, contentHeight = -1, place, generation) => {
       const layout = place ? settingsLayoutKey(place) : null;
-      memory.scrolled(y, max, contentHeight, layout === null ? undefined : { layout, mount: mount ?? sourceOf(layout, true) });
+      memory.scrolled(y, max, contentHeight, layout === null ? undefined : { layout, generation: generation ?? sourceOf(layout, true) });
     },
   };
 }
@@ -247,6 +247,27 @@ test("(c) a scroll event from the page being left, delivered to the one scroll v
   assert.equal(nav().scroll, 500);
   settingsForward();
   assert.equal(nav().scroll, 120);
+});
+
+test("(c) leaving right after a stale scroll event never saves that stale offset", () => {
+  fresh();
+  const settings = window();
+  goToSettingsPane("tabs");
+  settings.show();
+  settings.lay(3000);
+  later();
+  settings.scrolled(500);
+  goToSettingsPane("advanced");
+  settings.show();
+  settings.lay(3000);
+  settings.scrolled(700);
+  settingsBack();
+  assert.equal(nav().pane, "tabs");
+  assert.equal(nav().scroll, 500);
+  settings.show();
+  settingsForward();
+  assert.equal(nav().pane, "advanced");
+  assert.equal(nav().scroll, 0, "the stale 700 was never saved for the destination");
 });
 
 test("after a restore, a queued offset delivered through the current handler is ignored until the scroll view reports the restored spot", () => {
@@ -610,7 +631,7 @@ test("R4-2: fallback profile keeps its own scroll offset and default switch neve
   assert.equal(nav().scroll, 260, "the new default kept its own 260");
 });
 
-test("R5-1: a search reveal judges the row against the mounted scroll view's own offset, not the page left behind", () => {
+test("R5-1: a search reveal judges the row against the current page's own offset, not the page left behind", () => {
   fresh();
   const settings = window(600);
   goToSettingsPane("tabs");
@@ -620,14 +641,14 @@ test("R5-1: a search reveal judges the row against the mounted scroll view's own
   later();
   settings.scrolled(1200, 2400, 3000, tabs);
   assert.equal(settings.memory.revealTop(), 1200);
-  const left = settings.mount();
+  const left = settings.generation();
   goToSettingsPane("advanced");
   const advanced = nav();
   settings.show();
   settings.lay(3000);
-  assert.equal(settings.memory.revealTop(), 0, "the remounted view starts at the top");
+  assert.equal(settings.memory.revealTop(), 0, "navigating resets the one scroll view to the top");
   settings.scrolled(1300, 2400, 3000, tabs, left);
-  assert.equal(settings.memory.revealTop(), 0, "a late event from the unmounted view doesn't move it");
+  assert.equal(settings.memory.revealTop(), 0, "a late event from the page left behind doesn't move it");
   assert.equal(revealScrollTarget(1500, 40, settings.memory.revealTop(), 600), 1300, "a row at 1500 is offscreen at the top, so the reveal scrolls to it");
   later();
   settings.scrolled(1300, 2400, 3000, advanced);
@@ -656,18 +677,18 @@ test("R5-2: a quick Back before the page left reports layout waits for the desti
   settings.lay(1500);
   later();
   settings.scrolled(900, 1000, 1500, tall);
-  const first = settings.mount();
+  const first = settings.generation();
   goToSettingsPane("profiles", "short");
   settings.show();
   settingsBack();
   assert.equal(nav().scroll, 900);
-  assert.deepEqual(settings.show(), { y: 0, restore: null }, "the remounted overview never settles from its earlier mount's 1500");
+  assert.equal(settings.show(), null, "the overview shown again keeps its spot and never settles from its earlier 1500");
   assert.deepEqual(settings.reports, []);
-  assert.equal(settings.lay(1500, tall, first), null, "a late layout from the earlier mount settles nothing");
+  assert.equal(settings.lay(1500, tall, first), null, "a late layout from the earlier showing settles nothing");
   assert.deepEqual(settings.lay(1000), { y: 0, restore: "unreachable" }, "the fresh 1000 decides: 900 is out of reach");
 });
 
-test("R5-2: the remounted page restores once its own layout can reach the saved offset", () => {
+test("R5-2: a page shown again restores once its own layout can reach the saved offset", () => {
   fresh();
   const settings = window(500);
   goToSettingsPane("tabs");
@@ -683,4 +704,49 @@ test("R5-2: the remounted page restores once its own layout can reach the saved 
   assert.deepEqual(settings.lay(1600), { y: 900, restore: null });
   settings.scrolled(900, 1100, 1600, tabs);
   assert.deepEqual(settings.reports, ["applied"]);
+});
+
+test("R6-1: switching profile pills keeps the one scroll view's real offset for a search reveal", () => {
+  fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const home = useBrowser.getState().createProfile({ name: "Home" });
+  const settings = window(500);
+  goToSettingsPane("profiles", work);
+  settings.show();
+  settings.lay(1500);
+  later();
+  settings.scrolled(550, 1000, 1500, nav());
+  replaceSettingsPlace(home);
+  assert.equal(settings.show(), null, "the same page with another profile doesn't jump to the top");
+  assert.equal(settings.memory.revealTop(), 550, "until it lays out, the view still sits where the last profile left it");
+  assert.deepEqual(settings.lay(1500), { y: 0, restore: null });
+  assert.equal(settings.memory.revealTop(), 0, "the settled spot is what a reveal judges against");
+  goToSettingsPane("tabs");
+  assert.deepEqual(settings.show(), { y: 0, restore: null });
+  assert.equal(settings.memory.revealTop(), 0);
+});
+
+test("R6-2: a restore whose wait has expired saves the offset as an ordinary scroll and reports nothing", () => {
+  returnToSaved(500);
+  const settings = window();
+  settings.show();
+  assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
+  later();
+  settings.scrolled(500, 800, 1400, nav());
+  assert.deepEqual(settings.reports, [], "a late match isn't credited as applied");
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 500);
+
+  returnToSaved(500);
+  const clamped = window();
+  clamped.show();
+  clamped.lay(1400);
+  later();
+  clamped.scrolled(480, 480, 1400, nav());
+  assert.deepEqual(clamped.reports, [], "a late clamp isn't credited as clamped");
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 480);
 });
