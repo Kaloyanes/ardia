@@ -14,7 +14,12 @@ process.on("exit", () => {
 
 export const CODESIGN_TIMEOUT_MS = 120000;
 export const COPY_TIMEOUT_MS = 600000;
-export const signingIdentity = (app) => spawnSync("codesign", ["-dvv", app], { encoding: "utf8", timeout: CODESIGN_TIMEOUT_MS }).stderr.match(/^Authority=(.+)$/m)?.[1] ?? "-";
+export function identityFromCodesign(result, app = "the app") {
+  if (result.error) throw new Error(`codesign could not read ${app}'s signature: ${result.error.code ?? result.error.message}`);
+  if (result.status !== 0) throw new Error(`codesign -dvv ${app} exited ${result.status ?? result.signal}: ${String(result.stderr ?? "").trim()}`);
+  return String(result.stderr ?? "").match(/^Authority=(.+)$/m)?.[1] ?? "-";
+}
+export const signingIdentity = (app) => identityFromCodesign(spawnSync("codesign", ["-dvv", app], { encoding: "utf8", timeout: CODESIGN_TIMEOUT_MS }), app);
 
 const DEBUG_ENTITLEMENT = "com.apple.security.get-task-allow";
 

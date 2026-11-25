@@ -9,8 +9,11 @@ const HELP = `Parity gate: reads a shootout's bench.json and judges the WebUI ag
 
 Integrity comes first and always applies: every planned rep on both sides finished with no errors, both sides restored
 the same seeded fixture (profiles, tabs, windows), the multi-window runs reached 2 windows with a Peek open, every swipe
-reached the other profile, no New Tab poll failed, and both sides timed launch with the same clock (the app's commit
-mark or the on-screen-window fallback; --allow-fallback-clock accepts a mix).
+reached the other profile, every WebUI blocked swipe recorded a pager moving → rest interval that overlaps its block,
+no New Tab poll failed, and both sides timed launch with the same clock (the app's commit mark or the
+on-screen-window fallback; --allow-fallback-clock accepts a mix). A --baseline must pass the same integrity checks,
+else the gate exits 64. A rule compared against RN needs an RN value, unless the WebUI meets both the rule's budget
+and its cap on its own.
 
 Each rule reads one metric's median (or p95) on both sides. The WebUI passes a rule when its value is at most
 RN x ratio + tolerance, or at most the rule's budget (a value that is fine whatever RN does), and never above the
@@ -82,7 +85,8 @@ export function judge(rule, report, { baseline = null, regressionPct = 10, allow
   const before = baseline ? valueOf(baseline, "webui", rule.key, stat) : null;
   const limit = limitFor(rule, rn);
   const row = { key: rule.key, label: rule.label, stat, rn, webui, limit, baseline: before, verdict: "PASS", why: "" };
-  const missing = webui == null ? "WebUI value missing" : rule.vsRn && rn == null && rule.budget == null && rule.cap == null ? "RN value missing" : null;
+  const standsAlone = rule.budget != null && rule.cap != null && webui != null && webui <= rule.budget && webui <= rule.cap;
+  const missing = webui == null ? "WebUI value missing" : rule.vsRn && rn == null && !standsAlone ? "RN value missing" : null;
   if (missing) return { ...row, verdict: allowMissing ? "SKIP" : "FAIL", why: missing };
   if (limit != null && webui > limit) return { ...row, verdict: "FAIL", why: `${fmt(webui)} > ${fmt(limit)}` };
   if (baseline && before == null) return { ...row, verdict: allowMissing ? "SKIP" : "FAIL", why: "baseline value missing" };
@@ -189,6 +193,8 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
   if (measures.includes("swipe")) {
     const missed = Object.fromEntries(SIDES.map((side) => [side, runs.filter((r) => r.side === side && r.phase === "large").reduce((n, r) => n + SWIPES_BY_SIDE[side].filter((d) => r.swipe?.[d]?.arrived !== true || r.swipe?.[d]?.error).length, 0)]));
     rows.push(row("integrity.arrived", "Integrity: swipes that did not reach the other profile", missed, SIDES.every((s) => missed[s] === 0), 0, "a swipe did not arrive"));
+    const unproven = Object.fromEntries(SIDES.map((side) => [side, SWIPES_BY_SIDE[side].includes("blocked") ? runs.filter((r) => r.side === side && r.phase === "large" && blockedProblem(r.swipe?.blocked)).length : null]));
+    rows.push(row("integrity.blocked", "Integrity: blocked swipes without a pager interval overlapping the block", unproven, unproven.webui === 0, 0, "a blocked swipe has no valid pager motion overlapping its block"));
   }
   if (measures.includes("memory")) {
     const gaps = per((mine) => mine.filter((r) => r.status === "ok" && !(isCount(r.memory?.rssMb) && r.memory.rssMb > 0 && isCount(r.memory?.footprintMb) && r.memory.footprintMb > 0)).length);
@@ -209,9 +215,32 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
   return rows;
 }
 
+export function blockedProblem(blocked) {
+  if (!blocked) return "no blocked swipe";
+  if (blocked.error) return blocked.error;
+  if (blocked.arrived !== true) return "did not arrive";
+  const { motion, block } = blocked;
+  const finite = (v) => typeof v === "number" && Number.isFinite(v);
+  if (!motion || !finite(motion.start) || !finite(motion.end) || motion.end <= motion.start) return "no pager moving → rest interval";
+  if (!block || !finite(block.start) || !finite(block.end) || block.end <= block.start) return "no recorded block interval";
+  const overlap = Math.min(block.end, motion.end) - Math.max(block.start, motion.start);
+  if (!(overlap > 0)) return "the block did not overlap the pager motion";
+  return null;
+}
+
+export function baselineProblems(baseline, options = {}) {
+  const shape = validateReport(baseline, "baseline");
+  if (shape.length) return shape;
+  return integrity(baseline, options).filter((r) => r.verdict !== "PASS").map((r) => `baseline ${r.label}: ${r.why}`);
+}
+
 export function evaluate(report, options = {}) {
   const rules = options.rules ?? RULES;
   const rows = [...integrity(report, options), ...rules.map((rule) => judge(rule, report, options))];
+  if (options.baseline) {
+    const problems = baselineProblems(options.baseline, options);
+    rows.push({ key: "integrity.baseline", label: "Integrity: baseline report is complete", stat: "integrity", rn: null, webui: problems.length, limit: 0, baseline: null, verdict: problems.length ? "FAIL" : "PASS", why: problems[0] ?? "" });
+  }
 
   const failed = rows.filter((r) => r.verdict === "FAIL" || r.verdict === "REGRESSION");
   return { pass: failed.length === 0, verdict: failed.length ? "FAIL" : "PASS", failed: failed.length, skipped: rows.filter((r) => r.verdict === "SKIP").length, rows };
@@ -287,7 +316,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`gate: ${e.message}`);
     process.exit(64);
   }
-  const problems = [...validateReport(report, args.report), ...(args.baseline ? validateReport(baseline, args.baseline) : []), ...validateRules(rules)];
+  const problems = [...validateReport(report, args.report), ...(args.baseline ? baselineProblems(baseline, { allowFallbackClock: args.allowFallbackClock }) : []), ...validateRules(rules)];
   if (problems.length) {
     console.error(`gate: ${problems.join("\ngate: ")}`);
     process.exit(64);

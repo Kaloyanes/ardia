@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs";
+import { assertTraceComplete, connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs";
 import { analyze, decode, restFromFrames, settleMs } from "./frames.mjs";
 import {
   ACFRAMES, ACSWIPE, OPEN_TIMEOUT_MS, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, cleanupRegistry, fileProbe, hiddenOpenArgs,
@@ -33,7 +33,9 @@ Per rep and side:
   launch   open → first window committed (the app's __ardiaFirstWindowAt, clock "commitMark"; else, clock "fallback",
            when acperf first saw the owned window on screen, polled every 25 ms from before open, alongside the launch,
            so neither side's readiness or DevTools setup is counted), the restored fixture, and how many 25 ms polls after it still show a tab other
-           than the seeded selection (a lingering New Tab); failed polls are counted, never skipped
+           than the seeded selection (a lingering New Tab); failed polls are counted, never skipped. The polls start as soon
+           as a side can be asked (React Native's dev-eval harness after ready(), the WebUI's DevTools after connect),
+           before the fixture is read; newTabPollStartMs records when, so the two sides' observation starts are visible
   memory   RSS and phys_footprint summed over the instance's process tree after --idle seconds, for 3 profiles × 1 tab
            (small), 150 + 15 + 5 tabs (large), and two windows with a Peek open (multi)
   swipe    Personal → Work, Work → Personal (selected tab 130 rows down): frame gaps p50/p95/max, motion → rest, deep
@@ -223,6 +225,13 @@ export const PAIRED_PROFILE = PROFILES[0].id;
 export const DRAG_EDGE_OFFSETS = [0, 4, 8, 12];
 export const PEEK_CLOSE_MS = 3000;
 
+export function pacingProblem(pacing, label) {
+  if (!pacing) return `${label} has no frame pacing`;
+  if (pacing.pacingComplete === false) return `the ${label} capture began after the motion started`;
+  if (pacing.moved !== true) return `${label} produced no changed frame`;
+  return null;
+}
+
 export const dragChanged = (before, after) => Number.isFinite(before) && Number.isFinite(after) && after - before >= DRAG_PT / 2;
 
 export async function waitGone(exists, { timeoutMs = PEEK_CLOSE_MS, everyMs = 16, now = Date.now } = {}) {
@@ -387,6 +396,7 @@ class Bench {
     const forget = this.cleanup.instance(identity);
     const port = await freePort();
     let inst;
+    mkdirSync(join(data, "selfrec"), { recursive: true });
     const stopTracking = startTracker(identity);
     const windowWatch = this.watchWindow(identity);
     try {
@@ -407,7 +417,6 @@ class Bench {
     } finally {
       stopTracking();
     }
-    mkdirSync(join(data, "selfrec"), { recursive: true });
     this.track({ identity });
     return {
       kind: "rn", t0: inst.launchedAt, pid: inst.pid, data, port, identity, forget, forgetDir, windowWatch,
@@ -482,6 +491,7 @@ class Bench {
   }
 
   async newTabPolls(side, expected) {
+    const newTabPollStartMs = Date.now() - side.t0;
     let lingering = 0;
     let failures = 0;
     for (let i = 0; i < NEW_TAB_POLLS; i++) {
@@ -494,7 +504,7 @@ class Bench {
       }
       await sleep(25);
     }
-    return { newTabFrames: failures ? null : lingering, newTabPollFailures: failures, newTabPolls: NEW_TAB_POLLS };
+    return { newTabFrames: failures ? null : lingering, newTabPollFailures: failures, newTabPolls: NEW_TAB_POLLS, newTabPollStartMs };
   }
 
   windowOf(side) {
@@ -530,10 +540,10 @@ class Bench {
 
   async webuiCapture(side, label, action) {
     const syncName = `ardia-bench-sync-${label}`;
-    const result = await traced(side.cdp, async () => {
+    const result = assertTraceComplete(await traced(side.cdp, async () => {
       const syncEpoch = await side.js(`(performance.mark(${JSON.stringify(syncName)}), performance.timeOrigin + performance.now())`);
       return { syncEpoch, value: await action() };
-    });
+    }), label);
     const offset = epochOffset(result.events, syncName, result.value.syncEpoch);
     if (offset == null) throw new Error(`no sync mark in the ${label} trace`);
     const shots = screenshotsOf(result.events);
@@ -600,6 +610,7 @@ class Bench {
       rowsPaintedMs: restSource === "frames" || rest == null ? null : metrics.rowsPaintedMs,
       restMs: rest == null ? null : Math.round(rest - origin), restSource,
     };
+    if (!metrics.pacingComplete) throw Object.assign(new Error(`the swipe-${direction} capture began after the motion started`), { result });
     if (blocked) {
       const block = await side.js("globalThis.__ardiaBenchBlock ?? null");
       const motion = pagerMotion(cap.marks, cap.value);
@@ -651,7 +662,10 @@ class Bench {
       const after = await widthOf();
       attempts.push({ offset, after });
       if (dragChanged(before, after)) {
-        return { events: cap.value.events, offset, widthBefore: before, widthAfter: after, attempts: attempts.length, ...this.pacing(cap, cap.value.startAt, cap.value.endAt + 100) };
+        const result = { events: cap.value.events, offset, widthBefore: before, widthAfter: after, attempts: attempts.length, ...this.pacing(cap, cap.value.startAt, cap.value.endAt + 100) };
+        const problem = pacingProblem(result, "divider drag");
+        if (problem) throw Object.assign(new Error(problem), { result });
+        return result;
       }
     }
     throw Object.assign(new Error(`the drag never moved sidebarWidth off ${before} (edge offsets ${DRAG_EDGE_OFFSETS.join(", ")} pt)`), { result: { widthBefore: before, attempts } });
@@ -671,7 +685,13 @@ class Bench {
     const peekId = openCap.value;
     const opened = !!peekId && (await exists(peekId));
     const result = { opened, dismissed: false, dismissedBy: "escape", open: this.pacing(openCap, openAt, openAt + TRANSITION_MS) };
+    const cleanUp = () => side.js(`(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`).catch(() => {});
     if (!opened) throw Object.assign(new Error("the Peek did not open"), { result });
+    const openProblem = pacingProblem(result.open, "Peek open");
+    if (openProblem) {
+      await cleanUp();
+      throw Object.assign(new Error(openProblem), { result });
+    }
     const dismissCap = await this.capture(side, "peek-dismiss", async () => {
       const escAt = JSON.parse(execFileSync(this.acperf, ["postkeys", String(side.pid), "0", "esc"], { encoding: "utf8", timeout: 5000 }).trim().split("\n").at(-1)).at;
       const goneAt = await waitGone(() => exists(peekId), { timeoutMs: PEEK_CLOSE_MS });
@@ -682,9 +702,11 @@ class Bench {
     result.closeMs = goneAt == null ? null : Math.round(goneAt - escAt);
     result.dismiss = this.pacing(dismissCap, escAt, (goneAt ?? escAt + PEEK_CLOSE_MS) + 100);
     if (!result.dismissed) {
-      await side.js(`(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`).catch(() => {});
+      await cleanUp();
       throw Object.assign(new Error(`Esc did not dismiss the Peek within ${PEEK_CLOSE_MS} ms`), { result });
     }
+    const dismissProblem = pacingProblem(result.dismiss, "Peek dismiss");
+    if (dismissProblem) throw Object.assign(new Error(dismissProblem), { result });
     return result;
   }
 
@@ -712,8 +734,8 @@ class Bench {
   async measure(side, run, phase, session) {
     const o = this.o;
     Object.assign(run, await this.firstWindow(side));
-    run.fixture = { expected: expectedFixture(session), restored: await side.js(FIXTURE).catch(() => null) };
     if (o.only.includes("launch")) Object.assign(run, await this.newTabPolls(side, selectedUrl(session)));
+    run.fixture = { expected: expectedFixture(session), restored: await side.js(FIXTURE).catch(() => null) };
     if (phase === "multi") {
       run.windows = run.fixture.restored?.windows ?? null;
       const peekId = await side.js(`(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; return typeof s.openPeek === "function" ? s.openPeek(w.activeTabIds[w.profileId], ${JSON.stringify(this.server.origin + "/peek")}) : null; })()`).catch(() => null);

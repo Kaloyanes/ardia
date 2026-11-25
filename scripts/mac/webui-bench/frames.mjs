@@ -13,7 +13,8 @@ spec.json: {"pattern": "dir/%05d.jpg" | "movie": "file.mov", "times": [ms per fr
 Frames are decoded to grey at half size. A frame is new when more than 0.04 % of its pixels differ by more than 14
 levels from the frame before. Prints JSON: newFrames, slideMs, p50/p95/max of every interval between consecutive
 new frames that overlaps the motion window [start, rest] (an interval that starts before rest and ends after it
-counts whole, so a stall that outlasts the motion is never dropped; one that starts before start counts from start),
+counts whole, so a stall that outlasts the motion is never dropped; the wait from start to the first changed frame
+counts when a captured frame sits at or before start, and pacingComplete is false when none does),
 longGaps (> 25 ms), late120 (gaps over 1.5 frames at 120 Hz), rowsPaintedMs (rest to the last new frame after it),
 blankFrames (every captured frame that is one flat colour, the first included), and with inputs, the latency from each input to the next new frame. Without a rest,
 rest is the last new frame followed by at least 100 ms with no new frame; when the capture ends sooner, it is null.`;
@@ -76,13 +77,12 @@ export function gapsOf(times) {
 export const FRAME_120_MS = 1000 / 120;
 export const LATE_120_MS = FRAME_120_MS * 1.5;
 
-export function windowGaps(fresh, start = -Infinity, end = Infinity) {
+export function windowGaps(fresh, start = -Infinity, end = Infinity, { coversStart = true } = {}) {
+  const bounded = Number.isFinite(start);
+  const inside = bounded ? fresh.filter((t) => t > start) : fresh;
+  const points = bounded && coversStart ? [start, ...inside] : inside;
   const gaps = [];
-  for (let i = 1; i < fresh.length; i++) {
-    const prev = fresh[i - 1];
-    const cur = fresh[i];
-    if (cur > start && prev < end) gaps.push(cur - Math.max(prev, start));
-  }
+  for (let i = 1; i < points.length; i++) if (points[i - 1] < end) gaps.push(points[i] - points[i - 1]);
   return gaps;
 }
 
@@ -106,7 +106,8 @@ export function analyze({ frames, times, rest, inputs, endAt, start = -Infinity 
   const end = rest ?? (endAt == null ? Infinity : restFromFrames(fresh, endAt) ?? Infinity);
   const slide = fresh.filter((t) => t <= end);
   const after = fresh.filter((t) => t > end);
-  const gaps = windowGaps(fresh, start, end);
+  const coversStart = !Number.isFinite(start) || times.slice(0, n).some((t) => t <= start);
+  const gaps = windowGaps(fresh, start, end, { coversStart });
   const result = {
     frames: Math.min(frames.length, times.length),
     newFrames: fresh.length,
@@ -117,6 +118,7 @@ export function analyze({ frames, times, rest, inputs, endAt, start = -Infinity 
     maxGapMs: round1(gaps.length ? Math.max(...gaps) : null),
     longGaps: gaps.filter((g) => g > LONG_GAP_MS).length,
     late120: gaps.filter((g) => g > LATE_120_MS).length,
+    pacingComplete: coversStart,
     rowsPaintedMs: round1(after.length && Number.isFinite(end) ? after.at(-1) - end : 0),
     blankFrames: frames.slice(0, n).filter(isBlank).length,
     firstFrameBlank: n ? isBlank(frames[0]) : null,

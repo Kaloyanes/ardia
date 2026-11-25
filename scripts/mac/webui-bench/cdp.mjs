@@ -89,10 +89,14 @@ export const TRACE_CATEGORIES = [
 export async function traced(cdp, action, { categories = TRACE_CATEGORIES, tailMs = 1500, warmupMs = 300, timeoutMs = 30000 } = {}) {
   const events = [];
   let finish;
+  let dataLoss = false;
   const complete = new Promise((resolve) => (finish = resolve));
   const off = cdp.on((m) => {
     if (m.method === "Tracing.dataCollected") events.push(...m.params.value);
-    else if (m.method === "Tracing.tracingComplete") finish();
+    else if (m.method === "Tracing.tracingComplete") {
+      dataLoss = m.params?.dataLossOccurred === true;
+      finish();
+    }
   });
   let started = false;
   let ended = false;
@@ -106,12 +110,17 @@ export async function traced(cdp, action, { categories = TRACE_CATEGORIES, tailM
     ended = true;
     await cdp.send("Tracing.end");
     await Promise.race([complete, new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("trace did not complete")), timeoutMs)))]);
-    return { value, events };
+    return { value, events, dataLoss };
   } finally {
     clearTimeout(timer);
     if (started && !ended) await cdp.send("Tracing.end").catch(() => {});
     off();
   }
+}
+
+export function assertTraceComplete(trace, label = "trace") {
+  if (trace.dataLoss) throw new Error(`the ${label} trace lost data (Tracing.tracingComplete dataLossOccurred), so its frames are incomplete`);
+  return trace;
 }
 
 export function screenshotsOf(events) {

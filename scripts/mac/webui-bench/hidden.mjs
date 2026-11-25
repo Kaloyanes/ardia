@@ -255,6 +255,8 @@ export function memoryOf(identity) {
   return { rssMb: rssKb > 0 ? Math.round(rssKb / 1024) : null, ...fp, processes: pids.length, ...(rssKb > 0 ? {} : { error: fp.error ?? "ps reported no resident memory" }) };
 }
 
+const killer = (pid, signal) => process.kill(pid, signal);
+
 export const isMainWindow = (w) => (w?.layer ?? 0) === 0 && w?.w >= 300 && w?.h >= 200;
 
 export function ownerRootPid(identity) {
@@ -292,14 +294,14 @@ export function watchFirstWindow({ rootPid, listWindows, everyMs = 25, now = Dat
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function signalOwned(identity, signal, read, kill) {
-  const alive = trackOwned(identity, read());
-  const fresh = new Set(trackOwned(identity, read()).map(keyOf));
-  for (const row of alive) if (fresh.has(keyOf(row))) try { kill(row.pid, signal); } catch {}
-  return alive.length;
+export function signalOwned(identity, signal, read, kill = killer) {
+  const first = trackOwned(identity, read());
+  const confirmed = trackOwned(identity, read());
+  for (const row of confirmed) try { kill(row.pid, signal); } catch {}
+  return Math.max(first.length, confirmed.length);
 }
 
-const killer = (pid, signal) => process.kill(pid, signal);
+
 
 export async function stopOwned(identity, { graceMs = 5000, killMs = 3000, read = readProcessRows, kill = killer } = {}) {
   if (!signalOwned(identity, "SIGTERM", read, kill)) return true;

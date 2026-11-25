@@ -5,12 +5,12 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { DRAG_EDGE_OFFSETS, MEASURES, PAIRED_PROFILE, blockScript, dragChanged, firstWindowTiming, instanceName, scenarioOrder, waitGone, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
-import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
+import { DRAG_EDGE_OFFSETS, MEASURES, pacingProblem, PAIRED_PROFILE, blockScript, dragChanged, firstWindowTiming, instanceName, scenarioOrder, waitGone, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
+import { assertTraceComplete, epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { LATE_120_MS, analyze, windowGaps, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
-import { RULES, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
+import { RULES, baselineProblems, blockedProblem, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
 import {
-  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, footprintResult, isMainWindow, ownerRootPid, startTracker, watchFirstWindow, withTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
+  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, footprintResult, signalOwned, isMainWindow, ownerRootPid, startTracker, watchFirstWindow, withTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
   makeOwnedDir, makeOwnedRoot, ownedTree, parseFootprint, parseProcessRows, parseRss, processIdentity, readProcessRows, removeOwnedDir, sameProcess, stopOwned,
 } from "./hidden.mjs";
 import { PROFILES, SETTINGS, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
@@ -443,7 +443,7 @@ const motionRuns = (side) => (side === "rn"
 const swipe = (p95, rest, rows) => ({
   fwd: { p95GapMs: p95, restMs: rest, blankFrames: 0, arrived: true },
   back: { p95GapMs: p95 - 5, restMs: rest + 10, rowsPaintedMs: rows, blankFrames: 0, arrived: true },
-  blocked: { maxGapMs: 103, blankFrames: 0, arrived: true, blockOverlapMs: 300 },
+  blocked: { maxGapMs: 103, blankFrames: 0, arrived: true, blockOverlapMs: 350, motion: { start: 1000, end: 1500, source: "pager" }, block: { armedBy: "wheel", start: 1150, end: 1650 } },
 });
 const sampleRuns = () => {
   const runs = [];
@@ -496,7 +496,7 @@ test("summary: a failed swipe is never counted as zero blank frames", () => {
 test("gate: a WebUI at parity with clean integrity passes every rule", () => {
   const result = evaluate(report());
   assert.equal(result.verdict, "PASS", JSON.stringify(Object.values(failing(result))));
-  assert.equal(result.rows.length, RULES.length + 9);
+  assert.equal(result.rows.length, RULES.length + 10);
 });
 
 test("gate: integrity fails on missing, errored or partial reps", () => {
@@ -560,7 +560,8 @@ test("gate: missing values fail unless allowed, budgets cover a missing RN side"
   assert.equal(judge({ key: "a", vsRn: true }, r).verdict, "FAIL");
   assert.equal(judge({ key: "a", vsRn: true }, r, { allowMissing: true }).verdict, "SKIP");
   assert.equal(judge({ key: "zzz", vsRn: false, cap: 0 }, r).why, "WebUI value missing");
-  assert.equal(judge({ key: "b", vsRn: true, budget: 500 }, r).verdict, "PASS");
+  assert.equal(judge({ key: "b", vsRn: true, budget: 500 }, r).why, "RN value missing");
+  assert.equal(judge({ key: "b", vsRn: true, budget: 500, cap: 450 }, r).verdict, "PASS");
 });
 
 test("gate: baselines have no absolute deadband, define zero, and must hold the metric", () => {
@@ -602,7 +603,7 @@ test("gate: markdown table lists every row with a verdict", () => {
   assert.ok(lines.includes("| Metric | RN | WebUI | Limit | Verdict |"));
   assert.ok(lines.includes("| --- | ---: | ---: | ---: | --- |"));
   const rows = lines.filter((l) => l.startsWith("| ") && !l.startsWith("| Metric") && !l.startsWith("| ---"));
-  assert.equal(rows.length, RULES.length + 9);
+  assert.equal(rows.length, RULES.length + 10);
   assert.ok(rows.every((l) => l.split(" | ").length === 5));
   assert.ok(md.includes("| Swipe Work → Personal, motion → rest (ms) | 490 | 470 | 590 | ✅ PASS |"));
   assert.ok(md.includes("| Integrity: launch clock | commitMark | commitMark | — | ✅ PASS |"));
@@ -922,8 +923,8 @@ test("round 5: a stall that starts during motion and lands after the rest mark s
   const verdict = judge(RULES.find((x) => x.key === "swipe.blocked.maxGapMs"), { summary: { rn: {}, webui: { "swipe.blocked.maxGapMs": { median: r.maxGapMs } } } });
   assert.equal(verdict.verdict, "FAIL");
   assert.deepEqual(windowGaps([-800, 5, 21], 0, 300), [5, 16]);
-  assert.deepEqual(windowGaps([100, 200, 900, 950], 0, 300), [100, 700]);
-  assert.deepEqual(windowGaps([400, 500], 0, 300), []);
+  assert.deepEqual(windowGaps([100, 200, 900, 950], 0, 300), [100, 100, 700]);
+  assert.deepEqual(windowGaps([400, 500], 0, 300), [400]);
   assert.equal(LATE_120_MS, 12.5);
 });
 
@@ -1014,7 +1015,8 @@ test("round 6: Peek is dismissed with Esc, the animated path, and timed until it
   const dismiss = peek.slice(peek.indexOf('"peek-dismiss"'));
   assert.match(dismiss, /"postkeys", String\(side\.pid\), "0", "esc"/);
   assert.match(dismiss, /await waitGone\(\(\) => exists\(peekId\)/);
-  assert.ok(dismiss.indexOf("closePeek") > dismiss.indexOf("if (!result.dismissed)"));
+  assert.ok(!dismiss.includes("closePeek"));
+  assert.ok(dismiss.indexOf("await cleanUp()") > dismiss.indexOf("if (!result.dismissed)"));
 });
 
 test("round 6: a missing footprint fails the run and the gate", () => {
@@ -1029,4 +1031,131 @@ test("round 6: a missing footprint fails the run and the gate", () => {
   assert.ok(f["integrity.memory"]);
   assert.equal(f["integrity.memory"].webui, 2);
   assert.equal(failing(evaluate(report()))["integrity.memory"], undefined);
+});
+
+test("review 2: window timing is watched from before open and New Tab polls start before the fixture read", () => {
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  for (const start of ["  async startRn(", "  async startWebui("]) {
+    const body = source.slice(source.indexOf(start), source.indexOf("\n  }\n", source.indexOf(start)));
+    const watch = body.indexOf("this.watchWindow(identity)");
+    const open = Math.max(body.indexOf("await launch("), body.indexOf('await execFileAsync("open"'));
+    assert.ok(watch > 0 && open > watch, `${start} watches windows before it opens the app`);
+  }
+  const measure = source.slice(source.indexOf("  async measure("), source.indexOf("  async slot("));
+  const first = measure.indexOf("await this.firstWindow(side)");
+  const polls = measure.indexOf("await this.newTabPolls(side");
+  const fixture = measure.indexOf("run.fixture = ");
+  assert.ok(first < polls && polls < fixture);
+  assert.match(source, /const newTabPollStartMs = Date\.now\(\) - side\.t0;/);
+  assert.match(source, /newTabPolls: NEW_TAB_POLLS, newTabPollStartMs \}/);
+});
+
+test("review 3: the RN selfrec folder exists before launch, so a mkdir failure can never strand a running app", () => {
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const body = source.slice(source.indexOf("  async startRn("), source.indexOf("  async startWebui("));
+  const mkdir = body.indexOf('mkdirSync(join(data, "selfrec")');
+  assert.equal(body.split('mkdirSync(join(data, "selfrec")').length - 1, 1);
+  assert.ok(mkdir > 0 && mkdir < body.indexOf("startTracker(identity)") && mkdir < body.indexOf("await launch("));
+});
+
+test("review 4: a Peek transition needs changed frames, not only store state", () => {
+  const good = { moved: true, pacingComplete: true, p95GapMs: 9 };
+  assert.equal(pacingProblem(good, "Peek open"), null);
+  assert.equal(pacingProblem({ ...good, moved: false }, "Peek open"), "Peek open produced no changed frame");
+  assert.equal(pacingProblem({ ...good, moved: false }, "Peek dismiss"), "Peek dismiss produced no changed frame");
+  assert.equal(pacingProblem({ ...good, pacingComplete: false }, "Peek open"), "the Peek open capture began after the motion started");
+  assert.equal(pacingProblem(undefined, "Peek dismiss"), "Peek dismiss has no frame pacing");
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const peek = source.slice(source.indexOf("  async peek("), source.indexOf("  async typing("));
+  assert.match(peek, /pacingProblem\(result\.open, "Peek open"\)/);
+  assert.match(peek, /pacingProblem\(result\.dismiss, "Peek dismiss"\)/);
+});
+
+test("review 5: a trace that lost data rejects the sample", async () => {
+  const lossy = fakeCdp();
+  const send = lossy.send;
+  const listeners = [];
+  lossy.on = (l) => (listeners.push(l), () => {});
+  lossy.send = async (method) => {
+    if (method === "Tracing.end") setTimeout(() => listeners.forEach((l) => l({ method: "Tracing.tracingComplete", params: { dataLossOccurred: true } })), 1);
+    return send(method);
+  };
+  const trace = await traced(lossy, async () => 1, { warmupMs: 0, tailMs: 0 });
+  assert.equal(trace.dataLoss, true);
+  assert.throws(() => assertTraceComplete(trace, "swipe-fwd"), /swipe-fwd trace lost data/);
+  const clean = await traced(fakeCdp(), async () => 1, { warmupMs: 0, tailMs: 0 });
+  assert.equal(clean.dataLoss, false);
+  assert.equal(assertTraceComplete(clean), clean);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.match(source, /assertTraceComplete\(await traced\(side\.cdp,/);
+});
+
+test("review 6: the wait from motion start to the first changed frame counts, and a late capture is incomplete", () => {
+  const frames = [pattern(0), pattern(0), pattern(1), pattern(2)];
+  const covered = analyze({ frames, times: [-20, 10, 300, 316], start: 0, rest: 400 });
+  assert.equal(covered.maxGapMs, 300);
+  assert.equal(covered.newFrames, 2);
+  assert.equal(covered.pacingComplete, true);
+  const late = analyze({ frames: [pattern(0), pattern(1), pattern(2)], times: [120, 300, 316], start: 0, rest: 400 });
+  assert.equal(late.pacingComplete, false);
+  assert.equal(late.maxGapMs, 16);
+  assert.equal(pacingProblem({ ...late, moved: true }, "divider drag"), "the divider drag capture began after the motion started");
+  assert.equal(analyze({ frames, times: [0, 10, 20, 30] }).pacingComplete, true);
+  assert.deepEqual(windowGaps([300, 316], 0, 400, { coversStart: false }), [16]);
+  assert.deepEqual(windowGaps([300, 316], 0, 400), [300, 16]);
+});
+
+test("review 7: a cap alone never stands in for RN evidence", () => {
+  const only = (v) => ({ summary: { rn: {}, webui: { m: { median: v } } } });
+  assert.equal(judge({ key: "m", label: "m", vsRn: true, cap: 1500 }, only(600)).why, "RN value missing");
+  assert.equal(judge({ key: "m", label: "m", vsRn: true, budget: 500 }, only(400)).why, "RN value missing");
+  assert.equal(judge({ key: "m", label: "m", vsRn: true, budget: 500, cap: 600 }, only(400)).verdict, "PASS");
+  assert.equal(judge({ key: "m", label: "m", vsRn: true, budget: 500, cap: 600 }, only(550)).why, "RN value missing");
+  assert.equal(judge({ key: "m", label: "m", vsRn: false, cap: 0 }, only(0)).verdict, "PASS");
+});
+
+test("review 8: the gate re-proves each blocked swipe from its pager interval and block", () => {
+  const ok = { arrived: true, motion: { start: 1000, end: 1500 }, block: { start: 1150, end: 1650 } };
+  assert.equal(blockedProblem(ok), null);
+  assert.equal(blockedProblem({ ...ok, motion: null }), "no pager moving → rest interval");
+  assert.equal(blockedProblem({ ...ok, motion: { start: 1000, end: 1000 } }), "no pager moving → rest interval");
+  assert.equal(blockedProblem({ ...ok, block: { start: null, end: null } }), "no recorded block interval");
+  assert.equal(blockedProblem({ ...ok, block: { start: 1600, end: 2100 } }), "the block did not overlap the pager motion");
+  assert.equal(blockedProblem({ ...ok, arrived: false }), "did not arrive");
+  const forged = edit((r) => r.side === "webui" && r.phase === "large" && r.rep === 2, (r) => ((r.swipe.blocked = { maxGapMs: 103, blankFrames: 0, arrived: true, blockOverlapMs: 300 }), r));
+  const row = failing(evaluate(report(forged)))["integrity.blocked"];
+  assert.equal(row.webui, 1);
+  assert.equal(row.rn, null);
+  assert.equal(evaluate(report()).rows.find((r) => r.key === "integrity.blocked").verdict, "PASS");
+});
+
+test("review 9: an incomplete baseline is refused before anything is compared", () => {
+  const good = report();
+  assert.deepEqual(baselineProblems(good), []);
+  const broken = report(sampleRuns().filter((r, i) => i !== 0));
+  const problems = baselineProblems(broken);
+  assert.ok(problems.some((p) => p.startsWith("baseline Integrity: finished runs")));
+  assert.deepEqual(baselineProblems(null), ["baseline is not a JSON object"]);
+  const row = evaluate(good, { baseline: broken }).rows.find((r) => r.key === "integrity.baseline");
+  assert.equal(row.verdict, "FAIL");
+  assert.equal(evaluate(good, { baseline: good }).rows.find((r) => r.key === "integrity.baseline").verdict, "PASS");
+  const dir = scratch();
+  const file = (name, value) => (writeFileSync(join(dir, name), JSON.stringify(value)), join(dir, name));
+  const cli = node("gate.mjs", file("now.json", good), "--baseline", file("then.json", broken));
+  assert.equal(cli.status, 64);
+  assert.match(cli.stderr, /baseline Integrity: finished runs/);
+  assert.equal(node("gate.mjs", file("now2.json", good), "--baseline", file("then2.json", good)).status, 0);
+});
+
+test("review 10: a process that shows up only on the second read is still signalled and counted", () => {
+  const identity = processIdentity({ owner: "tok-r10", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const T = "Tue Nov 24 05:06:18 2026";
+  const appeared = parseProcessRows(`2147483300 1 ${T} /tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-r10`);
+  const reads = [[], appeared];
+  const signals = [];
+  assert.equal(signalOwned(identity, "SIGTERM", () => reads.shift() ?? [], (pid, sig) => signals.push([pid, sig])), 1);
+  assert.deepEqual(signals, [[2147483300, "SIGTERM"]]);
+  const quiet = [];
+  assert.equal(signalOwned(processIdentity({ owner: "tok-none", binary: "/tmp/b/W.app/Contents/MacOS/W" }), "SIGTERM", () => [], (pid) => quiet.push(pid)), 0);
+  assert.deepEqual(quiet, []);
 });
