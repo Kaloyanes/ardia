@@ -298,6 +298,17 @@ inline bool DownloadMember(bool primary_profile, int tabs_in_window) {
   return primary_profile || tabs_in_window > 0;
 }
 
+enum class DownloadRoute { kServe, kRefuseQueued, kUnavailable };
+
+inline bool QueuesOnManager(std::string_view name) {
+  return name == "downloads.list" || name == "downloads.clear";
+}
+
+inline DownloadRoute RouteDownloadRequest(std::string_view name, bool profile_usable, bool watched, bool has_manager) {
+  if (profile_usable && watched && has_manager) return DownloadRoute::kServe;
+  return QueuesOnManager(name) ? DownloadRoute::kRefuseQueued : DownloadRoute::kUnavailable;
+}
+
 inline bool HandsLinksToChrome(bool hosts_alive, std::size_t pending, bool quitting) {
   return !hosts_alive && pending > 0 && !quitting;
 }

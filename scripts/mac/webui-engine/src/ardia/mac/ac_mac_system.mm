@@ -593,20 +593,32 @@ void SystemServices::EngineCall(const std::string& name, Profile* profile, const
   if (const std::string invalid = ValidateDownloads(name, *input); !invalid.empty()) {
     return Fail(std::move(done), "ERR_DOWNLOAD_REQUEST", invalid);
   }
-  if (!profile || profile->IsOffTheRecord() || profile->ShutdownStarted()) {
-    return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's downloads are unavailable");
+  const bool usable = profile && !profile->IsOffTheRecord() && !profile->ShutdownStarted();
+  if (usable) {
+    SyncWatches();
   }
-  SyncWatches();
-  if (!watches_.contains(profile)) {
-    return Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile has no tabs in this window");
-  }
-  DownloadsCall(name, profile, std::move(*input), std::move(done));
+  DownloadsCall(name, usable ? profile : nullptr, std::move(*input), std::move(done));
+}
+
+void SystemServices::RefuseQueued(Done done) {
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](Done done) {
+                       Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile no longer has tabs in this window");
+                     },
+                     std::move(done)));
 }
 
 void SystemServices::DownloadsCall(const std::string& name, Profile* profile, base::DictValue input, Done done) {
-  const auto found = watches_.find(profile);
-  if (found == watches_.end() || !found->second->manager()) {
-    return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's downloads are unavailable");
+  const auto found = profile ? watches_.find(profile) : watches_.end();
+  const bool watched = found != watches_.end();
+  switch (policy::RouteDownloadRequest(name, profile != nullptr, watched, watched && found->second->manager())) {
+    case policy::DownloadRoute::kRefuseQueued:
+      return RefuseQueued(std::move(done));
+    case policy::DownloadRoute::kUnavailable:
+      return Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile has no tabs in this window");
+    case policy::DownloadRoute::kServe:
+      break;
   }
   DownloadWatch* watch = found->second.get();
   if (name == "downloads.remove") {

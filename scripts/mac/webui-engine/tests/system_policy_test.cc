@@ -221,6 +221,18 @@ TEST(a_manager_going_down_refuses_queued_and_later_requests) {
   CHECK(queue.Release().empty());
 }
 
+TEST(list_and_clear_are_refused_alike_when_a_profile_cannot_serve_them) {
+  using policy::DownloadRoute;
+  for (const char* name : {"downloads.list", "downloads.clear"}) {
+    CHECK(policy::RouteDownloadRequest(name, false, false, false) == DownloadRoute::kRefuseQueued);
+    CHECK(policy::RouteDownloadRequest(name, true, false, false) == DownloadRoute::kRefuseQueued);
+    CHECK(policy::RouteDownloadRequest(name, true, true, false) == DownloadRoute::kRefuseQueued);
+    CHECK(policy::RouteDownloadRequest(name, true, true, true) == DownloadRoute::kServe);
+  }
+  CHECK(policy::RouteDownloadRequest("downloads.remove", true, true, false) == DownloadRoute::kUnavailable);
+  CHECK(policy::RouteDownloadRequest("downloads.remove", true, true, true) == DownloadRoute::kServe);
+}
+
 TEST(links_are_captured_before_the_first_window_and_while_windows_live) {
   CHECK(policy::CapturesOpenUrls(true, false, false));
   CHECK(policy::CapturesOpenUrls(true, true, true));

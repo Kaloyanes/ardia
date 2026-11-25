@@ -63,6 +63,7 @@ class SystemServices {
   void FileCall(const std::string& method, const base::ListValue& values, Done done);
   void PickFiles(const base::ListValue& values, Done done);
   void PickFolder(const base::ListValue& values, Done done);
+  void RefuseQueued(Done done);
   void DownloadsCall(const std::string& name, Profile* profile, base::DictValue input, Done done);
 
   raw_ptr<ShellHostView> host_;

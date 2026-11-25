@@ -938,6 +938,13 @@ class ContractTests(unittest.TestCase):
         linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_page_media.cc').read_text()
         self.assertIn('info->playback_state == media_session::mojom::MediaPlaybackState::kPlaying', linux)
 
+    def test_download_entry_point_refuses_through_one_route(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        call = system.split('void SystemServices::DownloadsCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('policy::RouteDownloadRequest(', call)
+        self.assertIn('RefuseQueued(std::move(done))', call)
+        self.assertNotIn('ERR_PROFILE_UNAVAILABLE', system.split('void SystemServices::EngineCall(', 1)[1].split('\n}\n', 1)[0])
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)

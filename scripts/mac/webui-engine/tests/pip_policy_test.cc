@@ -104,7 +104,9 @@ TEST(automatic_pip_keeps_chromiums_ask_prompt) {
 
 TEST(a_reused_visible_window_still_checks_the_auto_pip_permission) {
   CHECK(pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAllow));
-  CHECK(pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAsk));
+  CHECK(!pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAsk));
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, false, pip::AutoPipPermission::kAsk) ==
+        pip::Presentation::kWindow);
   CHECK(!pip::KeepsVisibleWindow(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kBlock));
   CHECK(!pip::KeepsVisibleWindow(pip::Intent::kAutomatic, false, pip::AutoPipPermission::kAllow));
   CHECK(!pip::KeepsVisibleWindow(pip::Intent::kExplicit, true, pip::AutoPipPermission::kAllow));

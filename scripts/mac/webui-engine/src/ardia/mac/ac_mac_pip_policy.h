@@ -130,7 +130,7 @@ inline AutoPipPermission PermissionFor(bool switched_off, bool allowed, bool ask
 }
 
 inline bool KeepsVisibleWindow(Intent intent, bool window_visible, AutoPipPermission permission) {
-  return intent == Intent::kAutomatic && window_visible && permission != AutoPipPermission::kBlock;
+  return intent == Intent::kAutomatic && window_visible && permission == AutoPipPermission::kAllow;
 }
 
 inline Presentation PresentationFor(Intent intent, bool presenter_found, AutoPipPermission permission) {
