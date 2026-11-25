@@ -88,6 +88,19 @@ for grant in ${filesystems//;/ }; do
   esac
 done
 echo "ok   cobalt.ini, zypak and a plain chrome-sandbox; network, display, sound, devices, downloads, keyring and read-only import grants"
+mkdir -p "$HOME/.config/google-chrome" "$HOME/.mozilla/firefox" "$HOME/.config/ungranted"
+echo chrome > "$HOME/.config/google-chrome/Local State"
+echo firefox > "$HOME/.mozilla/firefox/profiles.ini"
+echo hidden > "$HOME/.config/ungranted/secret"
+flatpak run --command=sh "$app" -c '"'"'
+  set -e
+  [ "$XDG_CONFIG_HOME" = "$HOME/.var/app/dev.ardia.Ardia/config" ] || { echo "XDG_CONFIG_HOME is $XDG_CONFIG_HOME"; exit 1; }
+  grep -qx chrome "$XDG_CONFIG_HOME/google-chrome/Local State" || { echo "no host Chrome profile at \$XDG_CONFIG_HOME/google-chrome"; exit 1; }
+  grep -qx firefox "$HOME/.mozilla/firefox/profiles.ini" || { echo "no host Firefox profile at ~/.mozilla/firefox"; exit 1; }
+  ! touch "$XDG_CONFIG_HOME/google-chrome/written" 2>/dev/null || { echo "the Chrome profile is writable"; exit 1; }
+  [ ! -e "$XDG_CONFIG_HOME/ungranted" ] && [ ! -e "$HOME/.config/ungranted" ] || { echo "an ungranted config folder is visible"; exit 1; }
+'"'"' || fail "Import can'"'"'t read other browsers'"'"' profiles where the engine looks, or reaches more than them"
+echo "ok   Import reads host browser profiles at \$XDG_CONFIG_HOME and ~/.mozilla read-only, and nothing else of ~/.config"
 kind=$(flatpak run --command=/app/lib/ardia/ardia-update "$app" kind) || fail "ardia-update kind exited $?"
 [ "$kind" = managed ] || fail "ardia-update kind says $kind, not managed"
 echo "ok   updates are left to Flatpak (ardia-update kind: managed)"
