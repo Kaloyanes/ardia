@@ -2880,7 +2880,9 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       the field empty counting a keystroke still waiting for its frame (`searchFieldText`), not Incognito, the same
       space, and the pin or folder row still there, whose current address is what opens, and only an address
       `openRemote` accepts (`opensRemotely`, http and https): a `chrome://` pin opens, counts and exits nothing.
-      Copy Link and Share read the pin the same way when chosen. A pin open leaves search
+      Copy Link and Share go through the same check when chosen (session, space, Incognito, pin present), and the
+      tiles are keyed by session and space, so a press held across a newer session over the same panel is
+      cancelled with the old tiles instead of finishing on the new handler. A pin open leaves search
       with the submitted exit (`settleSearchAsSubmitted`, and the Android panel departs), as a row does, not the
       cancel morph.
     - **Menus:** a long-press or folder menu is built from the current pins each render, so a pin the Mac moves shows
@@ -2896,7 +2898,11 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       `stagePresented` or `searchPresented` ran. The open now asks again on each of the next three frames, only for
       the presentation that is still current (not dismissed, no newer open): the queued frame is cancelled on close
       and on a newer open, waits while the app is in the background and resumes when it's active, and a present that
-      completes for a panel no longer current records no launch timing.
+      completes for a panel no longer current records no launch timing. A launch whose panel saw the background
+      before it presented sends no launch timing at all, since its wall time includes the time away. Natively,
+      `SearchStageView` presents (from `shown` and from `present()`) only while the app is active; a present asked
+      for in the background or while launching waits for `didBecomeActive`, so nothing presents or takes keyboard
+      focus off screen.
     - **Android:** beside the panel with the panel's own lift transform in the redesign, and above the rows in the
       Material You search sheet. A space with more pins than fit above the panel scrolls.
     - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened` on iPhone, filtered by the envelope's `platform`; `new_tab_search_opened` isn't counted on Android.

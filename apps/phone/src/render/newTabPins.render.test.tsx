@@ -528,3 +528,66 @@ test("a pin whose address Ardia can't open, such as chrome://, opens nothing, co
   expect(currentTabs().open.length).toBe(tabs);
   unmount(root);
 });
+
+test("Copy Link and Share kept from a panel do nothing once Incognito is on or a newer panel has opened, as Open does", () => {
+  const copied = jest.spyOn(tabMenus, "copyLink").mockImplementation((() => undefined) as never);
+  const shared = jest.spyOn(tabMenus, "shareUrl").mockImplementation((() => undefined) as never);
+  act(() => browse.newTab());
+  const root = tray();
+  longPress(root, "Pin 1");
+  const copy = itemsOf(root).find((item) => item.label === "Copy Link")!.onPress;
+  const share = itemsOf(root).find((item) => item.label === "Share")!.onPress;
+  act(() => useTabs.setState({ incognito: true }));
+  act(() => copy());
+  act(() => share());
+  act(() => useTabs.setState({ incognito: false }));
+  act(() => presentSearch("start", ""));
+  act(() => copy());
+  act(() => share());
+  expect(copied).not.toHaveBeenCalled();
+  expect(shared).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+test("a newer search session over the same open panel remounts the tiles, so a press held from the old one can't finish on the new one's handler", () => {
+  act(() => browse.newTab());
+  const root = tray();
+  const before = root.root.findAll((node) => node.props.accessibilityLabel === "Pin 1" && typeof node.props.onPress === "function")[0]!;
+  act(() => presentSearch("start", ""));
+  expect(pins(root)).toBeDefined();
+  const after = root.root.findAll((node) => node.props.accessibilityLabel === "Pin 1" && typeof node.props.onPress === "function")[0]!;
+  expect(after).not.toBe(before);
+  unmount(root);
+});
+
+onIPhone("a launch whose panel saw the background before it presented sends no launch timing, even when it completes after the app is active again", () => {
+  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
+  const appState = watchAppState();
+  let complete: (() => void) | null = null;
+  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  appState.set("background");
+  appState.set("active");
+  act(() => complete!());
+  expect(pins(root)).toBeDefined();
+  expect(launchMarks).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+onIPhone("a launch retry paused in the background and resumed on return presents once and sends no launch timing", () => {
+  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
+  const appState = watchAppState();
+  const frames = holdFrames();
+  refusedOnce();
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  const asked = mockStage.present.mock.calls.length;
+  appState.set("background");
+  frames.run();
+  appState.set("active");
+  expect(mockStage.present.mock.calls.length).toBe(asked + 1);
+  expect(pins(root)).toBeDefined();
+  expect(launchMarks).not.toHaveBeenCalled();
+  unmount(root);
+});

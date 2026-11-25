@@ -36,12 +36,6 @@ export function pinEntry(tiles: readonly PinnedTile[], key: string | null): PinE
   return null;
 }
 
-function currentPin(profileId: string, key: string): PinEntry | null {
-  const { view, status } = useSync.getState();
-  const profile = shownProfile(view, status);
-  return profile?.syncId === profileId ? pinEntry(profile.pinned.tiles, key) : null;
-}
-
 function offeredPin(session: number, profileId: string, key: string | null): PinEntry | null {
   const search = searchState();
   if (!search.open || search.session !== session || search.editsPage || searchFieldText().trim() !== "" || useTabs.getState().incognito) return null;
@@ -65,7 +59,7 @@ function menuItems(menu: PinsMenu, tiles: readonly PinnedTile[], open: PinOpener
   const tile = tiles.find((candidate) => candidate.key === menu.pinKey);
   if (!tile) return [];
   if (menu.kind === "folder") return tile.folder?.length ? pinnedFolderMenu(tile, menu.profileId, open) : [];
-  return tile.folder?.length ? [] : pinnedLinkMenu(tile.url, tile.title, menu.profileId, tile.key, open, () => currentPin(menu.profileId, tile.key));
+  return tile.folder?.length ? [] : pinnedLinkMenu(tile.url, tile.title, menu.profileId, tile.key, open, () => offeredPin(menu.session, menu.profileId, tile.key));
 }
 
 const leavesNothing = () => undefined;
@@ -121,6 +115,7 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorSh
   };
   const tiles = (
     <Tiles
+      key={`${session}:${pins.profileId}`}
       tiles={pins.tiles}
       profileId={pins.profileId}
       open={opener}

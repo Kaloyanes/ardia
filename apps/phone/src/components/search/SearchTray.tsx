@@ -749,7 +749,7 @@ function StagedTray() {
     heldRelease.current = null;
   };
 
-  const presentRetry = useRef<{ frame: number | null; resume: (() => void) | null }>({ frame: null, resume: null });
+  const presentRetry = useRef<{ frame: number | null; resume: (() => void) | null; sawBackground: boolean }>({ frame: null, resume: null, sawBackground: false });
   const dropPresentRetry = () => {
     const retry = presentRetry.current;
     if (retry.frame !== null) cancelAnimationFrame(retry.frame);
@@ -760,6 +760,7 @@ function StagedTray() {
     const watching = AppState.addEventListener("change", (next) => {
       const retry = presentRetry.current;
       if (next === "background") {
+        retry.sawBackground = true;
         if (retry.frame !== null) cancelAnimationFrame(retry.frame);
         retry.frame = null;
         return;
@@ -782,11 +783,12 @@ function StagedTray() {
     if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
     setPresented(false);
     dropPresentRetry();
+    presentRetry.current.sawBackground = AppState.currentState === "background";
     const launch = searchState().arrival === "atRest";
     const isCurrent = () => live.current.presentation === presentation && !live.current.closing && searchState().open;
     const presented = () => {
       if (!isCurrent()) return;
-      if (launch && AppState.currentState !== "background") launchTrayUp();
+      if (launch && !presentRetry.current.sawBackground && AppState.currentState !== "background") launchTrayUp();
       markSearchPhase("presented");
       setPresented(true);
       stagePresented();

@@ -50,6 +50,8 @@ final class SearchStageView: ExpoView {
   private(set) var isStarted = false
   private var contentGaveUp = false
   private var startWaiters: [() -> Void] = []
+  private var presentsWhenActive = false
+  private var waitersForActive: [() -> Void] = []
   var fieldCenter = BrowseLayout.stageFieldCenter(fieldHeight: BrowseLayout.searchFieldHeight)
   var commandTop: CGFloat?
   var landsDirectly = false
@@ -111,6 +113,7 @@ final class SearchStageView: ExpoView {
     keyboardSentinel.isUserInteractionEnabled = false
     addSubview(keyboardSentinel)
     NotificationCenter.default.addObserver(self, selector: #selector(reduceMotionChanged), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
   }
 
   deinit {
@@ -183,12 +186,44 @@ final class SearchStageView: ExpoView {
     return hit === self ? nil : hit
   }
 
+  private var appIsActive: Bool { UIApplication.shared.applicationState == .active }
+
+  func requestPresent(onStarted: (() -> Void)? = nil) {
+    guard !appIsActive else {
+      present(onStarted: onStarted)
+      return
+    }
+    presentsWhenActive = true
+    if let onStarted { waitersForActive.append(onStarted) }
+  }
+
+  @objc private func appBecameActive() {
+    let waiters = waitersForActive
+    waitersForActive = []
+    guard presentsWhenActive else {
+      waiters.forEach { $0() }
+      return
+    }
+    presentsWhenActive = false
+    guard shownProp else {
+      waiters.forEach { $0() }
+      return
+    }
+    present()
+    waiters.forEach { present(onStarted: $0) }
+  }
+
   func propsDidUpdate() {
     let turnedOn = shownProp && !appliedShown
     let turnedOff = !shownProp && appliedShown
     appliedShown = shownProp
     if turnedOn {
-      present()
+      requestPresent()
+    } else if turnedOff, presentsWhenActive {
+      presentsWhenActive = false
+      let waiters = waitersForActive
+      waitersForActive = []
+      waiters.forEach { $0() }
     } else if turnedOff, isShown {
       finish()
     } else {
