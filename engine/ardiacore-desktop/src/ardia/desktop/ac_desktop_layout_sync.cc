@@ -784,7 +784,6 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
   }
   if (waiting == 0) {
     pending_ = false;
-    clock_jump_fallback_ = false;
     ++counts_.matched;
     for (Surface& child : children_) {
       if (child.participating) child.misses = 0;

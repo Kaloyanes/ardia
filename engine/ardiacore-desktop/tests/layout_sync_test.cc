@@ -979,6 +979,24 @@ void LastSequenceFinishesInsteadOfStranding() {
   CHECK(Near(split.Snapshot().split_ratio, 0.5) && split.Snapshot().device_scale == 2);
 }
 
+void ClockJumpsOutliveAMatchedLayout() {
+  sync::SurfaceSyncTracker tracker(16667);
+  CHECK(tracker.Decide(100).reason == sync::PresentReason::kIdle);
+  CHECK(tracker.Decide(5).reason == sync::PresentReason::kIdle);
+  tracker.Begin();
+  const auto first = tracker.ExpectLayout(1, {0, 0, 100, 100}, {{4, {0, 0, 50, 50}}}, 6);
+  CHECK(first.has_value());
+  CHECK(tracker.ShellSubmitted(tracker.ExpectedShell()));
+  if (first) CHECK(tracker.ChildSubmitted(4, (*first)[0]));
+  CHECK(tracker.Decide(7).reason == sync::PresentReason::kMatched);
+  CHECK(tracker.ExpectLayout(2, {0, 0, 100, 100}, {{4, {0, 0, 60, 60}}}, 8).has_value());
+  const auto fallback = tracker.Decide(9);
+  CHECK(fallback.reason == sync::PresentReason::kDeadline && fallback.present);
+  CHECK(!tracker.IsStalled(4) && tracker.Counts().stalls == 0 && tracker.Counts().clock_jumps == 1);
+  CHECK(tracker.ExpectLayout(3, {0, 0, 100, 100}, {{4, {0, 0, 70, 70}}}, 10).has_value());
+  CHECK(tracker.Decide(11).reason == sync::PresentReason::kHolding);
+}
+
 int main() {
   SidebarLimitMatchesTheBrowserUi();
   RubberBandRoundTrips();
@@ -1015,6 +1033,7 @@ int main() {
   CommittedWidthsNeverAutoCollapse();
   ClockJumpsSurviveBegin();
   LastSequenceFinishesInsteadOfStranding();
+  ClockJumpsOutliveAMatchedLayout();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return EXIT_FAILURE;
