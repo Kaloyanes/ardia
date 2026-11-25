@@ -19,8 +19,7 @@ import { SESSION_MIGRATIONS, SESSION_VERSION } from "../../browser/src/state/ses
 import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
-import { noteSessionFromOtherShell } from "../../browser/src/state/telemetry/sessionWrites";
-import { isOwnId, pageFromDisk, SESSION_ROWS, sessionRowLists, sessionWithListedRows, tableRows } from "../../browser/src/state/session/savedShapes";
+import { isOwnId, pageFromDisk, SESSION_ROWS, sessionWithListedRows, tableRows } from "../../browser/src/state/session/savedShapes";
 import { savedProfileRows } from "../../browser/src/state/session/savedSession";
 import { isFields } from "../../browser/src/lib/decode";
 
@@ -126,6 +125,11 @@ const withRowsKeyed = (saved: HydrateData): HydrateData => {
   const profilesChanged = !!profiles && (!isFields(saved.profiles) || Object.keys(profiles).length !== Object.keys(saved.profiles).length);
   if (!reshaped.length && !profilesChanged) return saved;
   return { ...saved, ...Object.fromEntries(reshaped.map((key) => [key, keyedById(rowsOf(saved[key])) ?? {}])), ...(profilesChanged ? { profiles } : {}) };
+};
+
+const withListRowsKeyed = (saved: HydrateData): HydrateData => {
+  const lists = SESSION_ROWS.filter((key) => Array.isArray(saved[key]));
+  return lists.length ? { ...saved, ...Object.fromEntries(lists.map((key) => [key, keyedById(saved[key]) ?? {}])) } : saved;
 };
 
 const sniffedSessionShape = (saved: HydrateData): HydrateData => {
@@ -482,11 +486,10 @@ function withoutStandIn(state: BrowserState, standIn: StandIn | undefined): Brow
 
 export function startHostPersistence(host: ArdiaHost, store: SessionStore, stored: HydrateData = host.bootstrap.session ?? {}, snapshot: (state: BrowserState, canonical: HydrateData) => HydrateData = snapshotHostSession) {
   const initial = linuxSessionShape(stored);
-  if (host.bootstrap.startup === true && sessionRowLists(stored as SavedObject)) noteSessionFromOtherShell();
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
   const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical);
-  const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : stored, stored);
+  const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : withListRowsKeyed(stored), stored);
   const writer = createSessionWriter(host, written, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(equalSessionValue({ ...initial, version: undefined }, { ...written, version: undefined }) ? initial : written)!;

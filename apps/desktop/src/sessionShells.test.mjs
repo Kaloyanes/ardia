@@ -424,3 +424,42 @@ test("profiles filed under prototype names are dropped by both shells alike", as
     assert.deepEqual(Object.keys(linuxSessionShape(JSON.parse(hostile)).profiles).sort(), ["default", "p-two"]);
   }
 });
+
+test("two windows saving their first edits to the same Mac list session before hearing from each other keep both edits", async () => {
+  for (const version of [SESSION_VERSION, 2]) {
+    const stored = version === SESSION_VERSION ? macSession() : olderMacSession();
+    let disk = structuredClone(stored);
+    const windowOn = (windowId, startup, tabId, title) => {
+      const bootstrap = { windowId, profileId: "default", startup };
+      hydrateFresh(initialLinuxSession({ bootstrap }, structuredClone(stored)));
+      let state = S();
+      state = { ...state, tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], title } } };
+      const store = { getState: () => state, setState: (patch) => void (state = { ...state, ...patch }), subscribe: () => () => {} };
+      const host = {
+        bootstrap,
+        invoke: async (method, pair) => {
+          if (method !== "session.write") return {};
+          disk = JSON.parse(JSON.stringify(mergeSession(pair.base, pair.session, disk)));
+          return structuredClone(disk);
+        },
+        onEvent: () => () => {},
+      };
+      return startHostPersistence(host, store, structuredClone(stored));
+    };
+    const first = windowOn("w1", true, "a", "A1");
+    const second = windowOn("w2", false, "second", "B1");
+    await first.flush();
+    await second.flush();
+    first();
+    second();
+    const shaped = linuxSessionShape(disk);
+    assert.equal(shaped.tabs.a.title, "A1", `v${version}: the first window's edit`);
+    assert.equal(shaped.tabs.second.title, "B1", `v${version}: the second window's edit`);
+    assert.equal(shaped.tabs.b.title, "Tab b");
+    const mac = macLaunch(JSON.stringify(disk));
+    assert.deepEqual(mac.seen.windows.w1.tabs, w1Tabs());
+    assert.equal(S().tabs.a.title, "A1");
+    assert.equal(S().tabs.second.title, "B1");
+    if (version === 2) assert.deepEqual(mac.seen.splits["w1|horizontal"], [{ size: 0.4, tab: T("left") }, { size: 0.6, tab: T("right") }]);
+  }
+});
