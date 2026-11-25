@@ -34,6 +34,7 @@ class WindowEvents {
   ~WindowEvents();
 
   void WatchPointer(bool on);
+  void PollPointer(bool on);
   void RouteCloseButton();
 
   bool Focused() const;

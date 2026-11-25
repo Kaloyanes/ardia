@@ -105,6 +105,24 @@ class CloseBook {
   ClosePhase phase_ = ClosePhase::kIdle;
 };
 
+enum class CloseRequestPlan { kRequest, kReissue, kAlreadyLeaving };
+
+inline CloseRequestPlan PlanCloseRequest(bool open, ClosePhase phase, std::uint64_t held_quit,
+                                         std::uint64_t requested_quit) {
+  if (!open || requested_quit == 0 || held_quit == requested_quit) return CloseRequestPlan::kRequest;
+  if (held_quit == 0 && (phase == ClosePhase::kAcknowledged || phase == ClosePhase::kClosing)) {
+    return CloseRequestPlan::kAlreadyLeaving;
+  }
+  return CloseRequestPlan::kReissue;
+}
+
+enum class QuitDownloads { kLeaveToChromium, kCancelThenExit };
+
+inline QuitDownloads DownloadsOnQuit(bool shell_confirmed, bool unload_handlers_pending) {
+  return shell_confirmed && !unload_handlers_pending ? QuitDownloads::kCancelThenExit
+                                                     : QuitDownloads::kLeaveToChromium;
+}
+
 inline bool ValidDeparture(bool present, bool is_dict, std::size_t size, bool has_base, bool has_session) {
   if (!present) return true;
   return is_dict && size == 2 && has_base && has_session;
@@ -228,6 +246,12 @@ struct EdgeReport {
   bool operator==(const EdgeReport&) const = default;
 };
 
+inline bool PollsOutside(bool over, double x, double y, double width, double height) {
+  if (!over) return false;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height)) return false;
+  return x < 0 || y < 0 || x >= width || y >= height;
+}
+
 class EdgeWatch {
  public:
   static constexpr double kStrip = 8;
@@ -273,6 +297,7 @@ class EdgeWatch {
   }
 
   bool watching() const { return watching_; }
+  bool over() const { return watching_ && over_; }
 
  private:
   bool Within() const {

@@ -92,6 +92,67 @@ TEST(a_late_acknowledgment_after_the_quit_deadline_never_exits_again) {
   CHECK(barrier.Acknowledged("main", next) == policy::QuitStep::kStale);
 }
 
+TEST(a_retried_quit_reissues_the_close_so_the_expired_acknowledgment_stays_stale) {
+  policy::QuitBarrier barrier;
+  policy::CloseBook book;
+  std::uint64_t held = 0;
+  const auto first_quit = barrier.Begin({"main"});
+  CHECK(policy::PlanCloseRequest(book.Open(), book.phase(), held, first_quit) == policy::CloseRequestPlan::kRequest);
+  const auto expired = book.Request(4);
+  held = first_quit;
+  CHECK(expired && book.BeginDrain(*expired, 4));
+  CHECK(barrier.Expired(first_quit) == policy::QuitStep::kExit);
+  const auto retry = barrier.Begin({"main"});
+  CHECK(policy::PlanCloseRequest(book.Open(), book.phase(), held, retry) == policy::CloseRequestPlan::kReissue);
+  CHECK(book.Cancel(*expired));
+  held = 0;
+  const auto fresh = book.Request(4);
+  held = retry;
+  CHECK(fresh && fresh->close != expired->close);
+  CHECK(!book.Acknowledge(*expired, 4, 3));
+  CHECK(barrier.Acknowledged("main", first_quit) == policy::QuitStep::kStale && barrier.running());
+  CHECK(book.BeginDrain(*fresh, 4) && book.Acknowledge(*fresh, 4, 3));
+  CHECK(barrier.Acknowledged("main", held) == policy::QuitStep::kExit);
+}
+
+TEST(close_requests_reuse_only_their_own_quit) {
+  using policy::ClosePhase;
+  CHECK(policy::PlanCloseRequest(false, ClosePhase::kIdle, 0, 5) == policy::CloseRequestPlan::kRequest);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kDraining, 5, 5) == policy::CloseRequestPlan::kRequest);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kDraining, 2, 0) == policy::CloseRequestPlan::kRequest);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kDraining, 2, 5) == policy::CloseRequestPlan::kReissue);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kRequested, 0, 5) == policy::CloseRequestPlan::kReissue);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kAcknowledged, 0, 5) == policy::CloseRequestPlan::kAlreadyLeaving);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kClosing, 0, 5) == policy::CloseRequestPlan::kAlreadyLeaving);
+  CHECK(policy::PlanCloseRequest(true, ClosePhase::kAcknowledged, 2, 5) == policy::CloseRequestPlan::kReissue);
+}
+
+TEST(downloads_are_cancelled_only_when_no_page_can_still_keep_the_app_open) {
+  CHECK(policy::DownloadsOnQuit(true, false) == policy::QuitDownloads::kCancelThenExit);
+  CHECK(policy::DownloadsOnQuit(true, true) == policy::QuitDownloads::kLeaveToChromium);
+  CHECK(policy::DownloadsOnQuit(false, false) == policy::QuitDownloads::kLeaveToChromium);
+  CHECK(policy::DownloadsOnQuit(false, true) == policy::QuitDownloads::kLeaveToChromium);
+}
+
+TEST(the_edge_polls_only_while_over_outside_the_content) {
+  CHECK(policy::PollsOutside(true, -10, 100, 1200, 800));
+  CHECK(policy::PollsOutside(true, 1205, 100, 1200, 800));
+  CHECK(!policy::PollsOutside(true, 3, 100, 1200, 800));
+  CHECK(!policy::PollsOutside(false, -10, 100, 1200, 800));
+  CHECK(!policy::PollsOutside(true, std::numeric_limits<double>::quiet_NaN(), 100, 1200, 800));
+  policy::EdgeWatch watch;
+  watch.Watch(0, policy::Side::kLeft, false);
+  CHECK(watch.Moved(-10, 100, 1200, 800, false)->over && watch.over());
+  CHECK(policy::PollsOutside(watch.over(), -10, 100, 1200, 800));
+  CHECK(!watch.Covered()->over && !watch.over());
+  CHECK(!policy::PollsOutside(watch.over(), -10, 100, 1200, 800));
+  CHECK(watch.Moved(-10, 100, 1200, 800, false)->over);
+  CHECK(!watch.Moved(-40, 100, 1200, 800, false)->over);
+  CHECK(!policy::PollsOutside(watch.over(), -40, 100, 1200, 800));
+  watch.Stop();
+  CHECK(!watch.over());
+}
+
 TEST(window_state_reads_zoom_and_full_screen) {
   CHECK(policy::StateOf(true, false, false) == (policy::WindowState{true, false, false}));
   CHECK(policy::StateOf(true, true, false) == (policy::WindowState{false, false, true}));

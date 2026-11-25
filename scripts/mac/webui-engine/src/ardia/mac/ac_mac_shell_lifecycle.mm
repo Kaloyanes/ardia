@@ -91,8 +91,26 @@ base::OneShotTimer& QuitDeadline() {
   return *timer;
 }
 
+bool UnloadHandlersPending() {
+  for (ShellHostView* host : Hosts()) {
+    for (BrowserWindowInterface* member : host->Members()) {
+      TabStripModel* model = member->GetTabStripModel();
+      for (int index = 0; index < model->count(); ++index) {
+        content::WebContents* contents = model->GetWebContentsAt(index);
+        if (contents && contents->NeedToFireBeforeUnloadOrUnloadEvents()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 void FinishShellQuit() {
-  DownloadCoreService::CancelAllDownloads(DownloadCoreService::CancelDownloadsTrigger::kShutdown);
+  if (window_policy::DownloadsOnQuit(true, UnloadHandlersPending()) ==
+      window_policy::QuitDownloads::kCancelThenExit) {
+    DownloadCoreService::CancelAllDownloads(DownloadCoreService::CancelDownloadsTrigger::kShutdown);
+  }
   chrome::AttemptExit();
 }
 
@@ -355,6 +373,15 @@ void ShellHostView::DialogCall(const std::string& method, const base::ListValue*
 base::DictValue ShellHostView::RequestWindowClose(std::uint64_t quit_generation) {
   if (!RendererLive()) {
     return {};
+  }
+  switch (window_policy::PlanCloseRequest(close_.Open(), close_.phase(), quit_generation_, quit_generation)) {
+    case window_policy::CloseRequestPlan::kRequest:
+      break;
+    case window_policy::CloseRequestPlan::kAlreadyLeaving:
+      return {};
+    case window_policy::CloseRequestPlan::kReissue:
+      CancelWindowClose(close_.identity(), "a newer quit replaced it");
+      break;
   }
   const bool fresh = !close_.Open();
   const std::optional<window_policy::CloseIdentity> identity = close_.Request(renderer_generation_);
@@ -727,11 +754,17 @@ void ShellHostView::OnPointerMoved(const WindowEvents::Pointer& pointer) {
     return;
   }
   if (pointer.covered) {
-    return ReportSidebarEdge(edge_.Covered());
+    ReportSidebarEdge(edge_.Covered());
+  } else {
+    const double zoom = ShellZoom();
+    ReportSidebarEdge(
+        edge_.Moved(pointer.x / zoom, pointer.y / zoom, pointer.width / zoom, pointer.height / zoom, pointer.pressed));
   }
-  const double zoom = ShellZoom();
-  ReportSidebarEdge(
-      edge_.Moved(pointer.x / zoom, pointer.y / zoom, pointer.width / zoom, pointer.height / zoom, pointer.pressed));
+  if (window_events_) {
+    window_events_->PollPointer(
+        !pointer.covered &&
+        window_policy::PollsOutside(edge_.over(), pointer.x, pointer.y, pointer.width, pointer.height));
+  }
 }
 
 void ShellHostView::ReportSidebarEdge(std::optional<window_policy::EdgeReport> report) {
@@ -779,6 +812,7 @@ void ShellHostView::OnWindowChanged(WindowEvents::Kind kind) {
       return;
     case WindowEvents::Kind::kBlur:
       ReportSidebarEdge(edge_.Resigned());
+      window_events_->PollPointer(false);
       EmitWindowEvent(base::DictValue().Set("type", "blur").Set("id", window_id_));
       return;
     case WindowEvents::Kind::kFrame: {

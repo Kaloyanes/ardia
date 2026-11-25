@@ -41,6 +41,7 @@ namespace ardia_mac {
 namespace {
 
 const void* const kCloseTargetKey = &kCloseTargetKey;
+constexpr NSTimeInterval kPointerPollSeconds = 0.1;
 
 bool CoveredByAnotherWindow(NSWindow* target, NSPoint screen) {
   const NSInteger under = [NSWindow windowNumberAtPoint:screen belowWindowWithWindowNumber:0];
@@ -78,6 +79,7 @@ struct WindowEvents::Native {
   NSMutableArray* observers = [NSMutableArray array];
   id pointer_monitor = nil;
   id pointer_resign = nil;
+  NSTimer* pointer_poll = nil;
   NSTrackingArea* pointer_area = nil;
   ArdiaMacPointerExitTracker* pointer_tracker = nil;
   BOOL accepted_mouse_moves = NO;
@@ -155,6 +157,7 @@ void WindowEvents::RouteCloseButton() {
 void WindowEvents::WatchPointer(bool on) {
   NSWindow* window = state_->window;
   if (!on) {
+    PollPointer(false);
     if (state_->pointer_monitor) {
       [NSEvent removeMonitor:state_->pointer_monitor];
       state_->pointer_monitor = nil;
@@ -216,6 +219,32 @@ void WindowEvents::WatchPointer(bool on) {
                                                                        usingBlock:^(NSNotification*) {
                                                                          report_covered();
                                                                        }];
+}
+
+void WindowEvents::PollPointer(bool on) {
+  if (!on || !state_->pointer_monitor) {
+    [state_->pointer_poll invalidate];
+    state_->pointer_poll = nil;
+    return;
+  }
+  if (state_->pointer_poll) {
+    return;
+  }
+  Native* state = state_.get();
+  NSWindow* __weak watched = state_->window;
+  state_->pointer_poll = [NSTimer scheduledTimerWithTimeInterval:kPointerPollSeconds
+                                                         repeats:YES
+                                                           block:^(NSTimer*) {
+                                                             NSWindow* target = watched;
+                                                             if (!target) {
+                                                               return;
+                                                             }
+                                                             Pointer pointer = PointerIn(target);
+                                                             if (!target.isKeyWindow) {
+                                                               pointer.covered = true;
+                                                             }
+                                                             state->moved.Run(pointer);
+                                                           }];
 }
 
 bool WindowEvents::Focused() const {

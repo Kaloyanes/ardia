@@ -367,7 +367,12 @@ class ContractTests(unittest.TestCase):
     def test_a_confirmed_quit_cancels_downloads_before_it_exits(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         finish = lifecycle.split('void FinishShellQuit() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('window_policy::DownloadsOnQuit(true, UnloadHandlersPending())'),
+                        finish.index('DownloadCoreService::CancelAllDownloads('))
         self.assertLess(finish.index('DownloadCoreService::CancelAllDownloads('), finish.index('chrome::AttemptExit();'))
+        pending = lifecycle.split('bool UnloadHandlersPending() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('NeedToFireBeforeUnloadOrUnloadEvents()', pending)
+        self.assertIn('host->Members()', pending)
         exit_soon = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit)', exit_soon)
         self.assertIn('ExitSoon(false);', lifecycle.split('void QuitWithoutShell() {', 1)[1].split('\n}\n', 1)[0])
@@ -387,6 +392,24 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('!Quit().running()', acknowledge)
         self.assertNotIn('close_quitting_', lifecycle + self.read('ac_mac_shell_host.h'))
 
+    def test_a_newer_quit_reissues_an_in_flight_close(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        request = lifecycle.split('base::DictValue ShellHostView::RequestWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(request.index('window_policy::PlanCloseRequest('), request.index('close_.Request(renderer_generation_)'))
+        reissue = request.split('case window_policy::CloseRequestPlan::kReissue:', 1)[1].split('break;', 1)[0]
+        self.assertIn('CancelWindowClose(close_.identity()', reissue)
+        self.assertNotIn('quit_generation_ = quit_generation;\n  }\n  const bool fresh', request)
+
+    def test_the_sidebar_edge_polls_while_over_outside_the_window(self):
+        events = self.read('ac_mac_window_events.mm')
+        poll = events.split('void WindowEvents::PollPointer(bool on) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('[state_->pointer_poll invalidate];', poll)
+        self.assertIn('scheduledTimerWithTimeInterval:kPointerPollSeconds', poll)
+        self.assertIn('kPointerPollSeconds = 0.1', events)
+        self.assertIn('PollPointer(false);', events.split('void WindowEvents::WatchPointer(bool on) {', 1)[1].split('\n}\n', 1)[0])
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        self.assertIn('window_policy::PollsOutside(edge_.over(), pointer.x, pointer.y, pointer.width, pointer.height)', lifecycle)
+
     def test_the_sidebar_edge_lets_go_when_another_window_covers_the_pointer(self):
         events = self.read('ac_mac_window_events.mm')
         self.assertIn('NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect', events)
@@ -394,7 +417,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('windowNumberAtPoint:screen belowWindowWithWindowNumber:0', events)
         self.assertIn('removeTrackingArea:state_->pointer_area', events)
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
-        self.assertIn('return ReportSidebarEdge(edge_.Covered());', lifecycle)
+        self.assertIn('ReportSidebarEdge(edge_.Covered());', lifecycle.split('void ShellHostView::OnPointerMoved(', 1)[1].split('\n}\n', 1)[0])
 
     def test_window_close_runs_the_shared_close_protocol(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
