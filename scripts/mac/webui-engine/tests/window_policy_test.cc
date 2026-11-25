@@ -146,6 +146,35 @@ TEST(a_download_started_during_the_drain_is_left_for_chromium_to_ask_about) {
   CHECK(policy::DownloadsToCancel(true, false, one_shown, {"finished-and-replaced"}).empty());
 }
 
+TEST(only_downloads_chromium_counts_at_shutdown_are_shown_or_cancelled) {
+  CHECK(policy::BlocksShutdown(false, true, false, false));
+  CHECK(!policy::BlocksShutdown(true, true, false, false));
+  CHECK(!policy::BlocksShutdown(false, false, false, false));
+  CHECK(!policy::BlocksShutdown(false, true, true, false));
+  CHECK(!policy::BlocksShutdown(false, true, false, true));
+}
+
+TEST(declining_the_download_prompt_leaves_nothing_for_a_later_quit_to_cancel) {
+  const policy::DownloadAsker main{"main", "3"};
+  policy::DownloadPermission permission;
+  permission.Shown(main, {"a"});
+  permission.Declined(policy::DownloadAsker{"main", "2"});
+  CHECK(permission.pending());
+  permission.Declined(main);
+  CHECK(!permission.pending());
+  const auto later = permission.Take(main);
+  CHECK(!later.present);
+  CHECK(policy::DownloadsToCancel(true, false, later, {"a"}).empty());
+  permission.Shown(main, {"a"});
+  const auto other = permission.Take(policy::DownloadAsker{"second", "3"});
+  CHECK(!other.present && !permission.pending());
+  CHECK(!permission.Take(main).present);
+  permission.Shown(main, {"a"});
+  const auto confirmed = permission.Take(main);
+  CHECK(confirmed.present && confirmed.ids == (std::set<std::string>{"a"}));
+  CHECK(!permission.Take(main).present);
+}
+
 TEST(re_registering_the_edge_while_outside_the_content_reports_the_live_pointer_and_polls) {
   policy::EdgeWatch watch;
   watch.Watch(0, policy::Side::kLeft, false);

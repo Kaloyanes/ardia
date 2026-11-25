@@ -124,7 +124,9 @@ void ForEachActiveDownload(base::FunctionRef<void(DownloadCoreService*, download
       content::DownloadManager::DownloadVector downloads;
       profile->GetDownloadManager()->GetAllDownloads(&downloads);
       for (download::DownloadItem* item : downloads) {
-        if (item && item->GetState() == download::DownloadItem::IN_PROGRESS) {
+        if (item && window_policy::BlocksShutdown(item->IsTransient(),
+                                                  item->GetState() == download::DownloadItem::IN_PROGRESS,
+                                                  item->IsDangerous(), item->IsInsecure())) {
           visit(service, item);
         }
       }
@@ -138,9 +140,21 @@ std::set<std::string> ActiveDownloadIds() {
   return ids;
 }
 
-std::optional<window_policy::DownloadAuthorization>& ShownDownloads() {
-  static base::NoDestructor<std::optional<window_policy::DownloadAuthorization>> shown;
+window_policy::DownloadPermission& ShownDownloads() {
+  static base::NoDestructor<window_policy::DownloadPermission> shown;
   return *shown;
+}
+
+void NoteDialogAnswer(const base::Value& envelope) {
+  const base::DictValue* event = envelope.GetIfDict();
+  const base::DictValue* data = event ? event->FindDict("data") : nullptr;
+  const base::DictValue* result = data ? data->FindDict("result") : nullptr;
+  const std::string* window = data ? data->FindString("windowId") : nullptr;
+  const std::string* renderer = data ? data->FindString("rendererGeneration") : nullptr;
+  if (!result || !window || !renderer || result->FindBool("confirmed").value_or(false)) {
+    return;
+  }
+  ShownDownloads().Declined(window_policy::DownloadAsker{*window, *renderer});
 }
 
 window_policy::DownloadAuthorization& QuitDownloadAuthorization() {
@@ -209,11 +223,12 @@ ShellHostView* HostNamed(std::string_view window) {
   return nullptr;
 }
 
-void StartQuit() {
+void StartQuit(const window_policy::DownloadAsker& asker) {
+  window_policy::DownloadAuthorization authorized = ShownDownloads().Take(asker);
   if (Quit().running()) {
     return;
   }
-  QuitDownloadAuthorization() = std::exchange(ShownDownloads(), std::nullopt).value_or(window_policy::DownloadAuthorization{});
+  QuitDownloadAuthorization() = std::move(authorized);
   std::vector<std::string> windows;
   for (ShellHostView* host : Hosts()) {
     if (host->RendererLive()) {
@@ -275,6 +290,7 @@ void ShellHostView::StartLifecycle() {
       widget, window_id_, BackgroundInstance(),
       base::BindRepeating(
           [](base::WeakPtr<ShellHostView> host, base::Value envelope) {
+            NoteDialogAnswer(envelope);
             if (host) {
               host->Emit("ArdiaShell", "shell", std::move(envelope));
             }
@@ -359,11 +375,14 @@ void ShellHostView::LifecycleCall(const std::string& method, const base::DictVal
       return std::move(done).Run(false, base::Value(method + " takes no arguments"));
     }
     if (method == "ArdiaShell.downloadsInProgress") {
-      ShownDownloads() = window_policy::DownloadAuthorization{true, ActiveDownloadIds()};
-      return std::move(done).Run(true, base::Value(DownloadCoreService::BlockingShutdownCountAllProfiles()));
+      std::set<std::string> shown = ActiveDownloadIds();
+      const int count = static_cast<int>(shown.size());
+      ShownDownloads().Shown(window_policy::DownloadAsker{window_id_, base::NumberToString(renderer_generation_)},
+                             std::move(shown));
+      return std::move(done).Run(true, base::Value(count));
     }
     std::move(done).Run(true, base::Value());
-    return StartQuit();
+    return StartQuit(window_policy::DownloadAsker{window_id_, base::NumberToString(renderer_generation_)});
   }
   if (method == "ArdiaShell.privateWindows") {
     return std::move(done).Run(true, base::Value(base::ListValue()));

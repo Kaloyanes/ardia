@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ardia_mac::window_policy {
@@ -119,6 +120,41 @@ inline CloseRequestPlan PlanCloseRequest(bool open, ClosePhase phase, std::uint6
 struct DownloadAuthorization {
   bool present = false;
   std::set<std::string> ids;
+};
+
+inline bool BlocksShutdown(bool transient, bool in_progress, bool dangerous, bool insecure) {
+  return !transient && in_progress && !dangerous && !insecure;
+}
+
+struct DownloadAsker {
+  std::string window;
+  std::string renderer;
+  bool operator==(const DownloadAsker&) const = default;
+};
+
+class DownloadPermission {
+ public:
+  void Shown(DownloadAsker asker, std::set<std::string> ids) {
+    asker_ = std::move(asker);
+    shown_ = DownloadAuthorization{true, std::move(ids)};
+  }
+
+  void Declined(const DownloadAsker& asker) {
+    if (shown_ && asker_ == asker) shown_.reset();
+  }
+
+  DownloadAuthorization Take(const DownloadAsker& asker) {
+    std::optional<DownloadAuthorization> shown = std::move(shown_);
+    shown_.reset();
+    if (!shown || asker_ != asker) return {};
+    return std::move(*shown);
+  }
+
+  bool pending() const { return shown_.has_value(); }
+
+ private:
+  DownloadAsker asker_;
+  std::optional<DownloadAuthorization> shown_;
 };
 
 inline std::set<std::string> DownloadsToCancel(bool shell_confirmed,

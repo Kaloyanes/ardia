@@ -358,11 +358,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn('if (command == "quit" && !RendererLive()) {', host)
         self.assertEqual((REPO / 'apps/desktop/src/quit.ts').read_text().count('export const QUIT_COMMAND = "quit";'), 1)
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
-        quit = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
+        quit = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('RequestWindowClose(generation)', quit)
         self.assertIn('window_policy::kQuitDeadlineSeconds', quit)
         self.assertIn('Quit().Expired(generation)', quit)
-        self.assertIn('DownloadCoreService::BlockingShutdownCountAllProfiles()', lifecycle)
+        self.assertIn('window_policy::BlocksShutdown(item->IsTransient(),', lifecycle)
 
     def test_a_confirmed_quit_cancels_downloads_before_it_exits(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
@@ -377,14 +377,21 @@ class ContractTests(unittest.TestCase):
         self.assertIn('UnloadController::From(browser)', pending)
         self.assertIn('TabsNeedBeforeUnloadFired()', pending)
         self.assertNotIn('Hosts()', pending)
-        shown = lifecycle.split('if (method == "ArdiaShell.downloadsInProgress") {', 1)[1].split('return ', 1)[0]
-        self.assertIn('ShownDownloads() = window_policy::DownloadAuthorization{true, ActiveDownloadIds()};', shown)
-        start = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(start.index('std::exchange(ShownDownloads(), std::nullopt)'), start.index('ExitSoon(true)'))
+        shown = lifecycle.split('if (method == "ArdiaShell.downloadsInProgress") {', 1)[1].split('return std::move(done)', 1)[0]
+        self.assertIn('std::set<std::string> shown = ActiveDownloadIds();', shown)
+        self.assertIn('const int count = static_cast<int>(shown.size());', shown)
+        self.assertIn('ShownDownloads().Shown(', shown)
+        self.assertNotIn('BlockingShutdownCountAllProfiles', lifecycle)
+        start = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(start.index('ShownDownloads().Take(asker)'), start.index('if (Quit().running())'))
+        self.assertLess(start.index('ShownDownloads().Take(asker)'), start.index('ExitSoon(true)'))
+        answer = lifecycle.split('void NoteDialogAnswer(const base::Value& envelope) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ShownDownloads().Declined(', answer)
+        self.assertIn('NoteDialogAnswer(envelope);', lifecycle.split('void ShellHostView::StartLifecycle() {', 1)[1].split('\n}\n', 1)[0])
         exit_soon = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit)', exit_soon)
         self.assertIn('ExitSoon(false);', lifecycle.split('void QuitWithoutShell() {', 1)[1].split('\n}\n', 1)[0])
-        quit = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
+        quit = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]
         self.assertNotIn('ExitSoon(false)', quit)
         self.assertNotIn('chrome::AttemptExit()', quit)
         self.assertIn('FinishShellQuit();', quit)
