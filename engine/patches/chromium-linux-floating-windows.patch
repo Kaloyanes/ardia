@@ -2,8 +2,8 @@ The Ardia Linux host names the window class of the windows it opens for Little A
 (g_ardia_linux_window_class: the Wayland app id and the X11 WM_CLASS instance, ardia-little, ardia-settings and
 ardia-import), so a compositor rule and a desktop entry can tell them from a main window. It may also pin a window's
 size (g_ardia_linux_pins_window_size): the browser widget's minimum and maximum size are then the window's own size,
-so the window maps with a fixed size, which niri, sway, Hyprland and i3 float by default, and the host releases the
-pin once the window has been presented. Both hooks are null outside the Linux host.
+so the window maps with a fixed size, which niri, sway and i3 float by default, and the host releases the pin once
+the window has been presented. Both hooks are null outside the Linux host.
 --- a/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
 +++ b/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
 @@ -22,6 +22,20 @@

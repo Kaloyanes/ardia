@@ -167,6 +167,10 @@ class FloatingWindowHostTests(unittest.TestCase):
         release = self.section('void ReleasePinnedSize() {', 'void set_small(bool small) {')
         self.assertLess(release.index('pinned_ = false;'), release.index('GetWidget()->OnSizeConstraintsChanged();'))
 
+    def test_tiled_edges_never_release_the_pin(self):
+        hook = self.section('g_ardia_linux_tiled_edges_changed = [](', 'g_ardia_linux_minimum_size = [](')
+        self.assertNotIn('ReleasePinnedSize', hook)
+
     def test_only_the_first_shell_bootstrap_says_the_window_opened_floating_and_only_once_chromium_read_the_pin(self):
         self.assertNotIn('openedFloating', self.section('base::DictValue ShellHostView::Bootstrap() const {', 'void ShellHostView::LayoutOverlay()'))
         served = self.section('  void StartDataRequest(', 'FileRunner()->PostTaskAndReplyWithResult(')
