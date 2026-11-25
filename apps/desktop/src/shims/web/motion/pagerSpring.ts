@@ -230,6 +230,11 @@ export class PagerSpring {
     if (frame.detentCrossed) this.detentCrossedFlag = true;
     if (frame.phase === "idle") {
       if (this.phaseValue !== "idle" || frame.settled) this.rest(selected);
+      else if (this.positionValue !== selected || this.velocityValue !== 0) {
+        this.positionValue = selected;
+        this.velocityValue = 0;
+        this.movedFlag = true;
+      }
       return true;
     }
     this.phaseValue = frame.phase;

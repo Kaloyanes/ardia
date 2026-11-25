@@ -152,26 +152,31 @@ export class Pager {
   applyNativeFrame(native: NativePagerFrame) {
     if (!this.spring.configured || native.frame <= this.nativeFrameSeen) return false;
     this.nativeFrameSeen = native.frame;
-    if (this.revokedSelection !== null) {
-      if (!native.began && native.selectionSequence <= this.revokedSelection) return false;
-      this.revokedSelection = null;
-    }
-    if (native.count !== this.spring.count) return false;
+    if (native.count !== this.spring.count || !Number.isFinite(native.position) || !Number.isFinite(native.velocity)) return false;
     if (native.profileId !== undefined && native.profileId !== null) {
       const index = this.spring.orderIndex(native.profileId);
       if (index < 0) return false;
       if (index !== native.selected) {
-        this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
-        this.revokeNative(true);
-        this.flush();
+        if (this.revokedSelection === null) {
+          this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
+          this.revokeNative(true);
+          this.flush();
+        }
         return false;
       }
+    }
+    if (this.revokedSelection !== null) {
+      if (!native.began) return false;
+      this.revokedSelection = null;
     }
     if (!this.spring.mirror(native)) return false;
     this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
     this.dragArea = null;
     this.stopFrames();
-    if (native.phase === "idle") this.releaseNative();
+    if (native.phase === "settling" && this.spring.reduceMotion) {
+      this.owner = "native";
+      this.revokeNative();
+    } else if (native.phase === "idle") this.releaseNative();
     else {
       this.owner = "native";
       this.nativeAt = clock.now();
@@ -221,6 +226,7 @@ export class Pager {
   private flush(options: { quiet?: boolean; outOfMotion?: boolean } = {}) {
     const wasIdle = this.motion === 0;
     const frame = this.spring.drain();
+    if (frame.phase !== "settling" || this.owner !== "js") this.stopFrames();
     if (!options.outOfMotion && wasIdle && frame.phase !== "idle") this.motion = ++motions;
     this.emit(frame, options);
     if (frame.phase === "settling" && this.owner === "js") {

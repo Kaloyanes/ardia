@@ -272,10 +272,9 @@ function engine(key, order = ORDER, selected = 0) {
   const spring = new PagerSpring();
   spring.configure(order.length, selected, 0, order);
   spring.drain();
-  let frame = 0;
   const toPayload = (f, extra = {}) => ({
     key,
-    frame: ++frame,
+    frame: ++frameNumbers,
     sequence: f.sequence,
     selection_sequence: f.selectionSequence,
     position: f.position,
@@ -404,15 +403,61 @@ test("a late frame from a native settle never undoes a JS switch; a fresh gestur
   assert.equal(pager.drivenNatively, true);
 });
 
-test("a native switch after a JS takeover is accepted once its selection sequence moves on", (t) => {
+test("after a JS takeover only a valid new native gesture takes the pager back, never the old gesture's release", (t) => {
   const fake = fakeClock();
   t.after(setPagerClock(fake.clock));
   const { pager } = driven(t);
-  onPagerFrame(nativeFrame(pager.key, { selectionSequence: 3, position: 0.4, selected_changed: true }));
-  pager.switchTo(0, ORDER);
-  assert.equal(onPagerFrame(nativeFrame(pager.key, { selectionSequence: 3, position: 0.9 })), false);
-  assert.equal(onPagerFrame(nativeFrame(pager.key, { selectionSequence: 4, position: 0.6, selected: 2, selected_changed: true })), true);
+  const native = engine(pager.key);
+  native.spring.input("began", 0, -1, WIDTH, 0);
+  native.spring.input("changed", 300, -1, WIDTH, 0.05);
+  assert.equal(native.step(0.05), true);
+  assert.equal(pager.snapshot().phase, "tracking");
+  pager.switchTo(2, ORDER);
+  native.spring.input("ended", 300, -1, WIDTH, 0.3);
+  let at = 0.3;
+  assert.equal(native.spring.selected, 1);
+  assert.equal(native.step((at += FRAME)), false, "the release frame advances the selection sequence but stays revoked");
+  while (native.spring.phase !== "idle") assert.equal(native.step((at += FRAME)), false);
+  fake.pump();
   assert.equal(pager.snapshot().selected, 2);
+  assert.equal(pager.snapshot().position, 2);
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { selectionSequence: 50, phase: "settling", position: 1.5, selected: 1, selected_changed: true })), false);
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { began: true, phase: "tracking", count: 2, selected: 1, position: 1.4 })), false, "a wrong-count began is rejected");
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { phase: "settling", position: 1.2, selected: 1 })), false, "and does not clear the revocation");
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { began: true, phase: "tracking", position: 1.9, selected: 2 })), true);
+  assert.equal(pager.drivenNatively, true);
+});
+
+test("an idle native selection with no settled flag moves the position to the selected page", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, positions } = driven(t);
+  const native = engine(pager.key);
+  assert.equal(native.spring.select("side", ORDER), true);
+  const frame = native.spring.drain();
+  assert.equal(frame.phase, "idle");
+  assert.equal(frame.settled, false);
+  assert.equal(native.send(frame), true);
+  assert.equal(pager.snapshot().selected, 2);
+  assert.equal(pager.snapshot().position, 2);
+  assert.equal(positions.at(-1), 2);
+});
+
+test("a native settle arriving while Reduce Motion is already on snaps straight to the target", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, states, positions } = driven(t);
+  fake.setReduce(true);
+  const before = positions.length;
+  const native = engine(pager.key);
+  native.spring.switchTo(1);
+  assert.equal(native.step(FRAME), true);
+  assert.deepEqual(positions.slice(before), [1]);
+  assert.equal(pager.snapshot().phase, "idle");
+  assert.deepEqual(states.map((s) => s.phase), ["selected", "settled"]);
+  assert.equal(fake.pending, 0);
+  assert.equal(native.step(2 * FRAME), false);
+  assert.equal(pager.snapshot().position, 1);
 });
 
 test("when native frames stop mid-settle the JS spring takes over and finishes", (t) => {
@@ -490,6 +535,24 @@ test("a 500 ms hold before a settle is not counted as a missed frame", (t) => {
   assert.equal(pager.snapshot().phase, "holding");
   fake.advance(0.5);
   fake.pump();
+  pager.input(area, "abandon", 0, 0, fake.clock.now());
+  fake.pump();
+  const settled = states.at(-1);
+  assert.equal(settled.phase, "settled");
+  assert.equal(settled.longFrames, 0);
+  assert.ok(settled.worstGapMs <= 17, `${settled.worstGapMs} ms`);
+});
+
+test("a hold that starts with an animation frame already queued is not counted as a missed frame", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, area, states } = driven(t);
+  pager.switchTo(1, ORDER);
+  fake.pump(3);
+  assert.equal(fake.pending, 1);
+  pager.input(area, "prepare", 0, 0, fake.clock.now());
+  assert.equal(fake.pending, 0);
+  fake.advance(0.5);
   pager.input(area, "abandon", 0, 0, fake.clock.now());
   fake.pump();
   const settled = states.at(-1);
@@ -640,6 +703,27 @@ test("a neighbour whose viewport is measured after it mounts still pre-scrolls t
   queue.want(["side"]);
   spots.set("side", { ...spot, scroller: { scrollTo: () => assert.fail("no selected row") } });
   assert.equal(queue.pump((id) => track.revealRow(spots.get(id), () => null, 12)), 0);
+});
+
+test("a neighbour measured before its lazy rows exist keeps waiting until the selected row can be reached", () => {
+  const scrolled = [];
+  const node = { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
+  const spot = { viewport: 600, scrollY: 0, regions: { list: 40 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => { scrolled.push(to.y); node.scrollTop = Math.min(to.y, node.scrollHeight - node.clientHeight); } } };
+  const queue = new track.RevealQueue();
+  const attempt = () => track.revealRow(spot, () => ({ section: "list", top: 130 * 32, height: 32 }), 12);
+  const target = Math.round(12 + 40 + 130 * 32 + 16 - 300);
+  queue.want(["work"]);
+  assert.equal(queue.pump(attempt), 1);
+  assert.deepEqual(scrolled, []);
+  node.scrollHeight = 2000;
+  assert.equal(queue.pump(attempt), 1, "rows still short of the selection");
+  node.scrollHeight = 150 * 32 + 200;
+  assert.equal(queue.pump(attempt), 0);
+  assert.deepEqual(scrolled, [target]);
+  assert.equal(node.scrollTop, target);
+  queue.want(["work"]);
+  assert.equal(queue.pump(attempt), 0);
+  assert.deepEqual(scrolled, [target], "reads the live scroll offset and leaves it");
 });
 
 test("the tint uses a ScrollTimeline only with a track, the constructor and element.animate together", () => {

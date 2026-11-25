@@ -97,8 +97,13 @@ export type RevealTarget = {
   viewport: number;
   scrollY: number;
   regions: Record<string, number>;
-  scroller: { scrollTo?: (to: { y: number; animated: boolean }) => void } | null;
+  scroller: { scrollTo?: (to: { y: number; animated: boolean }) => void; getScrollableNode?: () => ScrollExtent | null } | null;
 };
+
+export type ScrollExtent = { scrollTop: number; scrollHeight: number; clientHeight: number };
+
+const extentOf = (node: ScrollExtent | null | undefined) =>
+  node && [node.scrollTop, node.scrollHeight, node.clientHeight].every(Number.isFinite) ? node : null;
 
 export type RevealRow = { section: string; top: number; height: number };
 
@@ -106,8 +111,12 @@ export function revealRow(spot: RevealTarget | undefined, row: () => RevealRow |
   if (!spot || !spot.scroller?.scrollTo || !(spot.viewport > 0)) return "wait";
   const span = row();
   if (!span) return "done";
-  const target = revealOffset({ listTop: listInset + (spot.regions[span.section] ?? 0), rowTop: span.top, rowHeight: span.height, viewport: spot.viewport, scrollY: spot.scrollY });
-  if (target !== null) spot.scroller.scrollTo({ y: target, animated: false });
+  const node = extentOf(spot.scroller.getScrollableNode?.());
+  const scrollY = node ? node.scrollTop : spot.scrollY;
+  const target = revealOffset({ listTop: listInset + (spot.regions[span.section] ?? 0), rowTop: span.top, rowHeight: span.height, viewport: spot.viewport, scrollY });
+  if (target === null) return "done";
+  if (node && node.scrollHeight - node.clientHeight + 1 < target) return "wait";
+  spot.scroller.scrollTo({ y: target, animated: false });
   return "done";
 }
 
