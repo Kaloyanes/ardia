@@ -247,6 +247,18 @@ void WindowEvents::PollPointer(bool on) {
                                                            }];
 }
 
+std::optional<WindowEvents::Pointer> WindowEvents::LivePointer() const {
+  NSWindow* target = state_->window;
+  if (!target) {
+    return std::nullopt;
+  }
+  Pointer pointer = PointerIn(target);
+  if (!target.isKeyWindow) {
+    pointer.covered = true;
+  }
+  return pointer;
+}
+
 bool WindowEvents::Focused() const {
   NSWindow* window = state_->window;
   return window && window.isKeyWindow;

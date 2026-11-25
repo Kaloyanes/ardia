@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,7 +21,17 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/functional/function_ref.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/download/download_core_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/unload_controller.h"
+#include "components/download/public/common/download_item.h"
+#include "content/public/browser/download_manager.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -92,24 +103,65 @@ base::OneShotTimer& QuitDeadline() {
 }
 
 bool UnloadHandlersPending() {
-  for (ShellHostView* host : Hosts()) {
-    for (BrowserWindowInterface* member : host->Members()) {
-      TabStripModel* model = member->GetTabStripModel();
-      for (int index = 0; index < model->count(); ++index) {
-        content::WebContents* contents = model->GetWebContentsAt(index);
-        if (contents && contents->NeedToFireBeforeUnloadOrUnloadEvents()) {
-          return true;
+  bool pending = false;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation([&pending](BrowserWindowInterface* browser) {
+    UnloadController* unload = UnloadController::From(browser);
+    pending = unload && unload->TabsNeedBeforeUnloadFired();
+    return !pending;
+  });
+  return pending;
+}
+
+void ForEachActiveDownload(base::FunctionRef<void(DownloadCoreService*, download::DownloadItem*)> visit) {
+  for (Profile* loaded : g_browser_process->profile_manager()->GetLoadedProfiles()) {
+    std::vector<Profile*> profiles = loaded->GetAllOffTheRecordProfiles();
+    profiles.insert(profiles.begin(), loaded);
+    for (Profile* profile : profiles) {
+      DownloadCoreService* service = DownloadCoreServiceFactory::GetForBrowserContext(profile);
+      if (!service || !service->HasCreatedDownloadManager()) {
+        continue;
+      }
+      content::DownloadManager::DownloadVector downloads;
+      profile->GetDownloadManager()->GetAllDownloads(&downloads);
+      for (download::DownloadItem* item : downloads) {
+        if (item && item->GetState() == download::DownloadItem::IN_PROGRESS) {
+          visit(service, item);
         }
       }
     }
   }
-  return false;
+}
+
+std::set<std::string> ActiveDownloadIds() {
+  std::set<std::string> ids;
+  ForEachActiveDownload([&ids](DownloadCoreService*, download::DownloadItem* item) { ids.insert(item->GetGuid()); });
+  return ids;
+}
+
+std::optional<window_policy::DownloadAuthorization>& ShownDownloads() {
+  static base::NoDestructor<std::optional<window_policy::DownloadAuthorization>> shown;
+  return *shown;
+}
+
+window_policy::DownloadAuthorization& QuitDownloadAuthorization() {
+  static base::NoDestructor<window_policy::DownloadAuthorization> authorized;
+  return *authorized;
 }
 
 void FinishShellQuit() {
-  if (window_policy::DownloadsOnQuit(true, UnloadHandlersPending()) ==
-      window_policy::QuitDownloads::kCancelThenExit) {
-    DownloadCoreService::CancelAllDownloads(DownloadCoreService::CancelDownloadsTrigger::kShutdown);
+  const window_policy::DownloadAuthorization authorized = std::exchange(QuitDownloadAuthorization(), {});
+  const std::set<std::string> cancel =
+      window_policy::DownloadsToCancel(true, UnloadHandlersPending(), authorized, ActiveDownloadIds());
+  if (!cancel.empty()) {
+    ForEachActiveDownload([&cancel](DownloadCoreService* service, download::DownloadItem* item) {
+      if (!cancel.contains(item->GetGuid())) {
+        return;
+      }
+      item->Cancel(false);
+      if (ChromeDownloadManagerDelegate* delegate = service->GetDownloadManagerDelegate()) {
+        delegate->OnDownloadCanceledAtShutdown(item);
+      }
+    });
   }
   chrome::AttemptExit();
 }
@@ -161,6 +213,7 @@ void StartQuit() {
   if (Quit().running()) {
     return;
   }
+  QuitDownloadAuthorization() = std::exchange(ShownDownloads(), std::nullopt).value_or(window_policy::DownloadAuthorization{});
   std::vector<std::string> windows;
   for (ShellHostView* host : Hosts()) {
     if (host->RendererLive()) {
@@ -306,6 +359,7 @@ void ShellHostView::LifecycleCall(const std::string& method, const base::DictVal
       return std::move(done).Run(false, base::Value(method + " takes no arguments"));
     }
     if (method == "ArdiaShell.downloadsInProgress") {
+      ShownDownloads() = window_policy::DownloadAuthorization{true, ActiveDownloadIds()};
       return std::move(done).Run(true, base::Value(DownloadCoreService::BlockingShutdownCountAllProfiles()));
     }
     std::move(done).Run(true, base::Value());
@@ -538,6 +592,7 @@ void ShellHostView::RejectWindowClose(const base::DictValue& request, Done done)
   std::move(done).Run(true, base::Value());
   if (quit_generation && Quit().Rejected(window_id_, quit_generation) == window_policy::QuitStep::kAbort) {
     QuitDeadline().Stop();
+    QuitDownloadAuthorization() = {};
     Note("quit cancelled by window " + window_id_);
     std::vector<base::WeakPtr<ShellHostView>> hosts;
     for (ShellHostView* host : Hosts()) {
@@ -745,8 +800,25 @@ void ShellHostView::SidebarEdgeCall(const base::ListValue* values, bool left_onl
       values->size() > 3 && (*values)[3].GetBool() ? window_policy::Side::kRight : window_policy::Side::kLeft;
   const bool while_pressed = values->size() > 4 && (*values)[4].GetBool();
   window_events_->WatchPointer(true);
+  const std::optional<WindowEvents::Pointer> live = window_events_->LivePointer();
+  const double zoom = ShellZoom();
+  if (live && !live->covered) {
+    edge_.Place(live->x / zoom, live->y / zoom, live->width / zoom, live->height / zoom, live->pressed);
+  } else {
+    edge_.Forget();
+  }
   ReportSidebarEdge(edge_.Watch(hold, side, while_pressed));
+  ReconcilePointerPoll(live);
   std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::ReconcilePointerPoll(const std::optional<WindowEvents::Pointer>& pointer) {
+  if (!window_events_) {
+    return;
+  }
+  window_events_->PollPointer(
+      pointer && !pointer->covered &&
+      window_policy::PollsOutside(edge_.over(), pointer->x, pointer->y, pointer->width, pointer->height));
 }
 
 void ShellHostView::OnPointerMoved(const WindowEvents::Pointer& pointer) {
@@ -760,11 +832,7 @@ void ShellHostView::OnPointerMoved(const WindowEvents::Pointer& pointer) {
     ReportSidebarEdge(
         edge_.Moved(pointer.x / zoom, pointer.y / zoom, pointer.width / zoom, pointer.height / zoom, pointer.pressed));
   }
-  if (window_events_) {
-    window_events_->PollPointer(
-        !pointer.covered &&
-        window_policy::PollsOutside(edge_.over(), pointer.x, pointer.y, pointer.width, pointer.height));
-  }
+  ReconcilePointerPoll(pointer);
 }
 
 void ShellHostView::ReportSidebarEdge(std::optional<window_policy::EdgeReport> report) {

@@ -253,6 +253,7 @@ class ShellHostView : public views::View,
   void OnWindowChanged(WindowEvents::Kind kind);
   void OnPointerMoved(const WindowEvents::Pointer& pointer);
   void ReportSidebarEdge(std::optional<window_policy::EdgeReport> report);
+  void ReconcilePointerPoll(const std::optional<WindowEvents::Pointer>& pointer);
   void ReportWindowState();
   base::DictValue WindowStateValue() const;
   base::DictValue WindowGeometryValue() const;

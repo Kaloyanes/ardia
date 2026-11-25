@@ -116,11 +116,21 @@ inline CloseRequestPlan PlanCloseRequest(bool open, ClosePhase phase, std::uint6
   return CloseRequestPlan::kReissue;
 }
 
-enum class QuitDownloads { kLeaveToChromium, kCancelThenExit };
+struct DownloadAuthorization {
+  bool present = false;
+  std::set<std::string> ids;
+};
 
-inline QuitDownloads DownloadsOnQuit(bool shell_confirmed, bool unload_handlers_pending) {
-  return shell_confirmed && !unload_handlers_pending ? QuitDownloads::kCancelThenExit
-                                                     : QuitDownloads::kLeaveToChromium;
+inline std::set<std::string> DownloadsToCancel(bool shell_confirmed,
+                                               bool unload_handlers_pending,
+                                               const DownloadAuthorization& authorized,
+                                               const std::set<std::string>& active) {
+  std::set<std::string> cancel;
+  if (!shell_confirmed || unload_handlers_pending || !authorized.present) return cancel;
+  for (const std::string& id : active) {
+    if (authorized.ids.contains(id)) cancel.insert(id);
+  }
+  return cancel;
 }
 
 inline bool ValidDeparture(bool present, bool is_dict, std::size_t size, bool has_base, bool has_session) {
@@ -285,6 +295,22 @@ class EdgeWatch {
     known_ = true;
     return Report(Within());
   }
+
+  void Place(double x, double y, double width, double height, bool pressed) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) || width <= 0 ||
+        height <= 0) {
+      known_ = false;
+      return;
+    }
+    x_ = x;
+    y_ = y;
+    width_ = width;
+    height_ = height;
+    pressed_ = pressed;
+    known_ = true;
+  }
+
+  void Forget() { known_ = false; }
 
   std::optional<EdgeReport> Resigned() {
     known_ = false;

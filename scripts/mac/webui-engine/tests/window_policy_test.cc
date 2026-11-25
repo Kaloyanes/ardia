@@ -1,6 +1,7 @@
 #include "ardia/mac/ac_mac_window_policy.h"
 
 #include <limits>
+#include <set>
 #include <string>
 
 #include "check.h"
@@ -128,10 +129,43 @@ TEST(close_requests_reuse_only_their_own_quit) {
 }
 
 TEST(downloads_are_cancelled_only_when_no_page_can_still_keep_the_app_open) {
-  CHECK(policy::DownloadsOnQuit(true, false) == policy::QuitDownloads::kCancelThenExit);
-  CHECK(policy::DownloadsOnQuit(true, true) == policy::QuitDownloads::kLeaveToChromium);
-  CHECK(policy::DownloadsOnQuit(false, false) == policy::QuitDownloads::kLeaveToChromium);
-  CHECK(policy::DownloadsOnQuit(false, true) == policy::QuitDownloads::kLeaveToChromium);
+  const policy::DownloadAuthorization shown{true, {"a", "b"}};
+  CHECK(policy::DownloadsToCancel(true, false, shown, {"a", "b"}) == (std::set<std::string>{"a", "b"}));
+  CHECK(policy::DownloadsToCancel(true, true, shown, {"a", "b"}).empty());
+  CHECK(policy::DownloadsToCancel(false, false, shown, {"a", "b"}).empty());
+  CHECK(policy::DownloadsToCancel(true, false, policy::DownloadAuthorization{}, {"a"}).empty());
+}
+
+TEST(a_download_started_during_the_drain_is_left_for_chromium_to_ask_about) {
+  const policy::DownloadAuthorization none_shown{true, {}};
+  CHECK(policy::DownloadsToCancel(true, false, none_shown, {"started-mid-drain"}).empty());
+  const policy::DownloadAuthorization one_shown{true, {"confirmed"}};
+  const auto cancel = policy::DownloadsToCancel(true, false, one_shown, {"confirmed", "started-mid-drain"});
+  CHECK(cancel == (std::set<std::string>{"confirmed"}));
+  CHECK(!cancel.contains("started-mid-drain"));
+  CHECK(policy::DownloadsToCancel(true, false, one_shown, {"finished-and-replaced"}).empty());
+}
+
+TEST(re_registering_the_edge_while_outside_the_content_reports_the_live_pointer_and_polls) {
+  policy::EdgeWatch watch;
+  watch.Watch(0, policy::Side::kLeft, false);
+  CHECK(watch.Moved(-10, 100, 1200, 800, false)->over);
+  watch.Stop();
+  watch.Place(-10, 100, 1200, 800, false);
+  const auto again = watch.Watch(40, policy::Side::kLeft, false);
+  CHECK(again && again->over && watch.over());
+  CHECK(policy::PollsOutside(watch.over(), -10, 100, 1200, 800));
+  watch.Stop();
+  watch.Forget();
+  const auto covered = watch.Watch(40, policy::Side::kLeft, false);
+  CHECK(covered && !covered->over && !watch.over());
+  CHECK(!policy::PollsOutside(watch.over(), -10, 100, 1200, 800));
+  watch.Stop();
+  watch.Place(600, 100, 1200, 800, false);
+  const auto inside = watch.Watch(40, policy::Side::kLeft, false);
+  CHECK(inside && !inside->over);
+  watch.Place(std::numeric_limits<double>::quiet_NaN(), 100, 1200, 800, false);
+  CHECK(!watch.Watch(40, policy::Side::kLeft, false)->over);
 }
 
 TEST(the_edge_polls_only_while_over_outside_the_content) {

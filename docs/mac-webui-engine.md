@@ -70,8 +70,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
   cancels the quit, and a window that answers after its quit ended keeps its window open instead of exiting. The
-  shell already asked about active downloads, so that quit cancels them before it exits and Chromium doesn't ask
-  again, unless a tab still has a "Leave site?" handler to run: then the downloads stay until Chromium asks. A
+  shell already asked about active downloads, so that quit cancels the ones it reported before it exits and
+  Chromium doesn't ask again. A download that started while the windows flushed is left for Chromium to ask about,
+  and if any tab in any browser window still has a "Leave site?" handler to run, no download is cancelled. A
   second Quit while a window is still flushing for the first gives that window a fresh close. With no live shell, Quit exits at once and Chromium asks about downloads itself.
 - **Dialogs.** `ArdiaShell.beginDialog` and `cancelDialog` show `confirm` and `prompt` as an `NSAlert` sheet on the
   window, one at a time, and answer with `shell.dialogResolved`. With `ARDIA_BACKGROUND=1` a dialog is logged and

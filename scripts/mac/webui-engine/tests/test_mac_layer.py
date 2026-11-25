@@ -367,12 +367,20 @@ class ContractTests(unittest.TestCase):
     def test_a_confirmed_quit_cancels_downloads_before_it_exits(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         finish = lifecycle.split('void FinishShellQuit() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(finish.index('window_policy::DownloadsOnQuit(true, UnloadHandlersPending())'),
-                        finish.index('DownloadCoreService::CancelAllDownloads('))
-        self.assertLess(finish.index('DownloadCoreService::CancelAllDownloads('), finish.index('chrome::AttemptExit();'))
+        self.assertLess(finish.index('window_policy::DownloadsToCancel(true, UnloadHandlersPending(), authorized, ActiveDownloadIds())'),
+                        finish.index('item->Cancel(false);'))
+        self.assertLess(finish.index('item->Cancel(false);'), finish.index('chrome::AttemptExit();'))
+        self.assertIn('std::exchange(QuitDownloadAuthorization(), {})', finish)
+        self.assertNotIn('CancelAllDownloads', lifecycle)
         pending = lifecycle.split('bool UnloadHandlersPending() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('NeedToFireBeforeUnloadOrUnloadEvents()', pending)
-        self.assertIn('host->Members()', pending)
+        self.assertIn('ForEachCurrentBrowserWindowInterfaceOrderedByActivation(', pending)
+        self.assertIn('UnloadController::From(browser)', pending)
+        self.assertIn('TabsNeedBeforeUnloadFired()', pending)
+        self.assertNotIn('Hosts()', pending)
+        shown = lifecycle.split('if (method == "ArdiaShell.downloadsInProgress") {', 1)[1].split('return ', 1)[0]
+        self.assertIn('ShownDownloads() = window_policy::DownloadAuthorization{true, ActiveDownloadIds()};', shown)
+        start = lifecycle.split('void StartQuit() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(start.index('std::exchange(ShownDownloads(), std::nullopt)'), start.index('ExitSoon(true)'))
         exit_soon = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit)', exit_soon)
         self.assertIn('ExitSoon(false);', lifecycle.split('void QuitWithoutShell() {', 1)[1].split('\n}\n', 1)[0])
@@ -408,7 +416,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn('kPointerPollSeconds = 0.1', events)
         self.assertIn('PollPointer(false);', events.split('void WindowEvents::WatchPointer(bool on) {', 1)[1].split('\n}\n', 1)[0])
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
-        self.assertIn('window_policy::PollsOutside(edge_.over(), pointer.x, pointer.y, pointer.width, pointer.height)', lifecycle)
+        self.assertIn('window_policy::PollsOutside(edge_.over(), pointer->x, pointer->y, pointer->width, pointer->height)', lifecycle)
+        watch = lifecycle.split('void ShellHostView::SidebarEdgeCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(watch.index('window_events_->LivePointer()'), watch.index('edge_.Watch(hold, side, while_pressed)'))
+        self.assertLess(watch.index('edge_.Place('), watch.index('edge_.Watch(hold, side, while_pressed)'))
+        self.assertLess(watch.index('edge_.Watch(hold, side, while_pressed)'), watch.index('ReconcilePointerPoll(live);'))
+        self.assertIn('ReconcilePointerPoll(pointer);', lifecycle.split('void ShellHostView::OnPointerMoved(', 1)[1].split('\n}\n', 1)[0])
 
     def test_the_sidebar_edge_lets_go_when_another_window_covers_the_pointer(self):
         events = self.read('ac_mac_window_events.mm')

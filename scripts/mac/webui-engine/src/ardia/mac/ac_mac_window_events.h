@@ -2,6 +2,7 @@
 #define ARDIA_MAC_AC_MAC_WINDOW_EVENTS_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,7 @@ class WindowEvents {
 
   void WatchPointer(bool on);
   void PollPointer(bool on);
+  std::optional<Pointer> LivePointer() const;
   void RouteCloseButton();
 
   bool Focused() const;
