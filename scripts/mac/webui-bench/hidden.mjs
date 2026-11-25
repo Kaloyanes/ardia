@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -169,6 +169,21 @@ export function trackOwned(identity, rows) {
 }
 
 export const TRACK_EVERY_MS = 50;
+
+export function execFileAsync(file, args, { timeout = OPEN_TIMEOUT_MS, ...options } = {}) {
+  return new Promise((resolve, reject) =>
+    execFile(file, args, { timeout, encoding: "utf8", ...options }, (error, stdout, stderr) => (error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }))),
+  );
+}
+
+export async function withTracker(identity, run, options = {}) {
+  const stop = startTracker(identity, options);
+  try {
+    return await run();
+  } finally {
+    stop();
+  }
+}
 
 export function startTracker(identity, { everyMs = TRACK_EVERY_MS, read = readProcessRows } = {}) {
   let stopped = false;

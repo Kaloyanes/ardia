@@ -40,6 +40,15 @@ export const RULES = [
   { key: "scroll.maxGapMs", label: "Sidebar scroll, 150 tabs, frame gap max (ms)", vsRn: true, tolerance: 17 },
   { key: "typing.p95Ms", label: "Command bar keystroke → frame p95 (ms)", vsRn: true, tolerance: 8, cap: 100 },
   { key: "typing.missed", label: "Keystrokes with no frame within 250 ms", vsRn: false, cap: 0, stat: "max" },
+  { key: "drag.p95GapMs", label: "Divider drag, frame gap p95 (ms)", vsRn: true, tolerance: 4 },
+  { key: "drag.maxGapMs", label: "Divider drag, frame gap max (ms)", vsRn: true, tolerance: 17 },
+  { key: "drag.late120", label: "Divider drag, frames late at 120 Hz", vsRn: true, tolerance: 2 },
+  { key: "peek.open.p95GapMs", label: "Peek open, frame gap p95 (ms)", vsRn: true, tolerance: 4 },
+  { key: "peek.open.maxGapMs", label: "Peek open, frame gap max (ms)", vsRn: true, tolerance: 17 },
+  { key: "peek.open.late120", label: "Peek open, frames late at 120 Hz", vsRn: true, tolerance: 2 },
+  { key: "peek.dismiss.p95GapMs", label: "Peek dismiss, frame gap p95 (ms)", vsRn: true, tolerance: 4 },
+  { key: "peek.dismiss.maxGapMs", label: "Peek dismiss, frame gap max (ms)", vsRn: true, tolerance: 17 },
+  { key: "peek.dismiss.late120", label: "Peek dismiss, frames late at 120 Hz", vsRn: true, tolerance: 2 },
 ];
 
 const fmt = (v) => (v == null ? "—" : typeof v === "string" ? v : Number.isInteger(v) ? String(v) : v.toFixed(1));
@@ -180,6 +189,10 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
   if (measures.includes("swipe")) {
     const missed = Object.fromEntries(SIDES.map((side) => [side, runs.filter((r) => r.side === side && r.phase === "large").reduce((n, r) => n + SWIPES_BY_SIDE[side].filter((d) => r.swipe?.[d]?.arrived !== true || r.swipe?.[d]?.error).length, 0)]));
     rows.push(row("integrity.arrived", "Integrity: swipes that did not reach the other profile", missed, SIDES.every((s) => missed[s] === 0), 0, "a swipe did not arrive"));
+  }
+  if (measures.includes("peek")) {
+    const missed = per((mine) => mine.filter((r) => r.phase === "large" && !(r.peek?.opened === true && r.peek?.dismissed === true && !r.peek?.error)).length);
+    rows.push(row("integrity.peek", "Integrity: Peek runs that did not open and dismiss", missed, SIDES.every((s) => missed[s] === 0), 0, "a Peek did not open or go away"));
   }
   if (measures.includes("launch")) {
     const failedPolls = per((mine) => mine.reduce((n, r) => n + (Number.isInteger(r.newTabPollFailures) ? r.newTabPollFailures : 1), 0));

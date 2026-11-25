@@ -5,12 +5,12 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { blockScript, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
+import { MEASURES, blockScript, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
 import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
-import { analyze, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
+import { LATE_120_MS, analyze, windowGaps, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
 import { RULES, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
 import {
-  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, startTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
+  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, startTracker, withTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
   makeOwnedDir, makeOwnedRoot, ownedTree, parseFootprint, parseProcessRows, parseRss, processIdentity, readProcessRows, removeOwnedDir, sameProcess, stopOwned,
 } from "./hidden.mjs";
 import { PROFILES, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
@@ -72,8 +72,8 @@ test("frames: slide gaps, settle and late row paint on a synthetic swipe", () =>
   assert.equal(r.newFrames, 20);
   assert.equal(r.slideFrames, 19);
   assert.equal(r.p50GapMs, 8.3);
-  assert.equal(r.maxGapMs, 8.3);
-  assert.equal(r.longGaps, 0);
+  assert.equal(r.maxGapMs, 242.3);
+  assert.equal(r.longGaps, 1);
   assert.equal(r.rowsPaintedMs, 240);
   assert.equal(r.blankFrames, 0);
   assert.equal(r.restAt, 160);
@@ -421,6 +421,10 @@ const fixture = (phase) => {
   const f = expectedFixture({ small: smallSession, large: benchSession, multi: multiSession }[phase]());
   return { expected: f, restored: { ...f } };
 };
+const pace = (p95, max, late) => ({ p50GapMs: 8.3, p95GapMs: p95, maxGapMs: max, late120: late, moved: true });
+const motionRuns = (side) => (side === "rn"
+  ? { drag: pace(12, 30, 3), peek: { opened: true, dismissed: true, open: pace(12, 25, 2), dismiss: pace(12, 25, 2) } }
+  : { drag: pace(9, 20, 1), peek: { opened: true, dismissed: true, open: pace(9, 18, 1), dismiss: pace(9, 18, 0) } });
 const swipe = (p95, rest, rows) => ({
   fwd: { p95GapMs: p95, restMs: rest, blankFrames: 0, arrived: true },
   back: { p95GapMs: p95 - 5, restMs: rest + 10, rowsPaintedMs: rows, blankFrames: 0, arrived: true },
@@ -431,14 +435,14 @@ const sampleRuns = () => {
   for (let rep = 0; rep < 3; rep++) {
     runs.push(run("rn", "small", { rep: rep + 1, launchMs: 500 + rep, memory: { rssMb: 900, footprintMb: 300 }, fixture: fixture("small") }));
     runs.push(run("webui", "small", { rep: rep + 1, launchMs: 580 + rep, memory: { rssMb: 770, footprintMb: 260 }, fixture: fixture("small") }));
-    runs.push(run("rn", "large", { rep: rep + 1, launchMs: 514, newTabFrames: 0, memory: { rssMb: 966, footprintMb: 342 }, fixture: fixture("large"), swipe: swipe(50, 480, 200), scroll: { p95GapMs: 20, maxGapMs: 40 }, typing: { latenciesMs: [20, 22, 25, 30, 18, 21], missed: 0 } }));
-    runs.push(run("webui", "large", { rep: rep + 1, launchMs: 588, newTabFrames: 0, memory: { rssMb: 823, footprintMb: 295 }, fixture: fixture("large"), swipe: swipe(37, 460, 0), scroll: { p95GapMs: 17, maxGapMs: 33 }, typing: { latenciesMs: [12, 14, 16, 15, 13, 20], missed: 0 } }));
+    runs.push(run("rn", "large", { rep: rep + 1, ...motionRuns("rn"), launchMs: 514, newTabFrames: 0, memory: { rssMb: 966, footprintMb: 342 }, fixture: fixture("large"), swipe: swipe(50, 480, 200), scroll: { p95GapMs: 20, maxGapMs: 40 }, typing: { latenciesMs: [20, 22, 25, 30, 18, 21], missed: 0 } }));
+    runs.push(run("webui", "large", { rep: rep + 1, ...motionRuns("webui"), launchMs: 588, newTabFrames: 0, memory: { rssMb: 823, footprintMb: 295 }, fixture: fixture("large"), swipe: swipe(37, 460, 0), scroll: { p95GapMs: 17, maxGapMs: 33 }, typing: { latenciesMs: [12, 14, 16, 15, 13, 20], missed: 0 } }));
     runs.push(run("rn", "multi", { rep: rep + 1, launchMs: 600, memory: { rssMb: 1100, footprintMb: 400 }, fixture: fixture("multi"), windows: 2, peek: true }));
     runs.push(run("webui", "multi", { rep: rep + 1, launchMs: 650, memory: { rssMb: 950, footprintMb: 350 }, fixture: fixture("multi"), windows: 2, peek: true }));
   }
   return runs;
 };
-const META = { host: "mini", reps: 3, order: "abab", phases: ["small", "large", "multi"], measures: ["launch", "memory", "swipe", "scroll", "typing"] };
+const META = { host: "mini", reps: 3, order: "abab", phases: ["small", "large", "multi"], measures: ["launch", "memory", "swipe", "scroll", "typing", "drag", "peek"] };
 const report = (runs = sampleRuns()) => ({ meta: META, runs, summary: summarizeRuns(runs) });
 const edit = (pick, change) => sampleRuns().map((r, i, all) => (pick(r, i, all) ? change(structuredClone(r)) : r));
 const failing = (result) => Object.fromEntries(result.rows.filter((r) => r.verdict !== "PASS").map((r) => [r.key, r]));
@@ -477,7 +481,7 @@ test("summary: a failed swipe is never counted as zero blank frames", () => {
 test("gate: a WebUI at parity with clean integrity passes every rule", () => {
   const result = evaluate(report());
   assert.equal(result.verdict, "PASS", JSON.stringify(Object.values(failing(result))));
-  assert.equal(result.rows.length, RULES.length + 7);
+  assert.equal(result.rows.length, RULES.length + 8);
 });
 
 test("gate: integrity fails on missing, errored or partial reps", () => {
@@ -583,7 +587,7 @@ test("gate: markdown table lists every row with a verdict", () => {
   assert.ok(lines.includes("| Metric | RN | WebUI | Limit | Verdict |"));
   assert.ok(lines.includes("| --- | ---: | ---: | ---: | --- |"));
   const rows = lines.filter((l) => l.startsWith("| ") && !l.startsWith("| Metric") && !l.startsWith("| ---"));
-  assert.equal(rows.length, RULES.length + 7);
+  assert.equal(rows.length, RULES.length + 8);
   assert.ok(rows.every((l) => l.split(" | ").length === 5));
   assert.ok(md.includes("| Swipe Work → Personal, motion → rest (ms) | 490 | 470 | 590 | ✅ PASS |"));
   assert.ok(md.includes("| Integrity: launch clock | commitMark | commitMark | — | ✅ PASS |"));
@@ -862,4 +866,70 @@ test("round 4: a completed run needs both expected and restored fixture counts",
   assert.equal(node("gate.mjs", file("empty-fixture.json", withFirst({ fixture: {} }))).status, 64);
   assert.equal(node("gate.mjs", file("half-fixture.json", withFirst({ fixture: { expected: counts } }))).status, 64);
   assert.equal(node("gate.mjs", file("no-fixture.json", withFirst({ fixture: undefined }))).status, 64);
+});
+
+test("round 5: the tracker keeps ticking while an async open runs, so a helper whose root exits first is still owned", async () => {
+  const T = "Tue Nov 24 05:06:18 2026";
+  const root = `2147483100 1 ${T} /tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-r5`;
+  const helper = (ppid) => `2147483101 ${ppid} ${T} /tmp/b/W.app/Contents/Frameworks/Helper --type=gpu`;
+  const timeline = (started) => () => {
+    const t = Date.now() - started;
+    const rows = t < 20 ? [] : t < 45 ? [root] : t < 70 ? [root, helper(2147483100)] : [helper(1)];
+    return parseProcessRows(rows.join("\n"));
+  };
+  const asyncLaunch = processIdentity({ owner: "tok-r5", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  let started = Date.now();
+  await withTracker(asyncLaunch, () => new Promise((done) => setTimeout(done, 110)), { everyMs: 5, read: timeline(started) });
+  assert.deepEqual([...asyncLaunch.seen.values()].map((r) => r.pid).sort(), [2147483100, 2147483101]);
+  assert.deepEqual(trackOwned(asyncLaunch, parseProcessRows(helper(1))).map((r) => r.pid), [2147483101]);
+  const blockingLaunch = processIdentity({ owner: "tok-r5", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  started = Date.now();
+  await withTracker(blockingLaunch, () => {
+    const until = Date.now() + 110;
+    while (Date.now() < until);
+  }, { everyMs: 5, read: timeline(started) });
+  assert.deepEqual([...blockingLaunch.seen.values()], []);
+  const instance = readFileSync(join(here, "../../lib/instance.mjs"), "utf8");
+  assert.match(instance, /await new Promise\(\(done, fail\) => execFile\("open", openArgs/);
+  assert.ok(!/execFileSync\("open"/.test(instance));
+  const bench = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.match(bench, /await execFileAsync\("open", args/);
+  assert.ok(!/execFileSync\("open"/.test(bench));
+});
+
+test("round 5: a stall that starts during motion and lands after the rest mark still fails the blocked swipe", () => {
+  const times = [0, 16, 32, 48, 64, 80, 96, 600, 616];
+  const frames = times.map((_, i) => pattern(i));
+  const r = analyze({ frames, times, start: 0, rest: 300 });
+  assert.equal(r.maxGapMs, 504);
+  assert.ok(r.longGaps >= 1);
+  assert.ok(r.late120 >= 1);
+  const verdict = judge(RULES.find((x) => x.key === "swipe.blocked.maxGapMs"), { summary: { rn: {}, webui: { "swipe.blocked.maxGapMs": { median: r.maxGapMs } } } });
+  assert.equal(verdict.verdict, "FAIL");
+  assert.deepEqual(windowGaps([-800, 5, 21], 0, 300), [5, 16]);
+  assert.deepEqual(windowGaps([100, 200, 900, 950], 0, 300), [100, 700]);
+  assert.deepEqual(windowGaps([400, 500], 0, 300), []);
+  assert.equal(LATE_120_MS, 12.5);
+});
+
+test("round 5: divider drag and Peek pacing run, summarize and gate against RN", () => {
+  assert.ok(MEASURES.includes("drag") && MEASURES.includes("peek"));
+  const out = scratch();
+  const plan = planBench(parseBenchArgs(["--rn", "/tmp/a/RN.app", "--webui", "/tmp/a/W.app", "--out", out, "--reps", "1", "--only", "drag,peek", "--dry-run"]));
+  assert.deepEqual(plan.measures, ["drag", "peek"]);
+  assert.deepEqual(plan.phases, ["large"]);
+  const s = summarizeRuns(sampleRuns());
+  assert.equal(s.webui["drag.late120"].median, 1);
+  assert.equal(s.rn["peek.open.p95GapMs"].median, 12);
+  assert.equal(s.webui["peek.dismiss.maxGapMs"].median, 18);
+  const keys = RULES.map((r) => r.key);
+  for (const k of ["drag.p95GapMs", "drag.maxGapMs", "drag.late120", "peek.open.p95GapMs", "peek.open.late120", "peek.dismiss.p95GapMs", "peek.dismiss.late120"]) assert.ok(keys.includes(k), k);
+  const janky = edit((r) => r.side === "webui" && r.phase === "large", (r) => ((r.drag = pace(30, 90, 20)), r));
+  const f = failing(evaluate(report(janky)));
+  assert.ok(f["drag.p95GapMs"] && f["drag.maxGapMs"] && f["drag.late120"]);
+  const stuck = edit((r) => r.side === "rn" && r.phase === "large" && r.rep === 2, (r) => ((r.peek = { ...r.peek, dismissed: false, error: "the Peek did not go away" }), r));
+  assert.ok(failing(evaluate(report(stuck)))["integrity.peek"]);
+  assert.deepEqual(subErrors({ peek: { error: "no" }, drag: { error: "still" } }), ["peek: no", "drag: still"]);
+  const missing = edit((r) => r.side === "webui" && r.phase === "large", (r) => (delete r.drag, r));
+  assert.match(failing(evaluate(report(missing)))["drag.p95GapMs"].why, /WebUI value missing/);
 });

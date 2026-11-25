@@ -75,6 +75,21 @@ test("a menu switch and an interrupted motion each close their motion with a res
   assert.deepEqual(pagerMarks(), ["ardia-pager-moving", "ardia-pager-rest"]);
 });
 
+test("pager marks stay bounded across many motions and the latest pair is always kept", async () => {
+  performance.clearMarks();
+  const { named } = pager();
+  for (let i = 0; i < 40; i++) {
+    assert.equal(named.switchTo(i % 2 ? 0 : 1, ORDER), true);
+    await settled(named);
+  }
+  const moving = performance.getEntriesByName("ardia-pager-moving", "mark");
+  const rest = performance.getEntriesByName("ardia-pager-rest", "mark");
+  assert.ok(moving.length >= 1 && moving.length <= 16, `${moving.length} moving marks`);
+  assert.ok(rest.length >= 1 && rest.length <= 16, `${rest.length} rest marks`);
+  assert.ok(rest.at(-1).startTime >= moving.at(-1).startTime);
+  assert.equal(named.snapshot().selected, 0);
+});
+
 test("menu and keyboard switches page to any profile", async () => {
   const { named } = pager();
   assert.equal(named.switchTo(1, ORDER), true);

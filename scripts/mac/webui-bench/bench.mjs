@@ -10,7 +10,7 @@ import { connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs"
 import { analyze, decode, restFromFrames, settleMs } from "./frames.mjs";
 import {
   ACFRAMES, ACSWIPE, OPEN_TIMEOUT_MS, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, cleanupRegistry, fileProbe, hiddenOpenArgs,
-  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, startTracker, stopOwned, trackOwned,
+  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, execFileAsync, startTracker, stopOwned, trackOwned,
 } from "./hidden.mjs";
 import { SESSIONS, expectedFixture, selectedUrl, validateSession } from "./seed.mjs";
 import { percentile, summarize } from "./stats.mjs";
@@ -18,7 +18,7 @@ import { percentile, summarize } from "./stats.mjs";
 const HELP = `React Native vs WebUI on the Mac: an interleaved shootout, one hidden instance at a time, the same seeded sessions.
 
   node scripts/mac/webui-bench/bench.mjs --rn <Ardia.app> --webui <Ardia WebUI.app> --out <dir>
-      [--reps 5] [--order abab|abba] [--only launch,memory,swipe,scroll,typing] [--idle 20] [--keep] [--dry-run]
+      [--reps 5] [--order abab|abba] [--only launch,memory,swipe,scroll,typing,drag,peek] [--idle 20] [--keep] [--dry-run]
   node scripts/mac/webui-bench/gate.mjs <dir>/bench.json
 
 --rn is the React Native app build; it is copied with the entitlements the injected probes need. --webui is the WebUI
@@ -43,6 +43,10 @@ Per rep and side:
            has no page to block, so it skips it
   scroll   a trackpad flick up the 150-tab sidebar: frame gaps p50/p95/max
   typing   the command bar opened with ⌘T and "github" typed 150 ms apart: keystroke → next new frame
+  drag     the sidebar's divider dragged 120 pt wider over 600 ms at 120 events/s (acperf postdrag): frame gaps
+           p50/p95/max and late120 (gaps over 1.5 frames at 120 Hz) over the drag, on the whole window
+  peek     a Peek opened over the selected tab, then dismissed: the same 120 Hz pacing for each 600 ms transition;
+           the sample fails unless the Peek tab appears and then goes away
 Gestures come from acswipe.m and acframes.m and keys from acperf postkeys (apps/browser/scripts/perf); frames come
 from selfrec.m for React Native and from Chrome's screenshot trace for the WebUI, both measured by frames.mjs.
 Writes <out>/bench.json after every instance (meta, every run with its status and errors, summary). Ctrl-C stops every
@@ -50,7 +54,11 @@ instance and removes the scratch data dirs (kept with --keep). --dry-run validat
 the plan and the exact hidden launch arguments, and launches nothing.`;
 
 export const SIDES = ["rn", "webui"];
-export const MEASURES = ["launch", "memory", "swipe", "scroll", "typing"];
+export const MEASURES = ["launch", "memory", "swipe", "scroll", "typing", "drag", "peek"];
+export const PACING = ["p50GapMs", "p95GapMs", "maxGapMs", "late120"];
+export const DRAG_PT = 120;
+export const DRAG_MS = 600;
+export const TRANSITION_MS = 600;
 export const SIDEBAR_SELECTORS = [".ardia-mac-pager", "[data-ardia-sidebar]", "aside"];
 export const RN_SCALE = 0.5;
 export const SIDEBAR_FALLBACK = { x: 0, y: 0, width: 330, height: 760 };
@@ -163,6 +171,8 @@ export function summarizeRuns(runs) {
     put("typing.p95Ms", typed.map((r) => percentile(r.typing.latenciesMs, 95)));
     put("typing.maxMs", typed.map((r) => percentile(r.typing.latenciesMs, 100)));
     put("typing.missed", typed.map((r) => r.typing.missed));
+    for (const k of PACING) put(`drag.${k}`, mine.map((r) => (r.drag?.error ? null : r.drag?.[k])));
+    for (const phase of ["open", "dismiss"]) for (const k of PACING) put(`peek.${phase}.${k}`, mine.map((r) => (r.peek?.error ? null : r.peek?.[phase]?.[k])));
   }
   return summary;
 }
@@ -179,8 +189,9 @@ export function runStatus(run) {
 
 export function subErrors(run) {
   const errors = [];
+  if (run.peek?.error) errors.push(`peek: ${run.peek.error}`);
   for (const d of SWIPES) if (run.swipe?.[d]?.error) errors.push(`swipe ${d}: ${run.swipe[d].error}`);
-  for (const k of ["scroll", "typing"]) if (run[k]?.error) errors.push(`${k}: ${run[k].error}`);
+  for (const k of ["scroll", "typing", "drag"]) if (run[k]?.error) errors.push(`${k}: ${run[k].error}`);
   if (run.newTabPollFailures) errors.push(`${run.newTabPollFailures} New Tab polls failed`);
   return errors;
 }
@@ -380,7 +391,7 @@ class Bench {
       const env = { DYLD_INSERT_LIBRARIES: [this.acswipe, this.acframes].join(":"), AC_BENCH_SWIPE: "1", AC_BENCH_FRAMES: "1" };
       const args = assertHidden(hiddenOpenArgs({ app: this.o.webui, data, port, owner, env, log: join(data, "app.out.log") }));
       side.t0 = Date.now();
-      execFileSync("open", args, { timeout: OPEN_TIMEOUT_MS });
+      await execFileAsync("open", args, { timeout: OPEN_TIMEOUT_MS });
       const root = await until(() => {
         const rows = readProcessRows();
         trackOwned(identity, rows);
@@ -538,7 +549,7 @@ class Bench {
     }
     const times = cap.times.map((t) => t - origin);
     const endAt = times.at(-1);
-    const { fresh, ...metrics } = analyze({ frames, times, rest: rest == null ? undefined : rest - origin, endAt });
+    const { fresh, ...metrics } = analyze({ frames, times, start: 0, rest: rest == null ? undefined : rest - origin, endAt });
     if (rest == null && metrics.restAt != null) [rest, restSource] = [origin + metrics.restAt, "frames"];
     const result = {
       from, to, arrived: from != null && to != null && from !== to, ...metrics,
@@ -562,6 +573,60 @@ class Bench {
     const frames = decode({ ...cap.decodeSpec, crop: this.cropFor(rect, cap.scale) });
     const { fresh, ...metrics } = analyze({ frames, times: cap.times });
     return { events: cap.value?.events ?? null, ...metrics };
+  }
+
+  windowBounds(side, win) {
+    const list = JSON.parse(execFileSync(this.acperf, ["windows", String(side.pid)], { encoding: "utf8", timeout: 10000 }));
+    const found = list.find((w) => w.id === win);
+    if (!found) throw new Error(`window ${win} has no bounds`);
+    return found;
+  }
+
+  pacing(cap, startAt, endAt, crop = null) {
+    const frames = decode({ ...cap.decodeSpec, ...(crop ? { crop } : {}) });
+    const times = cap.times.map((t) => t - startAt);
+    const { fresh, ...metrics } = analyze({ frames, times, start: 0, rest: endAt - startAt });
+    return { ...metrics, windowMs: Math.round(endAt - startAt), moved: fresh.some((t) => t > 0 && t <= endAt - startAt) };
+  }
+
+  async drag(side, win) {
+    validWindow(win);
+    const bounds = this.windowBounds(side, win);
+    const rect = side.kind === "rn" ? SIDEBAR_FALLBACK : await this.sidebarCrop(side);
+    const edge = (Array.isArray(rect) ? SIDEBAR_FALLBACK.x + SIDEBAR_FALLBACK.width : rect.x + rect.width) - 1;
+    const [x0, y] = [bounds.x + edge, bounds.y + 400];
+    const cap = await this.capture(side, "drag", async () => {
+      const { stdout } = await execFileAsync(this.acperf, ["postdrag", String(side.pid), String(win), String(x0), String(y), String(x0 + DRAG_PT), String(y), String(bounds.x), String(bounds.y), String(DRAG_MS), "120"], { timeout: 10000 });
+      return JSON.parse(stdout.trim().split("\n").at(-1));
+    });
+    const result = { events: cap.value.events, ...this.pacing(cap, cap.value.startAt, cap.value.endAt + 100) };
+    if (!result.moved) throw Object.assign(new Error("the divider drag changed nothing on screen"), { result });
+    return result;
+  }
+
+  async peek(side) {
+    const source = await side.js(`(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; return w.activeTabIds[w.profileId]; })()`);
+    const url = JSON.stringify(`${this.server.origin}/peek-bench`);
+    const exists = (id) => side.js(`!!${TAB_OF}(${STORE}.getState(), ${JSON.stringify(id)})`);
+    const transition = async (label, expression) => {
+      let at = 0;
+      const cap = await this.capture(side, `peek-${label}`, async () => {
+        at = Date.now();
+        const value = await side.js(expression);
+        await sleep(TRANSITION_MS);
+        return value;
+      });
+      return { value: cap.value, pacing: this.pacing(cap, at, at + TRANSITION_MS) };
+    };
+    const open = await transition("open", `${STORE}.getState().openPeek(${JSON.stringify(source)}, ${url})`);
+    const peekId = open.value;
+    const opened = !!peekId && (await exists(peekId));
+    const dismiss = await transition("dismiss", `(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`);
+    const dismissed = opened && !(await exists(peekId));
+    const result = { opened, dismissed, open: open.pacing, dismiss: dismiss.pacing };
+    if (!opened) throw Object.assign(new Error("the Peek did not open"), { result });
+    if (!dismissed) throw Object.assign(new Error("the Peek did not go away"), { result });
+    return result;
   }
 
   async typing(side) {
@@ -611,6 +676,8 @@ class Bench {
     if (o.only.includes("scroll")) run.scroll = await sample(() => this.scroll(side, win));
     if (o.only.includes("swipe") && swipesFor(side.kind).includes("blocked")) run.swipe.blocked = await sample(() => this.swipe(side, win, "blocked"));
     if (o.only.includes("typing")) run.typing = await sample(() => this.typing(side));
+    if (o.only.includes("peek")) run.peek = await sample(() => this.peek(side));
+    if (o.only.includes("drag")) run.drag = await sample(() => this.drag(side, win));
   }
 
   async slot({ rep, side: kind }) {

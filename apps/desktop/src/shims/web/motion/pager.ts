@@ -29,8 +29,13 @@ const now = () => performance.now() / 1000;
 export const PAGER_MOVING_MARK = "ardia-pager-moving";
 export const PAGER_REST_MARK = "ardia-pager-rest";
 
+export const PAGER_MARKS_KEPT = 16;
+
 const mark = (name: string) => {
-  if (typeof globalThis.performance?.mark === "function") performance.mark(name);
+  const timing = globalThis.performance;
+  if (typeof timing?.mark !== "function") return;
+  if (typeof timing.getEntriesByName === "function" && typeof timing.clearMarks === "function" && timing.getEntriesByName(name, "mark").length >= PAGER_MARKS_KEPT) timing.clearMarks(name);
+  timing.mark(name);
 };
 const clamp = (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi);
 
