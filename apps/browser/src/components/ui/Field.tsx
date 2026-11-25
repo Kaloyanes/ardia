@@ -28,6 +28,7 @@ export function SearchField({
   look = "field",
   onSubmit,
   onEscape,
+  onEscapeUp,
   onArrow,
   onBlur,
   inputRef,
@@ -43,6 +44,7 @@ export function SearchField({
   look?: "field" | "bare";
   onSubmit?: (shift: boolean) => void;
   onEscape?: () => void;
+  onEscapeUp?: () => void;
   onArrow?: (step: 1 | -1) => void;
   onBlur?: () => void;
   inputRef?: Ref<TextInput>;
@@ -88,6 +90,7 @@ export function SearchField({
         ardiaCentersCapitals
         onBlur={onBlur}
         keyDownEvents={keyDownEvents}
+        {...(onEscapeUp ? { keyUpEvents: ESCAPE_KEY, onKeyUp: (e: { nativeEvent: { key: string } }) => void (e.nativeEvent.key === "Escape" && onEscapeUp()) } : null)}
         onKeyDown={(e) => {
           const { key, shiftKey } = e.nativeEvent;
           if (key === "Escape") (onEscape ?? (() => onChangeText("")))();

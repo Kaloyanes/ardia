@@ -63,3 +63,22 @@ test("Esc on a blank third pane of a pinned split removes only that pane: both p
   assert.deepEqual(focused, [shown], "and its page has the keyboard");
   assert.equal(S().closedTabs.some((c) => c.id === empty), false, "a blank pane leaves nothing in Recently Closed");
 });
+
+test("a held Esc clears the empty pane's field once and never closes the pane until Esc is let go, on every platform", async () => {
+  const { EMPTY_PANE_ESCAPE_RELEASED, emptyPaneEscapeDown } = await import("./emptyPaneEscape.ts");
+  let state = EMPTY_PANE_ESCAPE_RELEASED;
+  const press = (typed, repeat) => {
+    const next = emptyPaneEscapeDown(state, typed, repeat);
+    state = next.state;
+    return next.action;
+  };
+  assert.equal(press(true, undefined), "clear", "the first Esc clears what was typed");
+  assert.equal(press(false, undefined), "ignore", "a second key-down with no repeat flag and no key-up in between is the key still held");
+  assert.equal(press(false, undefined), "ignore");
+  state = EMPTY_PANE_ESCAPE_RELEASED;
+  assert.equal(press(false, undefined), "close", "after the key-up a fresh Esc closes the empty pane");
+  state = EMPTY_PANE_ESCAPE_RELEASED;
+  assert.equal(press(false, true), "ignore", "a key-down marked as a repeat never closes it");
+  state = EMPTY_PANE_ESCAPE_RELEASED;
+  assert.equal(press(false, undefined), "close", "with nothing typed the first Esc closes the pane");
+});
