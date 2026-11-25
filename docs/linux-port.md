@@ -254,8 +254,8 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   `linkProfile`), kept while the focused window's profile, tabs and active tabs, the profiles, Restore Session and the
   engine mode are unchanged.
 - **Rows the readers drop.** Rows that aren't objects, ids the object prototype holds (`__proto__`, `constructor`,
-  `toString`), windows without a `tabIds` list and `activeTabIds`, and groups without a `tabIds` list are dropped by
-  both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy exists
+  `toString`), tabs without a string `windowId`, `profileId` and `url`, windows without a `profileId`, a `tabIds` list
+  and `activeTabIds`, and groups without a `windowId`, `profileId` and `tabIds` list are dropped by both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy exists
   (the correctly keyed row wins), and the Mac app keeps any file with dropped or misfiled rows aside first.
 - **Startup prewarm.** Native prewarm reads only its own form. `ArdiaSavedSession.mm` on the Mac needs every row
   collection as a list; `ac_linux_startup_tab.cc` on Linux needs `windows` and `tabs` as tables (list-shaped `groups`
