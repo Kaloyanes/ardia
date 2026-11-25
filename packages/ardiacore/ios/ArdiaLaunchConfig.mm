@@ -15,6 +15,12 @@ NSString *const kTestVariable = @"ARDIA_TEST";
 NSString *const kPrewarmVariable = @"ARDIA_PREWARM";
 NSString *const kFeedbackURLVariable = @"ARDIA_FEEDBACK_URL";
 NSString *const kSwitchesCacheDocument = @"switches-cache.json";
+NSString *const kShellVariable = @"ARDIA_SHELL";
+NSString *const kShellArgument = @"--ardia-shell=webui";
+NSString *const kWebUIShell = @"webui";
+NSString *const kWebUIHostAppVariable = @"ARDIA_WEBUI_APP";
+NSString *const kWebUIHandedOffVariable = @"ARDIA_WEBUI_HANDED_OFF";
+NSString *const kWebUIDevDataFolder = @"Library/Application Support/Ardia WebUI Dev";
 
 NSArray<NSString *> *InstanceKeys() {
   return @[
@@ -155,6 +161,15 @@ NSString *Joined(NSDictionary<NSString *, NSString *> *entries, NSArray<NSString
   return [parts componentsJoinedByString:@","];
 }
 
+#if DEBUG
+BOOL WebUIShellRequested(NSString *_Nullable shell, NSArray<NSString *> *arguments) {
+  if ([Trimmed(shell ?: @"").lowercaseString isEqualToString:kWebUIShell]) return YES;
+  for (NSUInteger i = 1; i < arguments.count; i++)
+    if ([arguments[i].lowercaseString isEqualToString:kShellArgument]) return YES;
+  return NO;
+}
+#endif
+
 BOOL SignedForDistribution() {
   SecCodeRef code = nullptr;
   if (SecCodeCopySelf(kSecCSDefaultFlags, &code) != errSecSuccess) return YES;
@@ -193,15 +208,28 @@ BOOL SignedForDistribution() {
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     shared = [[ArdiaLaunchConfig alloc] initWithEnvironment:NSProcessInfo.processInfo.environment
+                                                  arguments:NSProcessInfo.processInfo.arguments
                                       signedForDistribution:^BOOL { return SignedForDistribution(); }];
   });
   return shared;
 }
 
 - (instancetype)initWithEnvironment:(NSDictionary<NSString *, NSString *> *)environment
+                          arguments:(NSArray<NSString *> *)arguments
               signedForDistribution:(BOOL (^)(void))signedForDistribution {
   if ((self = [super init])) {
     _dataDirectory = StandardizedDirectory(environment[kDataDirVariable]);
+#if DEBUG
+    _webUIShell = WebUIShellRequested(environment[kShellVariable], arguments);
+    if (_webUIShell) {
+      _webUIHostApp = Present(environment[kWebUIHostAppVariable]);
+      _webUIHandedOff = Present(environment[kWebUIHandedOffVariable]) != nil;
+      if (!_dataDirectory) {
+        _dataDirectory = [NSHomeDirectory() stringByAppendingPathComponent:kWebUIDevDataFolder];
+        _webUIDataDirectoryDefaulted = YES;
+      }
+    }
+#endif
     _configDirectory = _dataDirectory ? [_dataDirectory stringByAppendingPathComponent:@"config"]
                                       : [NSHomeDirectory() stringByAppendingPathComponent:@".config/ardia"];
     _background = BackgroundValue(environment[kBackgroundVariable]);
@@ -333,6 +361,7 @@ BOOL SignedForDistribution() {
     @"trace" : [self.honouredAreas.allObjects sortedArrayUsingSelector:@selector(compare:)],
     @"test" : self.honouredTest,
     @"feedbackURL" : _feedbackURL ?: NSNull.null,
+    @"webUIShell" : @(_webUIShell),
   };
 }
 

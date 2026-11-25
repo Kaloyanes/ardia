@@ -14,6 +14,7 @@ import { Vibrancy } from "./web/gl/Vibrancy";
 import { mountMeadow, type MeadowScene } from "./web/gl/meadow";
 import { baseLine, baseStops, GRAIN_POINTS, GRAIN_SIDE, grainAlpha, overlayLine, overlayStops, padLayers, stopCss, swatchColors, type SwatchLine, type SwatchStop } from "./web/gl/themeSwatch";
 import { usePageHoleLayer } from "../shellAbove";
+import { behindWindowGlassAvailable, watchBehindWindowGlass } from "@platform/windowGlass";
 import { useSurfaceDark } from "./web/chrome";
 
 export * from "@ardia-real/shaders";
@@ -60,6 +61,9 @@ export function WindowBackdrop({
   const uniformsAt = useMemo(() => (css: [number, number]) => backdropUniforms({ colors, angle, grainOpacity, grainScale }, css), [key]);
   const layer = useRef<View & HTMLElement>(null);
   usePageHoleLayer(layer);
+  const [behindGlass] = useState(() => !!vibrancy && !themed && behindWindowGlassAvailable());
+  useEffect(() => (behindGlass && layer.current ? watchBehindWindowGlass(layer.current) : undefined), [behindGlass]);
+  if (behindGlass) return <View ref={layer} pointerEvents="none" style={style} />;
   return (
     <View ref={layer} pointerEvents="none" style={style}>
       {themed ? (
