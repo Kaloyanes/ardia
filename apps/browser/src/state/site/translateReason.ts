@@ -20,6 +20,21 @@ export function failureReason(error: unknown, stage: FinishStage): TranslateReas
   return "other";
 }
 
+const failedAt = new WeakMap<object, FinishStage>();
+
+export async function failingAt<T>(stage: FinishStage, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (typeof error === "object" && error !== null && !failedAt.has(error)) failedAt.set(error, stage);
+    throw error;
+  }
+}
+
+export function failureStage(error: unknown, reached: FinishStage): FinishStage {
+  return (typeof error === "object" && error !== null ? failedAt.get(error) : undefined) ?? reached;
+}
+
 export const MODEL_ERRORS = [
   "cancelled", "nothing_to_translate", "unable_to_identify_language", "internal_error", "already_cancelled",
   "not_installed", "unsupported_source_language", "unsupported_target_language", "unsupported_language_pairing", "unavailable",

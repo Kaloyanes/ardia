@@ -55,14 +55,14 @@ test("a model that reports why it answered nothing has its kinds of error noted,
   const model = {
     translateBlocks: async (_s, _t, blocks) => ({ parts: blocks.map(() => null), errors: ["not_installed", "unsupported_language_pairing", "Couldn't translate \"Hello\"", "not_installed"] }),
   };
-  const progress = { unlinked: 0, modelErrors: new Set() };
+  const progress = { unlinked: 0, modelErrors: new Map() };
   await assert.rejects(translatePassage(model, "en", "fr", [1, [[10, "Hello"]]], "tok", progress, () => true), /didn't answer/);
-  assert.deepEqual([...progress.modelErrors].sort(), ["not_installed", "other", "unsupported_language_pairing"]);
+  assert.deepEqual([...progress.modelErrors].sort(), [["not_installed", 4], ["other", 2], ["unsupported_language_pairing", 2]]);
 });
 
 test("the answer with the parts and the kinds of error translates as the parts alone did", async () => {
   const model = { translateBlocks: async (_s, _t, blocks) => ({ parts: blocks.map((pieces) => pieces.map((text) => text.toUpperCase())), errors: [] }) };
-  const progress = { unlinked: 0, modelErrors: new Set() };
+  const progress = { unlinked: 0, modelErrors: new Map() };
   const out = await translatePassage(model, "en", "fr", [1, [[10, "Read the "], [11, "notes"]]], "tok", progress, () => true);
   assert.deepEqual(out, [
     [10, "READ THE "],
@@ -77,12 +77,12 @@ test("an error the model raised on a request that the linked retry then answered
     translateBlocks: async (_s, _t, blocks) =>
       ++calls === 1 ? { parts: [null], errors: ["internal_error"] } : { parts: blocks.map((pieces) => [pieces[0].toUpperCase()]), errors: [] },
   };
-  const progress = { unlinked: 0, modelErrors: new Set() };
+  const progress = { unlinked: 0, modelErrors: new Map() };
   const out = await translatePassage(model, "en", "fr", [1, [[10, "Read the "], [11, "notes"]]], "tok", progress, () => true);
   assert.deepEqual(out, [
     [10, "READ THE "],
     [11, "NOTES"],
   ]);
-  assert.deepEqual([...progress.modelErrors], ["internal_error"]);
+  assert.deepEqual([...progress.modelErrors], [["internal_error", 1]]);
   assert.equal(progress.unlinked, 1);
 });

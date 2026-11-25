@@ -13,7 +13,7 @@ import { errorText } from "../../lib/errors";
 import { capture, consentToken, type ConsentToken } from "../telemetry/client";
 import { noteWebKitCount } from "../telemetry/engineSwitchCounts";
 import { tabEngine } from "../engines/engines";
-import { failureReason, MODEL_ERRORS, TranslateFailure, type FinishStage, type TranslateReason, type TranslateStage } from "./translateReason";
+import { failingAt, failureReason, failureStage, MODEL_ERRORS, TranslateFailure, type FinishStage, type TranslateReason, type TranslateStage } from "./translateReason";
 
 export { translation } from "../../platform/text";
 
@@ -126,11 +126,14 @@ type TranslatedBlocks = Exclude<Awaited<ReturnType<BlockTranslator["translateBlo
 const answered = (reply: (string[] | null)[] | TranslatedBlocks): TranslatedBlocks =>
   Array.isArray(reply) ? { parts: reply, errors: [] } : { parts: reply.parts, errors: Array.isArray(reply.errors) ? reply.errors : [] };
 
-function noteModelErrors(progress: { modelErrors?: Set<string> }, errors: string[]) {
-  for (const kind of errors) progress.modelErrors?.add(MODEL_ERRORS.includes(kind) ? kind : "other");
+function noteModelErrors(progress: { modelErrors?: Map<string, number> }, errors: string[]) {
+  for (const reported of errors) {
+    const kind = MODEL_ERRORS.includes(reported) ? reported : "other";
+    progress.modelErrors?.set(kind, (progress.modelErrors.get(kind) ?? 0) + 1);
+  }
 }
 
-export async function translatePassage(model: BlockTranslator, source: string, target: string, [, pieces]: Passage, token: string, progress: { unlinked: number; modelErrors?: Set<string> }, live: () => boolean): Promise<Translated[]> {
+export async function translatePassage(model: BlockTranslator, source: string, target: string, [, pieces]: Passage, token: string, progress: { unlinked: number; modelErrors?: Map<string, number> }, live: () => boolean): Promise<Translated[]> {
   const texts = pieces.map(([, text]) => text);
   const linked = answered(await model.translateBlocks(source, target, [texts], token));
   noteModelErrors(progress, linked.errors);
@@ -145,8 +148,8 @@ export async function translatePassage(model: BlockTranslator, source: string, t
   return pieces.map(([id], i) => [id, single[i]?.[0] ?? null]);
 }
 
-type Progress = { applied: number; unlinked: number; firstAppliedAt: number | null; stage: FinishStage; modelErrors: Set<string> };
-const newProgress = (): Progress => ({ applied: 0, unlinked: 0, firstAppliedAt: null, stage: "detect", modelErrors: new Set() });
+type Progress = { applied: number; unlinked: number; firstAppliedAt: number | null; stage: FinishStage; modelErrors: Map<string, number> };
+const newProgress = (): Progress => ({ applied: 0, unlinked: 0, firstAppliedAt: null, stage: "detect", modelErrors: new Map() });
 
 function untilReleased(tabId: string, token: string) {
   let stop = () => {};
@@ -174,9 +177,9 @@ async function drain(tabId: string, token: string, onProgress?: (done: number, t
       inFlight: IN_FLIGHT,
       holds: () => holds(tabId, token) && !!webviews.get(tabId),
       released: released.promise,
-      next: (max) => page().evaluate<PageBatch>(translatorCall("next", token, max, BATCH_CHARS)),
-      translate: (passage) => translatePassage(translation!, source, target, passage, token, progress, () => holds(tabId, token)),
-      apply: (results) => page().evaluate(translatorCall("apply", token, results)),
+      next: (max) => failingAt("collect", async () => page().evaluate<PageBatch>(translatorCall("next", token, max, BATCH_CHARS))),
+      translate: (passage) => failingAt("model", () => translatePassage(translation!, source, target, passage, token, progress, () => holds(tabId, token))),
+      apply: (results) => failingAt("apply", async () => page().evaluate(translatorCall("apply", token, results))),
       onStage: (stage) => {
         atStage(tabId, stage);
         progress.stage = stage;
@@ -261,9 +264,10 @@ export async function translatePage(tabId: string, target = defaultTarget()) {
       progress,
     );
     if (!done) {
+      const closed = !webviews.get(tabId);
       if (holds(tabId, mine)) toIdle(tabId);
       if (shown && stateOf(tabId).status === "idle") hideKeyedToast(tab.windowId, PROGRESS_TOAST);
-      return void reportFirstPass("stopped", started, progress, consent);
+      return void reportFirstPass("stopped", started, progress, consent, closed ? "page_closed" : null);
     }
     reportFirstPass("done", started, progress, consent);
     if (tabEngine(useBrowser.getState(), tabId) === "webkit") noteWebKitCount("translation", consent);
@@ -271,7 +275,8 @@ export async function translatePage(tabId: string, target = defaultTarget()) {
     toast(tabId, `Translated to ${languageName(target)}`);
     void follow(tabId, mine);
   } catch (error) {
-    reportFirstPass("failed", started, progress, consent, failureReason(error, progress.stage));
+    const stage = failureStage(error, progress.stage);
+    reportFirstPass("failed", started, { ...progress, stage }, consent, failureReason(error, stage));
     const replaced = token !== null && !holds(tabId, token);
     if (shown && (!replaced || stateOf(tabId).status === "idle")) hideKeyedToast(tab.windowId, PROGRESS_TOAST);
     if (replaced) return;
@@ -290,8 +295,13 @@ function reportFirstPass(outcome: "done" | "stopped" | "failed" | "refused", sta
     unlinked_passages: progress.unlinked,
     stage: progress.stage,
     reason,
-    model_errors: progress.modelErrors.size ? [...progress.modelErrors].sort().join(",") : null,
+    ...modelErrorFields(progress.modelErrors),
   }, consent);
+}
+
+function modelErrorFields(reported: Map<string, number>) {
+  const [top = null] = [...reported].sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
+  return { model_error_kind: top?.[0] ?? null, model_error_count: [...reported.values()].reduce((sum, n) => sum + n, 0) };
 }
 
 export async function revertPage(tabId: string, { quiet = false } = {}) {

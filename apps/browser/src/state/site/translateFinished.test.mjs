@@ -22,6 +22,7 @@ const { useBrowser } = await import("../browser/store.ts");
 const { webviews } = await import("../../platform/webviews.ts");
 const { useToasts } = await import("../app/toasts.ts");
 const { setTelemetryRelay } = await import("../telemetry/relay.ts");
+const { cleanProperties } = await import("../telemetry/sanitize.ts");
 const { translatePage, releaseTranslation } = await import("./translate.ts");
 
 const S = () => useBrowser.getState();
@@ -38,11 +39,11 @@ beforeEach(() => {
 const EMPTY = { passages: [], more: false, gone: false, done: 0, total: 0 };
 const ONE = { passages: [[1, [[10, "Bonjour"]]]], more: false, gone: false, done: 0, total: 1 };
 
-function openTab({ sample = { lang: "fr", text: "", active: true }, start = true, batches = [ONE] } = {}) {
+function openTab({ sample = { lang: "fr", text: "", active: true }, start = true, batches = [ONE], apply = () => true } = {}) {
   S().hydrate({});
   const windowId = S().createWindow({ url: "https://a.com/x", profileId: S().createProfile({ name: "Work" }) });
   const tabId = S().windows[windowId].tabIds[0];
-  const answers = { sample: () => sample, start: () => start, next: () => batches.shift() ?? EMPTY, apply: () => true };
+  const answers = { sample: () => sample, start: () => start, next: () => batches.shift() ?? EMPTY, apply };
   webviews.set(tabId, {
     evaluate: async (script) => {
       const ops = [...script.matchAll(/ardia\.translator"\)\]\.(\w+)\(/g)];
@@ -53,7 +54,8 @@ function openTab({ sample = { lang: "fr", text: "", active: true }, start = true
 }
 
 const everyValueIsALabel = (props) => {
-  for (const key of ["stage", "reason", "model_errors"]) assert.ok(props[key] === null || /^[a-z_,]+$/.test(props[key]), `${key} is a fixed label: ${props[key]}`);
+  for (const key of ["stage", "reason", "model_error_kind"]) assert.ok(props[key] === null || /^[a-z_]+$/.test(props[key]), `${key} is a fixed label: ${props[key]}`);
+  assert.deepEqual(cleanProperties(props), props, "telemetry's own scrubbing leaves every value as it was sent");
 };
 
 test("a pair the Mac doesn't offer is a refused translation with its reason, and the toast is as before", async () => {
@@ -61,7 +63,7 @@ test("a pair the Mac doesn't offer is a refused translation with its reason, and
   const { tabId, toast } = openTab();
   await translatePage(tabId, "en");
   assert.deepEqual(finished(), [
-    { outcome: "refused", first_pass_ms: null, first_text_ms: null, passages: 0, unlinked_passages: 0, stage: "status", reason: "pair_unavailable", model_errors: null },
+    { outcome: "refused", first_pass_ms: null, first_text_ms: null, passages: 0, unlinked_passages: 0, stage: "status", reason: "pair_unavailable", model_error_kind: null, model_error_count: 0 },
   ]);
   assert.equal(toast(), "Translation error (fr to en isn't available)");
 });
@@ -141,7 +143,7 @@ test("a model that answers nothing is a failed translation with the reason model
   assert.equal(more.length, 0);
   assert.deepEqual([event.outcome, event.stage, event.reason, event.passages], ["failed", "model", "model_no_answer", 0]);
   assert.equal(typeof event.first_pass_ms, "number");
-  assert.equal(event.model_errors, "not_installed,other");
+  assert.deepEqual([event.model_error_kind, event.model_error_count], ["not_installed", 4]);
   everyValueIsALabel(event);
   assert.ok(!JSON.stringify(sent).includes("Bonjour"));
   assert.equal(toast(), "Translation error (the Mac's translation model didn't answer)");
@@ -153,6 +155,62 @@ test("a build that answers the parts alone still translates, and its finished ev
   await translatePage(tabId, "en");
   releaseTranslation(tabId);
   const [event] = finished();
-  assert.deepEqual([event.outcome, event.reason, event.model_errors, event.passages], ["done", null, null, 1]);
+  assert.deepEqual([event.outcome, event.reason, event.model_error_kind, event.model_error_count, event.passages], ["done", null, null, 0, 1]);
   assert.equal(toast(), "Translated to en");
+});
+
+test("a model that reports every kind of error still sends two short values, which telemetry's scrubbing leaves whole", async () => {
+  const { MODEL_ERRORS } = await import("./translateReason.ts");
+  assert.ok(MODEL_ERRORS.join(",").length > 64, "the kinds joined would have been replaced by telemetry");
+  model.translateBlocks = async (_s, _t, blocks) => ({ parts: blocks.map(() => null), errors: [...MODEL_ERRORS, "unsupported_language_pairing"] });
+  await translatePage(openTab().tabId, "en");
+  const [event] = finished();
+  assert.deepEqual([event.model_error_kind, event.model_error_count], ["unsupported_language_pairing", 22]);
+  everyValueIsALabel(event);
+});
+
+test("a tab that closes while the model is still answering is a stopped translation with the reason page_closed", async () => {
+  let answer = () => {};
+  let asked = () => {};
+  const asking = new Promise((resolve) => void (asked = resolve));
+  model.translateBlocks = (_s, _t, blocks) => new Promise((resolve) => void ((answer = () => resolve(blocks)), asked()));
+  const { tabId } = openTab();
+  const running = translatePage(tabId, "en");
+  await asking;
+  webviews.delete(tabId);
+  answer();
+  await running;
+  const [event, ...more] = finished();
+  assert.equal(more.length, 0);
+  assert.deepEqual([event.outcome, event.stage, event.reason], ["stopped", "model", "page_closed"]);
+});
+
+test("a translation put back by the person while the model is answering is a stopped translation with no reason", async () => {
+  let answer = () => {};
+  let asked = () => {};
+  const asking = new Promise((resolve) => void (asked = resolve));
+  model.translateBlocks = (_s, _t, blocks) => new Promise((resolve) => void ((answer = () => resolve(blocks)), asked()));
+  const { tabId } = openTab();
+  const running = translatePage(tabId, "en");
+  await asking;
+  releaseTranslation(tabId);
+  answer();
+  await running;
+  const [event] = finished();
+  assert.deepEqual([event.outcome, event.reason], ["stopped", null]);
+});
+
+test("a failure is reported at the step that failed, not at the step another passage had reached", async () => {
+  let secondApplied = () => {};
+  const afterSecond = new Promise((resolve) => void (secondApplied = resolve));
+  model.translateBlocks = async (_s, _t, blocks) => {
+    if (blocks[0][0] !== "Alpha") return blocks;
+    await afterSecond;
+    return blocks.map(() => null);
+  };
+  const two = { passages: [[1, [[10, "Alpha"]]], [2, [[20, "Beta"]]]], more: false, gone: false, done: 0, total: 2 };
+  const { tabId } = openTab({ batches: [two], apply: () => (secondApplied(), true) });
+  await translatePage(tabId, "en");
+  const [event] = finished();
+  assert.deepEqual([event.outcome, event.stage, event.reason], ["failed", "model", "model_no_answer"]);
 });
