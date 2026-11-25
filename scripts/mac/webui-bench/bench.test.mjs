@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { DRAG_EDGE_OFFSETS, MEASURES, pacingProblem, PAIRED_PROFILE, blockScript, dragChanged, firstWindowTiming, instanceName, scenarioOrder, waitGone, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
+import { DRAG_EDGE_OFFSETS, MEASURES, captureOrClose, pacingProblem, PAIRED_PROFILE, blockScript, dragChanged, firstWindowTiming, instanceName, scenarioOrder, waitGone, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
 import { assertTraceComplete, epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { LATE_120_MS, analyze, windowGaps, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
 import { RULES, baselineProblems, blockedProblem, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
@@ -1016,7 +1016,7 @@ test("round 6: Peek is dismissed with Esc, the animated path, and timed until it
   assert.match(dismiss, /"postkeys", String\(side\.pid\), "0", "esc"/);
   assert.match(dismiss, /await waitGone\(\(\) => exists\(peekId\)/);
   assert.ok(!dismiss.includes("closePeek"));
-  assert.ok(dismiss.indexOf("await cleanUp()") > dismiss.indexOf("if (!result.dismissed)"));
+  assert.ok(dismiss.lastIndexOf("await cleanUp()") > dismiss.indexOf("if (!result.dismissed)"));
 });
 
 test("round 6: a missing footprint fails the run and the gate", () => {
@@ -1158,4 +1158,25 @@ test("review 10: a process that shows up only on the second read is still signal
   const quiet = [];
   assert.equal(signalOwned(processIdentity({ owner: "tok-none", binary: "/tmp/b/W.app/Contents/MacOS/W" }), "SIGTERM", () => [], (pid) => quiet.push(pid)), 0);
   assert.deepEqual(quiet, []);
+});
+
+test("review 11: a Peek capture that throws closes the Peek before the error propagates", async () => {
+  const calls = [];
+  const orClose = captureOrClose(async () => calls.push("closePeek"));
+  const lost = new Error("the peek-dismiss trace lost data");
+  await assert.rejects(orClose(async () => {
+    calls.push("capture");
+    throw lost;
+  }), (e) => e === lost);
+  assert.deepEqual(calls, ["capture", "closePeek"]);
+  calls.length = 0;
+  assert.equal(await orClose(async () => (calls.push("capture"), 7)), 7);
+  assert.deepEqual(calls, ["capture"]);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const peek = source.slice(source.indexOf("  async peek("), source.indexOf("  async typing("));
+  const cleanUpAt = peek.indexOf("const cleanUp = ");
+  const openAt = peek.indexOf('this.capture(side, "peek-open"');
+  const dismissAt = peek.indexOf('this.capture(side, "peek-dismiss"');
+  assert.ok(cleanUpAt > 0 && cleanUpAt < openAt && openAt < dismissAt);
+  assert.equal(peek.match(/await orClose\(async \(\) => \{\n\s*const (?:cap|dismissCap) = await this\.capture\(side, "peek-(?:open|dismiss)"/g)?.length, 2);
 });

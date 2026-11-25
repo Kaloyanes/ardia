@@ -225,6 +225,15 @@ export const PAIRED_PROFILE = PROFILES[0].id;
 export const DRAG_EDGE_OFFSETS = [0, 4, 8, 12];
 export const PEEK_CLOSE_MS = 3000;
 
+export const captureOrClose = (cleanUp) => async (run) => {
+  try {
+    return await run();
+  } catch (error) {
+    await cleanUp();
+    throw error;
+  }
+};
+
 export function pacingProblem(pacing, label) {
   if (!pacing) return `${label} has no frame pacing`;
   if (pacing.pacingComplete === false) return `the ${label} capture began after the motion started`;
@@ -675,32 +684,41 @@ class Bench {
     const source = await side.js(`(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; return w.activeTabIds[w.profileId]; })()`);
     const url = JSON.stringify(`${this.server.origin}/peek-bench`);
     const exists = (id) => side.js(`!!${TAB_OF}(${STORE}.getState(), ${JSON.stringify(id)})`);
+    const cleanUp = () => side.js(`(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`).catch(() => {});
+    const orClose = captureOrClose(cleanUp);
     let openAt = 0;
-    const openCap = await this.capture(side, "peek-open", async () => {
-      openAt = Date.now();
-      const id = await side.js(`${STORE}.getState().openPeek(${JSON.stringify(source)}, ${url})`);
-      await sleep(TRANSITION_MS);
-      return id;
+    const { openCap, open } = await orClose(async () => {
+      const cap = await this.capture(side, "peek-open", async () => {
+        openAt = Date.now();
+        const id = await side.js(`${STORE}.getState().openPeek(${JSON.stringify(source)}, ${url})`);
+        await sleep(TRANSITION_MS);
+        return id;
+      });
+      return { openCap: cap, open: this.pacing(cap, openAt, openAt + TRANSITION_MS) };
     });
     const peekId = openCap.value;
     const opened = !!peekId && (await exists(peekId));
-    const result = { opened, dismissed: false, dismissedBy: "escape", open: this.pacing(openCap, openAt, openAt + TRANSITION_MS) };
-    const cleanUp = () => side.js(`(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`).catch(() => {});
-    if (!opened) throw Object.assign(new Error("the Peek did not open"), { result });
+    const result = { opened, dismissed: false, dismissedBy: "escape", open };
+    if (!opened) {
+      await cleanUp();
+      throw Object.assign(new Error("the Peek did not open"), { result });
+    }
     const openProblem = pacingProblem(result.open, "Peek open");
     if (openProblem) {
       await cleanUp();
       throw Object.assign(new Error(openProblem), { result });
     }
-    const dismissCap = await this.capture(side, "peek-dismiss", async () => {
-      const escAt = JSON.parse(execFileSync(this.acperf, ["postkeys", String(side.pid), "0", "esc"], { encoding: "utf8", timeout: 5000 }).trim().split("\n").at(-1)).at;
-      const goneAt = await waitGone(() => exists(peekId), { timeoutMs: PEEK_CLOSE_MS });
-      return { escAt, goneAt };
+    await orClose(async () => {
+      const dismissCap = await this.capture(side, "peek-dismiss", async () => {
+        const escAt = JSON.parse(execFileSync(this.acperf, ["postkeys", String(side.pid), "0", "esc"], { encoding: "utf8", timeout: 5000 }).trim().split("\n").at(-1)).at;
+        const goneAt = await waitGone(() => exists(peekId), { timeoutMs: PEEK_CLOSE_MS });
+        return { escAt, goneAt };
+      });
+      const { escAt, goneAt } = dismissCap.value;
+      result.dismissed = goneAt != null;
+      result.closeMs = goneAt == null ? null : Math.round(goneAt - escAt);
+      result.dismiss = this.pacing(dismissCap, escAt, (goneAt ?? escAt + PEEK_CLOSE_MS) + 100);
     });
-    const { escAt, goneAt } = dismissCap.value;
-    result.dismissed = goneAt != null;
-    result.closeMs = goneAt == null ? null : Math.round(goneAt - escAt);
-    result.dismiss = this.pacing(dismissCap, escAt, (goneAt ?? escAt + PEEK_CLOSE_MS) + 100);
     if (!result.dismissed) {
       await cleanUp();
       throw Object.assign(new Error(`Esc did not dismiss the Peek within ${PEEK_CLOSE_MS} ms`), { result });
