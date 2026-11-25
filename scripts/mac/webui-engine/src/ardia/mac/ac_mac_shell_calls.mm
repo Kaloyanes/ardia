@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
@@ -76,14 +77,15 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.focusWindow",
     "ArdiaShell.windowIds",
     "ArdiaShell.utilityReady",
+    "ArdiaShell.requestWindowClose",
+    "ArdiaShell.beginWindowCloseDrain",
+    "ArdiaShell.acknowledgeWindowClose",
+    "ArdiaShell.rejectWindowClose",
+    "ArdiaShell.setShortcutRecording",
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
-  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
-  return *runner;
+  return SessionFiles();
 }
 
 base::FilePath DocumentDirectory() {
@@ -112,8 +114,8 @@ std::optional<base::DictValue> ReadSessionFile() {
   return std::move(parsed->GetDict());
 }
 
-bool WriteSessionFile(base::DictValue session) {
-  std::optional<std::string> json = base::WriteJson(base::Value(std::move(session)));
+bool WriteSessionFile(const base::DictValue& session) {
+  std::optional<std::string> json = base::WriteJson(session);
   if (!json || !shell_policy::SessionFits(json->size())) {
     return false;
   }
@@ -156,6 +158,47 @@ void* EngineImage() {
   return image;
 }
 
+}
+
+scoped_refptr<base::SequencedTaskRunner> SessionFiles() {
+  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
+      base::ThreadPool::CreateSequencedTaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
+  return *runner;
+}
+
+MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local) {
+  MergedSession result;
+  if (std::optional<base::DictValue> previous = ReadSessionFile()) {
+    result.previous = std::move(*previous);
+  }
+  std::optional<base::DictValue> merged =
+      ardia::MergeLinuxSession(base, local, result.previous);
+  if (!merged || !WriteSessionFile(*merged)) {
+    return result;
+  }
+  result.session = std::move(*merged);
+  result.ok = true;
+  return result;
+}
+
+void BroadcastSession(const MergedSession& merged,
+                      const std::string& source_window,
+                      const base::DictValue* source_base) {
+  if (!merged.ok || merged.previous == merged.session) {
+    return;
+  }
+  for (ShellHostView* host : Hosts()) {
+    const bool source = host->window_id() == source_window;
+    host->Emit("ArdiaHost", "session",
+               base::Value(base::DictValue()
+                               .Set("base", source && source_base
+                                                ? source_base->Clone()
+                                                : merged.previous.Clone())
+                               .Set("session", merged.session.Clone())
+                               .Set("sourceWindowId", source_window)));
+  }
 }
 
 std::string ShellHostView::BootstrapJson() const {
@@ -305,23 +348,42 @@ void ShellHostView::Invoke(const std::string& method,
     return;
   }
   if (method == "session.write") {
-    const base::DictValue* session = args.FindDict("session");
-    if (!session) {
-      return std::move(done).Run(false, base::Value("A session is required"));
+    return WriteSession(args, std::move(done));
+  }
+  if (method == "ArdiaShell.requestWindowClose") {
+    if (!values || values->size() != 1 || !(*values)[0].is_string()) {
+      return std::move(done).Run(false, base::Value("Window identity required"));
     }
-    base::DictValue copy = session->Clone();
-    FileRunner()->PostTaskAndReplyWithResult(
-        FROM_HERE, base::BindOnce(&WriteSessionFile, session->Clone()),
-        base::BindOnce(
-            [](Done done, base::DictValue session, bool ok) {
-              if (!ok) {
-                return std::move(done).Run(
-                    false, base::Value("The session could not be saved"));
-              }
-              std::move(done).Run(true, base::Value(std::move(session)));
-            },
-            std::move(done), std::move(copy)));
-    return;
+    ShellHostView* target = HostForWindow(first_string());
+    if (!target) {
+      return std::move(done).Run(false, base::Value("No such native window"));
+    }
+    base::DictValue request = target->RequestWindowClose();
+    if (request.empty()) {
+      return std::move(done).Run(
+          false, Failure("ERR_WINDOW_CLOSE_UNAVAILABLE", "Target renderer unavailable"));
+    }
+    return Reply(std::move(done), base::Value(std::move(request)));
+  }
+  if (method == "ArdiaShell.beginWindowCloseDrain" ||
+      method == "ArdiaShell.acknowledgeWindowClose" ||
+      method == "ArdiaShell.rejectWindowClose") {
+    const base::DictValue* request =
+        values && values->size() == 1 ? (*values)[0].GetIfDict() : nullptr;
+    if (method == "ArdiaShell.beginWindowCloseDrain") {
+      return BeginWindowCloseDrain(request, std::move(done));
+    }
+    if (method == "ArdiaShell.acknowledgeWindowClose") {
+      return AcknowledgeWindowClose(request, std::move(done));
+    }
+    return RejectWindowClose(request, std::move(done));
+  }
+  if (method == "ArdiaShell.setShortcutRecording") {
+    if (!values || values->size() != 1 || !(*values)[0].is_bool()) {
+      return std::move(done).Run(false, base::Value("A recording flag is required"));
+    }
+    shortcut_recording_ = (*values)[0].GetBool();
+    return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.readDocument") {
     const std::string name = first_string();
@@ -347,6 +409,12 @@ void ShellHostView::Invoke(const std::string& method,
             },
             std::move(done)));
     return;
+  }
+  if (ClosingBlocksWrites() &&
+      (method == "ArdiaShell.writeDocument" || method == "ArdiaShell.saveDocument" ||
+       method == "ArdiaShell.removeDocument")) {
+    return std::move(done).Run(
+        false, Failure("ERR_DOCUMENT_CLOSING", "Window is closing"));
   }
   if (method == "ArdiaShell.writeDocument" ||
       method == "ArdiaShell.saveDocument") {

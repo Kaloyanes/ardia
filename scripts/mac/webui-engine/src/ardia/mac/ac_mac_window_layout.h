@@ -29,19 +29,28 @@ struct Lights {
   bool hidden = false;
 };
 
+inline constexpr double kLightsEdgeMargin = 7;
+inline constexpr double kMinLightsCenter = kLightsEdgeMargin + kButtonSide / 2;
+
+inline double SafeScale(double scale) {
+  return std::isfinite(scale) && scale > 0.05 && scale < 20 ? scale : 1;
+}
+
 inline std::optional<Lights> LightsFrom(std::optional<double> x,
                                         std::optional<double> y,
                                         bool hidden,
-                                        Size window) {
+                                        Size window,
+                                        double css_scale = 1) {
   Lights lights;
   lights.hidden = hidden;
   if (!x && !y) return lights;
-  const double cx = x.value_or(lights.center.x);
-  const double cy = y.value_or(lights.center.y);
+  const double scale = SafeScale(css_scale);
+  const double cx = x ? *x * scale : lights.center.x;
+  const double cy = y ? *y * scale : lights.center.y;
   if (!std::isfinite(cx) || !std::isfinite(cy)) return std::nullopt;
-  const double max_x = std::max(kButtonSide / 2, window.width - kButtonSide * 2.5 - kTrafficLightSpacing * 2);
-  const double max_y = std::max(kButtonSide, window.height - kButtonSide);
-  lights.center = Point{std::clamp(cx, kButtonSide / 2, max_x), std::clamp(cy, kButtonSide / 2, max_y)};
+  const double max_x = std::max(kMinLightsCenter, window.width - kButtonSide * 2.5 - kTrafficLightSpacing * 2 - kLightsEdgeMargin);
+  const double max_y = std::max(kMinLightsCenter, window.height - kMinLightsCenter);
+  lights.center = Point{std::clamp(cx, kMinLightsCenter, max_x), std::clamp(cy, kMinLightsCenter, max_y)};
   return lights;
 }
 
@@ -159,11 +168,6 @@ inline Frame UtilityFrameOver(const Frame& opener, std::string_view kind) {
   const double height = settings ? kSettingsHeight : kImportHeight;
   return Frame{std::round(opener.x + (opener.width - width) / 2), std::round(opener.y + (opener.height - height) / 2),
                width, height};
-}
-
-inline Lights ScaledLights(const Lights& lights, double scale) {
-  const double safe = std::isfinite(scale) && scale > 0.05 && scale < 20 ? scale : 1;
-  return Lights{Point{lights.center.x * safe, lights.center.y * safe}, lights.hidden};
 }
 
 inline Translucency TranslucencyFor(bool webui_shell) {

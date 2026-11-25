@@ -222,6 +222,24 @@ TEST(window_requests) {
   CHECK(policy::CheckWindowRequest({"settings", "settings", "", false, false}) == policy::WindowRefusal::kNone);
 }
 
+TEST(close_identities) {
+  namespace policy = ardia_mac::shell_policy;
+  for (const std::string& text : Load().strings) {
+    if (const auto generation = policy::ParseGeneration(text)) {
+      CHECK(*generation > 0 && text == std::to_string(*generation));
+    }
+    policy::CloseLedger ledger;
+    const auto identity = ledger.Request(3);
+    const auto parsed = policy::ParseGeneration(text);
+    const policy::CloseIdentity forged{3, parsed.value_or(0)};
+    if (!(forged == *identity)) {
+      CHECK(!ledger.BeginDrain(forged, 3));
+      CHECK(!ledger.Cancel(forged, 3));
+    }
+    CHECK(ledger.phase() == policy::CloseLedger::Phase::kRequested);
+  }
+}
+
 TEST(bridge_documents) {
   for (const std::string& text : Load().strings) {
     if (ardia_mac::shell_policy::ValidDocumentName(text)) {

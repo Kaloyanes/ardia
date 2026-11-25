@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <limits>
 #include <map>
@@ -181,6 +182,77 @@ inline std::string_view PageProfileFor(std::string_view kind, std::string_view p
   if (UtilityKind(kind) || profile == "default") return std::string_view();
   return profile;
 }
+
+inline bool AcceleratorsLive(bool attached, bool renderer, bool recording) {
+  return attached && renderer && !recording;
+}
+
+struct CloseIdentity {
+  std::uint64_t renderer = 0;
+  std::uint64_t close = 0;
+  bool operator==(const CloseIdentity&) const = default;
+};
+
+inline std::optional<std::uint64_t> ParseGeneration(std::string_view text) {
+  if (text.empty() || text.size() > 20 || text.front() == '0') return std::nullopt;
+  std::uint64_t value = 0;
+  for (char c : text) {
+    if (c < '0' || c > '9') return std::nullopt;
+    const std::uint64_t digit = static_cast<std::uint64_t>(c - '0');
+    if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) return std::nullopt;
+    value = value * 10 + digit;
+  }
+  return value;
+}
+
+class CloseLedger {
+ public:
+  enum class Phase { kIdle, kRequested, kDraining, kSealed };
+
+  std::optional<CloseIdentity> Request(std::uint64_t renderer) {
+    if (renderer == 0) return std::nullopt;
+    if (phase_ == Phase::kSealed) return std::nullopt;
+    if (phase_ != Phase::kIdle && identity_.renderer == renderer) return identity_;
+    identity_ = CloseIdentity{renderer, ++generation_};
+    phase_ = Phase::kRequested;
+    return identity_;
+  }
+
+  bool BeginDrain(const CloseIdentity& identity, std::uint64_t renderer) {
+    if (!Matches(identity, renderer) || (phase_ != Phase::kRequested && phase_ != Phase::kDraining)) return false;
+    phase_ = Phase::kDraining;
+    return true;
+  }
+
+  bool Seal(const CloseIdentity& identity, std::uint64_t renderer) {
+    if (!Matches(identity, renderer) || phase_ != Phase::kDraining) return false;
+    phase_ = Phase::kSealed;
+    return true;
+  }
+
+  bool Cancel(const CloseIdentity& identity, std::uint64_t renderer) {
+    if (!Matches(identity, renderer) || phase_ == Phase::kIdle || phase_ == Phase::kSealed) return false;
+    phase_ = Phase::kIdle;
+    return true;
+  }
+
+  void RendererRetired() {
+    if (phase_ != Phase::kSealed) phase_ = Phase::kIdle;
+  }
+
+  bool BlocksWrites() const { return phase_ == Phase::kSealed; }
+  Phase phase() const { return phase_; }
+  const CloseIdentity& identity() const { return identity_; }
+
+ private:
+  bool Matches(const CloseIdentity& identity, std::uint64_t renderer) const {
+    return phase_ != Phase::kIdle && identity == identity_ && identity.renderer == renderer;
+  }
+
+  Phase phase_ = Phase::kIdle;
+  CloseIdentity identity_;
+  std::uint64_t generation_ = 0;
+};
 
 enum class CloseAction { kRefuse, kCloseWindow, kQuit };
 

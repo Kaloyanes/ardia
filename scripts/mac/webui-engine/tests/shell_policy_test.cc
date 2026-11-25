@@ -211,6 +211,57 @@ TEST(closing_a_window_closes_that_window_and_only_the_last_browser_window_quits)
   CHECK(policy::CloseActionFor(true, false, 1) == CloseAction::kQuit);
 }
 
+TEST(recording_a_shortcut_lets_every_key_reach_the_recorder) {
+  CHECK(policy::AcceleratorsLive(true, true, false));
+  CHECK(!policy::AcceleratorsLive(true, true, true));
+  CHECK(!policy::AcceleratorsLive(false, true, false));
+  CHECK(!policy::AcceleratorsLive(true, false, false));
+}
+
+TEST(close_generations_are_positive_decimal_strings) {
+  CHECK(policy::ParseGeneration("1") == 1u);
+  CHECK(policy::ParseGeneration("18446744073709551615") == 18446744073709551615u);
+  for (const char* bad : {"", "0", "01", "-1", "1.0", "1e3", " 1", "18446744073709551616", "999999999999999999999"}) {
+    CHECK(!policy::ParseGeneration(bad));
+  }
+}
+
+TEST(a_close_request_drains_seals_and_only_its_own_identity_moves_it) {
+  policy::CloseLedger ledger;
+  CHECK(!ledger.Request(0));
+  const auto first = ledger.Request(4);
+  CHECK(first && first->renderer == 4 && first->close == 1);
+  CHECK(ledger.phase() == policy::CloseLedger::Phase::kRequested);
+  CHECK(ledger.Request(4) == first);
+  CHECK(!ledger.BeginDrain({4, 2}, 4));
+  CHECK(!ledger.BeginDrain(*first, 5));
+  CHECK(!ledger.Seal(*first, 4));
+  CHECK(ledger.BeginDrain(*first, 4));
+  CHECK(!ledger.BlocksWrites());
+  CHECK(ledger.Seal(*first, 4));
+  CHECK(ledger.BlocksWrites());
+  CHECK(!ledger.Cancel(*first, 4));
+  CHECK(!ledger.Request(4));
+  ledger.RendererRetired();
+  CHECK(ledger.BlocksWrites());
+}
+
+TEST(a_rejected_close_frees_the_window_and_the_next_request_is_new) {
+  policy::CloseLedger ledger;
+  const auto first = ledger.Request(2);
+  CHECK(ledger.Cancel(*first, 2));
+  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
+  CHECK(!ledger.Cancel(*first, 2));
+  CHECK(!ledger.BeginDrain(*first, 2));
+  const auto second = ledger.Request(2);
+  CHECK(second && second->close == 2);
+  ledger.RendererRetired();
+  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
+  const auto reloaded = ledger.Request(3);
+  CHECK(reloaded && reloaded->renderer == 3 && reloaded->close == 3);
+  CHECK(!ledger.BeginDrain(*second, 3));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

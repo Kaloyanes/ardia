@@ -1,3 +1,5 @@
 engine/ardiacore-linux/src/ardia/linux/bootstrap.js	ardia/mac/bootstrap.js
 engine/ardiacore-linux/src/ardia/linux/generate_bootstrap.py	ardia/mac/generate_bootstrap.py
 engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h	ardia/mac/generated/ac_desktop_routes.h
+engine/ardiacore-linux/src/ardia/linux/ac_linux_session.h	ardia/mac/shared/ardia/linux/ac_linux_session.h
+engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc	ardia/mac/shared/ac_linux_session.cc

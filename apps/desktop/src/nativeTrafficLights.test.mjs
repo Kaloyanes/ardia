@@ -40,3 +40,22 @@ test("the drawn SVG lights step aside when the host draws real ones", () => {
   const shell = readFileSync(new URL("./shims/shellBase.tsx", import.meta.url), "utf8");
   assert.match(shell, /await placeNativeTrafficLights\(id, center, trailing\);/);
 });
+
+test("a burst of places, as spamming ⌘S slides the sidebar, settles on the last one and never ends on a stale frame", async () => {
+  const calls = [];
+  const releases = [];
+  const host = {
+    bootstrap: { windowId: "main", profileId: "default", capabilities: ["shell.trafficLights"] },
+    invoke: (method, args) => new Promise((resolve) => { calls.push([method, args]); releases.push(resolve); }),
+  };
+  const frames = [[25, 27], [-40, 27], [-200, 27], [-60, 27], [10, 27], [25, 27], [-200, 27], [96, 20]];
+  const settled = Promise.all(frames.map((center) => placeNativeTrafficLights("main", center, false, host, 1280)));
+  for (let turn = 0; turn < 10; turn++) {
+    await new Promise(setImmediate);
+    releases.shift()?.(null);
+  }
+  await settled;
+  assert.deepEqual(calls.at(-1), ["shell.trafficLights", { center: { x: 96, y: 20 }, hidden: false }]);
+  assert.ok(calls.length <= 2, `intermediate frames are dropped, sent ${calls.length}`);
+  assert.deepEqual(calls[0], ["shell.trafficLights", { center: { x: 25, y: 27 }, hidden: false }]);
+});

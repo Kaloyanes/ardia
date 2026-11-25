@@ -118,8 +118,11 @@ class BuildGraphTests(unittest.TestCase):
         self.assertIn('ARDIA_MAC_WEBUI_DEV', development)
 
     def test_every_listed_source_exists(self):
+        copies = dict(line.split('\t')[::-1] for line in (ROOT / 'dev-copies.tsv').read_text().splitlines() if line)
         for name in re.findall(r'"([A-Za-z0-9_./]+\.(?:h|mm|cc))"', self.gn):
-            if name.startswith('generated/'):
+            copied = copies.get(f'ardia/mac/{name}')
+            if copied:
+                self.assertTrue((REPO / copied).is_file(), copied)
                 continue
             self.assertTrue((MAC / name).is_file(), name)
 
@@ -503,11 +506,78 @@ class ContractTests(unittest.TestCase):
         calls = self.read('ac_mac_shell_calls.mm')
         self.assertIn('.Set("layout", "")', calls)
         host = self.read('ac_mac_shell_host.mm')
-        self.assertIn('window::ScaledLights(*lights, ShellZoom())', host)
+        lights = host.split('void ShellHostView::SetTrafficLights(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ShellZoom());', lights.split('window::LightsFrom(', 1)[1])
         chrome = (REPO / 'apps/browser/src/lib/platformChrome.mac.ts').read_text()
         self.assertIn('export { applyWindowButtonStyle, WINDOW_BUTTON_STYLES, WINDOW_CHROME } from "./platformChrome.ts";', chrome)
         lights = (REPO / 'apps/desktop/src/nativeTrafficLights.ts').read_text()
         self.assertIn('export const NATIVE_TRAFFIC_LIGHTS = "shell.trafficLights";', lights)
+
+    def test_shell_close_requests_run_the_desktop_close_protocol(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        for method in ('ArdiaShell.requestWindowClose', 'ArdiaShell.beginWindowCloseDrain',
+                       'ArdiaShell.acknowledgeWindowClose', 'ArdiaShell.rejectWindowClose',
+                       'ArdiaShell.setShortcutRecording'):
+            self.assertIn(f'"{method}"', listed)
+        self.assertIn('base::DictValue request = target->RequestWindowClose();', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        request = host.split('base::DictValue ShellHostView::RequestWindowClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('close_.Request(renderer_generation_)', request)
+        self.assertIn('.Set("name", "shell.closeRequested")', request)
+        ack = host.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(ack.index('close_.Seal(*identity, renderer_generation_)'), ack.index('SessionFiles()->PostTaskAndReplyWithResult('))
+        self.assertLess(ack.index('SessionFiles()->PostTaskAndReplyWithResult('), ack.index('&ShellHostView::FinishClose'))
+        finish = host.split('void ShellHostView::FinishClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::CloseActionFor(true, is_utility(), browser_windows)', finish)
+        desktop = (REPO / 'apps/desktop/src/shims/shell.tsx').read_text()
+        self.assertIn('hostModuleMethod("ArdiaShell", "requestWindowClose")', desktop)
+        self.assertIn('envelope?.name === "shell.closeRequested"', desktop)
+
+    def test_session_writes_merge_and_reach_every_window(self):
+        host = self.read('ac_mac_shell_host.mm')
+        write = host.split('void ShellHostView::WriteSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(write.index('ardia::ValidLinuxSession(*base)'), write.index('SessionFiles()'))
+        self.assertIn('close_.BlocksWrites()', write)
+        self.assertIn('BroadcastSession(merged, window, &source);', write)
+        calls = self.read('ac_mac_shell_calls.mm')
+        merge = calls.split('MergedSession MergeAndWriteSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(merge.index('ReadSessionFile()'), merge.index('ardia::MergeLinuxSession(base, local, result.previous)'))
+        broadcast = calls.split('void BroadcastSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('for (ShellHostView* host : Hosts())', broadcast)
+        self.assertIn('host->Emit("ArdiaHost", "session",', broadcast)
+        self.assertIn('return WriteSession(args, std::move(done));', calls)
+        copies = (ROOT / 'dev-copies.tsv').read_text()
+        self.assertIn('engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc\tardia/mac/shared/ac_linux_session.cc', copies)
+        gn = (MAC / 'BUILD.gn').read_text()
+        self.assertIn('public_deps = [ ":session" ]', gn)
+        self.assertIn('"-Wno-range-loop-bind-reference"', gn)
+        desktop = (REPO / 'apps/desktop/src/hostSession.ts').read_text()
+        self.assertIn('module !== "ArdiaHost" || event !== "session"', desktop)
+
+    def test_recording_a_shortcut_switches_the_accelerators_off(self):
+        host = self.read('ac_mac_shell_host.mm')
+        pressed = host.split('bool ShellHostView::AcceleratorPressed(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(pressed.index('if (!CanHandleAccelerators()) {'), pressed.index('shortcuts_.find(accelerator)'))
+        self.assertIn('shell_policy::AcceleratorsLive(browser_ != nullptr, handler_ != nullptr,', host)
+        self.assertIn('shortcut_recording_ = (*values)[0].GetBool();', self.read('ac_mac_shell_calls.mm'))
+        retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shortcut_recording_ = false;', retire)
+
+    def test_released_tabs_take_their_glass_with_them(self):
+        host = self.read('ac_mac_shell_host.mm')
+        release = host.split('void ShellHostView::ReleaseTab(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(release.index('binding->viewport->SetVisible(false);'), release.index('UpdateGlassSurface();'))
+        glass = self.read('ac_mac_glass.mm')
+        relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('return !page_rects.contains(entry.first.page);', relayout)
+
+    def test_the_dev_app_carries_ardias_icon(self):
+        assemble = (ROOT / 'assemble.sh').read_text()
+        self.assertIn('<key>CFBundleIconFile</key><string>AppIcon</string>', assemble)
+        self.assertIn('iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"', assemble)
+        self.assertIn('apps/browser/assets/app-icon.png', assemble)
+        self.assertTrue((REPO / 'apps/browser/assets/app-icon.png').is_file())
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
@@ -525,7 +595,7 @@ class BoundaryTests(unittest.TestCase):
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
                        'session.write', 'ArdiaShell.writeDocument', 'ArdiaShell.openWindow',
-                       'ArdiaShell.closeWindow'):
+                       'ArdiaShell.closeWindow', 'ArdiaShell.requestWindowClose', 'MergeLinuxSession'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',

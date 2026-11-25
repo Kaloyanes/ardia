@@ -12,6 +12,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
@@ -30,6 +31,10 @@
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 class BrowserView;
 class BrowserWindowInterface;
@@ -73,6 +78,18 @@ struct WindowSpec {
   bool startup = true;
   base::DictValue utility;
 };
+
+struct MergedSession {
+  bool ok = false;
+  base::DictValue previous;
+  base::DictValue session;
+};
+
+scoped_refptr<base::SequencedTaskRunner> SessionFiles();
+MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local);
+void BroadcastSession(const MergedSession& merged,
+                      const std::string& source_window,
+                      const base::DictValue* source_base);
 
 std::vector<ShellHostView*>& Hosts();
 ShellHostView* HostForShell(content::WebContents* contents);
@@ -152,6 +169,8 @@ class ShellHostView : public views::View,
   void NavigateUtility(base::DictValue utility);
   void ActivateWindow();
   void CloseWindow();
+  base::DictValue RequestWindowClose();
+  bool ClosingBlocksWrites() const { return close_.BlocksWrites(); }
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* app_profile() const { return app_profile_; }
   content::WebContents* shell_contents() const;
@@ -239,6 +258,15 @@ class ShellHostView : public views::View,
   void SetTrafficLights(const base::DictValue& args, Done done);
   void OpenWindow(const base::ListValue* values, Done done);
   void CloseWindowCall(const std::string& id, Done done);
+  void BeginWindowCloseDrain(const base::DictValue* request, Done done);
+  void AcknowledgeWindowClose(const base::DictValue* request, Done done);
+  void RejectWindowClose(const base::DictValue* request, Done done);
+  void WriteSession(const base::DictValue& args, Done done);
+  std::optional<shell_policy::CloseIdentity> OwnCloseIdentity(
+      const base::DictValue* request,
+      std::size_t fields) const;
+  bool EndsSession() const;
+  void FinishClose();
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
@@ -266,6 +294,8 @@ class ShellHostView : public views::View,
   bool startup_ = true;
   base::DictValue utility_;
   bool utility_ready_ = false;
+  bool shortcut_recording_ = false;
+  shell_policy::CloseLedger close_;
   bool closing_ = false;
   bool painted_ = false;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;

@@ -8,6 +8,7 @@
 #include <set>
 #include <utility>
 
+#include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_popover.h"
@@ -845,6 +846,8 @@ void ShellHostView::RetireRenderer() {
     focus_manager_->UnregisterAccelerators(this);
   }
   shortcuts_.clear();
+  shortcut_recording_ = false;
+  close_.RendererRetired();
 }
 
 void ShellHostView::DeliverReply(base::WeakPtr<ShellBridge> handler,
@@ -1168,6 +1171,7 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
     binding->viewport->SetVisible(false);
     binding->viewport->SetWebContents(nullptr);
   }
+  UpdateGlassSurface();
   std::move(done).Run(true, base::Value());
 }
 
@@ -1353,12 +1357,13 @@ void ShellHostView::SetTrafficLights(const base::DictValue& args, Done done) {
       center ? center->FindDouble("y") : std::nullopt,
       args.FindBool("hidden").value_or(false),
       window::Size{static_cast<double>(size.width()),
-                   static_cast<double>(size.height())});
+                   static_cast<double>(size.height())},
+      ShellZoom());
   if (!lights) {
     return std::move(done).Run(false,
                                base::Value("Traffic light centers must be finite"));
   }
-  ardia_mac::SetTrafficLights(widget, window::ScaledLights(*lights, ShellZoom()));
+  ardia_mac::SetTrafficLights(widget, *lights);
   std::move(done).Run(true, base::Value());
 }
 
@@ -1452,6 +1457,178 @@ void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
         false, Failure("ERR_WINDOW_OPEN", "The window could not open"));
   }
   std::move(done).Run(true, base::Value());
+}
+
+base::DictValue ShellHostView::RequestWindowClose() {
+  if (!browser_ || !handler_ || closing_) {
+    return base::DictValue();
+  }
+  const shell_policy::CloseLedger::Phase before = close_.phase();
+  const std::optional<shell_policy::CloseIdentity> identity =
+      close_.Request(renderer_generation_);
+  if (!identity) {
+    return base::DictValue();
+  }
+  base::DictValue request;
+  request.Set("windowId", window_id_);
+  request.Set("rendererGeneration", base::NumberToString(identity->renderer));
+  request.Set("closeGeneration", base::NumberToString(identity->close));
+  if (before == shell_policy::CloseLedger::Phase::kIdle) {
+    Emit("ArdiaShell", "shell",
+         base::Value(base::DictValue()
+                         .Set("name", "shell.closeRequested")
+                         .Set("data", request.Clone())
+                         .Set("quitting", false)));
+  }
+  return request;
+}
+
+std::optional<shell_policy::CloseIdentity> ShellHostView::OwnCloseIdentity(
+    const base::DictValue* request,
+    std::size_t fields) const {
+  if (!request || request->size() != fields ||
+      Text(*request, "windowId") != window_id_) {
+    return std::nullopt;
+  }
+  const std::optional<std::uint64_t> renderer =
+      shell_policy::ParseGeneration(Text(*request, "rendererGeneration"));
+  const std::optional<std::uint64_t> close =
+      shell_policy::ParseGeneration(Text(*request, "closeGeneration"));
+  if (!renderer || !close) {
+    return std::nullopt;
+  }
+  return shell_policy::CloseIdentity{*renderer, *close};
+}
+
+bool ShellHostView::EndsSession() const {
+  if (is_utility()) {
+    return false;
+  }
+  return std::ranges::none_of(Hosts(), [this](ShellHostView* host) {
+    return host != this && host->browser() && !host->is_utility();
+  });
+}
+
+void ShellHostView::BeginWindowCloseDrain(const base::DictValue* request,
+                                          Done done) {
+  const std::optional<shell_policy::CloseIdentity> identity =
+      OwnCloseIdentity(request, 3);
+  if (!handler_ || !identity ||
+      !close_.BeginDrain(*identity, renderer_generation_)) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close drain"));
+  }
+  std::move(done).Run(true, base::Value(base::DictValue()
+                                            .Set("accepted", true)
+                                            .Set("endsSession", EndsSession())));
+}
+
+void ShellHostView::RejectWindowClose(const base::DictValue* request,
+                                      Done done) {
+  const std::optional<shell_policy::CloseIdentity> identity =
+      OwnCloseIdentity(request, 3);
+  if (!identity || !close_.Cancel(*identity, renderer_generation_)) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_CLOSE_STALE", "Close request is not current"));
+  }
+  std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
+                                           Done done) {
+  const base::DictValue* departure =
+      request ? request->FindDict("departure") : nullptr;
+  const bool departure_valid =
+      !departure || (departure->size() == 2 && departure->FindDict("base") &&
+                     departure->FindDict("session"));
+  base::DictValue identity_fields;
+  if (request) {
+    for (const char* key : {"windowId", "rendererGeneration", "closeGeneration"}) {
+      if (const base::Value* value = request->Find(key)) {
+        identity_fields.Set(key, value->Clone());
+      }
+    }
+  }
+  const std::size_t expected = departure ? 5u : 4u;
+  const std::optional<shell_policy::CloseIdentity> identity =
+      OwnCloseIdentity(&identity_fields, 3);
+  if (!handler_ || !request || request->size() != expected || !departure_valid ||
+      !request->FindInt("watermark") || !identity ||
+      !close_.Seal(*identity, renderer_generation_)) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close acknowledgment"));
+  }
+  std::optional<base::DictValue> base;
+  std::optional<base::DictValue> session;
+  if (departure) {
+    base = departure->FindDict("base")->Clone();
+    session = departure->FindDict("session")->Clone();
+  }
+  SessionFiles()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::optional<base::DictValue> base,
+             std::optional<base::DictValue> session) -> std::optional<MergedSession> {
+            if (!base || !session) {
+              return std::nullopt;
+            }
+            return MergeAndWriteSession(std::move(*base), std::move(*session));
+          },
+          std::move(base), std::move(session)),
+      base::BindOnce(
+          [](base::WeakPtr<ShellHostView> host, std::string window, Done done,
+             std::optional<MergedSession> merged) {
+            if (merged && merged->ok) {
+              BroadcastSession(*merged, window, nullptr);
+            }
+            std::move(done).Run(true, base::Value());
+            if (host) {
+              base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                  FROM_HERE, base::BindOnce(&ShellHostView::FinishClose, host));
+            }
+          },
+          GetWeakPtr(), window_id_, std::move(done)));
+}
+
+void ShellHostView::FinishClose() {
+  const std::size_t browser_windows = static_cast<std::size_t>(
+      std::ranges::count_if(Hosts(), [](ShellHostView* host) {
+        return host->browser() && !host->is_utility();
+      }));
+  if (shell_policy::CloseActionFor(true, is_utility(), browser_windows) ==
+      shell_policy::CloseAction::kQuit) {
+    chrome::AttemptExit();
+    return;
+  }
+  CloseWindow();
+}
+
+void ShellHostView::WriteSession(const base::DictValue& args, Done done) {
+  const base::DictValue* base = args.FindDict("base");
+  const base::DictValue* local = args.FindDict("session");
+  if (!base || !local || !ardia::ValidLinuxSession(*base) ||
+      !ardia::ValidLinuxSession(*local)) {
+    return std::move(done).Run(
+        false, base::Value("session.write requires bounded base and session objects"));
+  }
+  if (close_.BlocksWrites()) {
+    return std::move(done).Run(
+        false, Failure("ERR_DOCUMENT_CLOSING", "Window is closing"));
+  }
+  SessionFiles()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&MergeAndWriteSession, base->Clone(), local->Clone()),
+      base::BindOnce(
+          [](std::string window, base::DictValue source, Done done,
+             MergedSession merged) {
+            if (!merged.ok) {
+              return std::move(done).Run(
+                  false, base::Value("Could not merge and persist the session"));
+            }
+            std::move(done).Run(true, base::Value(merged.session.Clone()));
+            BroadcastSession(merged, window, &source);
+          },
+          window_id_, local->Clone(), std::move(done)));
 }
 
 void ShellHostView::CloseWindowCall(const std::string& id, Done done) {
@@ -1709,6 +1886,9 @@ bool ShellHostView::HandleKeyboardEvent(
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+  if (!CanHandleAccelerators()) {
+    return false;
+  }
   auto found = shortcuts_.find(accelerator);
   if (found == shortcuts_.end()) {
     return false;
@@ -1736,7 +1916,8 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
 }
 
 bool ShellHostView::CanHandleAccelerators() const {
-  return browser_ && handler_;
+  return shell_policy::AcceleratorsLive(browser_ != nullptr, handler_ != nullptr,
+                                        shortcut_recording_);
 }
 
 void ShellHostView::SetKeyboardShortcuts(const base::ListValue* values,

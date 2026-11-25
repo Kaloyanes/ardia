@@ -153,7 +153,7 @@ TEST(titlebar_metrics_center_the_lights_where_ardia_puts_them) {
 
 TEST(traffic_lights_clamp_and_refuse_nan) {
   const auto far = window::LightsFrom(5000, -40, false, {1280, 800});
-  CHECK(far && far->center == (window::Point{1233, 7}));
+  CHECK(far && far->center == (window::Point{1226, 14}));
   const window::Point zoom = window::ButtonOrigin(*far, {14, 14}, 800, 2);
   CHECK(zoom.x + window::kButtonSide <= 1280);
   CHECK(!window::LightsFrom(std::nan(""), 10, false, {1280, 800}));
@@ -262,8 +262,9 @@ TEST(the_whole_traffic_light_group_stays_inside_the_window) {
     CHECK(lights.has_value());
     if (!lights) continue;
     const window::Point zoom = window::ButtonOrigin(*lights, {14, 14}, 800, 2);
-    CHECK(zoom.x + window::kButtonSide <= width || width < 3 * window::kButtonSide + 2 * window::kTrafficLightSpacing);
-    CHECK(lights->center.x >= window::kButtonSide / 2);
+    CHECK(zoom.x + window::kButtonSide <= width ||
+          width < 3 * window::kButtonSide + 2 * window::kTrafficLightSpacing + 2 * window::kLightsEdgeMargin);
+    CHECK(lights->center.x >= window::kMinLightsCenter);
   }
   const auto defaults = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
   CHECK(defaults && defaults->center == (window::Point{25, 20}));
@@ -277,13 +278,39 @@ TEST(new_windows_cascade_and_utility_windows_center_over_their_opener) {
   CHECK(window::UtilityFrameOver(opener, "import") == (window::Frame{420, 180, 640, 600}));
 }
 
-TEST(traffic_lights_follow_the_shell_zoom) {
-  const window::Lights lights{window::Point{25, 27}, false};
-  CHECK(window::ScaledLights(lights, 1).center == (window::Point{25, 27}));
-  CHECK(window::ScaledLights(lights, 1.25).center == (window::Point{31.25, 33.75}));
-  CHECK(window::ScaledLights(lights, std::numeric_limits<double>::quiet_NaN()).center == (window::Point{25, 27}));
-  CHECK(window::ScaledLights(lights, 0).center == (window::Point{25, 27}));
-  CHECK(window::ScaledLights(window::Lights{window::Point{25, 27}, true}, 2).hidden);
+TEST(traffic_lights_scale_by_the_shell_zoom_before_they_clamp_to_the_window) {
+  const window::Size window{1280, 800};
+  CHECK(window::LightsFrom(25, 27, false, window, 1)->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, false, window, 1.25)->center == (window::Point{31.25, 33.75}));
+  CHECK(window::LightsFrom(25, 27, false, window, 0.8)->center == (window::Point{20, 21.6}));
+  CHECK(window::LightsFrom(1500, 27, false, window, 0.8)->center.x == 1200);
+  CHECK(window::LightsFrom(1200, 27, false, window, 1.25)->center.x == 1226);
+  CHECK(window::LightsFrom(1240, 27, false, window, 0.5)->center.x == 620);
+  CHECK(window::LightsFrom(25, 27, false, window, std::numeric_limits<double>::quiet_NaN())->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, false, window, 0)->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, true, window, 2)->hidden);
+}
+
+TEST(the_close_button_never_leaves_the_window_edge_or_the_top) {
+  const window::Size window{1280, 800};
+  for (double x : {-400.0, -7.0, 0.0, 3.0, 7.0, 13.9}) {
+    const auto lights = window::LightsFrom(x, 27, false, window);
+    CHECK(lights && lights->center.x - window::kButtonSide / 2 >= window::kLightsEdgeMargin);
+    CHECK(window::TitlebarFor(*lights, {14, 14}).min_x_inset >= window::kLightsEdgeMargin);
+  }
+  for (double y : {-50.0, 0.0, 4.0, 13.0}) {
+    const auto lights = window::LightsFrom(25, y, false, window);
+    CHECK(lights && lights->center.y - window::kButtonSide / 2 >= window::kLightsEdgeMargin);
+  }
+  const auto tiny = window::LightsFrom(25, 27, false, {10, 10});
+  CHECK(tiny && tiny->center == (window::Point{window::kMinLightsCenter, window::kMinLightsCenter}));
+}
+
+TEST(settings_windows_center_their_lights_in_the_settings_toolbar_as_the_mac_app_does) {
+  const auto settings = window::LightsFrom(25, 26, false, {820, 640});
+  CHECK(settings && settings->center == (window::Point{25, 26}));
+  CHECK(window::TitlebarFor(*settings, {14, 14}) == (window::TitlebarMetrics{18, 52}));
+  CHECK(settings->center.y - window::kButtonSide / 2 == 19);
 }
 
 int main(int argc, char** argv) {
