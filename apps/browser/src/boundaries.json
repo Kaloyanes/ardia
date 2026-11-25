@@ -2238,6 +2238,23 @@
    "detected": false
   },
   {
+   "id": "desktop-shell:extensions.configure#sites",
+   "source": "frame",
+   "guard": "Site access changes from the Linux and Windows shell (extensions.configure grantSite and revokeSite): Linux's Configuration takes them only as non-empty strings of at most 2,048 bytes beside known option keys (Windows forwards the shell's JSON as is); the engine refuses a site key that isn't text and checks the site before changing anything (SiteProblem: the extension must be one the user may change, the site must parse as an http(s) or file URLPattern whose path is /*, must not cover every site, and must overlap a host the extension requires or an optional host the user already approved), so a refused request leaves site access as it was; a grant keeps the pattern's own HTTP(S) scheme mask (RuntimeSitePattern) and a remove goes through Chromium's ScriptingPermissionsModifier::RemoveHostPermissions. The shell's own Add Site sheet sends only what extensionSitePattern returns: an http(s) host pattern or nothing",
+   "checks": [
+    "engine/ardiacore-linux/src/ardia/linux/ac_linux_extensions.cc#Configuration",
+    "engine/ardiacore-linux/src/ardia/linux/ac_linux_extensions.cc#kMaxSitePatternLength",
+    "engine/chromium/src/chrome/browser/ardia/ac_extensions.cc#ac_extensions_configure",
+    "engine/chromium/src/chrome/browser/ardia/ac_extension_sites.cc#SiteProblem",
+    "engine/chromium/src/chrome/browser/ardia/ac_extension_sites.cc#RuntimeSitePattern",
+    "engine/chromium/src/chrome/browser/ardia/ac_extension_sites.cc#ChangeSite",
+    "apps/browser/src/state/extensions/sitePatterns.ts#extensionSitePattern",
+    "engine/ardiacore-linux/tests/test_extension_contract.py#ARDIA_HOSTILE",
+    "apps/browser/src/hostileInputs.test.mjs#extensionSitePattern"
+   ],
+   "detected": false
+  },
+  {
    "id": "mac-webui-bridge:ardiaRequest",
    "source": "frame",
    "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. Tabs Chromium opens on its own (target=_blank, window.open) are offered to this window's shell as ArdiaTabs unclaimed and listed by ArdiaTabs.unclaimedTabs only after it asks; tab.create checks adoptId before anything else: a present adoptId that is not a string of exactly tab:<1..INT_MAX> is refused (ClassifyAdoptField, ParseAdoptId), a reclaim of a key already bound in the same profile succeeds only without adoptId or with that binding's own id, and an adoption needs a tab this host offered, in the requested profile, still in one of this window's tab strips and not bound (CheckAdoption, PlanCreate); a move to another profile opens the replacement first, then unbinds the old tab and deletes it at once (DetachAndDeleteWebContentsAt, as on Linux), so nothing is left unbound; an offer remembers whether its tab was active and is dropped when its tab leaves the tab strip (OfferBook). A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",

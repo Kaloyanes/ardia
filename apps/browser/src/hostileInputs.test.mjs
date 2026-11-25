@@ -30,7 +30,11 @@ const { readManifest } = await import("./lib/pluginManifest.ts");
 const { parseIntent, INTENT_SPECS } = await import("./state/plugins/stateIntents.ts");
 const { pluginStateUrl, redactedTabs } = await import("./state/plugins/pluginEventRedaction.ts");
 const { copyLinkFromPageMenu } = await import("./state/site/pageLinkCopy.ts");
+const { extensionSitePattern } = await import("./state/extensions/sitePatterns.ts");
 const { cleanUrl } = await import("@ardia/core");
+const { drainPassages } = await import("./state/site/translateDrain.ts");
+const { translatePack } = await import("./state/site/translate.ts");
+const { FakeElement, FakeText, fakePage: fakeTranslatorPage } = await import("./state/site/fixtures/translatorPage.mjs");
 
 const S = () => useBrowser.getState();
 const show = (value) => {
@@ -821,4 +825,80 @@ test("a tab a page opened moves engines only when its page answers the opener ch
   assert.doesNotMatch(probe, /JSON|String|toString|valueOf|Object|Reflect|\.call|\.apply|Symbol/, "the probe calls nothing a page can replace");
   dropSwap(control);
   webviews.clear();
+});
+
+test("an Add Site entry reaches the engine only as an http(s) host pattern, whatever text it started as", () => {
+  const SITE = /^(\*|https?):\/\/(\*\.)?([a-z0-9_-]+(\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])(:[1-9]\d{0,4})?\/\*$/;
+  assert.equal(extensionSitePattern("https://example.com/path"), "https://example.com/*", "the positive control runs");
+  for (const value of [...strings, ...strings.map((h) => `https://example.com/${h}`), ...strings.map((h) => `${h}example.com`), ...Object.values(URL_SCHEMES).flat().filter((x) => typeof x === "string")]) {
+    const site = extensionSitePattern(value);
+    assert.ok(site === null || (SITE.test(site) && !LINE_TERMINATORS.test(site) && site.length <= 2048), show(value));
+  }
+});
+
+const translatorFixture = () => {
+  const texts = [new FakeText("Hauptseite"), new FakeText("Lies die "), new FakeText("Hinweise"), new FakeText("Ein Absatz mit genug Text.")];
+  const untouched = new FakeText("Nicht angeboten");
+  const link = new FakeElement("a", [texts[2]]);
+  const body = new FakeElement("body", [new FakeElement("li", [texts[0]]), new FakeElement("p", [texts[1], link]), new FakeElement("p", [texts[3]])]);
+  const page = fakeTranslatorPage(body);
+  const shape = (node) => (node.nodeType === 3 ? "#text" : [node.tagName, ...node.childNodes.map(shape)]);
+  return { page, texts, untouched, before: JSON.stringify(shape(body)), shape: () => JSON.stringify(shape(body)) };
+};
+
+const drainTranslatorPage = (page, model, next) =>
+  drainPassages({
+    inFlight: 2,
+    holds: () => true,
+    released: new Promise(() => {}),
+    next: next ?? (async (maxChars) => page.call("next", "t", 24, maxChars)),
+    translate: (pack) => translatePack(model, "de", "en", pack, "t", { unlinked: 0, failed: 0 }, () => true),
+    apply: async (results) => page.call("apply", "t", results),
+  }).catch(() => false);
+
+test("T1: whatever the translation model answers, the page only gets text in the nodes it offered", async () => {
+  for (const { id, value } of HOSTILE_VALUES) {
+    const { page, texts, before, shape } = translatorFixture();
+    page.call("start", "t");
+    const model = { translateBlocks: async (_s, _t, blocks) => blocks.map((pieces) => pieces.map(() => value)) };
+    await drainTranslatorPage(page, model);
+    assert.equal(shape(), before, id);
+    for (const node of texts) {
+      assert.equal(typeof node.nodeValue, "string", id);
+      if (typeof value !== "string") assert.ok(["Hauptseite", "Lies die ", "Hinweise", "Ein Absatz mit genug Text."].includes(node.nodeValue), `${id}: ${show(node.nodeValue)}`);
+    }
+  }
+});
+
+test("T2: a pack answer that doesn't map back, in length or shape, leaves those nodes as they were", async () => {
+  const answers = [() => null, () => [], (pieces) => [...pieces, "extra"], (pieces) => pieces.slice(1), () => "Main page", () => ({ 0: "Main page" }), () => [42]];
+  for (const answer of answers) {
+    const { page, texts } = translatorFixture();
+    page.call("start", "t");
+    const model = { translateBlocks: async (_s, _t, blocks) => blocks.map((pieces) => answer(pieces)) };
+    await drainTranslatorPage(page, model);
+    for (const node of texts) assert.equal(typeof node.nodeValue, "string", show(answer([])));
+    assert.notEqual(texts[0].nodeValue, "extra", show(answer(["x"])));
+  }
+});
+
+test("T3: whatever the page hands over as passages, the model only gets numbered strings and the page's own nodes only text", async () => {
+  for (const { id, value } of HOSTILE_VALUES) {
+    const { page, texts, untouched, before, shape } = translatorFixture();
+    page.call("start", "t");
+    const seen = [];
+    const model = {
+      translateBlocks: async (_s, _t, blocks) => {
+        seen.push(blocks);
+        return blocks.map((pieces) => pieces.map((p) => `EN ${p}`));
+      },
+    };
+    let handed = 0;
+    const next = async (maxChars) => (handed++ ? page.call("next", "t", 24, maxChars) : { passages: [value, [1, value], [2, [[3, value], value]], [value, [[4, "x"]]]], more: true, gone: false, done: 1, total: 2 });
+    await drainTranslatorPage(page, model, next);
+    for (const blocks of seen) for (const pieces of blocks) for (const piece of pieces) assert.equal(typeof piece, "string", id);
+    assert.equal(shape(), before, id);
+    assert.equal(untouched.nodeValue, "Nicht angeboten", id);
+    for (const node of texts) assert.equal(typeof node.nodeValue, "string", id);
+  }
 });

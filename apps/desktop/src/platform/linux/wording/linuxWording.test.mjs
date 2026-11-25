@@ -114,6 +114,13 @@ test("search rows describing reworded panes read as Linux too", () => {
   assert.doesNotMatch(section(linuxCopy("components/settings/rows/profileRows.ts"), "section: \"Passwords and autofill\"", "savedCards: {"), /Touch ID|keychain|Keychain|\bMac\b/);
 });
 
+test("Linux's What's Sent leaves out the Mac's crash report details, which its crash dump reader doesn't send", () => {
+  const copy = linuxCopy("state/telemetry/copy.ts");
+  assert.ok(read("state/telemetry/copy.ts").includes("near address zero"));
+  for (const said of ["near address zero", "which kind of thread crashed", "whether it was the main queue"]) assert.ok(!copy.includes(said), `Linux says ${said}`);
+  assert.equal(LINUX_FEATURES.crashReportDetails, false);
+});
+
 test("open-tab sync telemetry describes this computer on Linux", () => {
   const copy = linuxCopy("state/telemetry/copy.ts");
   assert.match(copy, /how many tab changes this computer sent,/);

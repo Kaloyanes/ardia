@@ -7,7 +7,7 @@ const SHARED_TESTS = [
   "host.test.mjs", "hostContract.test.mjs", "hostTabReplacement.test.mjs", "liveDocuments.test.mjs",
   "livePersistenceBinding.test.mjs", "liveCompletionPersistence.test.mjs", "hostDocumentTransport.test.mjs",
   "windowCloseLifecycle.test.mjs", "hostSessionMerge.test.mjs", "hostSessionSync.test.mjs",
-  "sessionWriterRebase.test.mjs", "session.test.mjs", "settingsWindows.test.mjs", "hostViewport.test.mjs",
+  "sessionWriterRebase.test.mjs", "session.test.mjs", "sessionShells.test.mjs", "settingsWindows.test.mjs", "hostViewport.test.mjs",
   "pageFocus.test.mjs", "shortcuts.test.mjs", "hostDialogs.test.mjs", "hostDialogConsumers.test.mjs",
   "hostProfiles.test.mjs", "windowLifecycle.test.mjs", "hostDownloads.test.mjs", "hostPrivateWindows.test.mjs",
   "hostSmallWindows.test.mjs", "windowMenu.test.mjs", "hostFiles.test.mjs", "fileDrop.test.mjs",

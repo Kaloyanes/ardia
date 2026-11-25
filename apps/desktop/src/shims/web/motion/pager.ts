@@ -48,6 +48,17 @@ export function setPagerClock(next: PagerClock) {
 }
 
 let motions = 0;
+export const PAGER_MOVING_MARK = "ardia-pager-moving";
+export const PAGER_REST_MARK = "ardia-pager-rest";
+export const PAGER_MARKS_KEPT = 16;
+
+const mark = (name: string) => {
+  const timing = globalThis.performance;
+  if (typeof timing?.mark !== "function") return;
+  if (typeof timing.getEntriesByName === "function" && typeof timing.clearMarks === "function" && timing.getEntriesByName(name, "mark").length >= PAGER_MARKS_KEPT) timing.clearMarks(name);
+  timing.mark(name);
+};
+
 const sequences = sequenceSource();
 const pagers = new Map<string, Pager>();
 
@@ -67,6 +78,7 @@ export class Pager {
   private nativeAt = 0;
   private nativeWatch: ReturnType<typeof setTimeout> | undefined;
   private stopReduceMotion: () => void;
+  private moving = false;
 
   static named(key: string) {
     let pager = pagers.get(key);
@@ -103,6 +115,7 @@ export class Pager {
     this.stopFrames();
     this.stopNativeWatch();
     this.stopReduceMotion();
+    this.stopMoving();
     pagers.delete(this.key);
   }
 
@@ -261,7 +274,10 @@ export class Pager {
     const frame = this.spring.drain();
     if (frame.phase !== "settling" || this.owner !== "js") this.stopFrames();
     if ((frame.phase === "holding" || frame.phase === "tracking") && this.stats) this.stats.last = null;
-    if (!options.outOfMotion && wasIdle && frame.phase !== "idle") this.motion = ++motions;
+    if (!options.outOfMotion && wasIdle && frame.phase !== "idle") {
+      this.motion = ++motions;
+      this.startMoving();
+    }
     this.emit(frame, options);
     if (frame.phase === "settling" && this.owner === "js") {
       if (!this.stats) this.stats = { last: clock.now(), frames: 0, long: 0, worst: 0 };
@@ -287,7 +303,20 @@ export class Pager {
     if (frame.phase === "idle") {
       this.motion = 0;
       this.stats = null;
+      this.stopMoving();
     }
+  }
+
+  private startMoving() {
+    if (this.moving) return;
+    this.moving = true;
+    mark(PAGER_MOVING_MARK);
+  }
+
+  private stopMoving() {
+    if (!this.moving) return;
+    this.moving = false;
+    mark(PAGER_REST_MARK);
   }
 
   private startFrames() {

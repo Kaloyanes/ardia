@@ -46,6 +46,7 @@ export const LINUX_WORDING: readonly Wording[] = [
     file: "state/telemetry/copy.ts",
     replacements: [
       ...[PHRASES_ONLY_WITH.freezeWatch ?? []].flat().map((phrase): [string, string] => [phrase, ""]),
+      ...[PHRASES_ONLY_WITH.crashReportDetails ?? []].flat().map((phrase): [string, string] => [phrase, ""]),
       ["how many tab changes this Mac sent,", "how many tab changes this computer sent,"],
       ["; on macOS, from Chromium pages while sharing is on, how many video and audio elements failed to play and why (aborted, network, decoding, unsupported source or other), how many video frames were shown and dropped, how many scrolls there were and how many frames they drew in how many milliseconds, each grouped by whether the display runs at 60 Hz or faster and whether Low Power Mode was on, never which page;", ","],
       ["; on macOS, how many update downloads started, finished or failed and why (like a network error or a full disk), how many updates began installing, and how many couldn't be unpacked, failed their signature check or didn't install", ""],
