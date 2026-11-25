@@ -23,7 +23,7 @@ import { SMALL_BAR_HEIGHT } from "../../state/windows/small";
 import { switchOn } from "../../state/app/switches";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { endPeekToolbarPreview, previewPeekToolbar } from "../../state/peek/toolbarPreview";
-import { forgetPeekStage, notePeekStageState, pressPeekChrome, type PeekButtonSurface } from "../../state/peek/gesturePresses";
+import { forgetPeekStage, notePeekStageState, pressPeekChrome, pressPeekScrim, type PeekButtonSurface } from "../../state/peek/gesturePresses";
 
 const SIDE_GAP = space.m;
 const BEGIN_RETRIES = 30;
@@ -221,7 +221,7 @@ function PeekCard({
           <View collapsable={false} style={StyleSheet.absoluteFill}>
             <Pressable
               accessibilityLabel="Close Peek"
-              onPress={() => dismissPeek(windowId)}
+              onPress={() => pressPeekScrim(windowId, () => dismissPeek(windowId))}
               style={{ flex: 1, borderRadius: card.radius, backgroundColor: theme.dark ? PEEK_SCRIM.dark : PEEK_SCRIM.light }}
             />
             {!fullscreen && buttons !== "top" && (

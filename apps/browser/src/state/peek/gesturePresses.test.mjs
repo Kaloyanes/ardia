@@ -9,7 +9,7 @@ const client = await import("../telemetry/client.ts");
 const usage = await import("../telemetry/usage.ts");
 const { useBrowser } = await import("../browser/store.ts");
 const { activeTabId } = await import("../browser/model.ts");
-const { forgetPeekStage, notePeekStageState, pressPeekChrome } = await import("./gesturePresses.ts");
+const { forgetPeekStage, notePeekStageState, pressPeekChrome, pressPeekScrim } = await import("./gesturePresses.ts");
 after(() => client.setSharing(false, "settings"));
 const S = () => useBrowser.getState();
 
@@ -68,6 +68,25 @@ test("pinch in to -0.70: the card and its bar are invisible, so a held Close rel
   pressPeekChrome(w, "bar", () => ran.bar++);
   pressPeekChrome(w, "side", () => ran.side++);
   assert.deepEqual(ran, { bar: 0, side: 0 });
+});
+
+test("a dim press held from visible into an invisible scrim does not dismiss on release, and runs again once the scrim is shown", async () => {
+  client.setSharing(true, "onboarding");
+  const before = await sentPresses();
+  const { w, shown, hidden } = windowWithTwoPeeks();
+  let dismissed = 0;
+  notePeekStageState(shown, "open", { chromeShown: true, scrimShown: true });
+  notePeekStageState(hidden, "open", { chromeShown: true, scrimShown: true });
+  notePeekStageState(shown, "gesture", { chromeShown: false, scrimShown: false });
+  pressPeekScrim(w, () => dismissed++);
+  assert.equal(dismissed, 0, "releasing a press started on the visible dim after pinching the scrim away does not dismiss");
+  notePeekStageState(shown, "gesture", { chromeShown: false, scrimShown: true });
+  pressPeekScrim(w, () => dismissed++);
+  assert.equal(dismissed, 1, "a dim press still dismisses while the scrim is visible");
+  notePeekStageState(shown, "open", { chromeShown: true, scrimShown: true });
+  pressPeekScrim(w, () => dismissed++);
+  assert.equal(dismissed, 2);
+  assert.equal((await sentPresses()) - before, 0, "dim presses are not counted as mid-gesture chrome button presses");
 });
 
 test("a press on a card at rest, after its stage is forgotten, or with sharing off isn't counted, and still runs", async () => {
