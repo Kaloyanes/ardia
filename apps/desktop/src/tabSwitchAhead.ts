@@ -1,4 +1,5 @@
 import { showInPlaceOf, type HostTab } from "./hostTab.ts";
+import { PEEK_MOVING_ATTRIBUTE } from "./peekStageMotion.ts";
 
 type SwitchView = { tab: () => HostTab | null; slot: Element; regions: { setPage(slot: Element, visible: boolean): void } };
 type ActiveWindows = { windows: Record<string, { profileId: string; activeTabIds: Record<string, string> } | undefined> };
@@ -6,6 +7,8 @@ type ActiveStore = { subscribe(listener: (state: ActiveWindows, previous: Active
 
 const views = new Map<string, SwitchView>();
 let switchedAhead = 0;
+const MOVING_STAGE = `[${PEEK_MOVING_ATTRIBUTE}]`;
+const inMovingStage = (view: SwitchView) => !!(view.slot as Partial<Pick<Element, "closest">>).closest?.(MOVING_STAGE);
 
 export function registerSwitchView(tabId: string, view: SwitchView) {
   views.set(tabId, view);
@@ -21,7 +24,7 @@ function switchAhead(fromId: string, toId: string) {
   const to = views.get(toId);
   const fromTab = from?.tab();
   const toTab = to?.tab();
-  if (!from || !to || !fromTab || !toTab) return;
+  if (!from || !to || !fromTab || !toTab || inMovingStage(from) || inMovingStage(to)) return;
   for (const view of views.values()) if (view !== from && view.tab()?.shownViewport()) return;
   if (!showInPlaceOf(fromTab, toTab)) return;
   switchedAhead++;

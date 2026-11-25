@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPopoverHost, popoverCapabilities, POPOVER_BEYOND_WINDOW, POPOVER_CHILD_PANEL_METHODS, POPOVER_CLOSE_METHOD, POPOVER_DISMISSED_EVENT, POPOVER_OPEN_METHOD, POPOVER_UPDATE_METHOD } from "./popoverHost.ts";
+import { createPopoverHost, focusableForRestore, nextPopoverId, popoverCapabilities, POPOVER_BEYOND_WINDOW, POPOVER_CHILD_PANEL_METHODS, POPOVER_CLOSE_METHOD, POPOVER_DISMISSED_EVENT, POPOVER_OPEN_METHOD, POPOVER_UPDATE_METHOD } from "./popoverHost.ts";
 
 const hostWith = (capabilities) => ({ bootstrap: { windowId: "w", profileId: "p", capabilities }, call: async () => "null", invoke: async () => null, onEvent: () => () => {} });
 
@@ -18,24 +18,35 @@ function element(name) {
 }
 let active = null;
 
-function harness({ childPanels = false, beyondWindow = false, openFails = false } = {}) {
+function harness({ childPanels = false, beyondWindow = false, openFails = false, openThrows = false, holdOpen = false, focusable } = {}) {
   const target = new EventTarget();
   const calls = [];
   const mounted = [];
   const regions = new Set();
   const dismissed = [];
   let shellListener = null;
+  let pageFocusListener = null;
+  let windowFocused = true;
+  const pendingOpens = [];
   let id = 0;
   const body = { nodeName: "BODY", focus() {} };
   active = body;
   const host = createPopoverHost({
     windowId: "w1",
     capabilities: { childPanels, beyondWindow },
-    invoke: async (method, args) => {
+    invoke: (method, args) => {
       calls.push({ method, args });
-      if (method === POPOVER_OPEN_METHOD && openFails) throw new Error("no panel");
-      return null;
+      if (method === POPOVER_OPEN_METHOD && openThrows) throw new Error("threw synchronously");
+      if (method === POPOVER_OPEN_METHOD && openFails) return Promise.reject(new Error("no panel"));
+      if (method === POPOVER_OPEN_METHOD && holdOpen) return new Promise((resolve, reject) => pendingOpens.push({ resolve, reject }));
+      return Promise.resolve(null);
     },
+    watchPageFocus: (listener) => {
+      pageFocusListener = listener;
+      return () => void (pageFocusListener = null);
+    },
+    windowFocused: () => windowFocused,
+    ...(focusable ? { focusable } : {}),
     onShellEvent: (listener) => {
       shellListener = listener;
       return () => void (shellListener = null);
@@ -71,7 +82,13 @@ function harness({ childPanels = false, beyondWindow = false, openFails = false 
     Object.defineProperty(event, "target", { value: on });
     target.dispatchEvent(event);
   };
-  return { host, calls, mounted, regions, dismissed, spec, key, press, target, shell: (name, data) => shellListener?.(name, data), listening: () => !!shellListener };
+  return {
+    host, calls, mounted, regions, dismissed, spec, key, press, target, pendingOpens,
+    shell: (name, data) => shellListener?.(name, data),
+    listening: () => !!shellListener,
+    focusPage: () => pageFocusListener?.(),
+    setWindowFocused: (value) => void (windowFocused = value),
+  };
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -105,12 +122,15 @@ test("with child panels the host gets the placed rect and no DOM or input region
   assert.equal(open.args.scale, 2);
   assert.deepEqual(open.args.content, { route: "downloads" });
   handle.update({ anchor: { x: 10, y: 10, width: 10, height: 10 } });
+  await tick();
   assert.equal(h.calls[1].method, POPOVER_UPDATE_METHOD);
   handle.close();
   handle.close();
+  await tick();
   assert.deepEqual(h.calls.slice(2).map((c) => c.method), [POPOVER_CLOSE_METHOD]);
   assert.deepEqual(h.dismissed, ["closed"]);
   handle.update({ anchor: { x: 0, y: 0, width: 1, height: 1 } });
+  await tick();
   assert.equal(h.calls.length, 3);
 });
 
@@ -174,8 +194,10 @@ test("a host dismissal closes the right panel once, ignoring stale ids, other wi
   h.shell(POPOVER_DISMISSED_EVENT, { id: handle.id, windowId: "other" });
   h.shell("shell.somethingElse", { id: handle.id, windowId: "w1" });
   assert.equal(handle.closed(), false);
+  await handle.ready;
   h.shell(POPOVER_DISMISSED_EVENT, { id: handle.id, windowId: "w1", reason: "blur" });
   h.shell(POPOVER_DISMISSED_EVENT, { id: handle.id, windowId: "w1", reason: "blur" });
+  await tick();
   assert.deepEqual(h.dismissed, ["blur"]);
   assert.equal(h.calls.filter((c) => c.method === POPOVER_CLOSE_METHOD).length, 0, "the host already closed it");
   assert.equal(h.listening(), false, "listeners detach once nothing is open");
@@ -221,4 +243,130 @@ test("a DOM popover is re-placed on update with a stale update after close ignor
   handle.close();
   handle.update({ anchor: { x: 0, y: 0, width: 1, height: 1 } });
   assert.equal(h.mounted[0].placements.length, 2);
+});
+
+test("closing while the host is still opening the panel sends close once the open lands, never before", async () => {
+  const h = harness({ childPanels: true, holdOpen: true });
+  const handle = h.host.open(h.spec());
+  await tick();
+  handle.close("escape");
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD], "close is not sent ahead of the open");
+  assert.equal(h.host.openCount(), 0);
+  h.pendingOpens[0].resolve(null);
+  assert.equal(await handle.ready, "native");
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD, POPOVER_CLOSE_METHOD]);
+  assert.equal(h.calls[1].args.id, handle.id);
+  assert.equal(h.calls[1].args.reason, "escape");
+  assert.deepEqual(h.dismissed, ["escape"]);
+});
+
+test("updates while opening are coalesced into one update sent after the open lands", async () => {
+  const h = harness({ childPanels: true, holdOpen: true });
+  const handle = h.host.open(h.spec());
+  for (const x of [10, 20, 30]) handle.update({ anchor: { x, y: 10, width: 10, height: 10 } });
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD]);
+  h.pendingOpens[0].resolve(null);
+  await handle.ready;
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD, POPOVER_UPDATE_METHOD]);
+  assert.deepEqual(h.calls[1].args.anchor, { x: 30, y: 10, width: 10, height: 10 });
+});
+
+test("a host that rejects the open after a close leaves nothing behind and sends no close", async () => {
+  const h = harness({ childPanels: true, holdOpen: true });
+  const handle = h.host.open(h.spec());
+  handle.close();
+  await tick();
+  h.pendingOpens[0].reject(new Error("gone"));
+  await handle.ready;
+  await tick();
+  assert.equal(h.calls.filter((c) => c.method === POPOVER_CLOSE_METHOD).length, 0);
+  assert.equal(h.mounted.length, 0);
+});
+
+test("an invoke that throws synchronously falls back to the DOM instead of leaving a dangling entry", async () => {
+  const h = harness({ childPanels: true, openThrows: true });
+  const handle = h.host.open(h.spec());
+  assert.equal(await handle.ready, "dom");
+  assert.equal(h.mounted.length, 1);
+  assert.equal(h.host.openCount(), 1);
+  handle.close();
+  assert.equal(h.host.openCount(), 0);
+  assert.equal(h.regions.size, 0);
+});
+
+test("focusing a native page closes open popovers", () => {
+  const h = harness();
+  const handle = h.host.open(h.spec());
+  h.focusPage();
+  assert.equal(handle.closed(), true);
+  assert.deepEqual(h.dismissed, ["page"]);
+});
+
+test("a native child taking focus does not let window blur close its DOM parent", async () => {
+  const mixed = harness({ childPanels: true });
+  const domParent = mixed.host.open(mixed.spec());
+  const child = mixed.host.open(mixed.spec({ nested: true }));
+  await child.ready;
+  mixed.target.dispatchEvent(new Event("blur"));
+  assert.equal(domParent.closed(), false);
+  assert.equal(child.closed(), false);
+  mixed.setWindowFocused(false);
+  mixed.shell(POPOVER_DISMISSED_EVENT, { id: child.id, windowId: "w1", reason: "blur" });
+  assert.equal(child.closed(), true);
+  assert.equal(domParent.closed(), true, "focus left the app, so the whole stack closes together");
+});
+
+test("a host dismissing a parent panel closes the children stacked above it", async () => {
+  const h = harness({ childPanels: true });
+  const parent = h.host.open(h.spec());
+  const child = h.host.open(h.spec({ nested: true }));
+  await Promise.all([parent.ready, child.ready]);
+  h.shell(POPOVER_DISMISSED_EVENT, { id: parent.id, windowId: "w1", reason: "outside" });
+  assert.equal(child.closed(), true);
+  assert.equal(parent.closed(), true);
+  await tick();
+  assert.deepEqual(h.calls.filter((c) => c.method === POPOVER_CLOSE_METHOD).map((c) => c.args.id), [child.id]);
+});
+
+test("a press inside a parent closes only the popovers above it", () => {
+  const h = harness();
+  const parent = h.host.open(h.spec());
+  const child = h.host.open(h.spec({ nested: true }));
+  h.press(h.mounted[0].node);
+  assert.equal(child.closed(), true);
+  assert.equal(parent.closed(), false);
+});
+
+test("popover ids never repeat across adapters in one document, so a late dismissal cannot close a newer panel", () => {
+  const seen = new Set();
+  for (let i = 0; i < 50; i++) seen.add(nextPopoverId("w1"));
+  assert.equal(seen.size, 50);
+  const first = nextPopoverId("w1");
+  const second = nextPopoverId("w1");
+  assert.notEqual(first, second);
+  assert.match(first, /^popover-w1-/);
+});
+
+test("focus is not restored to a hidden, inert or aria-hidden element", () => {
+  assert.equal(focusableForRestore({ focus() {}, isConnected: false }), false);
+  assert.equal(focusableForRestore({ focus() {}, isConnected: true, closest: () => ({}), getClientRects: () => [{}] }), false);
+  assert.equal(focusableForRestore({ focus() {}, isConnected: true, closest: () => null, getClientRects: () => [] }), false);
+  assert.equal(focusableForRestore({ focus() {}, isConnected: true, closest: () => null, getClientRects: () => [{}] }), true);
+  const h = harness({ focusable: (node) => node.name !== "hidden" });
+  const hidden = element("hidden");
+  active = hidden;
+  const handle = h.host.open(h.spec());
+  active = h.mounted[0].node;
+  handle.close();
+  assert.equal(hidden.focused, 0);
+  const throwing = harness({ focusable: () => { throw new Error("detached"); } });
+  const button = element("button");
+  active = button;
+  const other = throwing.host.open(throwing.spec());
+  other.close();
+  assert.equal(button.focused, 0);
 });

@@ -399,7 +399,7 @@ test("the page watcher leaves counting a refused viewport to the tab that sent i
   }
 });
 
-test("a page inside a moving Peek stage is hidden once and published once at its settled rect, not every frame", async () => {
+test("a page inside a moving Peek stage stays attached where it was, is not re-sent every frame, and is published once at its settled rect", async () => {
   let x = 200;
   let moving = false;
   const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(x, 47, 763, 900), contains: (node) => node === page, closest: (selector) => (moving && selector.includes("data-ardia-peek-moving") ? {} : null) };
@@ -418,14 +418,16 @@ test("a page inside a moving Peek stage is hidden once and published once at its
       s.frames.shift()?.();
       document.dispatchEvent(new Event("animationstart"));
     }
-    assert.equal(updates.length, 2);
-    assert.deepEqual(updates[1], { rect: { x: 200, y: 47, width: 763, height: 900 }, visible: false });
+    assert.equal(updates.length, 1, "no hide and no per-frame bounds while the stage moves");
+    s.frames.shift()?.();
+    assert.equal(s.frames.length, 0, "a held page stops sampling every frame");
+    assert.equal(updates.length, 1);
     moving = false;
     running = false;
     x = 100;
     s.mutate();
-    assert.equal(updates.length, 3);
-    assert.deepEqual(updates[2], { rect: { x: 100, y: 47, width: 763, height: 900 }, visible: true });
+    assert.equal(updates.length, 2);
+    assert.deepEqual(updates[1], { rect: { x: 100, y: 47, width: 763, height: 900 }, visible: true });
     stop();
   } finally {
     s.restore();

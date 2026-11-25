@@ -53,9 +53,61 @@ export const compositorOnly = (frames: readonly object[]) => frames.every((frame
 
 export type StageAnimator = {
   run(move: StageMove, motion: StageMotion): Promise<void>;
+  cancel(): void;
   hold(): void;
   release(): void;
 };
+
+type AnimatedNode = {
+  animate?: (frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "cancel" | "finished">;
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
+};
+
+export function createWebAnimator(root: () => AnimatedNode | null, card: () => AnimatedNode | null, scrim: () => AnimatedNode | null, settledBounds: () => void): StageAnimator {
+  let running: Pick<Animation, "cancel" | "finished">[] = [];
+  let holder: AnimatedNode | null = null;
+  const cancelAll = () => {
+    const stopping = running;
+    running = [];
+    for (const animation of stopping) animation.cancel();
+  };
+  const play = (node: AnimatedNode | null, frames: StageFrame[], motion: StageMotion) => {
+    if (!node?.animate) return null;
+    const keyframes = frames.length === 1 ? [frames[0]!, frames[0]!] : frames;
+    return node.animate(keyframes as Keyframe[], { duration: motion.duration, easing: motion.easing, fill: "forwards" });
+  };
+  return {
+    hold() {
+      const node = root();
+      if (holder === node) return;
+      holder?.removeAttribute(PEEK_MOVING_ATTRIBUTE);
+      holder = node;
+      holder?.setAttribute(PEEK_MOVING_ATTRIBUTE, "");
+    },
+    release() {
+      if (!holder) return;
+      holder.removeAttribute(PEEK_MOVING_ATTRIBUTE);
+      holder = null;
+      settledBounds();
+    },
+    cancel: cancelAll,
+    run(_move, motion) {
+      cancelAll();
+      const started = [play(card(), motion.card, motion), play(scrim(), motion.scrim, motion)].filter((animation): animation is Pick<Animation, "cancel" | "finished"> => !!animation);
+      running = started;
+      const interrupted = () => {
+        if (running === started) cancelAll();
+      };
+      return Promise.allSettled(started.map((animation) => animation.finished.catch((error: unknown) => {
+        interrupted();
+        throw error;
+      }))).then((results) => {
+        if (results.some((result) => result.status === "rejected")) throw new Error("peek stage animation interrupted");
+      });
+    },
+  };
+}
 
 export type StageEvents = {
   state(phase: StagePhase, generation: number, entrance: StageEntrance): void;
@@ -77,18 +129,12 @@ export function createStageController(animator: StageAnimator, events: StageEven
     const { geometry, reduceMotion } = current();
     const motion = stageMotion(move, geometry, reduceMotion || !animated);
     animator.hold();
-    void animator.run(move, motion).then(
-      () => {
-        if (mine !== run) return;
-        animator.release();
-        settled();
-      },
-      () => {
-        if (mine !== run) return;
-        animator.release();
-        settled();
-      },
-    );
+    const end = () => {
+      if (mine !== run) return;
+      settled();
+      animator.release();
+    };
+    void animator.run(move, motion).then(end, end);
   };
   return {
     phase: () => phase,
@@ -114,6 +160,7 @@ export function createStageController(animator: StageAnimator, events: StageEven
     },
     dispose() {
       run++;
+      animator.cancel();
       animator.release();
     },
   };
@@ -124,43 +171,31 @@ export function createStageController(animator: StageAnimator, events: StageEven
   }
 }
 
-export type BoundsCommit<T extends { visible: boolean }> = {
+export type BoundsCommit<T> = {
   offer(value: T): void;
   hold(): void;
   release(): void;
   held(): boolean;
 };
 
-export function createBoundsCommit<T extends { visible: boolean }>(
-  publish: (value: T) => void,
-  conceal: (value: T) => T = (value) => ({ ...value, visible: false }),
-  same: (a: T, b: T) => boolean = (a, b) => JSON.stringify(a) === JSON.stringify(b),
-): BoundsCommit<T> {
-  let holds = 0;
-  let last: T | null = null;
-  let pending: T | null = null;
-  const send = (value: T) => {
-    if (last && same(last, value)) return;
-    last = value;
-    publish(value);
-  };
+export function createBoundsCommit<T>(publish: (value: T) => void): BoundsCommit<T> {
+  let held = false;
+  let pending: { value: T } | null = null;
   return {
     offer(value) {
-      if (!holds) return send(value);
-      pending = value;
-      if (last?.visible) send(conceal(last));
+      if (held) pending = { value };
+      else publish(value);
     },
     hold() {
-      holds++;
+      held = true;
     },
     release() {
-      if (!holds) return;
-      holds--;
-      if (holds || !pending) return;
+      if (!held) return;
+      held = false;
       const next = pending;
       pending = null;
-      send(next);
+      if (next) publish(next.value);
     },
-    held: () => holds > 0,
+    held: () => held,
   };
 }

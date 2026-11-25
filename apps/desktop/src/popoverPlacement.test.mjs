@@ -55,3 +55,32 @@ test("edges snap to device pixels at fractional scales", () => {
   const placed = placePopover({ anchor: { x: 100.13, y: 50.37, width: 33.3, height: 20 }, size: { width: 101, height: 80 }, area, scale: 1.5 });
   for (const value of Object.values(placed.rect)) assert.equal(Math.abs(value * 1.5 - Math.round(value * 1.5)) < 1e-9, true);
 });
+
+test("a work area smaller than twice the margin gives a zero-sized rect inside it, never negative", () => {
+  const placed = placePopover({ anchor: { x: 2, y: 2, width: 2, height: 2 }, size: { width: 200, height: 150 }, area: { x: 0, y: 0, width: 10, height: 10 } });
+  assert.ok(placed.rect.width >= 0 && placed.rect.height >= 0);
+  assert.ok(placed.rect.x >= 0 && placed.rect.x + placed.rect.width <= 10);
+  assert.ok(placed.rect.y >= 0 && placed.rect.y + placed.rect.height <= 10);
+  const empty = placePopover({ anchor: { x: 0, y: 0, width: 0, height: 0 }, size: { width: 10, height: 10 }, area: { x: 0, y: 0, width: 0, height: 0 } });
+  assert.deepEqual(empty.rect, { x: 0, y: 0, width: 0, height: 0 });
+});
+
+test("non-finite anchors, sizes, margins and scales never reach the result", () => {
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const placed = placePopover({ anchor: { x: bad, y: bad, width: bad, height: 20 }, size: { width: bad, height: 100 }, area, margin: bad, gap: bad, scale: bad });
+    for (const value of [...Object.values(placed.rect), placed.arrowOffset]) assert.ok(Number.isFinite(value), `${bad} -> ${JSON.stringify(placed)}`);
+    assert.ok(placed.rect.width >= 0 && placed.rect.height >= 0);
+  }
+});
+
+test("device-pixel snapping keeps every edge inside a fractional work area, negative origins included", () => {
+  const work = { x: -100.3, y: -40.7, width: 300.55, height: 200.45 };
+  for (const scale of [1, 1.25, 1.5, 2]) for (const anchorX of [-120, -50.2, 0, 150.9, 400]) {
+    const placed = placePopover({ anchor: { x: anchorX, y: 30.3, width: 17.7, height: 10 }, size: { width: 180.4, height: 90.6 }, area: work, scale });
+    const { x, y, width, height } = placed.rect;
+    assert.ok(x >= work.x + 8 - 1e-9 && x + width <= work.x + work.width - 8 + 1e-9, `x ${scale} ${anchorX} ${JSON.stringify(placed.rect)}`);
+    assert.ok(y >= work.y + 8 - 1e-9 && y + height <= work.y + work.height - 8 + 1e-9, `y ${scale} ${anchorX} ${JSON.stringify(placed.rect)}`);
+    for (const value of [x, y, x + width, y + height]) assert.ok(Math.abs(value * scale - Math.round(value * scale)) < 1e-6);
+  }
+  assert.ok(placePopover({ anchor: { x: -90, y: 0, width: 10, height: 10 }, size: { width: 50, height: 50 }, area: work, align: "start" }).rect.x < 0);
+});

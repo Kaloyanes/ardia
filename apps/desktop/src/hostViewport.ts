@@ -101,18 +101,12 @@ type OverlayCover = { overlayAt: (x: number, y: number) => boolean; overlayEleme
 export function watchTabViewport(element: HTMLElement, visible: () => boolean, report: (viewport: TabViewport, covered: boolean) => void, cover: OverlayCover, clipToAncestors = true) {
   let frame = 0;
   let stopped = false;
-  type Reported = { visible: boolean; viewport: TabViewport; covered: boolean };
-  const commit = createBoundsCommit<Reported>(
-    ({ viewport, covered }) => report(viewport, covered),
-    ({ viewport }) => ({ visible: false, covered: false, viewport: { ...viewport, visible: false } }),
-    () => false,
-  );
+  type Reported = { viewport: TabViewport; covered: boolean };
+  const commit = createBoundsCommit<Reported>(({ viewport, covered }) => report(viewport, covered));
   const measure = () => {
     if (stopped) return;
-    const held = !!element.closest?.(MOVING_STAGE);
-    if (held) {
-      if (!commit.held()) commit.hold();
-      commit.offer({ visible: false, covered: false, viewport: { rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false } });
+    if (element.closest?.(MOVING_STAGE)) {
+      commit.hold();
       return;
     }
     const raw = boxOf(element);
@@ -122,8 +116,8 @@ export function watchTabViewport(element: HTMLElement, visible: () => boolean, r
     const reported = plain.viewport.visible && [raw.x, raw.y, raw.width, raw.height].every(Number.isFinite) && raw.width > 0 && raw.height > 0 && !sameRect(raw, plain.viewport.rect)
       ? { ...plain.viewport, contentRect: raw }
       : plain.viewport;
-    commit.offer({ visible: reported.visible, viewport: reported, covered: plain.covered });
-    if (commit.held()) commit.release();
+    commit.offer({ viewport: reported, covered: plain.covered });
+    commit.release();
     if (animating()) measureNextFrame();
   };
   const animating = () => !!document.getAnimations?.().some((animation) => {

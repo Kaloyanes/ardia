@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { collapsedTransform, compositorOnly, createBoundsCommit, createStageController, ENTER_MS, expandedTransform, stageMotion, STEP_MS } from "./peekStageMotion.ts";
+import { collapsedTransform, compositorOnly, createBoundsCommit, createStageController, createWebAnimator, ENTER_MS, expandedTransform, PEEK_MOVING_ATTRIBUTE, stageMotion, STEP_MS } from "./peekStageMotion.ts";
 
 const geometry = { width: 1200, height: 800, card: { x: 200, y: 100, width: 800, height: 600 }, source: { x: 40, y: 40, width: 20, height: 20 }, fullscreen: false };
 const MOVES = ["enter", "close", "promote"];
@@ -17,9 +17,11 @@ test("every Peek move animates only transform and opacity, never layout", () => 
 });
 
 test("the stage source animates through the Web Animations API, not per-frame style writes", () => {
-  const source = readFileSync(new URL("./shims/web/PeekStage.tsx", import.meta.url), "utf8");
-  assert.match(source, /\.animate\(/);
-  assert.doesNotMatch(source, /Animated\./);
+  const stage = readFileSync(new URL("./shims/web/PeekStage.tsx", import.meta.url), "utf8");
+  const motion = readFileSync(new URL("./peekStageMotion.ts", import.meta.url), "utf8");
+  assert.match(stage, /createWebAnimator\(/);
+  assert.match(motion, /\.animate\(/);
+  assert.doesNotMatch(stage, /Animated\./);
 });
 
 test("reduced motion and a fullscreen peek snap every move in zero time", () => {
@@ -49,6 +51,7 @@ function controllerHarness({ reduceMotion = false } = {}) {
   const animator = {
     hold: () => { held = true; log.push("hold"); },
     release: () => { held = false; log.push("release"); },
+    cancel: () => log.push("cancel"),
     run: (move, motion) => new Promise((resolve, reject) => runs.push({ move, motion, resolve, reject })),
   };
   const states = [];
@@ -115,26 +118,101 @@ test("reduced motion reports the fade entrance and snaps", () => {
   assert.equal(instant.runs[0].motion.duration, 0);
 });
 
-test("held bounds publish once hidden and once at the settled rect, never per frame", () => {
+test("held bounds publish nothing while moving and only the settled value on release", () => {
   const published = [];
   const commit = createBoundsCommit((value) => published.push(value));
   commit.offer({ visible: true, rect: { x: 0, y: 0, width: 100, height: 100 } });
   assert.equal(published.length, 1);
   commit.hold();
   for (let frame = 0; frame < 12; frame++) commit.offer({ visible: true, rect: { x: frame, y: frame, width: 100 + frame, height: 100 } });
-  assert.deepEqual(published.slice(1), [{ visible: false, rect: { x: 0, y: 0, width: 100, height: 100 } }]);
+  assert.equal(published.length, 1, "a live page is never hidden or moved mid-motion");
   commit.release();
-  assert.deepEqual(published.slice(2), [{ visible: true, rect: { x: 11, y: 11, width: 111, height: 100 } }]);
+  assert.deepEqual(published.slice(1), [{ visible: true, rect: { x: 11, y: 11, width: 111, height: 100 } }]);
   commit.release();
-  assert.equal(published.length, 3);
+  assert.equal(published.length, 2);
+  commit.hold();
+  commit.release();
+  assert.equal(published.length, 2, "a hold with no measurement publishes nothing");
 });
 
-test("a page that was never shown stays silent while held", () => {
-  const published = [];
-  const commit = createBoundsCommit((value) => published.push(value));
-  commit.hold();
-  commit.offer({ visible: true, rect: { x: 1, y: 1, width: 1, height: 1 } });
-  assert.equal(published.length, 0);
-  commit.release();
-  assert.equal(published.length, 1);
+function fakeNode() {
+  const attributes = new Set();
+  const animations = [];
+  return {
+    attributes,
+    animations,
+    setAttribute: (name) => attributes.add(name),
+    removeAttribute: (name) => attributes.delete(name),
+    animate(frames, options) {
+      let settle;
+      const finished = new Promise((resolve, reject) => (settle = { resolve, reject }));
+      finished.catch(() => {});
+      const animation = { frames, options, cancelled: false, finished, cancel() { this.cancelled = true; settle.reject(new Error("AbortError")); }, finish: () => settle.resolve() };
+      animations.push(animation);
+      return animation;
+    },
+  };
+}
+
+test("the animator releases the very node it marked, even after the root is replaced", () => {
+  const first = fakeNode();
+  const second = fakeNode();
+  let root = first;
+  let settled = 0;
+  const animator = createWebAnimator(() => root, () => null, () => null, () => settled++);
+  animator.hold();
+  assert.ok(first.attributes.has(PEEK_MOVING_ATTRIBUTE));
+  root = second;
+  animator.release();
+  assert.equal(first.attributes.has(PEEK_MOVING_ATTRIBUTE), false);
+  assert.equal(second.attributes.has(PEEK_MOVING_ATTRIBUTE), false);
+  assert.equal(settled, 1);
+  animator.release();
+  assert.equal(settled, 1);
+});
+
+test("one interrupted animation cancels its sibling before the run settles, and a restart cancels both", async () => {
+  const card = fakeNode();
+  const scrim = fakeNode();
+  const animator = createWebAnimator(() => fakeNode(), () => card, () => scrim, () => {});
+  const motion = stageMotion("enter", geometry, false);
+  const run = animator.run("enter", motion);
+  card.animations[0].cancel();
+  await assert.rejects(run);
+  assert.equal(scrim.animations[0].cancelled, true);
+  const again = animator.run("close", stageMotion("close", geometry, false));
+  void animator.run("promote", stageMotion("promote", geometry, false));
+  assert.equal(card.animations[1].cancelled, true);
+  assert.equal(scrim.animations[1].cancelled, true);
+  await assert.rejects(again);
+  for (const node of [card, scrim]) assert.equal(node.animations[2].cancelled, false);
+});
+
+test("disposing mid-move cancels every animation before releasing the hold", () => {
+  const root = fakeNode();
+  const card = fakeNode();
+  const scrim = fakeNode();
+  const order = [];
+  const animator = createWebAnimator(() => root, () => card, () => scrim, () => order.push("released"));
+  const controller = createStageController({ ...animator, cancel: () => { animator.cancel(); order.push(`cancelled ${card.animations.every((a) => a.cancelled) && scrim.animations.every((a) => a.cancelled)}`); } }, { state() {}, done() {} }, () => ({ geometry, reduceMotion: false }));
+  controller.begin(1);
+  assert.ok(root.attributes.has(PEEK_MOVING_ATTRIBUTE));
+  controller.dispose();
+  assert.deepEqual(order, ["cancelled true", "released"]);
+  assert.equal(root.attributes.has(PEEK_MOVING_ATTRIBUTE), false);
+});
+
+test("a close or promote reports done while the hold is still on, so nothing reads bounds mid-move", async () => {
+  const h = controllerHarness();
+  const seen = [];
+  h.controller.begin(1);
+  h.runs[0].resolve();
+  await tick();
+  h.controller.promote(1);
+  const originalDone = h.done.push.bind(h.done);
+  h.done.push = (entry) => { seen.push(h.held()); return originalDone(entry); };
+  h.runs[1].resolve();
+  await tick();
+  assert.deepEqual(seen, [true]);
+  assert.equal(h.held(), false);
 });

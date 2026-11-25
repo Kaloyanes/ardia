@@ -1,6 +1,6 @@
 import { Children, forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View, type ViewProps } from "react-native";
-import { createStageController, PEEK_MOVING_ATTRIBUTE, stageCard, type StageAnimator, type StageEntrance, type StageGeometry, type StageMotion, type StageOutcome, type StagePhase } from "../../peekStageMotion";
+import { createStageController, createWebAnimator, stageCard, type StageEntrance, type StageGeometry, type StageOutcome, type StagePhase } from "../../peekStageMotion";
 import { refreshTabViewports } from "../../hostViewport";
 
 const HIDDEN = { display: "none" } as const;
@@ -20,32 +20,6 @@ type Props = ViewProps & {
   children?: ReactNode;
 };
 
-type Element = HTMLElement | null;
-
-function webAnimator(root: () => Element, card: () => Element, scrim: () => Element): StageAnimator {
-  let running: Animation[] = [];
-  const play = (element: Element, frames: StageMotion["card"], motion: StageMotion) => {
-    if (!element?.animate) return null;
-    const keyframes = frames.length === 1 ? [frames[0]!, frames[0]!] : frames;
-    return element.animate(keyframes as Keyframe[], { duration: motion.duration, easing: motion.easing, fill: "forwards" });
-  };
-  return {
-    hold: () => root()?.setAttribute(PEEK_MOVING_ATTRIBUTE, ""),
-    release: () => {
-      const node = root();
-      if (!node?.hasAttribute(PEEK_MOVING_ATTRIBUTE)) return;
-      node.removeAttribute(PEEK_MOVING_ATTRIBUTE);
-      refreshTabViewports();
-    },
-    run(_move, motion) {
-      for (const animation of running) animation.cancel();
-      const started = [play(card(), motion.card, motion), play(scrim(), motion.scrim, motion)].filter((animation): animation is Animation => !!animation);
-      running = started;
-      return Promise.all(started.map((animation) => animation.finished)).then(() => undefined);
-    },
-  };
-}
-
 export const PeekStage = forwardRef<unknown, Props>(function PeekStage({ geometry, reduceMotion, onPeekState, onPeekDone, onPeekPinch: _pinch, gestures: _gestures, meshAllowed: _mesh, children, style, ...rest }, ref) {
   const root = useRef<View & HTMLElement>(null);
   const cardLayer = useRef<View & HTMLElement>(null);
@@ -55,7 +29,7 @@ export const PeekStage = forwardRef<unknown, Props>(function PeekStage({ geometr
   latest.current = { onPeekState, onPeekDone, reduceMotion: !!reduceMotion, geometry };
   const [controller] = useState(() =>
     createStageController(
-      webAnimator(() => root.current, () => cardLayer.current, () => scrimLayer.current),
+      createWebAnimator(() => root.current, () => cardLayer.current, () => scrimLayer.current, refreshTabViewports),
       {
         state: (phase, generation, entrance) => {
           if (phase === "entering") setWaiting(false);
