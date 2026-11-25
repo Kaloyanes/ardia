@@ -35,13 +35,13 @@ case "${1:-}" in
       required=$3
     fi
     awk -v token="$DEBUG_TOKEN" -v required="$required" '
-      /Could not get build settings|xcodebuild: error|Ignoring provided run destination|^error: / {
+      /Could not get build settings|xcodebuild: error|Ignoring provided run destination|^[ \t]*error: / {
         print "no-debug-build: xcodebuild did not give every setting: " $0 > "/dev/stderr"; bad++; next
       }
-      /^Build settings for action / { target = $0; sub(/^.* and target "?/, "", target); sub(/"?:$/, "", target); targets++; order[targets] = target; seen[target] = 1; next }
-      target != "" && /^[ \t]+[A-Za-z_][A-Za-z0-9_]* = / { settings[target]++ }
-      target != "" && /^[ \t]+CONFIGURATION = / { configuration[target] = $3 }
-      target != "" && /^[ \t]+SDK_NAME = / { sdk[target] = $3 }
+      /^Build settings for action / { target = $0; sub(/^.* and target "?/, "", target); sub(/"?:$/, "", target); targets++; name[targets] = target; seen[target] = 1; next }
+      targets && /^[ \t]+[A-Za-z_][A-Za-z0-9_]* = / { settings[targets]++ }
+      targets && /^[ \t]+CONFIGURATION = / { configuration[targets] = $3 }
+      targets && /^[ \t]+SDK_NAME = / { sdk[targets] = $3 }
       /^[ \t]+(SWIFT_ACTIVE_COMPILATION_CONDITIONS|GCC_PREPROCESSOR_DEFINITIONS|OTHER_SWIFT_FLAGS|OTHER_CFLAGS|OTHER_CPLUSPLUSFLAGS) = / {
         value = $0; sub(/^[ \t]+[A-Z_]+ = /, "", value)
         if (value ~ token) { key = $1; print "no-debug-build: target " target " defines DEBUG in " key > "/dev/stderr"; bad++ }
@@ -51,10 +51,10 @@ case "${1:-}" in
         n = split(required, wanted, ",")
         for (i = 1; i <= n; i++) if (!(wanted[i] in seen)) { print "no-debug-build: the build settings have no target " wanted[i] > "/dev/stderr"; bad++ }
         for (i = 1; i <= targets; i++) {
-          t = order[i]
-          if (!settings[t]) { print "no-debug-build: target " t " lists no settings" > "/dev/stderr"; bad++; continue }
-          if (configuration[t] != "Release") { print "no-debug-build: target " t " is configured " (configuration[t] == "" ? "nothing" : configuration[t]) ", not Release" > "/dev/stderr"; bad++ }
-          if (sdk[t] !~ /^macosx/) { print "no-debug-build: target " t " builds for " (sdk[t] == "" ? "no SDK" : sdk[t]) ", not macOS" > "/dev/stderr"; bad++ }
+          t = name[i] " (block " i ")"
+          if (!settings[i]) { print "no-debug-build: target " t " lists no settings" > "/dev/stderr"; bad++; continue }
+          if (configuration[i] != "Release") { print "no-debug-build: target " t " is configured " (configuration[i] == "" ? "nothing" : configuration[i]) ", not Release" > "/dev/stderr"; bad++ }
+          if (sdk[i] !~ /^macosx/) { print "no-debug-build: target " t " builds for " (sdk[i] == "" ? "no SDK" : sdk[i]) ", not macOS" > "/dev/stderr"; bad++ }
         }
         exit bad ? 1 : 0
       }'

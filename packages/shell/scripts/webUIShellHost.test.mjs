@@ -267,16 +267,33 @@ test("a dump xcodebuild couldn't fill, or one that isn't a macOS Release build, 
   const failed = effective(unreadable);
   assert.equal(failed.status, 1, "xcodebuild exiting 0 with a target it couldn't read");
   assert.match(failed.stderr, /did not give every setting: Could not get build settings/);
-  assert.match(failed.stderr, /target ArdiaCore lists no settings/);
+  assert.match(failed.stderr, /target ArdiaCore \(block 1\) lists no settings/);
   const headersOnly = "Build settings for action build and target ArdiaCore:\n\nBuild settings for action build and target ArdiaShell:\n\n";
   const empty = effective(headersOnly);
   assert.equal(empty.status, 1, "target headers without a single KEY = VALUE line");
-  assert.match(empty.stderr, /target ArdiaCore lists no settings/);
-  assert.match(empty.stderr, /target ArdiaShell lists no settings/);
+  assert.match(empty.stderr, /target ArdiaCore \(block 1\) lists no settings/);
+  assert.match(empty.stderr, /target ArdiaShell \(block 2\) lists no settings/);
   assert.equal(effective(good + settingsDump("ArdiaSync", [], [])).status, 1, "any target without settings fails, not just the required ones");
   assert.match(effective(settingsDump("ArdiaCore", [], ["CONFIGURATION = Debug", "SDK_NAME = macosx27.2"]) + settingsDump("ArdiaShell", [])).stderr, /configured Debug, not Release/);
   assert.match(effective(settingsDump("ArdiaCore", [], ["CONFIGURATION = Release", "SDK_NAME = iphoneos27.2"]) + settingsDump("ArdiaShell", [])).stderr, /builds for iphoneos27\.2, not macOS/);
   const dropped = effective("--- xcodebuild: WARNING: Ignoring provided run destination because no scheme was passed.\n" + good);
   assert.equal(dropped.status, 1, "a destination xcodebuild ignored means the settings aren't the archive's");
   assert.equal(effective("xcodebuild: error: The project named \"Pods\" does not contain a scheme\n" + good).status, 1);
+  assert.equal(effective("    error: settings query failed\n" + good).status, 1, "an indented error: line");
+  assert.equal(effective(good + "\terror: settings query failed\n").status, 1, "a tab-indented error: line after the settings");
+});
+
+test("each settings block is checked on its own, even when a target name repeats", () => {
+  const effective = (input) => spawnSync(guard, ["--effective", "--require-targets", "ArdiaCore,ArdiaShell"], { input, encoding: "utf8" });
+  const good = settingsDump("ArdiaCore", []) + settingsDump("ArdiaShell", []);
+  assert.equal(effective(good + settingsDump("ArdiaCore", [])).status, 0, "two good blocks for one target are fine");
+  const thenEmpty = effective(good + "Build settings for action build and target ArdiaCore:\n\n");
+  assert.equal(thenEmpty.status, 1, "a good ArdiaCore block can't vouch for a later empty one");
+  assert.match(thenEmpty.stderr, /target ArdiaCore \(block 3\) lists no settings/);
+  const debugFirst = effective(settingsDump("ArdiaCore", [], ["CONFIGURATION = Debug", "SDK_NAME = macosx27.2"]) + good);
+  assert.equal(debugFirst.status, 1, "a later Release block can't hide an earlier Debug one");
+  assert.match(debugFirst.stderr, /target ArdiaCore \(block 1\) is configured Debug, not Release/);
+  const iosFirst = effective(settingsDump("ArdiaShell", [], ["CONFIGURATION = Release", "SDK_NAME = iphoneos27.2"]) + good);
+  assert.match(iosFirst.stderr, /target ArdiaShell \(block 1\) builds for iphoneos27\.2, not macOS/);
+  assert.equal(effective(settingsDump("ArdiaCore", []) + settingsDump("ArdiaCore", [])).status, 1, "repeating one target doesn't stand in for another required one");
 });
