@@ -49,7 +49,7 @@ final class QuitFlow {
     attempt += 1
     phase = .saving(wait: nil, lateAlert: nil)
     WindowManager.shared.flushFrameReports()
-    ArdiaHost.endHoverLossForQuit()
+    ArdiaHost.reportHoverLossAtQuit()
     ShellEvents.send(.app, ["type": "willQuit"])
     waitForSave()
     return .terminateLater

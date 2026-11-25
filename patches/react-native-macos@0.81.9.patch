@@ -1721,10 +1721,18 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..fdd49042170be0c7850fea3ea8550c32
  }
    
 diff --git a/React/Base/RCTUIKit.h b/React/Base/RCTUIKit.h
-index 8f1094a71ed431fcecb6f760ffe8d6da643f04cb..67404c8656b69d9cf28d9eb5862e991400be8276 100644
+index 8f1094a71ed431fcecb6f760ffe8d6da643f04cb..10a989e11842f9db0d1c0409401d159b36c26407 100644
 --- a/React/Base/RCTUIKit.h
 +++ b/React/Base/RCTUIKit.h
-@@ -604,6 +604,11 @@ NS_INLINE RCTPlatformView *RCTUIViewHitTestWithEvent(RCTPlatformView *view, CGPo
+@@ -529,6 +529,7 @@ void UIBezierPathAppendPath(UIBezierPath *path, UIBezierPath *appendPath);
+  * containing window is in the background.
+  */
+ @property (nonatomic, assign) BOOL acceptsFirstMouse;
++@property (nonatomic, assign) BOOL ardiaKeepsHitsWhileClear;
+ 
+ @property (nonatomic, assign) BOOL mouseDownCanMoveWindow;
+ 
+@@ -604,6 +605,11 @@ NS_INLINE RCTPlatformView *RCTUIViewHitTestWithEvent(RCTPlatformView *view, CGPo
    return [view hitTest:pointInSuperview];
  }
  
@@ -1737,7 +1745,7 @@ index 8f1094a71ed431fcecb6f760ffe8d6da643f04cb..67404c8656b69d9cf28d9eb5862e9914
  {
    view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
 diff --git a/React/Base/macOS/RCTUIKit.m b/React/Base/macOS/RCTUIKit.m
-index a37a1c106a04752c1baeb6dd2170402ce5f34f71..a2b796b7516cd6cd3386a10ae4f2ce01b4c88b6e 100644
+index a37a1c106a04752c1baeb6dd2170402ce5f34f71..12b9296d163bf8cf6297b55c53653f6b5d0cd7c6 100644
 --- a/React/Base/macOS/RCTUIKit.m
 +++ b/React/Base/macOS/RCTUIKit.m
 @@ -15,6 +15,7 @@
@@ -1855,7 +1863,7 @@ index a37a1c106a04752c1baeb6dd2170402ce5f34f71..a2b796b7516cd6cd3386a10ae4f2ce01
 +
  - (NSView *)hitTest:(NSPoint)point
  {
-+  if (self.alphaValue < 0.01 || self.layer.opacity < 0.01) { // [Ardia: a view under 1% opacity takes no hits, as in UIKit (#881) Ardia]
++  if (!self.ardiaKeepsHitsWhileClear && (self.alphaValue < 0.01 || self.layer.opacity < 0.01)) {
 +    return nil;
 +  }
    // NSView's hitTest: receives a point in superview coordinates. Convert to local

@@ -409,7 +409,7 @@ test("a lost-hover episode sends only its enums, flags and duration, capped per 
   diagnostics.trackHoverLost({ ...episode, healRefused: "none", healRefusedLast: "keyPopup", healRefusedWindow: "none", otherWindowClicks: -3 });
   diagnostics.trackHoverLost({ ...episode, healRefusedWindow: "menu:popUp", otherWindowClicks: "many" });
   diagnostics.trackHoverLost({ ...episode, healRefusedWindow: "panel:normal:Some App's Window Title", otherWindowClicks: 2.6 });
-  diagnostics.trackHoverLost({ ...episode, reason: "coveredByView", cover: "reactNative", coverClear: true, coverView: "rnView", coverClearView: "appKit", coverSize: "full", endedBy: "quit" });
+  diagnostics.trackHoverLost({ ...episode, reason: "coveredByView", cover: "reactNative", coverClear: true, coverView: "rnView", coverClearView: "appKit", coverSize: "full", endedBy: "windowClosed" });
   diagnostics.trackHoverLost({ ...episode, reason: "coveredByView", coverView: "RCTView", coverClearView: "https://private.example", coverSize: "Title of a page", endedBy: "Quit" });
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await client.saveQueueNow();
@@ -419,7 +419,7 @@ test("a lost-hover episode sends only its enums, flags and duration, capped per 
   assert.equal(quitWhileCovered.cover_view, "rnView");
   assert.equal(quitWhileCovered.cover_clear_view, "appKit");
   assert.equal(quitWhileCovered.cover_size, "full");
-  assert.equal(quitWhileCovered.ended_by, "quit");
+  assert.equal(quitWhileCovered.ended_by, "windowClosed");
   assert.equal(oddCover.cover_view, "unknown");
   assert.equal(oddCover.cover_clear_view, "unknown");
   assert.equal(oddCover.cover_size, "unknown");

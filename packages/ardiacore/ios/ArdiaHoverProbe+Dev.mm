@@ -179,8 +179,6 @@ NSString *HoverProbeDev(NSWindow *window, NSString *argument) {
     return DevSeeThroughCovers(window);
   } else if ([command isEqualToString:@"blockerKey"]) {
     return DevBlockerKey();
-  } else if ([command isEqualToString:@"quit"]) {
-    EndHoverEpisodeForQuit();
   } else if ([command isEqualToString:@"cover"]) {
     return DevCover(window, rest, parts.count > 2 ? parts[2] : @"");
   }

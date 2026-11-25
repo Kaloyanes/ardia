@@ -93,6 +93,7 @@ extern NSString *gLastHoverVerdict;
 extern id gHoverMonitor;
 extern bool gHoverWatchInBackground;
 extern NSMutableArray<NSDictionary *> *gDevHoverEvents;
+extern NSUInteger gEpisodeCount;
 
 NSString *ReasonName(HoverReason reason);
 NSString *HolderName(FocusHolder holder);
@@ -116,6 +117,11 @@ bool ResponderLost(FocusHolder holder, bool clickedPage);
 void HandleHoverCheck(NSWindow *window, NSPoint point, HoverTrigger trigger, ArdiaConsentStamp *stamp);
 void StartHoverWatch();
 void StopHoverWatch();
-void CloseEpisode(NSString *endedBy);
+NSString *KindName(FocusWindowKind kind);
+NSString *CoverName(PageCover cover);
+NSString *TriggerName(HoverTrigger trigger);
+double Uptime();
+NSDictionary *EpisodePayload(NSString *endedBy);
+void EmitEpisode(NSDictionary *payload, ArdiaConsentStamp *stamp);
 
 }

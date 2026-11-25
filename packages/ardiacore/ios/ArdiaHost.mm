@@ -498,8 +498,8 @@ static NSDictionary<NSString *, id> *OffscreenRefusal(NSString *reason) {
   ardia_host::NotePointer(event, name);
 }
 
-+ (void)endHoverLossForQuit {
-  ardia_host::EndHoverEpisodeForQuit();
++ (void)reportHoverLossAtQuit {
+  ardia_host::ReportHoverEpisodeAtQuit();
 }
 
 + (NSDictionary<NSString *, id> *)engineInfo {

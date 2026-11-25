@@ -11,6 +11,7 @@ const sources = [
   "../ios/ArdiaHoverProbe.mm",
   "../ios/ArdiaHoverProbe+Refusal.mm",
   "../ios/ArdiaHoverProbe+Cover.mm",
+  "../ios/ArdiaHoverProbe+Episode.mm",
   "../ios/ArdiaHoverProbeInternal.h",
   "../ios/ArdiaHoverProbe+Dev.mm",
   "../../shell/ios/FocusHandoff.swift",
@@ -27,6 +28,7 @@ const probeInternal = read("../ios/ArdiaHoverProbeInternal.h");
 const probeDev = read("../ios/ArdiaHoverProbe+Dev.mm");
 const handoff = read("../../shell/ios/FocusHandoff.swift");
 const probeCover = read("../ios/ArdiaHoverProbe+Cover.mm");
+const probeEpisode = read("../ios/ArdiaHoverProbe+Episode.mm");
 const quitFlow = read("../../shell/ios/QuitFlow.swift");
 const hoverLostJs = read("../../../apps/browser/src/state/telemetry/hoverLost.ts");
 
@@ -179,7 +181,7 @@ test("a click in another browser window while an episode is open is counted, and
 });
 
 test("the episode record carries the refusal, the matched window and the other-window clicks out to page_hover_lost and the dev state", () => {
-  const close = body(probe, "void CloseEpisode(");
+  const close = body(probeEpisode, "NSDictionary *EpisodePayload(");
   assert.match(close, /@"healRefused" : HealRefusalName\(gEpisode\.firstRefusal\),/);
   assert.match(close, /@"healRefusedLast" : HealRefusalName\(gEpisode\.lastRefusal\),/);
   assert.match(close, /@"healRefusedWindow" : MenuWindowName\(gEpisode\.refusedWindow\),/);
@@ -192,19 +194,23 @@ test("the episode record carries the refusal, the matched window and the other-w
 
 const jsSet = (name) => new Set([...(new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]`).exec(hoverLostJs)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]));
 
-test("an episode still open when Ardia quits is sent as ended by quit, before the app tells JS it is quitting", () => {
+test("an episode still open when Ardia quits is reported as ended by quit before JS hears willQuit, and stays open in case the quit is cancelled", () => {
   const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
-  const flushed = terminate.indexOf("ArdiaHost.endHoverLossForQuit()");
+  const reported = terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()");
   const told = terminate.indexOf('ShellEvents.send(.app, ["type": "willQuit"])');
-  assert.ok(flushed > 0 && told > flushed, "the open episode closes before willQuit, so JS records it before it saves the queue");
-  assert.match(body(probe, "void EndHoverEpisodeForQuit("), /CloseEpisode\(@"quit"\);/);
+  assert.ok(reported > 0 && told > reported, "JS holds the episode before it saves for the quit");
+  const atQuit = body(probeEpisode, "void ReportHoverEpisodeAtQuit(");
+  assert.match(atQuit, /if \(!gEpisode\.open\) return;/);
+  assert.match(atQuit, /EmitEpisode\(EpisodePayload\(@"quit"\), gEpisode\.stamp\);/);
+  assert.doesNotMatch(atQuit, /CloseEpisode|HoverEpisode\{\}/, "the episode stays open until the quit commits");
+  assert.doesNotMatch(probeDev, /@"quit"/, "no dev shortcut stands in for the real quit");
   assert.ok(jsSet("HOVER_ENDINGS").has("quit"), "JS keeps the quit ending");
 });
 
 test("a page covered by a view reports the kind of view, the kind that made it see-through and how much it covered, as enums JS knows", () => {
   const reason = body(probe, "HoverReason PageReason(");
   assert.match(reason, /check\.coverView = CoverViewOf\(hit\);\s*NSView \*clear = SeeThroughView\(hit\);\s*check\.coverClear = clear != nil;\s*check\.coverClearView = CoverViewOf\(clear\);\s*check\.coverSize = CoverSizeOver\(clear \?: hit, page\);/);
-  const close = body(probe, "void CloseEpisode(");
+  const close = body(probeEpisode, "NSDictionary *EpisodePayload(");
   assert.match(close, /@"coverView" : CoverViewName\(first\.coverView\),/);
   assert.match(close, /@"coverClearView" : CoverViewName\(first\.coverClearView\),/);
   assert.match(close, /@"coverSize" : CoverSizeName\(first\.coverSize\),/);
