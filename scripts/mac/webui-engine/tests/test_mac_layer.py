@@ -408,9 +408,10 @@ class ContractTests(unittest.TestCase):
         main = (REPO / 'apps/desktop/src/main.tsx').read_text()
         surface = (REPO / 'apps/desktop/src/popoverSurface.ts').read_text()
         if shipped == 'false':
-            self.assertNotIn('popoverBoot(', main)
+            self.assertNotIn('entryKind(', main)
         else:
-            self.assertIn('popoverBoot(ardiaHost, location.search)', main)
+            self.assertIn('entryKind(ardiaHost, location.search)', main)
+            self.assertIn('popoverBoot(host, search)', surface)
             self.assertIn('import("./popoverEntry")', main)
             self.assertIn('import("./shellEntry")', main)
             self.assertNotIn('browser/src', main)
@@ -459,7 +460,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('menu::BookmarkMenuItems(*known)', menu)
         for setter in ('SetWindowMainMenu', 'SetWindowMenuState', 'SetWindowMenuBookmarks'):
             body = menu.split('void ' + setter + '(' if setter == 'SetWindowMainMenu' else 'std::optional<std::string> ' + setter + '(', 1)[1].split('\n}\n', 1)[0]
-            self.assertIn('Owner().Claims(window_id, KeyWindowId() == window_id)', body)
+            self.assertIn('ClaimsBar(window_id)', body)
+        self.assertIn('return Owner().Claims(window_id, key == window_id, key.has_value());', menu)
         self.assertIn('NSWindowDidBecomeKeyNotification', menu)
 
     def test_shortcut_recording_suppresses_menu_key_equivalents(self):

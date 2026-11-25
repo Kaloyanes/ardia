@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { popoverBoot, popoverChannel, POPOVER_MODULE, POPOVER_PROPS_EVENT, POPOVER_SELF_CLOSE, POPOVER_SELF_MESSAGE, POPOVER_SELF_PROPS } from "./popoverSurface.ts";
+import { entryKind, popoverBoot, popoverChannel, POPOVER_MODULE, POPOVER_PROPS_EVENT, POPOVER_SELF_CLOSE, POPOVER_SELF_MESSAGE, POPOVER_SELF_PROPS } from "./popoverSurface.ts";
 import { PopoverRoot, POPOVER_ROUTES } from "./PopoverRoot.tsx";
 
 const bootstrap = (popover, extra = {}) => ({ bootstrap: { windowId: "w1", profileId: "", windowKind: "popover", surface: "popover", popover, ...extra } });
@@ -88,4 +88,20 @@ test("the downloads route draws its rows, actions and footer from props alone", 
   const empty = renderToStaticMarkup(createElement(PopoverRoot, { boot: { id: "p1", route: "downloads", props: {} }, channel }));
   assert.match(empty, /No downloads yet/);
   assert.doesNotMatch(empty, />Clear</);
+});
+
+test("the entry boots a popover, the shell, or refuses a broken popover instead of loading the shell into a panel", () => {
+  const good = bootstrap({ id: "p1", route: "list" });
+  assert.equal(entryKind(good, "?popover=p1").kind, "popover");
+  assert.deepEqual(entryKind({ bootstrap: { windowId: "w1", profileId: "", windowKind: "browser" } }, ""), { kind: "shell" });
+  assert.deepEqual(entryKind(undefined, ""), { kind: "shell" });
+  for (const [host, search] of [
+    [good, "?popover=p2"],
+    [good, ""],
+    [bootstrap({ id: "p 1", route: "list" }), "?popover=p%201"],
+    [bootstrap({ id: "p1", route: "../x" }), "?popover=p1"],
+    [{ bootstrap: { windowId: "w1", profileId: "", windowKind: "browser" } }, "?popover=p1"],
+    [bootstrap({ id: "p1", route: "list" }, { windowKind: "browser" }), "?popover=p1"],
+    [undefined, "?popover=p1"],
+  ]) assert.equal(entryKind(host, search).kind, "invalid", JSON.stringify([host?.bootstrap, search]));
 });

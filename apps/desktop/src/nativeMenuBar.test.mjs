@@ -10,6 +10,8 @@ import {
   NATIVE_MENU_SYNC_MS,
   nativeMenuKey,
   nativeMenuSpec,
+  REQUEST_WINDOW_CLOSE_METHOD,
+  utilityMenuSpec,
   nativeMenuTitle,
   SET_MAIN_MENU_METHOD,
   SET_MENU_STATE_METHOD,
@@ -86,7 +88,7 @@ test("edit, window, about and full-screen items use AppKit roles, and window act
   assert.equal(find(bar, (item) => item.title === "Enter Full Screen").role, "toggleFullScreen");
   assert.equal(find(bar, (item) => item.title === "Minimize All"), undefined);
   const close = find(bar, (item) => item.title === "Close Window");
-  assert.deepEqual([close.command, close.arg], [MENU_PICK, "window:close"]);
+  assert.deepEqual([close.role, close.command], ["close", undefined]);
   const quit = find(bar, (item) => item.command === "quit");
   assert.deepEqual([quit.id, quit.key, quit.modifiers], ["std:quit:", "q", 8]);
 });
@@ -94,9 +96,9 @@ test("edit, window, about and full-screen items use AppKit roles, and window act
 test("commands carry their state id, shortcut and current flags, and a renamed item keeps its default title", () => {
   const bar = spec();
   const newTab = find(bar, (item) => item.command === "newTab" && !item.arg);
-  assert.deepEqual([newTab.id, newTab.key, newTab.modifiers, newTab.enabled], ["newTab", "t", 8, true]);
+  assert.deepEqual([newTab.id, newTab.key, newTab.modifiers, newTab.enabled], ["newTab", "t", 2, true]);
   const back = find(bar, (item) => item.command === "back");
-  assert.deepEqual([back.enabled, back.key, back.modifiers], [false, "[", 8]);
+  assert.deepEqual([back.enabled, back.key, back.modifiers], [false, "[", 2]);
   assert.equal(find(bar, (item) => item.id === "setAppearance:dark").checked, true);
   assert.equal(find(bar, (item) => item.id === "setAppearance:light").checked, false);
   assert.equal(find(bar, (item) => item.id === "moveSplitPaneLeft").enabled, false);
@@ -104,7 +106,7 @@ test("commands carry their state id, shortcut and current flags, and a renamed i
   const bookmark = find(byTitle(bar, "Bookmarks").children, (item) => item.id === "bookmarkPage");
   assert.deepEqual([bookmark.title, bookmark.defaultTitle], ["Edit Bookmark…", "Bookmark This Page"]);
   assert.equal(find(bar, (item) => item.command === "nextTab").key, "Tab");
-  assert.deepEqual([find(bar, (item) => item.command === "zoomIn").key, find(bar, (item) => item.command === "zoomIn").modifiers], ["Up", 12]);
+  assert.deepEqual([find(bar, (item) => item.command === "zoomIn").key, find(bar, (item) => item.command === "zoomIn").modifiers], ["Up", 6]);
   assert.equal(find(bar, (item) => item.command === "devTools").key, "F8");
   assert.equal(find(bar, (item) => item.command === "openExtension").arg, "ext");
   assert.equal(find(bar, (item) => item.command === "restoreClosed").arg, "c1");
@@ -267,4 +269,46 @@ test("a menu that fills the budget uses the native limit, which counts items but
   let count = 0;
   walk(spec({ windows }), () => count++);
   assert.ok(count <= NATIVE_MENU_MAX_ITEMS && count >= NATIVE_MENU_MAX_ITEMS - 4, String(count));
+});
+
+test("desktop shortcuts map to the keys that press them on the Mac: command is Control, control is Command", async () => {
+  const { keyboardCombo } = await import("./shortcuts.ts");
+  const recorded = keyboardCombo({ code: "KeyT", key: "t", ctrlKey: false, metaKey: true, altKey: false, shiftKey: true });
+  const { items } = build();
+  const withRecorded = items.map((menu) => menu.id === "menu:File"
+    ? { ...menu, children: menu.children.map((child) => child.id === "newTab" ? { ...child, key: recorded.key, modifiers: recorded.modifiers } : child) }
+    : menu);
+  const newTab = find(nativeMenuSpec(withRecorded), (item) => item.command === "newTab" && !item.arg);
+  assert.deepEqual([newTab.key, newTab.modifiers], ["t", 8 | 1], "a recorded Command-Shift-T shows as Command-Shift-T");
+  const control = keyboardCombo({ code: "KeyT", key: "t", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false });
+  const viaControl = items.map((menu) => menu.id === "menu:File"
+    ? { ...menu, children: menu.children.map((child) => child.id === "newTab" ? { ...child, key: control.key, modifiers: control.modifiers } : child) }
+    : menu);
+  assert.equal(find(nativeMenuSpec(viaControl), (item) => item.command === "newTab" && !item.arg).modifiers, 2);
+  const bar = spec();
+  assert.equal(find(bar, (item) => item.command === "newTab" && !item.arg).modifiers, 2, "the default Ctrl-T binding is Control-T on the Mac host");
+  assert.deepEqual(byTitle(bar, "Edit").children.filter((item) => item.role).map((item) => [item.key, item.modifiers]), [["z", 8], ["z", 9], ["x", 8], ["c", 8], ["v", 8], ["v", 13], ["a", 8]]);
+});
+
+test("Close Window uses the host's close request when it has one and AppKit's own close otherwise", () => {
+  const { items, flags } = build();
+  const standalone = find(nativeMenuSpec(items, flags), (item) => item.title === "Close Window");
+  assert.deepEqual([standalone.role, standalone.command, standalone.key, standalone.modifiers], ["close", undefined, "w", 9]);
+  const hosted = find(nativeMenuSpec(items, flags, { closeThroughHost: true }), (item) => item.title === "Close Window");
+  assert.deepEqual([hosted.role, hosted.command, hosted.arg], [undefined, MENU_PICK, "window:close"]);
+  assert.equal(REQUEST_WINDOW_CLOSE_METHOD, "ArdiaShell.requestWindowClose");
+});
+
+test("Settings and Import get their own bar with Close Window, editing and the window menu", () => {
+  const bar = utilityMenuSpec();
+  assert.deepEqual(bar.map((menu) => menu.title), ["Ardia", "File", "Edit", "Window", "Help"]);
+  assert.deepEqual(bar[1].children.map((item) => [item.title, item.role]), [["Close Window", "close"]]);
+  assert.deepEqual(utilityMenuSpec({ closeThroughHost: true })[1].children.map((item) => [item.command, item.arg]), [[MENU_PICK, "window:close"]]);
+  assert.deepEqual(bar[2].children.filter((item) => item.role).map((item) => item.role), ["undo", "redo", "cut", "copy", "paste", "pasteAndMatchStyle", "selectAll"]);
+  assert.equal(bar[3].role, "windowMenu");
+  assert.equal(bar[4].role, "helpMenu");
+  assert.deepEqual(bar[0].children.map((item) => item.role ?? (item.separator ? "---" : item.title)), ["about", "---", "services", "---", "hide", "hideOthers", "showAll", "---", "quit"]);
+  let count = 0;
+  walk(bar, () => count++);
+  assert.ok(count < NATIVE_MENU_MAX_ITEMS);
 });

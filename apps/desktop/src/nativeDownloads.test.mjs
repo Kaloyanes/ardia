@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPopoverHost, POPOVER_CLOSE_METHOD, POPOVER_DISMISSED_EVENT, POPOVER_MESSAGE_EVENT, POPOVER_OPEN_METHOD, POPOVER_UPDATE_METHOD } from "./popoverHost.ts";
-import { BUTTON_PRESS_MS, DOWNLOADS_POPOVER, DOWNLOADS_ROUTE, downloadsMessage, downloadsPanelSize, downloadsProps, openNativeDownloads, OUTSIDE_SETTLE_MS, runDownloadsMessage } from "./nativeDownloads.ts";
+import { DOWNLOADS_POPOVER, DOWNLOADS_ROUTE, downloadPresence, downloadsMessage, downloadsPanelSize, downloadsProps, openNativeDownloads, OUTSIDE_SETTLE_MS, runDownloadsMessage } from "./nativeDownloads.ts";
 
 const download = (overrides) => ({ id: "d", filename: "file.zip", path: "/tmp/file.zip", url: "https://example.com/file.zip", state: "finished", received: 2000, total: 2000, speed: 0, paused: false, dangerous: false, ...overrides });
 const LIST = [
@@ -74,8 +74,8 @@ function production({ openFails = false, list = LIST } = {}) {
   const fallbacks = [];
   const timers = [];
   let shell = null;
-  let pressedAt = -Infinity;
-  let now = 0;
+  let press = "none";
+  const releases = [];
   const target = new EventTarget();
   const popovers = createPopoverHost({
     windowId: "w1",
@@ -108,21 +108,25 @@ function production({ openFails = false, list = LIST } = {}) {
     actions: recorded.actions,
     close: (byPress) => closes.push(byPress),
     isButton: (node) => node === "button",
-    buttonPressedWithin: (ms) => now - pressedAt <= ms,
+    buttonPress: () => press,
+    afterButtonRelease: (run) => releases.push(run),
     later: (run, ms) => timers.push({ run, ms }),
     fallback: () => fallbacks.push(true),
   });
   const settle = () => new Promise(setImmediate);
-  const runTimers = (advance) => {
-    for (const timer of timers.splice(0)) {
-      now += advance ?? timer.ms;
-      timer.run();
-    }
+  const runTimers = () => {
+    for (const timer of timers.splice(0)) timer.run();
   };
   return {
     controller, calls, closes, fallbacks, timers, recorded, settle, runTimers,
     shell: (name, data) => shell?.(name, data),
-    pressButton: () => void (pressedAt = now),
+    hold: () => void (press = "held"),
+    release: () => {
+      press = "recent";
+      for (const run of releases.splice(0)) run();
+    },
+    pressCleared: () => void (press = "none"),
+    releases,
     setProps: (next) => void (props = next),
     method: (name) => calls.filter((call) => call.method === name),
   };
@@ -170,24 +174,55 @@ test("Escape or blur closes Downloads at once; an outside press closes it as a p
   outside.runTimers();
   assert.deepEqual(outside.closes, [true]);
 
-  const button = production();
-  await button.settle();
-  button.pressButton();
-  button.shell(POPOVER_DISMISSED_EVENT, { id: "dl1", windowId: "w1", reason: "outside" });
-  assert.deepEqual(button.timers.map((timer) => timer.ms), [BUTTON_PRESS_MS]);
-  button.controller.stop();
-  button.runTimers();
-  assert.deepEqual(button.closes, []);
+  const quick = production();
+  await quick.settle();
+  quick.release();
+  quick.shell(POPOVER_DISMISSED_EVENT, { id: "dl1", windowId: "w1", reason: "outside" });
+  assert.deepEqual(quick.timers.map((timer) => timer.ms), [0]);
+  quick.controller.stop();
+  quick.runTimers();
+  assert.deepEqual(quick.closes, [], "the button's own toggle closed it");
 
   const late = production();
   await late.settle();
   late.shell(POPOVER_DISMISSED_EVENT, { id: "dl1", windowId: "w1", reason: "outside" });
-  late.pressButton();
-  late.runTimers(10);
-  assert.deepEqual(late.timers.map((timer) => timer.ms), [BUTTON_PRESS_MS]);
-  late.controller.stop();
+  late.hold();
   late.runTimers();
+  assert.equal(late.releases.length, 1);
+  late.controller.stop();
+  late.release();
   assert.deepEqual(late.closes, []);
+});
+
+test("holding the Downloads button past any timer and releasing never reopens the panel", async () => {
+  const h = production();
+  await h.settle();
+  h.hold();
+  h.shell(POPOVER_DISMISSED_EVENT, { id: "dl1", windowId: "w1", reason: "outside" });
+  assert.deepEqual(h.timers, [], "nothing waits on a clock while the button is held");
+  for (let tick = 0; tick < 50; tick++) h.runTimers();
+  assert.deepEqual(h.closes, []);
+  h.controller.stop();
+  h.release();
+  assert.deepEqual(h.closes, [], "the release's own toggle closed it, and the panel isn't asked to close twice or reopen");
+
+  const dragged = production();
+  await dragged.settle();
+  dragged.hold();
+  dragged.shell(POPOVER_DISMISSED_EVENT, { id: "dl1", windowId: "w1", reason: "outside" });
+  dragged.release();
+  assert.deepEqual(dragged.closes, [true], "a press dragged off the button still closes the panel once released");
+});
+
+test("finished downloads keep Open and Show until the host can say a file is gone", () => {
+  const unknown = downloadPresence(() => false, false);
+  const known = downloadPresence((path) => path === "/tmp/file.zip", true);
+  const done = download({ id: "done" });
+  assert.deepEqual(downloadsProps([done], unknown, false, "").rows[0].actions, ["open", "reveal"]);
+  assert.equal(downloadsProps([done], unknown, false, "").rows[0].missing, false);
+  assert.deepEqual(downloadsProps([done], known, false, "").rows[0].actions, ["open", "reveal"]);
+  const gone = downloadsProps([download({ id: "gone", path: "/tmp/gone.zip" })], known, false, "").rows[0];
+  assert.deepEqual([gone.actions, gone.missing, gone.status], [[], true, "Deleted"]);
 });
 
 test("closing Downloads from the store closes the native panel once and leaves no listener", async () => {

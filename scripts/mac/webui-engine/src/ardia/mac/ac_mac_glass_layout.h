@@ -110,6 +110,7 @@ struct Placement {
   std::optional<Color> tint;
   std::string group;
   Appearance appearance = Appearance::kAuto;
+  int slice = 0;
   bool operator==(const Placement&) const = default;
 };
 
@@ -130,8 +131,13 @@ struct SlotKey {
   int page = 0;
   Source source = Source::kGlass;
   std::string id;
+  int slice = 0;
   auto operator<=>(const SlotKey&) const = default;
 };
+
+inline SlotKey KeyOf(const Placement& placement) {
+  return SlotKey{placement.plane, placement.page, placement.source, placement.id, placement.slice};
+}
 
 struct Diff {
   std::vector<Placement> create;
@@ -370,6 +376,16 @@ inline void Subtract(std::vector<Rect>& region, const Rect& cut) {
   region = std::move(remaining);
 }
 
+inline Radii SliceRadii(const Radii& radii, const Rect& slice, const Rect& whole) {
+  const auto same = [](double a, double b) { return std::abs(a - b) < 0.01; };
+  const bool left = same(slice.x, whole.x);
+  const bool right = same(slice.right(), whole.right());
+  const bool top = same(slice.y, whole.y);
+  const bool bottom = same(slice.bottom(), whole.bottom());
+  return Radii{left && top ? radii.upper_left : 0, right && top ? radii.upper_right : 0,
+               right && bottom ? radii.lower_right : 0, left && bottom ? radii.lower_left : 0};
+}
+
 inline Layout Lay(const std::vector<Region>& regions,
                   const std::vector<Page>& pages,
                   const Rect& window,
@@ -442,9 +458,18 @@ inline Layout Lay(const std::vector<Region>& regions,
         }
       }
     }
-    if ((!on_page || !uncovered.empty()) && ValidRect(window) &&
-        place(Plane::kBehindWindow, 0, Rect{}, window, behind_order)) {
+    if (!on_page && ValidRect(window) && place(Plane::kBehindWindow, 0, Rect{}, window, behind_order)) {
       ++behind_order;
+    } else if (on_page) {
+      int slice = 0;
+      for (const Rect& piece : uncovered) {
+        if (piece.empty()) continue;
+        const Radii kept = SliceRadii(*radii, piece, rect);
+        layout.placements.push_back(Placement{region.id, Plane::kBehindWindow, 0, piece, piece, UniformRadius(kept),
+                                              CornerMask(kept), opacity, region.material, behind_order++,
+                                              region.source, kept, region.tint, region.group, region.appearance,
+                                              ++slice});
+      }
     }
   }
   return layout;
@@ -484,7 +509,7 @@ inline std::vector<Page> MountablePages(const std::vector<Page>& pages, const st
 
 inline Layout KeepAttached(Layout layout, const std::set<SlotKey>& attached) {
   std::erase_if(layout.placements, [&attached, &layout](const Placement& placement) {
-    const bool kept = attached.contains(SlotKey{placement.plane, placement.page, placement.source, placement.id});
+    const bool kept = attached.contains(KeyOf(placement));
     if (!kept) layout.partial.insert(placement.id);
     return !kept;
   });
@@ -545,9 +570,6 @@ inline std::set<GroupKey> LiveGroups(const std::vector<Placement>& placements, b
   return live;
 }
 
-inline SlotKey KeyOf(const Placement& placement) {
-  return SlotKey{placement.plane, placement.page, placement.source, placement.id};
-}
 
 inline Diff DiffPlacements(const std::vector<Placement>& before,
                            const std::vector<Placement>& after,

@@ -41,7 +41,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
   - A glass region over no page falls back behind the window, and the part of a region that no page covers (a menu
-    straddling the sidebar and a page) gets its own behind-window slice; `accepted` names a region only once every
+    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles; `accepted` names a region only once every
     slice mounted, so a half-mounted region keeps its DOM fallback. The host advertises `shell.glassBehindWindow`, so
     `glassRegions.ts` also sends regions over the sidebar, toolbar or empty space instead of dropping them.
   - A region may carry `material` (`regular`, `clear`, `sidebar`, `header`, `menu`, `popover`, `hud`, `window`,
@@ -65,10 +65,12 @@ that branch). It is a development tool and never runs in a release. Like Windows
   (`kPopoverRendererShipped`), so `shell.popover.*` is advertised and `popoverHost` opens native panels.
   - `main.tsx` is a small entry that loads `popoverEntry.tsx` (`PopoverRoot.tsx`) instead of `shellEntry.tsx` when
     the bootstrap says `surface: "popover"` and the URL's `?popover=` matches (`popoverSurface.ts`), so a panel never
-    loads the browser shell, its store or its shims; it draws only the requested route on a transparent page.
+    loads the browser shell, its store or its shims; a popover URL or bootstrap that doesn't validate stops with an
+    error instead of loading the shell; it draws only the requested route on a transparent page.
   - Downloads is the first panel: with `shell.popover.*` advertised, `DownloadsPopover.tsx` opens it through
     `popoverHost` (`nativeDownloads.ts`) under the Downloads button, pushes rows as props, runs the actions the panel
-    sends back, and falls back to the DOM panel when the host can't open one.
+    sends back, and falls back to the DOM panel when the host can't open one. A press on its own button closes it on
+    release however long it's held. Without `ArdiaSystem.fileStatus`, finished downloads count as present.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
@@ -84,7 +86,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
 - **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu until `apps/desktop`
   (`nativeMenuBar.ts`) pushes the full Ardia, File, Edit, View, Tabs, Bookmarks, History, Extensions, Window and Help
   menus with `ArdiaShell.setMainMenu`. Every window pushes its own menu, state and bookmarks; the host keeps them by
-  window and shows the key window's, switching when another window becomes key. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
+  window and shows the key window's, switching when another window becomes key; a background window can't rewrite the
+  bar while any Ardia window is key. Settings and Import push their own Ardia, File, Edit, Window and Help bar. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
   as `menu.pick`. Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs
   the Services, Window and Help menus.
   - `ArdiaShell.setMenuState` updates enabled, checked and titles in place by state id (`command` or
@@ -92,7 +95,10 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - `ArdiaShell.setMenuBookmarks` rebuilds the Bookmarks menu after its fixed items, as `appMenu.ts` builds it.
   - The Ardia menu has Services, Hide Ardia (⌘H), Hide Others (⌥⌘H) and Show All; Quit is ⌘Q and full screen ⌃⌘F
     whatever the desktop shortcuts say.
-  - Settings and Import windows handle `menu.pick` too, so Close Window works there.
+  - Close Window goes through `ArdiaShell.requestWindowClose` when the host advertises it and AppKit's `performClose:`
+    otherwise, in browser and utility windows alike.
+  - Desktop shortcuts keep the desktop convention, so `command` is the Control key and `control` the Command key, as
+    the host's accelerators read them; system items (Edit, Minimize, Close Window, Hide) use AppKit's standard keys.
   - `ArdiaShell.setShortcutRecording` stops the menu bar's key equivalents while that window records a shortcut.
   - The in-window `≡` app menu button is hidden on macOS (`platform/appMenuButton.mac.ts`), where the menu bar holds
     those menus.

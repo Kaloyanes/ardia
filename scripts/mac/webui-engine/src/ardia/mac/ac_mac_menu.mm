@@ -324,6 +324,11 @@ void BuildBar(const menu::Item& root) {
   NSApp.mainMenu = bar;
 }
 
+bool ClaimsBar(const std::string& window_id) {
+  const std::optional<std::string> key = KeyWindowId();
+  return Owner().Claims(window_id, key == window_id, key.has_value());
+}
+
 void Present(const WindowMenu& record, bool rebuild) {
   if (rebuild && record.root) {
     BuildBar(*record.root);
@@ -337,9 +342,9 @@ void Present(const WindowMenu& record, bool rebuild) {
 void ActivateKeyWindow(NSWindow* window) {
   const std::optional<std::string> id = WindowIdOf(window);
   if (!id) return;
+  if (!Owner().Activate(*id)) return;
   auto found = WindowMenus().find(*id);
-  const bool has_menu = found != WindowMenus().end() && found->second.root.has_value();
-  if (Owner().Activate(*id, has_menu)) {
+  if (found != WindowMenus().end() && found->second.root) {
     Present(found->second, true);
   }
 }
@@ -444,7 +449,7 @@ void SetWindowMainMenu(const std::string& window_id, menu::Item root, MenuComman
   MainHandler() = std::move(handler);
   WindowMenu& record = WindowMenus()[window_id];
   record.root = std::move(root);
-  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+  if (ClaimsBar(window_id)) {
     Present(record, true);
   }
 }
@@ -454,7 +459,7 @@ std::optional<std::string> SetWindowMenuState(const std::string& window_id, cons
   if (!state) return "Menu state must be an object";
   WindowMenu& record = WindowMenus()[window_id];
   record.state = std::move(*state);
-  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+  if (ClaimsBar(window_id)) {
     ApplyState(NSApp.mainMenu, *record.state, 0);
   }
   return std::nullopt;
@@ -465,7 +470,7 @@ std::optional<std::string> SetWindowMenuBookmarks(const std::string& window_id, 
   if (!bookmarks) return "Menu bookmarks must be an object";
   WindowMenu& record = WindowMenus()[window_id];
   record.bookmarks = std::move(*bookmarks);
-  if (Owner().Claims(window_id, KeyWindowId() == window_id)) {
+  if (ClaimsBar(window_id)) {
     Present(record, false);
   }
   return std::nullopt;

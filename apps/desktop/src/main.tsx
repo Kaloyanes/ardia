@@ -1,5 +1,5 @@
 import { ardiaHost } from "./host";
-import { popoverBoot } from "./popoverSurface";
+import { entryKind } from "./popoverSurface";
 
 function showStartupFailure(error: unknown) {
   console.error("[ardia linux] startup failed", error);
@@ -10,8 +10,10 @@ function showStartupFailure(error: unknown) {
   }
 }
 
-const popover = popoverBoot(ardiaHost, location.search);
-void (popover
-  ? import("./popoverEntry").then(({ startPopover }) => startPopover(ardiaHost!, popover))
-  : import("./shellEntry").then(({ startShell }) => startShell())
+const entry = entryKind(ardiaHost, location.search);
+void (entry.kind === "popover"
+  ? import("./popoverEntry").then(({ startPopover }) => startPopover(ardiaHost!, entry.boot))
+  : entry.kind === "shell"
+    ? import("./shellEntry").then(({ startShell }) => startShell())
+    : Promise.reject(new Error(entry.reason))
 ).catch(showStartupFailure);

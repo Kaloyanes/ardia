@@ -13,7 +13,8 @@ import { OutsidePressIgnoreContext } from "./outsidePressScope";
 import { PageOverlayRegion } from "./PageOverlayRegion";
 import { watchPageFocus } from "./pageFocus";
 import { nativePopovers } from "./desktopPopovers";
-import { downloadsProps, openNativeDownloads } from "./nativeDownloads";
+import { downloadPresence, downloadsProps, openNativeDownloads, RECENT_PRESS_MS, type ButtonPress } from "./nativeDownloads";
+import { FILE_STATUS } from "./fileCapabilities";
 import { DOWNLOADS_BUTTON_TEST_ID } from "../../browser/src/components/downloads/downloadsButtonId";
 import { useDownloads } from "../../browser/src/state/browser/hooks";
 import { useTheme } from "../../browser/src/components/ui/theme";
@@ -23,7 +24,7 @@ import { fileExists, revealFile } from "../../browser/src/state/app/system";
 import { clearDownloads, dismissDownloadsByPress } from "../../browser/src/state/windows/actions";
 import { openInternalPage } from "../../browser/src/state/pages/urls";
 import { PLATFORM_TERMS } from "../../browser/src/lib/platformTerms";
-import { reportHostError } from "./host";
+import { ardiaHost, hostSupports, reportHostError } from "./host";
 
 export * from "../../browser/src/components/downloads/Downloads";
 
@@ -40,12 +41,33 @@ function downloadsAnchor() {
 }
 
 function watchButtonPresses() {
-  let pressedAt = Number.NEGATIVE_INFINITY;
+  let held = false;
+  let releasedAt = Number.NEGATIVE_INFINITY;
+  let waiting: (() => void)[] = [];
   const press = (event: Event) => {
-    if (isDownloadsButton(event.target)) pressedAt = performance.now();
+    if (isDownloadsButton(event.target)) held = true;
+  };
+  const release = () => {
+    if (!held) return;
+    held = false;
+    releasedAt = performance.now();
+    const run = waiting;
+    waiting = [];
+    setTimeout(() => run.forEach((next) => next()), 0);
   };
   window.addEventListener("pointerdown", press, true);
-  return { within: (ms: number) => performance.now() - pressedAt <= ms, stop: () => window.removeEventListener("pointerdown", press, true) };
+  window.addEventListener("pointerup", release, true);
+  window.addEventListener("pointercancel", release, true);
+  return {
+    press: (): ButtonPress => (held ? "held" : performance.now() - releasedAt <= RECENT_PRESS_MS ? "recent" : "none"),
+    afterRelease: (run: () => void) => void (held ? waiting.push(run) : setTimeout(run, 0)),
+    stop: () => {
+      waiting = [];
+      window.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+    },
+  };
 }
 
 function NativeDownloadsPopover({ onFallback }: { onFallback: () => void }) {
@@ -53,7 +75,7 @@ function NativeDownloadsPopover({ onFallback }: { onFallback: () => void }) {
   const open = useWindowUiOf(windowId, (ui) => !!ui?.downloadsOpen);
   const list = useDownloads(windowId, useShallow((downloads) => downloads));
   const dark = useTheme().dark;
-  const props = useMemo(() => downloadsProps(list, fileExists, dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark]);
+  const props = useMemo(() => downloadsProps(list, downloadPresence(fileExists, !!ardiaHost && hostSupports(FILE_STATUS, ardiaHost)), dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark]);
   const latest = useRef({ list, props });
   latest.current = { list, props };
   const controller = useRef<ReturnType<typeof openNativeDownloads> | null>(null);
@@ -78,7 +100,8 @@ function NativeDownloadsPopover({ onFallback }: { onFallback: () => void }) {
       },
       close: (byPress) => (byPress ? dismissDownloadsByPress(windowId, { nativeEvent: {} }) : setDownloadsOpen(windowId, false)),
       isButton: isDownloadsButton,
-      buttonPressedWithin: presses.within,
+      buttonPress: presses.press,
+      afterButtonRelease: presses.afterRelease,
       later: (run, ms) => void setTimeout(run, ms),
       fallback: onFallback,
     });

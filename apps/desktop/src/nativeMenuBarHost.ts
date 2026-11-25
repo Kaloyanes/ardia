@@ -6,7 +6,7 @@ import { hiddenAppMenuCommands, runAppMenuChoice } from "./appMenuActions";
 import { hostSupports, invokeHost, reportHostError, type ArdiaHost } from "./host";
 import { linuxMenuShortcuts } from "./shortcuts";
 import { onLinuxCommand } from "./shims/expo-modules-core";
-import { createNativeMenuBar, menuPickFor, SET_MAIN_MENU_METHOD, structuralMenuState, type MenuPickEvent } from "./nativeMenuBar";
+import { createNativeMenuBar, menuPickFor, REQUEST_WINDOW_CLOSE_METHOD, SET_MAIN_MENU_METHOD, structuralMenuState, utilityMenuSpec, type MenuPickEvent } from "./nativeMenuBar";
 
 const EDIT_ROLES = { disabled: new Set<string>() };
 
@@ -19,9 +19,18 @@ export function startNativeMenuPicks(host: ArdiaHost, windowId: string) {
   return () => subscription.remove();
 }
 
+const menuOptions = (host: ArdiaHost) => ({ closeThroughHost: hostSupports(REQUEST_WINDOW_CLOSE_METHOD, host) });
+
+export function startUtilityMenuBar(host: ArdiaHost, windowId: string) {
+  const stopPicks = startNativeMenuPicks(host, windowId);
+  if (hostSupports(SET_MAIN_MENU_METHOD, host)) void invokeHost(SET_MAIN_MENU_METHOD, { items: utilityMenuSpec(menuOptions(host)) }, host).catch(reportHostError);
+  return stopPicks;
+}
+
 export function startNativeMenuBar(host: ArdiaHost, windowId: string) {
   const stopPicks = startNativeMenuPicks(host, windowId);
   const bar = createNativeMenuBar({
+    options: menuOptions(host),
     supports: (method) => hostSupports(method, host),
     invoke: (method, args) => invokeHost(method, args, host),
     build: () => {

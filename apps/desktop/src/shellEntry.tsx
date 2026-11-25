@@ -103,7 +103,7 @@ import { setDownloadFlowOwner } from "../../browser/src/state/telemetry/download
 import { consentToken, stillValid } from "../../browser/src/state/telemetry/choice";
 import type { LeaderLocks } from "./telemetryLeader";
 import { liveOf } from "../../browser/src/state/tabs/tabLive";
-import { startNativeMenuBar, startNativeMenuPicks } from "./nativeMenuBarHost";
+import { startNativeMenuBar, startUtilityMenuBar } from "./nativeMenuBarHost";
 
 Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, emitCommand, extensions: useExtensions, openExtension: openExtensionFromMenu, webviews, media: useMedia, lifecycle: { state: useLifecycle }, sync: linuxSyncHooks, live: linuxLiveHooks, tabLive: { liveOf }, toolbar: useToolbarAutoHide, windowMenu: linuxWindowMenu, selection: { state: usePageSelection, jump: jumpToSelection, copyQuoteLink: copyLinkToSelection, replaceInField }, calendar: { state: useCalendar, connect: connectCalendar, refresh: refreshCalendar, hide: setCalendarHidden, alert: useMeetingAlert }, inputRegions, telemetry: linuxTelemetryHooks } });
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme, depart: (tabId) => ardiaHost && forgetDepartedPage(tabId, ardiaHost.bootstrap.windowId) });
@@ -174,7 +174,7 @@ async function start() {
     startAppCommands(windowId, capabilities, undefined, UTILITY_APP_COMMANDS);
     startLinuxSync({ host: ardiaHost, candidate: false });
     followExtensionChanges(ardiaHost, settingsShowsExtensions, refreshExtensionsAfterChange);
-    startNativeMenuPicks(ardiaHost, windowId);
+    startUtilityMenuBar(ardiaHost, windowId);
     await startUtility(ardiaHost);
   } else {
     if (useBrowser.getState().windows[windowId]?.kind === "main") useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));

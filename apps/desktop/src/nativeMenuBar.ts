@@ -34,7 +34,8 @@ export type NativeMenuItem = {
 export type MenuFlags = Pick<MenuState, "disabled" | "checked" | "titles">;
 export const NO_MENU_FLAGS: MenuFlags = { disabled: [], checked: [], titles: {} };
 
-const MODIFIER_BITS: Record<string, number> = { shift: 1, control: 2, option: 4, command: 8 };
+const APPKIT = { shift: 1, control: 2, option: 4, command: 8 } as const;
+const DESKTOP_MODIFIER_BITS: Record<string, number> = { shift: APPKIT.shift, option: APPKIT.option, command: APPKIT.control, control: APPKIT.command };
 const SUBMENU_ROLES: Record<string, string> = { "menu:Window": "windowMenu", "menu:Help": "helpMenu", "menu:Bookmarks": "bookmarksMenu" };
 const ITEM_ROLES: Record<string, string> = {
   ...Object.fromEntries(EDIT_ITEMS.map((item) => [item.id, item.action])),
@@ -45,17 +46,29 @@ const ITEM_ROLES: Record<string, string> = {
 };
 const SKIPPED: ReadonlySet<string> = new Set(["window:minimizeAll"]);
 const MAC_SHORTCUTS: Record<string, Pick<NativeMenuItem, "key" | "modifiers">> = {
-  "std:quit:": { key: "q", modifiers: MODIFIER_BITS.command },
-  "std:toggleFullScreen:": { key: "f", modifiers: MODIFIER_BITS.control! | MODIFIER_BITS.command! },
+  "std:quit:": { key: "q", modifiers: APPKIT.command },
+  "std:toggleFullScreen:": { key: "f", modifiers: APPKIT.control | APPKIT.command },
+  "std:undo:": { key: "z", modifiers: APPKIT.command },
+  "std:redo:": { key: "z", modifiers: APPKIT.command | APPKIT.shift },
+  "std:cut:": { key: "x", modifiers: APPKIT.command },
+  "std:copy:": { key: "c", modifiers: APPKIT.command },
+  "std:paste:": { key: "v", modifiers: APPKIT.command },
+  "std:pasteAndMatchStyle:": { key: "v", modifiers: APPKIT.command | APPKIT.option | APPKIT.shift },
+  "std:selectAll:": { key: "a", modifiers: APPKIT.command },
+  "window:minimize": { key: "m", modifiers: APPKIT.command },
+  "window:close": { key: "w", modifiers: APPKIT.command | APPKIT.shift },
 };
+const CLOSE_WINDOW = "window:close";
+export const REQUEST_WINDOW_CLOSE_METHOD = "ArdiaShell.requestWindowClose";
+export type NativeMenuOptions = { appName?: string; closeThroughHost?: boolean };
 const APP_MENU = "menu:Ardia";
 const QUIT = "std:quit:";
 const appMenuStandardItems = (appName: string): NativeMenuItem[] => [
   { separator: true },
   { title: "Services", role: "services", children: [] },
   { separator: true },
-  { title: `Hide ${appName}`, role: "hide", key: "h", modifiers: MODIFIER_BITS.command },
-  { title: "Hide Others", role: "hideOthers", key: "h", modifiers: MODIFIER_BITS.command! | MODIFIER_BITS.option! },
+  { title: `Hide ${appName}`, role: "hide", key: "h", modifiers: APPKIT.command },
+  { title: "Hide Others", role: "hideOthers", key: "h", modifiers: APPKIT.command | APPKIT.option },
   { title: "Show All", role: "showAll" },
   { separator: true },
 ];
@@ -86,6 +99,8 @@ export function nativeMenuTitle(raw: string): string {
   return kept.trim();
 }
 
+export const desktopModifierBits = (modifiers: readonly string[]) => modifiers.reduce((bits, modifier) => bits | (DESKTOP_MODIFIER_BITS[modifier] ?? 0), 0);
+
 export function nativeMenuKey(key: string | undefined): string | undefined {
   if (!key) return undefined;
   const named = NAMED_KEYS[key];
@@ -102,7 +117,7 @@ const shortcutOf = (item: Extract<MenuItem, { id: string }>): Pick<NativeMenuIte
   if (fixed) return fixed;
   const key = nativeMenuKey(item.key);
   if (!key) return {};
-  const modifiers = (item.modifiers ?? []).reduce((bits, modifier) => bits | (MODIFIER_BITS[modifier] ?? 0), 0);
+  const modifiers = desktopModifierBits(item.modifiers ?? []);
   return { key, modifiers };
 };
 
@@ -118,7 +133,7 @@ export function structuralMenuState(state: MenuState): MenuState {
   return { ...state, bookmarkFolders: [], recentBookmarks: [], bookmarksBar: [], otherBookmarks: [], disabled: state.disabled.filter((id) => STRUCTURAL_DISABLED.has(id)), checked: [], titles: {} };
 }
 
-export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO_MENU_FLAGS, appName = "Ardia"): NativeMenuItem[] {
+export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO_MENU_FLAGS, { appName = "Ardia", closeThroughHost = false }: NativeMenuOptions = {}): NativeMenuItem[] {
   const disabled = new Set(flags.disabled);
   const checked = new Set(flags.checked);
   let budget = NATIVE_MENU_MAX_ITEMS;
@@ -142,7 +157,7 @@ export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO
       return { title: title || "Untitled", ...(role ? { role } : {}), children: tidy(converted) };
     }
     if (!title) return null;
-    const role = ITEM_ROLES[item.id];
+    const role = item.id === CLOSE_WINDOW && !closeThroughHost ? "close" : ITEM_ROLES[item.id];
     if (role) return take() ? { title, role, ...shortcutOf(item) } : null;
     const choice = appMenuChoice(item.id);
     if (!choice) return take() ? { title, enabled: false } : null;
@@ -170,10 +185,25 @@ export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO
   return items.map((item) => convert(item, 1)).filter((item): item is NativeMenuItem => !!item && !!item.children);
 }
 
+export function utilityMenuSpec({ appName = "Ardia", closeThroughHost = false }: NativeMenuOptions = {}): NativeMenuItem[] {
+  const close: NativeMenuItem = closeThroughHost
+    ? { title: "Close Window", command: MENU_PICK, arg: CLOSE_WINDOW, ...MAC_SHORTCUTS[CLOSE_WINDOW] }
+    : { title: "Close Window", role: "close", ...MAC_SHORTCUTS[CLOSE_WINDOW] };
+  const edit = EDIT_ITEMS.map((item): NativeMenuItem => ({ title: item.title, role: item.action, ...MAC_SHORTCUTS[item.id] }));
+  return [
+    { title: appName, children: [{ title: `About ${appName}`, role: "about" }, ...appMenuStandardItems(appName), { title: `Quit ${appName}`, role: "quit", ...MAC_SHORTCUTS[QUIT] }] },
+    { title: "File", children: [close] },
+    { title: "Edit", children: [...edit.slice(0, 2), { separator: true }, ...edit.slice(2)] },
+    { title: "Window", role: "windowMenu", children: [{ title: "Minimize", role: "minimize", ...MAC_SHORTCUTS["window:minimize"] }, { title: "Zoom", role: "zoom" }] },
+    { title: "Help", role: "helpMenu", children: [] },
+  ];
+}
+
 export type NativeMenuBarDeps = {
   supports(method: string): boolean;
   invoke(method: string, args: Record<string, unknown>): Promise<unknown>;
   build(): { items: readonly MenuItem[]; flags: MenuFlags };
+  options?: NativeMenuOptions;
   subscribe(changed: () => void): () => void;
   timeout(run: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -197,8 +227,8 @@ export function createNativeMenuBar(deps: NativeMenuBarDeps) {
       return;
     }
     const { items, flags } = deps.build();
-    const spec = nativeMenuSpec(items, flags);
-    const key = JSON.stringify([followsState ? nativeMenuSpec(items) : spec]);
+    const spec = nativeMenuSpec(items, flags, deps.options);
+    const key = JSON.stringify([followsState ? nativeMenuSpec(items, NO_MENU_FLAGS, deps.options) : spec]);
     if (key === sentKey && !forced) return;
     sentKey = key;
     inFlight = true;

@@ -446,19 +446,33 @@ TEST(a_menu_of_exactly_400_items_is_valid_and_401_is_not) {
 
 TEST(the_key_window_owns_the_shared_menu_bar) {
   menu::MenuOwner owner;
-  CHECK(owner.Claims("w1", false));
-  CHECK(!owner.Claims("w2", false));
+  CHECK(owner.Claims("w1", false, false));
+  CHECK(!owner.Claims("w2", false, false));
   CHECK(owner.active() == "w1");
-  CHECK(owner.Claims("w2", true));
-  CHECK(!owner.Claims("w1", false));
-  CHECK(!owner.Activate("w1", false));
-  CHECK(owner.Activate("w1", true) && owner.active() == "w1");
-  CHECK(!owner.Activate("w1", true));
+  CHECK(owner.Claims("w2", true, true));
+  CHECK(!owner.Claims("w1", false, true));
+  CHECK(owner.Activate("settings") && owner.active() == "settings");
+  CHECK(!owner.Claims("w2", false, true));
+  CHECK(!owner.Activate("settings"));
   owner.Forget("w2");
-  CHECK(owner.active() == "w1");
-  owner.Forget("w1");
-  CHECK(owner.active().empty() && owner.Claims("w3", false));
-  CHECK(!owner.Claims("", true));
+  CHECK(owner.active() == "settings");
+  owner.Forget("settings");
+  CHECK(owner.active().empty());
+  CHECK(!owner.Claims("w1", false, true));
+  CHECK(owner.active().empty());
+  CHECK(owner.Claims("w3", false, false));
+  CHECK(!owner.Claims("", true, true));
+}
+
+TEST(close_window_maps_to_appkit_perform_close) {
+  CHECK(menu::RoleNamed("close") == menu::Role::kClose);
+  CHECK(menu::SelectorFor(menu::Role::kClose) == "performClose:");
+  menu::Item item;
+  item.title = "Close Window";
+  item.role = menu::Role::kClose;
+  item.key = "w";
+  item.modifiers = menu::kCommand | menu::kShift;
+  CHECK(menu::Selectable(item));
 }
 
 TEST(shortcut_recording_suppresses_menu_keys_only_in_its_key_window) {

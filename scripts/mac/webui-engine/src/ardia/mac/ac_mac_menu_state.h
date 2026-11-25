@@ -222,14 +222,14 @@ class BookmarkMenu {
 
 class MenuOwner {
  public:
-  bool Claims(const std::string& window, bool key_window) {
+  bool Claims(const std::string& window, bool key_window, bool any_key_window) {
     if (window.empty()) return false;
-    if (key_window || active_.empty()) active_ = window;
+    if (key_window || (active_.empty() && !any_key_window)) active_ = window;
     return active_ == window;
   }
 
-  bool Activate(const std::string& window, bool has_menu) {
-    if (window.empty() || !has_menu || window == active_) return false;
+  bool Activate(const std::string& window) {
+    if (window.empty() || window == active_) return false;
     active_ = window;
     return true;
   }

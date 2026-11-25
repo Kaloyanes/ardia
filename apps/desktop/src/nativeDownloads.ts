@@ -5,8 +5,9 @@ import type { PopoverDismissReason, PopoverHandle, PopoverSpec } from "./popover
 
 export const DOWNLOADS_ROUTE = "downloads";
 export const DOWNLOADS_POPOVER = { width: 300, padding: 6, header: 28, row: 44, empty: 32, footer: 30, separator: 9, visibleRows: 8 } as const;
-export const BUTTON_PRESS_MS = 700;
+export const RECENT_PRESS_MS = 300;
 export const OUTSIDE_SETTLE_MS = 80;
+export type ButtonPress = "held" | "recent" | "none";
 const PROGRESS_MIN = 0.03;
 const MAX_ROWS = 50;
 
@@ -27,6 +28,8 @@ export type DownloadsActions = {
 };
 
 type Shown = Pick<Download, "id" | "filename" | "path" | "state" | "received" | "total" | "paused" | "dangerous" | "url" | "speed">;
+
+export const downloadPresence = (fileExists: (path: string) => boolean, statusKnown: boolean) => (path: string) => !statusKnown || fileExists(path);
 
 export function downloadsRow(d: Shown, exists: (path: string) => boolean): DownloadsRow {
   const present = d.state !== "finished" || exists(d.path);
@@ -108,7 +111,8 @@ export type NativeDownloadsDeps = {
   actions: DownloadsActions;
   close(byPress: boolean): void;
   isButton(target: EventTarget | null): boolean;
-  buttonPressedWithin(ms: number): boolean;
+  buttonPress(): ButtonPress;
+  afterButtonRelease(run: () => void): void;
   later(run: () => void, ms: number): void;
   fallback(): void;
 };
@@ -119,14 +123,16 @@ export function openNativeDownloads(deps: NativeDownloadsDeps) {
   const close = (byPress: boolean) => {
     if (live) deps.close(byPress);
   };
-  const settleOutside = () => {
-    const viaButton = () => deps.later(() => close(true), BUTTON_PRESS_MS);
-    if (deps.buttonPressedWithin(BUTTON_PRESS_MS)) return viaButton();
-    deps.later(() => (deps.buttonPressedWithin(BUTTON_PRESS_MS) ? viaButton() : close(true)), OUTSIDE_SETTLE_MS);
+  const settleOutside = (settled: boolean) => {
+    const press = deps.buttonPress();
+    if (press === "held") return deps.afterButtonRelease(() => close(true));
+    if (press === "recent") return deps.later(() => close(true), 0);
+    if (settled) return close(true);
+    deps.later(() => settleOutside(true), OUTSIDE_SETTLE_MS);
   };
   const onDismiss = (reason: PopoverDismissReason) => {
     if (fallingBack || reason === "replaced") return;
-    if (reason === "outside") return settleOutside();
+    if (reason === "outside") return settleOutside(false);
     close(false);
   };
   const { rect, side } = deps.anchor();

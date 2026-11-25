@@ -42,6 +42,7 @@ enum class Role {
   kWindowMenu,
   kHelpMenu,
   kBookmarksMenu,
+  kClose,
 };
 
 inline constexpr std::uint32_t kShift = 1;
@@ -74,7 +75,7 @@ struct RoleName {
   Role role;
 };
 
-inline constexpr std::array<RoleName, 22> kRoles = {{
+inline constexpr std::array<RoleName, 23> kRoles = {{
     {"separator", Role::kSeparator},
     {"about", Role::kAbout},
     {"services", Role::kServices},
@@ -97,6 +98,7 @@ inline constexpr std::array<RoleName, 22> kRoles = {{
     {"windowMenu", Role::kWindowMenu},
     {"helpMenu", Role::kHelpMenu},
     {"bookmarksMenu", Role::kBookmarksMenu},
+    {"close", Role::kClose},
 }};
 
 inline std::optional<Role> RoleNamed(std::string_view name) {
@@ -137,6 +139,8 @@ inline std::string_view SelectorFor(Role role) {
       return "selectAll:";
     case Role::kMinimize:
       return "performMiniaturize:";
+    case Role::kClose:
+      return "performClose:";
     case Role::kZoom:
       return "performZoom:";
     case Role::kFullScreen:

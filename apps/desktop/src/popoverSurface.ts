@@ -31,6 +31,17 @@ export function popoverBoot(host: Pick<ArdiaHost, "bootstrap"> | undefined, sear
   return { id: popover.id, route: popover.route, props: isProps(popover.props) ? popover.props : {} };
 }
 
+export type EntryKind = { kind: "popover"; boot: PopoverBoot } | { kind: "shell" } | { kind: "invalid"; reason: string };
+
+export function entryKind(host: Pick<ArdiaHost, "bootstrap"> | undefined, search: string): EntryKind {
+  const boot = popoverBoot(host, search);
+  if (boot) return { kind: "popover", boot };
+  const asked = new URLSearchParams(search).has(POPOVER_SURFACE);
+  const surface = host?.bootstrap.surface === POPOVER_SURFACE || host?.bootstrap.windowKind === POPOVER_SURFACE;
+  if (asked || surface) return { kind: "invalid", reason: "This popover's bootstrap is not valid" };
+  return { kind: "shell" };
+}
+
 export function popoverChannel(host: Pick<ArdiaHost, "invoke" | "onEvent">, boot: PopoverBoot): PopoverChannel {
   const invoke = (method: string, args: Record<string, unknown>) => Promise.resolve().then(() => host.invoke(method, args));
   return {
