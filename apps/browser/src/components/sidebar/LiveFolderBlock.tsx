@@ -7,7 +7,7 @@ import type { LiveItem } from "../../state/live/types";
 import { usePageProfileId, useTab } from "../../state/browser/hooks";
 import { useLiveActiveTab, useLiveStrays } from "../../state/sidebar/hooks";
 import { liveFolderKeep } from "../../state/sidebar/liveRows";
-import { Badge, Button, ContextMenuArea, Dot, ink, space, Symbol, useHover } from "../ui";
+import { Badge, Button, ContextMenuArea, clippedContinuousCorners, Dot, ink, space, Symbol, useHover } from "../ui";
 import { layout, useTheme } from "../ui/theme";
 import { useLiveColors } from "../live/tokens";
 import { TabRow } from "./TabRow";
@@ -83,7 +83,7 @@ export const LiveFolderBlock = memo(function LiveFolderBlock({ folderId, windowI
       <View {...box.hoverProps} style={BOX_ROOM}>
         <Animated.View
           pointerEvents="none"
-          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, borderRadius: GROUP_RADIUS, backgroundColor: fill, borderWidth: GROUP_BORDER, borderColor: stroke, opacity: boxOpacity }}
+          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, ...clippedContinuousCorners(GROUP_RADIUS), backgroundColor: fill, borderWidth: GROUP_BORDER, borderColor: stroke, opacity: boxOpacity }}
         />
         <View ref={headerRef} {...handle} style={HEADER_ROOM}>
           <FolderHeader folderId={folderId} windowId={windowId} collapsed={collapsed} />
