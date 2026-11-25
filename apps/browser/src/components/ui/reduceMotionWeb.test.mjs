@@ -67,3 +67,15 @@ test("a failed first answer keeps the reduced-motion preference the web already 
   assert.equal(await unknown.reduceMotionKnown, false);
   assert.equal(unknown.reduceMotion(), false);
 });
+
+test("a first answer that lands after the web already read the preference does not overwrite it, and later changes still do", async () => {
+  const at = settle.length;
+  const web = await load("resolved-web", () => ({ matches: true }));
+  settle[at](false);
+  assert.equal(await web.reduceMotionKnown, true);
+  assert.equal(web.reduceMotion(), true);
+  changeListeners.at(-1)(false);
+  assert.equal(web.reduceMotion(), false);
+  changeListeners.at(-1)(true);
+  assert.equal(web.reduceMotion(), true);
+});

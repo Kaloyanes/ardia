@@ -113,7 +113,7 @@ type MaterialFill = { light: string; dark: string };
 const MATERIAL_FILL: Record<string, MaterialFill> = {
   popover: popoverMenuMaterial,
   menu: popoverMenuMaterial,
-  hudWindow: { light: "rgba(246,246,246,0.6)", dark: "rgba(30,30,30,0.6)" },
+  hudWindow: { light: "rgba(30,30,30,0.6)", dark: "rgba(30,30,30,0.6)" },
   sidebar: { light: "rgba(240,240,240,0.5)", dark: "rgba(46,46,48,0.5)" },
   underWindowBackground: { light: "rgba(240,240,240,0.4)", dark: "rgba(30,30,30,0.4)" },
 };
