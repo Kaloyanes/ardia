@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ScrollView, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Point } from "../../lib/menuPlace";
+import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useSearchEditsPage, useSearchOpen, useSearchSession } from "../../state/search/hooks";
-import { searchState, useSearch } from "../../state/search/store";
+import { searchFieldText, searchState, settleSearchAsSubmitted, useSearch } from "../../state/search/store";
 import { coverTray } from "../../state/search/trayBack";
 import { openRemote } from "../../state/sync/actions";
 import { useSelectedProfile } from "../../state/sync/hooks";
@@ -13,32 +14,55 @@ import { useIncognito } from "../../state/tabs/hooks";
 import { useTabs } from "../../state/tabs/store";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { FloatingMenu, space, tabsLayout, trayMotion, type MenuItem } from "../ui";
+import { useFocusReturn } from "../ui/focusReturn";
 import { pinnedFolderMenu, pinnedLinkMenu, Tiles, type PinOpener } from "../sync/SpacesParts";
 import { useKeyboardTopFromBottom } from "./useKeyboardHeight";
 
 export const NEW_TAB_PINS_MIN_ROOM = 64;
 
-type PinsMenu = { items: MenuItem[]; at: Point | null; anchor?: RefObject<ViewInstance | null>; session: number; profileId: string; pinKey: string };
+type PinsMenu = { kind: "link" | "folder"; pinKey: string; at: Point | null; anchor?: RefObject<ViewInstance | null>; from: RefObject<ViewInstance | null> | null; session: number; profileId: string };
 
 export type NewTabPinsShown = { profileId: string; tiles: PinnedTile[] };
 
-export const holdsPin = (tiles: readonly PinnedTile[], key: string | null) => key !== null && tiles.some((tile) => tile.key === key || (tile.folder ?? []).some((tab) => tab.key === key));
+type PinEntry = { url: string; title: string };
 
-function pinStillOffered(session: number, profileId: string, key: string | null): boolean {
+export function pinEntry(tiles: readonly PinnedTile[], key: string | null): PinEntry | null {
+  if (key === null) return null;
+  for (const tile of tiles) {
+    if (tile.key === key && !tile.folder?.length) return { url: tile.url, title: tile.title };
+    const inFolder = (tile.folder ?? []).find((tab) => tab.key === key);
+    if (inFolder) return { url: inFolder.url, title: inFolder.title };
+  }
+  return null;
+}
+
+function offeredPin(session: number, profileId: string, key: string | null): PinEntry | null {
   const search = searchState();
-  if (!search.open || search.session !== session || search.editsPage || search.text.trim() !== "" || useTabs.getState().incognito) return false;
+  if (!search.open || search.session !== session || search.editsPage || searchFieldText().trim() !== "" || useTabs.getState().incognito) return null;
   const { view, status } = useSync.getState();
   const profile = shownProfile(view, status);
-  return profile?.syncId === profileId && holdsPin(profile.pinned.tiles, key);
+  return profile?.syncId === profileId ? pinEntry(profile.pinned.tiles, key) : null;
 }
 
 const opensOfferedPin =
-  (session: number, profileId: string): PinOpener =>
-  (url, title, key) => {
-    if (!pinStillOffered(session, profileId, key)) return;
+  (session: number, profileId: string, onLeave: () => void): PinOpener =>
+  (_url, _title, key) => {
+    const entry = offeredPin(session, profileId, key);
+    if (!entry) return;
     countUsage("new_tab_pins_opened");
-    openRemote(url, title, profileId, key);
+    openRemote(entry.url, entry.title, profileId, key);
+    settleSearchAsSubmitted();
+    onLeave();
   };
+
+function menuItems(menu: PinsMenu, tiles: readonly PinnedTile[], open: PinOpener): MenuItem[] {
+  const tile = tiles.find((candidate) => candidate.key === menu.pinKey);
+  if (!tile) return [];
+  if (menu.kind === "folder") return tile.folder?.length ? pinnedFolderMenu(tile, menu.profileId, open) : [];
+  return tile.folder?.length ? [] : pinnedLinkMenu(tile.url, tile.title, menu.profileId, tile.key, open);
+}
+
+const leavesNothing = () => undefined;
 
 export function useNewTabPins(): NewTabPinsShown | null {
   const editsPage = useSearchEditsPage();
@@ -49,31 +73,55 @@ export function useNewTabPins(): NewTabPinsShown | null {
   return { profileId: profile.syncId, tiles: profile.pinned.tiles };
 }
 
-export function NewTabPins({ style, maxHeight, plate = null, inset = 0 }: { style?: StyleProp<ViewStyle>; maxHeight?: number; plate?: ReactNode; inset?: number }) {
+export function NewTabPins({ style, maxHeight, plate = null, inset = 0, anchorShift = 0, onLeave = leavesNothing }: { style?: StyleProp<ViewStyle>; maxHeight?: number; plate?: ReactNode; inset?: number; anchorShift?: number; onLeave?: () => void }) {
   const pins = useNewTabPins();
   const open = useSearchOpen();
   const session = useSearchSession();
   const window = useWindowDimensions();
   const keyboardTop = useKeyboardTopFromBottom();
+  const returnFocus = useFocusReturn();
+  const stopReturn = useRef<() => void>(() => undefined);
+  useEffect(() => () => stopReturn.current(), []);
   const [menu, setMenu] = useState<PinsMenu | null>(null);
   const shown = pins !== null && open && (maxHeight === undefined || maxHeight >= NEW_TAB_PINS_MIN_ROOM);
-  const menuShown = shown && menu !== null && menu.session === session && menu.profileId === pins.profileId && holdsPin(pins.tiles, menu.pinKey);
+  const opener = pins ? opensOfferedPin(session, pins.profileId, onLeave) : null;
+  const items = shown && menu && opener && menu.session === session && menu.profileId === pins.profileId ? menuItems(menu, pins.tiles, opener) : [];
+  const menuShown = menu !== null && items.length > 0;
   const menuStale = menu !== null && !menuShown;
   useEffect(() => {
     if (menuStale) setMenu(null);
   }, [menuStale]);
   useEffect(() => (menuShown ? coverTray() : undefined), [menuShown]);
-  if (!shown) return null;
-  const opener = opensOfferedPin(session, pins.profileId);
+  if (!shown || !opener) return null;
+  const openMenu = (next: Omit<PinsMenu, "session" | "profileId">) => {
+    stopReturn.current();
+    menuOpenedHaptic();
+    setMenu({ ...next, session, profileId: pins.profileId });
+  };
+  const closeMenu = (chosen?: boolean) => {
+    const from = menu?.from ?? null;
+    const pinKey = menu?.pinKey ?? null;
+    setMenu(null);
+    if (chosen || !from) return;
+    stopReturn.current = returnFocus(
+      () => from.current,
+      () => {
+        const now = searchState();
+        if (!now.open || now.session !== session) return false;
+        const { view, status } = useSync.getState();
+        return (shownProfile(view, status)?.pinned.tiles ?? []).some((tile) => tile.key === pinKey);
+      },
+    );
+  };
   const tiles = (
     <Tiles
       tiles={pins.tiles}
       profileId={pins.profileId}
       open={opener}
-      onLink={(url, title, at, pinnedKey) => {
-        if (pinnedKey !== null) setMenu({ items: pinnedLinkMenu(url, title, pins.profileId, pinnedKey, opener), at, session, profileId: pins.profileId, pinKey: pinnedKey });
+      onLink={(_url, _title, at, pinnedKey, from) => {
+        if (pinnedKey !== null) openMenu({ kind: "link", pinKey: pinnedKey, at, from: from ?? null });
       }}
-      onFolder={(tile, anchor) => setMenu({ items: pinnedFolderMenu(tile, pins.profileId, opener), at: null, anchor, session, profileId: pins.profileId, pinKey: tile.key })}
+      onFolder={(tile, anchor) => openMenu({ kind: "folder", pinKey: tile.key, at: null, anchor, from: anchor })}
     />
   );
   return (
@@ -90,14 +138,15 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0 }: { styl
       </View>
       {menuShown ? (
         <FloatingMenu
-          items={menu.items}
+          items={items}
           anchor={menu.anchor}
+          anchorShift={anchorShift}
           at={menu.at}
           floor={keyboardTop ? window.height - keyboardTop : null}
           dimmed={menu.at !== null}
           frost={null}
           place={{ top: 0, left: space.xl, width: tabsLayout.menuWidth }}
-          onDismiss={() => setMenu(null)}
+          onDismiss={closeMenu}
         />
       ) : null}
     </Animated.View>

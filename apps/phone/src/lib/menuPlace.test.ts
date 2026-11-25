@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ANDROID_MENU_SIZES, IPHONE_MENU_SIZES, menuAt, menuHeight, menuOnTrigger, menuShrink, roomAbove, tallestMenuPage } from "./menuPlace.ts";
+import { ANDROID_MENU_SIZES, IPHONE_MENU_SIZES, menuAt, menuHeight, menuOnTrigger, keepAbove, menuShrink, roomAbove, tallestMenuPage } from "./menuPlace.ts";
 
 const { row: MENU_ROW, heading: MENU_HEADING, divider: MENU_DIVIDER, padding: MENU_PADDING } = IPHONE_MENU_SIZES;
 
@@ -146,4 +146,16 @@ test("a menu anchored on a tile above the keyboard stays above it: a 12-row fold
   assert.ok(bounded.height < wanted);
   assert.deepEqual(roomAbove(phone, null), phone);
   assert.deepEqual(roomAbove(phone, 900), phone);
+});
+
+test("the keyboard's top is a hard limit: an anchor measured below it, where the stage's lift hasn't moved it, still gets a menu that ends above the keyboard", () => {
+  const phone = { x: 0, y: 0, width: 393, height: 852 };
+  const unlifted = { x: 16, y: 520, width: 82, height: 56 };
+  const room = roomAbove(phone, 517);
+  const loose = menuOnTrigger(unlifted, phone, room, 250, 12 * MENU_ROW + MENU_PADDING, 8);
+  assert.ok(loose.top + loose.height > 517);
+  const held = keepAbove(loose, 517 - 8, 8);
+  assert.ok(held.top >= 8);
+  assert.ok(held.top + held.height <= 509);
+  assert.deepEqual(keepAbove(loose, null, 8), loose);
 });

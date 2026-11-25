@@ -317,6 +317,15 @@ export function typeSearch(text: string) {
   });
 }
 
+export function searchFieldText(): string {
+  const { text, session } = useSearch.getState();
+  return typed !== null && typed.session === session ? typed.text : text;
+}
+
+export function settleSearchAsSubmitted() {
+  if (!useSearch.getState().open) useSearch.setState({ ending: "submitted" });
+}
+
 export function setSearchText(text: string) {
   if (frame !== null) cancelAnimationFrame(frame);
   frame = null;

@@ -9,6 +9,7 @@ import { CrossfadeText } from "../settings/SettingsKit";
 import { haptics } from "../../state/app/haptics";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { closeArchive, openArchive } from "../../state/browse/store";
+import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { openSettings } from "../../state/settings/nav";
 import { openRemote, selectProfile, syncNow } from "../../state/sync/actions";
 import { useSelectedProfile, useSyncStatus, useSyncView } from "../../state/sync/hooks";
@@ -203,7 +204,10 @@ function SpacePage({ profile, isShown, onMenu, bottom }: { profile: SyncedProfil
     return before ? new Set([...now].filter((key) => !before.has(key))) : new Set<string>();
   }, [rows]);
   const toggle = (key: string) => toggleSpaceRow(profile.syncId, key);
-  const linkMenu = (url: string, title: string, at: Point | null, pinnedKey: string | null = null) => onMenu({ items: pinnedLinkMenu(url, title, profile.syncId, pinnedKey), at });
+  const linkMenu = (url: string, title: string, at: Point | null, pinnedKey: string | null = null) => {
+    menuOpenedHaptic();
+    onMenu({ items: pinnedLinkMenu(url, title, profile.syncId, pinnedKey), at });
+  };
   return (
     <FlatList
       data={rows}

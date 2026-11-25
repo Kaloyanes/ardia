@@ -4,7 +4,7 @@ import { lookIsNative } from "@ardia/phone-native";
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withAlpha } from "../../lib/color";
-import { insetRect, MENU_MARGIN, menuAt, menuHeight, menuOnTrigger, menuShrink, roomAbove, type MenuAlign, type MenuLimits, type Point, type Rect } from "../../lib/menuPlace";
+import { insetRect, keepAbove, MENU_MARGIN, menuAt, menuHeight, menuOnTrigger, menuShrink, roomAbove, type MenuAlign, type MenuLimits, type Point, type Rect } from "../../lib/menuPlace";
 import { useReduceMotion } from "./contrast";
 import { focusForScreenReader } from "./coverFocus";
 import { useDesign } from "./design";
@@ -455,7 +455,8 @@ export function pointPlacer(at: Point, screen: { width: number; height: number }
 function triggerPlacer(row: Rect, host: Rect, insets: Insets, width: number, align?: MenuAlign, clearAnchor = false, floor?: number | null): MenuPlacer {
   return (height, keepBelow, pageWidth = width) => {
     if (host.width > 0) pageWidth = Math.min(pageWidth, Math.max(1, host.width - insets.left - insets.right - MENU_MARGIN * 2));
-    const spot = menuOnTrigger(row, host, roomAbove(host.width > 0 ? insetRect(host, insets) : host, floor), pageWidth, height, MENU_MARGIN, keepBelow, align, clearAnchor);
+    const room = roomAbove(host.width > 0 ? insetRect(host, insets) : host, floor);
+    const spot = keepAbove(menuOnTrigger(row, host, room, pageWidth, height, MENU_MARGIN, keepBelow, align, clearAnchor), floor === null || floor === undefined ? null : floor - host.y - MENU_MARGIN, room.y - host.y + MENU_MARGIN);
     return { place: { left: spot.left, top: spot.top, width: pageWidth }, origin: spot.origin, maxHeight: spot.height, shrink: menuShrink(row, pageWidth, spot.height) };
   };
 }
@@ -484,9 +485,9 @@ export const menuExitMs = (dimmed?: boolean) => (dimmed ? menuMotion.heldClose :
 
 const widthOf = (place: ViewStyle) => (typeof place.width === "number" ? place.width : menuLook.width);
 
-type FloatingProps = Omit<Props, "shown" | "origin" | "placer" | "place"> & { place?: ViewStyle; anchor?: RefObject<ViewInstance | null>; at?: Point | null; align?: MenuAlign; floor?: number | null };
+type FloatingProps = Omit<Props, "shown" | "origin" | "placer" | "place"> & { place?: ViewStyle; anchor?: RefObject<ViewInstance | null>; anchorShift?: number; at?: Point | null; align?: MenuAlign; floor?: number | null };
 
-export function FloatingMenu({ items, place = {}, onDismiss, anchor, at, align, floor, dimmed, frost, privately }: FloatingProps) {
+export function FloatingMenu({ items, place = {}, onDismiss, anchor, anchorShift = 0, at, align, floor, dimmed, frost, privately }: FloatingProps) {
   const material = useDesign() === "material";
   const hostFrame = useOverlayFrame();
   const insets = useSafeAreaInsets();
@@ -498,7 +499,7 @@ export function FloatingMenu({ items, place = {}, onDismiss, anchor, at, align, 
     if (at && !anchor) return;
     let live = true;
     void Promise.all([hostFrame(), anchor ? measureAnchor(anchor) : Promise.resolve(null)]).then(([host, row]) => {
-      if (live) setMeasured({ host, row: row && row.height > 0 ? row : null });
+      if (live) setMeasured({ host, row: row && row.height > 0 ? { ...row, y: row.y + anchorShift } : null });
     });
     return () => {
       live = false;

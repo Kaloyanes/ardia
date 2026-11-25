@@ -2875,13 +2875,23 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       change: `SearchStagePanelView` is an Expo Fabric view, so its hit test is React Native's, which follows the
       layout's `overflowInset` into children outside the panel's bounds.
     - **They leave at once:** typing, Incognito, the address tap or a space with no pins removes them in the same
-      render, with no exit fade, so nothing outgoing takes a touch; and every open (tile, long-press Open, a
-      folder's row) checks again that search is still open on an empty new-tab field, not Incognito, in the same
-      space, with that pin still there, before it calls `openRemote`.
-    - **Menus:** a long-press or folder menu belongs to the panel's session, the space and the pin it opened on; if
-      any of them changes or the panel closes, the menu goes and its `coverTray()` is released, so Android's
-      predictive Back works again. Both menus are bounded by the keyboard's top (`floor`, which anchored menus now
-      honour through `roomAbove`), so a long folder scrolls above the keyboard instead of running under it.
+      render, with no exit fade, so nothing outgoing takes a touch. Every open (tile, long-press Open, a folder's
+      row) checks again at the press, against the pin as sync has it now: search still open in the same session,
+      the field empty counting a keystroke still waiting for its frame (`searchFieldText`), not Incognito, the same
+      space, and the pin or folder row still there, whose current address is what opens. A pin open leaves search
+      with the submitted exit (`settleSearchAsSubmitted`, and the Android panel departs), as a row does, not the
+      cancel morph.
+    - **Menus:** a long-press or folder menu is built from the current pins each render, so a pin the Mac moves shows
+      its new address and a removed folder row leaves the open menu; it belongs to the panel's session, the space
+      and its pin, and if any of them changes or the panel closes it goes and its `coverTray()` is released, so
+      Android's predictive Back works again. Closed without a choice, it hands screen-reader focus back to its tile
+      (`useFocusReturn`). Both menus stop at the keyboard's top as a hard limit (`roomAbove`, `keepAbove`); on
+      iPhone a folder menu measures its tile shifted by the stage's lift (`anchorShift`), since Fabric's measure
+      doesn't see the transform the native stage applies.
+    - **At launch with Auto-Open Keyboard:** the stage's first `present()` can reach the main queue before Fabric has
+      mounted its native view, and Expo refuses it ("Unable to find the 'SearchStageView' view"). The refusal went
+      unseen, so the launch panel never counted as presented: no tiles, and none of `launchTrayUp`,
+      `stagePresented` or `searchPresented` ran. The open now asks again on each of the next three frames.
     - **Android:** beside the panel with the panel's own lift transform in the redesign, and above the rows in the
       Material You search sheet. A space with more pins than fit above the panel scrolls.
     - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened` on iPhone, filtered by the envelope's `platform`; `new_tab_search_opened` isn't counted on Android.

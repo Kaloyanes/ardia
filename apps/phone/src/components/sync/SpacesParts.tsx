@@ -5,7 +5,7 @@ import { openSettings } from "../../state/settings/nav";
 import { openRemote } from "../../state/sync/actions";
 import { remoteTitle } from "../../state/sync/spaces";
 import type { PinnedTile, SyncedProfile } from "../../state/sync/store";
-import { copyLink, menuOpenedHaptic, shareUrl } from "../../state/browse/tabMenus";
+import { copyLink, shareUrl } from "../../state/browse/tabMenus";
 import { capsule, controlRadius, Favicon, font, iconRoles, isSymbolName, screenReaderActions, space, spacesLayout, Symbol, useTheme, ActionButton, slopToReach, Tappable, usePressStyle, type MenuItem } from "../ui";
 import type { Point } from "../../lib/menuPlace";
 import { actionWords, destinationWords } from "../../lib/sharedWords";
@@ -20,7 +20,6 @@ export type PinOpener = (url: string, title: string, pinnedKey: string | null) =
 const opensRemote = (profileId: string): PinOpener => (url, title, pinnedKey) => openRemote(url, title, profileId, pinnedKey);
 
 export function pinnedLinkMenu(url: string, title: string, profileId: string, pinnedKey: string | null = null, open: PinOpener = opensRemote(profileId)): MenuItem[] {
-  menuOpenedHaptic();
   const sharing: MenuItem[] = /^https?:\/\//i.test(url)
     ? [
         { label: actionWords.copyLink, icon: iconRoles.copyLink, onPress: () => copyLink(url) },
@@ -34,7 +33,7 @@ export function pinnedFolderMenu(tile: PinnedTile, profileId: string, open: PinO
   return (tile.folder ?? []).map((tab) => ({ label: remoteTitle(tab.title, tab.url), onPress: () => open(tab.url, tab.title, tab.key) }));
 }
 
-export function Tiles({ tiles, profileId, onFolder, onLink, open = opensRemote(profileId) }: { tiles: PinnedTile[]; profileId: string; onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void; onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null) => void; open?: PinOpener }) {
+export function Tiles({ tiles, profileId, onFolder, onLink, open = opensRemote(profileId) }: { tiles: PinnedTile[]; profileId: string; onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void; onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null, from?: RefObject<ViewInstance | null>) => void; open?: PinOpener }) {
   const { width, fontScale } = useWindowDimensions();
   const height = Math.min(TILE_HEIGHT * fontScale, TILE_HEIGHT_MAX);
   const titled = fontScale < SPACES_LARGE_TEXT;
@@ -69,7 +68,7 @@ function TileButton({
   height: number;
   titled: boolean;
   onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void;
-  onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null) => void;
+  onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null, from?: RefObject<ViewInstance | null>) => void;
   open: PinOpener;
 }) {
   const theme = useTheme();
@@ -89,8 +88,8 @@ function TileButton({
         }
         open(tile.url, tile.title, tile.key);
       }}
-      onLongPress={folder ? undefined : (event) => onLink(tile.url, tile.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }, tile.key)}
-      {...(folder ? {} : screenReaderActions([{ name: "longpress", run: () => onLink(tile.url, tile.title, null, tile.key) }]))}
+      onLongPress={folder ? undefined : (event) => onLink(tile.url, tile.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }, tile.key, anchor)}
+      {...(folder ? {} : screenReaderActions([{ name: "longpress", run: () => onLink(tile.url, tile.title, null, tile.key, anchor) }]))}
       style={tileStyle}
     >
       <View testID="spaceTileFace" style={[styles.tileFace, { height, backgroundColor: theme.groupFill }]}>

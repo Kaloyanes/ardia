@@ -610,7 +610,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
         <MotionView style={StyleSheet.absoluteFill} pointerEvents="box-none" to={departed ? PANEL_DEPARTED : PANEL_HOME} motion={PANEL_DEPART}>
         {arcPanel && furnished && !standby && !closing ? (
           <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, pinsStyle]}>
-            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} inset={place.cardInset} plate={origin === "page" ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null} />
+            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} inset={place.cardInset} onLeave={beginDeparture} plate={origin === "page" ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null} />
           </Animated.View>
         ) : null}
         <Animated.View
@@ -675,6 +675,8 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   );
 }
 
+
+const STAGE_PRESENT_RETRIES = 3;
 
 let knownLift = 0;
 let knownFieldHeight = 0;
@@ -754,14 +756,23 @@ function StagedTray() {
     if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
     setPresented(false);
     const launch = searchState().arrival === "atRest";
-    void stage.current?.present().then(() => {
-      if (live.current.presentation !== presentation || live.current.closing) return;
+    const stillThisOne = () => live.current.presentation === presentation && !live.current.closing;
+    const presented = () => {
+      if (!stillThisOne()) return;
       if (launch) launchTrayUp();
       markSearchPhase("presented");
       setPresented(true);
       stagePresented();
       searchPresented(searchState().session);
-    });
+    };
+    const tryPresent = (triesLeft: number) => {
+      const asked = stage.current?.present();
+      if (!asked) return;
+      asked.then(presented, () => {
+        if (triesLeft > 0 && stillThisOne()) requestAnimationFrame(() => tryPresent(triesLeft - 1));
+      });
+    };
+    tryPresent(STAGE_PRESENT_RETRIES);
   };
   const clearsPrefill = searchPanelShown(phoneLayout, command !== null);
   useLayoutEffect(() => setSearchClearsPagePrefill(clearsPrefill), [clearsPrefill]);
@@ -1049,6 +1060,7 @@ function StagedTray() {
               style={[styles.pinsAbovePanel, { paddingLeft: insets.left, paddingRight: insets.right }]}
               maxHeight={window.height - insets.top - lift.lift - trayHeight - place.cardGap - space.m * 2}
               inset={place.cardInset}
+              anchorShift={lift.up ? -lift.lift : 0}
               plate={overPage ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null}
             />
           ) : null}

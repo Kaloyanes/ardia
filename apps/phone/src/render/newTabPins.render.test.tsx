@@ -4,17 +4,19 @@ import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, FloatingMenu } from "../components/ui";
 import * as browse from "../state/browse/store";
 import { history } from "../state/history/store";
-import { dismissSearch, presentSearch, setSearchText } from "../state/search/store";
+import { dismissSearch, presentSearch, searchState, setSearchText, typeSearch } from "../state/search/store";
 import { useStageBar } from "../state/search/stageBar";
 import { useTrayCovers } from "../state/search/trayBack";
 import * as syncActions from "../state/sync/actions";
 import { OFF_STATUS, useSync, type PinnedTile, type SyncedProfile } from "../state/sync/store";
 import { currentTabs, updateTabById, useTabs } from "../state/tabs/store";
 import * as telemetry from "../state/telemetry/telemetry";
+import * as focusReturn from "../components/ui/focusReturn";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const mockFaceTaken = { then: (taken: () => void) => taken() };
 const mockStage = { present: jest.fn(() => mockFaceTaken), holdLift: jest.fn(), releaseLift: jest.fn(), close: jest.fn(), finish: jest.fn() };
+const mockSeen: { props: Record<string, unknown> | null } = { props: null };
 
 jest.mock("@ardia/phone-native", () => {
   const actual = jest.requireActual("@ardia/phone-native");
@@ -23,6 +25,7 @@ jest.mock("@ardia/phone-native", () => {
   const onIPhone = () => native.Platform.OS === "ios";
   const SearchStage = React.forwardRef((props: Record<string, unknown>, ref) => {
     React.useImperativeHandle(ref, () => mockStage, []);
+    mockSeen.props = props;
     const { onLift, onReveal, onSettled, morphLook, anchorNativeId, faceNativeId, commandTop, fieldCenter, shown, ...rest } = props;
     return React.createElement(native.View, rest);
   });
@@ -319,5 +322,80 @@ test("a tap held from an earlier panel opens nothing in the next one, even with 
   expect(opened).not.toHaveBeenCalled();
   act(() => pressOf(root, "Pin 1")());
   expect(opened).toHaveBeenCalledWith("https://pin1.example/", "Pin 1", "work", "k1");
+  unmount(root);
+});
+
+const itemsOf = (root: Root) => menus(root)[0]!.props.items as { label: string; onPress: () => void }[];
+const longPress = (root: Root, label: string) => act(() => root.root.findAll((node) => node.props.accessibilityLabel === label && typeof node.props.onLongPress === "function")[0]!.props.onLongPress({ nativeEvent: { pageX: 40, pageY: 300 } }));
+const pinsWith = (changes: (tiles: PinnedTile[]) => PinnedTile[]) => act(() => withSpace(changes([tile(0), tile(1), tile(2, FOLDER)])));
+
+onIPhone("on iPhone a folder menu measures its tile where the stage has lifted it, not where its layout left it", () => {
+  act(() => browse.newTab());
+  const root = tray();
+  act(() => (mockSeen.props!.onLift as (lift: { lift: number; up: boolean }) => void)({ lift: 336, up: true }));
+  tap(root, "Pin 2");
+  expect(menus(root)[0]!.props.anchorShift).toBe(-336);
+  unmount(root);
+});
+
+test("a pin menu reads the pin as it is now: a changed address opens the new one, and a folder row the Mac removed is gone from the open menu", () => {
+  const opened = jest.spyOn(syncActions, "openRemote").mockImplementation(() => undefined);
+  act(() => browse.newTab());
+  const root = tray();
+  longPress(root, "Pin 1");
+  pinsWith((tiles) => tiles.map((pin) => (pin.key === "k1" ? { ...pin, url: "https://moved.example/", title: "Moved" } : pin)));
+  act(() => itemsOf(root).find((item) => item.label === "Open")!.onPress());
+  expect(opened).toHaveBeenCalledWith("https://moved.example/", "Moved", "work", "k1");
+  opened.mockClear();
+  act(() => menus(root)[0]?.props.onDismiss(true));
+  const twoRows = [{ key: "f0", title: "Folder Tab", url: "https://folder.example/", icon: null }, { key: "f1", title: "Second Tab", url: "https://second.example/", icon: null }];
+  pinsWith((tiles) => tiles.map((pin) => (pin.key === "k2" ? { ...pin, folder: twoRows } : pin)));
+  tap(root, "Pin 2");
+  expect(itemsOf(root).map((item) => item.label)).toEqual(["Folder Tab", "Second Tab"]);
+  const staleRow = itemsOf(root)[1]!.onPress;
+  pinsWith((tiles) => tiles.map((pin) => (pin.key === "k2" ? { ...pin, folder: [twoRows[0]!] } : pin)));
+  expect(itemsOf(root).map((item) => item.label)).toEqual(["Folder Tab"]);
+  act(() => staleRow());
+  expect(opened).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+test("a pin tapped after typing has started but before the field's text has landed opens nothing", () => {
+  const opened = jest.spyOn(syncActions, "openRemote").mockImplementation(() => undefined);
+  act(() => browse.newTab());
+  const root = tray();
+  const press = pressOf(root, "Pin 1");
+  typeSearch("a");
+  press();
+  expect(opened).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+test("a pin opens with the submitted exit, like a row, and a pin menu closed without a choice hands focus back to its tile", () => {
+  const handBack = jest.fn(() => () => undefined);
+  jest.spyOn(focusReturn, "useFocusReturn").mockReturnValue(handBack);
+  act(() => browse.newTab());
+  const root = tray();
+  tap(root, "Pin 2");
+  act(() => menus(root)[0]!.props.onDismiss());
+  expect(handBack).toHaveBeenCalledTimes(1);
+  const target = (handBack.mock.calls[0] as unknown as [() => unknown])[0];
+  expect(target()).toBeTruthy();
+  tap(root, "Pin 2");
+  act(() => menus(root)[0]!.props.onDismiss(true));
+  expect(handBack).toHaveBeenCalledTimes(1);
+  tap(root, "Pin 1");
+  expect(searchState().open).toBe(false);
+  expect(searchState().ending).toBe("submitted");
+  unmount(root);
+});
+
+onIPhone("when the stage's first present is refused because its native view isn't mounted yet, as at a launch with Auto-Open Keyboard, it asks again next frame and the tiles still come", () => {
+  mockStage.present.mockImplementationOnce(() => ({ then: (_presented: () => void, refused: (error: Error) => void) => refused(new Error("Unable to find the 'SearchStageView' view")) }) as never);
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  act(() => jest.advanceTimersByTime(20));
+  expect(mockStage.present.mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(pins(root)).toBeDefined();
   unmount(root);
 });
