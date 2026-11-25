@@ -1,6 +1,7 @@
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -78,6 +79,7 @@ SCENARIOS = r'''#include <malloc.h>
 #include "ui/base/ime/wipe_text.h"
 
 static bool g_watching = false;
+static const char16_t* volatile g_escaped = nullptr;
 static int g_freed_secrets = 0;
 
 static bool HoldsSecret(const void* block, size_t size) {
@@ -128,6 +130,7 @@ int main() {
   g_watching = true;
   {
     std::u16string unwiped(u"QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ");
+    g_escaped = unwiped.data();
   }
   assert(g_freed_secrets == 1);
   g_freed_secrets = 0;
@@ -219,6 +222,8 @@ class ImePasswordCopiesTests(unittest.TestCase):
         self.assertEqual(steps[names.index(PATCH.name)], ['chromium', PATCH.name, 'linux'])
 
     def test_the_wipe_helper_zeroes_text_before_its_memory_is_released(self):
+        if not sys.platform.startswith('linux'):
+            self.skipTest('the scenario watches frees with glibc\'s malloc_usable_size')
         compiler = shutil.which('clang++') or shutil.which('c++')
         if compiler is None:
             self.skipTest('C++ compiler is unavailable')

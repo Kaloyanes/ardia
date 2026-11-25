@@ -99,7 +99,12 @@ export class WaylandInputMethod {
       const objectId = this.pending.readUInt32LE(0);
       const word = this.pending.readUInt32LE(4);
       const size = word >>> 16;
-      if (size < 8 || this.pending.length < size) break;
+      if (size < 8) {
+        this.fail(new Error(`a Wayland message header for object ${objectId} claims ${size} bytes`));
+        this.pending = Buffer.alloc(0);
+        break;
+      }
+      if (this.pending.length < size) break;
       const body = this.pending.subarray(8, size);
       this.pending = this.pending.subarray(size);
       try {
@@ -138,7 +143,7 @@ export class WaylandInputMethod {
     this.handlers.delete(callback);
   }
 
-  bind(name, timeout) {
+  bind(name) {
     const global = this.globals.get(name);
     if (!global) throw new Error(`the compositor offers no ${name}`);
     const id = this.newId(() => {});
