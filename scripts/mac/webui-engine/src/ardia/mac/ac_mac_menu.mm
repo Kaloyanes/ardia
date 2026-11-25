@@ -26,6 +26,7 @@
 @end
 
 @interface ArdiaMacShareMenuFiller : NSObject <NSMenuDelegate>
+- (void)openSharingSettings:(id)sender;
 @end
 
 namespace ardia_mac {
@@ -579,6 +580,10 @@ void ShowContextMenu(LiveMenuView live_view,
   return item;
 }
 
+- (void)openSharingSettings:(id)sender {
+  ardia_mac::share::OpenSharingSettingsFromMenu();
+}
+
 - (void)menuNeedsUpdate:(NSMenu*)menu {
   for (NSInteger index = menu.numberOfItems - 1; index >= 0; --index) {
     if ([menu itemAtIndex:index].tag == ardia_mac::kShareServiceTag) {
@@ -595,7 +600,9 @@ void ShowContextMenu(LiveMenuView live_view,
     gap.tag = ardia_mac::kShareServiceTag;
     [menu insertItem:gap atIndex:at];
   }
-  NSMenuItem* more = [self shareItem:@"More\u2026" service:ardia_mac::menu::kShareMoreService];
+  NSMenuItem* more = [[NSMenuItem alloc] initWithTitle:@"More\u2026" action:@selector(openSharingSettings:) keyEquivalent:@""];
+  more.target = self;
+  more.tag = ardia_mac::kShareServiceTag;
   more.image = [NSImage imageWithSystemSymbolName:@"ellipsis.circle" accessibilityDescription:nil];
   [menu addItem:more];
 }

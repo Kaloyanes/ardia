@@ -580,12 +580,18 @@ void ListServices(Done done) {
   std::move(done).Run(true, base::Value(std::move(services)));
 }
 
-void OpenSharingSettings(ShellHostView& host, Done done) {
+void ShowSharingSettings() {
   if (BackgroundInstance()) {
-    LogUnshown(host, "sharing settings (not opened)");
+    const std::string line = "sharing settings (not opened)";
+    Trace(line);
+    AppendActivityLog(line);
   } else if (NSURL* url = [NSURL URLWithString:@(kSharingSettings)]) {
     [[NSWorkspace sharedWorkspace] openURL:url];
   }
+}
+
+void OpenSharingSettings(Done done) {
+  ShowSharingSettings();
   std::move(done).Run(true, base::Value());
 }
 
@@ -1014,11 +1020,26 @@ std::vector<Service> LinkServices() {
   std::vector<Service> services;
   for (NSSharingService* service in ServicesFor(SampleItems())) {
     const std::string title = base::SysNSStringToUTF8(service.title);
-    if (share_policy::ValidServiceName(title)) {
+    const bool seen = std::ranges::any_of(services, [&title](const Service& listed) { return listed.title == title; });
+    if (share_policy::ValidServiceName(title) && !seen) {
       services.push_back(Service{title, base::SysNSStringToUTF8(service.menuItemTitle ?: service.title)});
     }
   }
   return services;
+}
+
+template <typename Match>
+void RevokeImages(Match match) {
+  const auto revoked = Issued().RevokeUnheld([&match](const ImageOwner& image) {
+    if (!match(image.origin)) {
+      return false;
+    }
+    image.cancelled->store(true);
+    return true;
+  });
+  for (const std::string& path : revoked.written) {
+    RemoveTemporary(base::FilePath(path));
+  }
 }
 
 void Retire(const std::string& owner) {
@@ -1042,15 +1063,16 @@ void Retire(const std::string& owner) {
     [picker close];
     EndRequest(id);
   }
-  for (const std::string& path : Issued().RevokeUnheld([&owner](const ImageOwner& image) {
-         if (image.origin.window_id != owner) {
-           return false;
-         }
-         image.cancelled->store(true);
-         return true;
-       })) {
-    RemoveTemporary(base::FilePath(path));
-  }
+  RevokeImages([&owner](const PageOrigin& origin) { return origin.window_id == owner; });
+}
+
+void RetireBinding(const std::string& owner, int binding) {
+  RevokeImages(
+      [&owner, binding](const PageOrigin& origin) { return origin.window_id == owner && origin.binding == binding; });
+}
+
+void OpenSharingSettingsFromMenu() {
+  ShowSharingSettings();
 }
 
 bool Handles(std::string_view method) {
@@ -1077,7 +1099,7 @@ void Invoke(ShellHostView& host, const std::string& method, const base::ListValu
     return ListServices(std::move(done));
   }
   if (method == "ArdiaApp.openSharingSettings") {
-    return OpenSharingSettings(host, std::move(done));
+    return OpenSharingSettings(std::move(done));
   }
   std::move(done).Run(false, Failure("ERR_UNKNOWN_CALL", "Unknown share call"));
 }

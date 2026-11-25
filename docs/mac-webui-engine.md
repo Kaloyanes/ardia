@@ -126,11 +126,12 @@ that branch). It is a development tool and never runs in a release. Like Windows
     deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
     into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
     delete finishes), or that have no lock and whose process is gone, never anything else. An image reserves its slot
-    before its bytes are copied; a write for a retired window, or before the instance folder is claimed, is
-    skipped. A removed image stops being shareable at once but keeps its slot until the unlink is done, which
-    retries with backoff and gives the slot back after five failures. A share whose service the user already
+    before its bytes are copied; a write for a retired window or a released, closed or rebound tab, or before
+    the instance folder is claimed, is skipped, and the write's reply alone cleans it up. A removed image stops
+    being shareable at once but keeps its slot until the unlink is done: at most five tries (four retries,
+    500 ms doubling), then the slot is given back. A share whose service the user already
     chose keeps its file through a window close until the service finishes. The Share… items use command
-    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, which opens System Settings › Sharing directly on any page, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
     button cancels an older open, and a services request that stalls for 5 s is replaced.
   - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
     places them, through a dev-only `RenderViewContextMenuObserver` hook in

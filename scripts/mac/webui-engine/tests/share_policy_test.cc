@@ -188,7 +188,8 @@ TEST(a_retired_window_cancels_its_reserved_and_issued_images_but_not_one_a_servi
     cancelled.push_back(owner);
     return true;
   });
-  CHECK((revoked == std::vector<std::string>{"/tmp/i/1-a/ready.png", "/tmp/i/1-a/writing.png"}));
+  CHECK((revoked.written == std::vector<std::string>{"/tmp/i/1-a/ready.png"}));
+  CHECK((revoked.writing == std::vector<std::string>{"/tmp/i/1-a/writing.png"}));
   CHECK(cancelled.size() == 2);
   CHECK(issued.SlotOf("/tmp/i/1-a/held.png") == policy::Slot::kTaken);
   CHECK(issued.SlotOf("/tmp/i/1-a/other.png") == policy::Slot::kReserved);
@@ -229,6 +230,9 @@ TEST(unlinks_retry_with_backoff_and_then_give_up) {
     CHECK(policy::UnlinkRetryDelayMs(attempt + 1) == 2 * policy::UnlinkRetryDelayMs(attempt));
   }
   CHECK(policy::NextUnlinkStep(policy::kMaxUnlinkAttempts - 1, false) == policy::UnlinkStep::kGiveUp);
+  int attempts = 1;
+  for (int attempt = 0; policy::NextUnlinkStep(attempt, false) == policy::UnlinkStep::kRetry; ++attempt) ++attempts;
+  CHECK(attempts == policy::kMaxUnlinkAttempts && policy::kMaxUnlinkAttempts == 5);
   CHECK(policy::UnlinkRetryDelayMs(0) == policy::kFirstUnlinkRetryMs);
   CHECK(policy::UnlinkRetryDelayMs(1000) == policy::UnlinkRetryDelayMs(policy::kMaxUnlinkAttempts));
   CHECK(policy::UnlinkRetryDelayMs(-5) == policy::kFirstUnlinkRetryMs);

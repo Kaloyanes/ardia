@@ -346,6 +346,9 @@ PageBinding::PageBinding(ShellHostView* owner,
 }
 
 PageBinding::~PageBinding() {
+  if (owner_) {
+    share::RetireBinding(owner_->window_id(), id_);
+  }
   commands_.reset();
   events_.reset();
   if (viewport && owner_) {
@@ -1041,6 +1044,7 @@ void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
     return;
   }
   base::DictValue delivery = binding->Envelope("pageLifecycle");
+  share::RetireBinding(window_id_, old_id);
   binding->Rebind(contents);
   binding->binding_generation = *generation;
   if (id != old_id) {
@@ -1146,6 +1150,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
     existing->commands()->CancelEvaluations();
+    share::RetireBinding(window_id_, existing->id());
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1337,6 +1342,7 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
   }
   binding->claim.clear();
   binding->commands()->CancelEvaluations();
+  share::RetireBinding(window_id_, binding->id());
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {

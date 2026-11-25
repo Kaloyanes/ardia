@@ -22,22 +22,40 @@ export function shareModuleMethod(host: ArdiaHost, name: string, method: string)
   };
 }
 
-export function loadShareServices(host: ArdiaHost | undefined, now: () => number = Date.now) {
+type Deadline = (expire: () => void, ms: number) => () => void;
+const timerDeadline: Deadline = (expire, ms) => {
+  const timer = setTimeout(expire, ms);
+  return () => clearTimeout(timer);
+};
+
+export const isMoreShareChoice = (command: string, arg: string | null | undefined) => command === "share" && arg === `via:${MORE_SHARE_SERVICE}`;
+
+export function openSharingSettings(host: ArdiaHost | undefined): Promise<unknown> {
+  return host && hostSupports(OPEN_SHARING_SETTINGS, host) ? invokeHost(OPEN_SHARING_SETTINGS, { args: [] }, host) : Promise.resolve();
+}
+
+export function loadShareServices(host: ArdiaHost | undefined, deadline: Deadline = timerDeadline) {
   if (!host || !hostSupports(SHARE_SERVICES, host)) return;
   let latest = 0;
-  let loading: { id: number; started: number; promise: Promise<void> } | null = null;
+  let loading: { id: number; promise: Promise<void> } | null = null;
   const refresh = (): Promise<void> => {
-    if (loading && now() - loading.started < SHARE_SERVICES_STALL_MS) return loading.promise;
+    if (loading) return loading.promise;
     const id = ++latest;
+    let expired = false;
+    const cancel = deadline(() => {
+      expired = true;
+      if (loading?.id === id) loading = null;
+    }, SHARE_SERVICES_STALL_MS);
     const promise = invokeHost<unknown>(SHARE_SERVICES, { args: [] }, host)
       .then((listed) => {
-        if (id === latest) setShareServices(shareServicesFrom(listed), refresh);
+        if (id === latest && !expired) setShareServices(shareServicesFrom(listed), refresh);
       })
       .catch(reportHostError)
       .finally(() => {
+        cancel();
         if (loading?.id === id) loading = null;
       });
-    loading = { id, started: now(), promise };
+    loading = { id, promise };
     return promise;
   };
   setShareServices([], refresh);

@@ -26,11 +26,16 @@ type ServicesRefresh = () => Promise<void> | void;
 let refreshServices: ServicesRefresh | null = null;
 export const SHARE_SERVICES_WAIT_MS = 250;
 const serviceName = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= MAX_SERVICE_BYTES && !/[\u0000-\u001f\u007f]/.test(value);
-export const shareServicesFrom = (value: unknown): ShareService[] => (Array.isArray(value) ? value : []).flatMap((entry) => {
-  const title = entry && typeof entry === "object" ? (entry as Record<string, unknown>).title : undefined;
-  const menuTitle = entry && typeof entry === "object" ? (entry as Record<string, unknown>).menuTitle : undefined;
-  return serviceName(title) && title !== COPY && title !== EMAIL && title !== MORE_SHARE_SERVICE ? [{ title, menuTitle: serviceName(menuTitle) ? menuTitle : title }] : [];
-}).slice(0, MAX_SERVICES);
+export const shareServicesFrom = (value: unknown): ShareService[] => {
+  const seen = new Set<string>();
+  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+    const title = entry && typeof entry === "object" ? (entry as Record<string, unknown>).title : undefined;
+    const menuTitle = entry && typeof entry === "object" ? (entry as Record<string, unknown>).menuTitle : undefined;
+    if (!serviceName(title) || title === COPY || title === EMAIL || title === MORE_SHARE_SERVICE || seen.has(title)) return [];
+    seen.add(title);
+    return [{ title, menuTitle: serviceName(menuTitle) ? menuTitle : title }];
+  }).slice(0, MAX_SERVICES);
+};
 export const setShareServices = (next: readonly ShareService[], refresh: ServicesRefresh | null = refreshServices) => {
   services = next;
   refreshServices = refresh;

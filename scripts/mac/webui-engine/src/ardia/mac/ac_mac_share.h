@@ -23,6 +23,8 @@ void Invoke(ShellHostView& host,
             ShellHostView::Done done);
 std::vector<Service> LinkServices();
 void Retire(const std::string& owner);
+void RetireBinding(const std::string& owner, int binding);
+void OpenSharingSettingsFromMenu();
 void InstallPageMenu();
 
 }

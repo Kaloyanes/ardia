@@ -885,8 +885,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn('__weak NSWindow* window', share)
         retire = share.split('void Retire(const std::string& owner) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('[picker close];', retire)
-        self.assertIn('Issued().RevokeUnheld(', retire)
-        self.assertIn('image.cancelled->store(true);', retire)
+        self.assertIn('RevokeImages(', retire)
+        revoke = share.split('void RevokeImages(Match match) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('Issued().RevokeUnheld(', revoke)
+        self.assertIn('image.cancelled->store(true);', revoke)
+        self.assertIn('for (const std::string& path : revoked.written) {', revoke)
+        self.assertNotIn('revoked.writing', revoke)
+        binding = share.split('void RetireBinding(const std::string& owner, int binding) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('origin.binding == binding', binding)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('share::RetireBinding(owner_->window_id(), id_);', host.split('PageBinding::~PageBinding() {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('share::RetireBinding(window_id_, old_id);', host.split('void ShellHostView::ReplaceBinding(', 1)[1].split('\n}\n', 1)[0])
+        self.assertEqual(host.count('share::RetireBinding('), 4)
+        services = share.split('std::vector<Service> LinkServices() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('!seen', services)
         self.assertLess(retire.index('share_policy::KeepsServiceAfterRetire(found->second.service != nil)'), retire.index('[picker close];'))
         self.assertIn('found->second.chosen ? nil : found->second.picker', retire)
         shareable = share.split('std::optional<SharedFile> ShareableFile(', 1)[1].split('\n}\n', 1)[0]
@@ -954,8 +966,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn('ardia_mac::share::LinkServices()', menu)
         self.assertIn('menu::FillsShareServices(item.role, app_menus)', menu)
         filler = menu.split('- (void)menuNeedsUpdate:(NSMenu*)menu {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('action:@selector(openSharingSettings:)', filler)
+        self.assertIn('ardia_mac::share::OpenSharingSettingsFromMenu();', menu)
+        actions = (REPO / 'apps/desktop/src/appMenuActions.ts').read_text()
+        self.assertIn('isMoreShareChoice(choice.command, choice.arg)', actions)
         self.assertNotIn('return;', filler)
-        self.assertIn('kShareMoreService', filler)
+        self.assertIn('More', filler)
         app_menu = (REPO / 'apps/desktop/src/appMenu.ts').read_text()
         self.assertIn('shareServices().map(', app_menu)
 

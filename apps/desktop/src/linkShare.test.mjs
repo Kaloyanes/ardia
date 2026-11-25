@@ -144,26 +144,46 @@ test("opening a menu waits for the services macOS lists, but never longer than t
   await refreshShareServices(20);
 });
 
-test("a stalled services request expires, and only the newest reply is kept", async () => {
-  let clock = 0;
+test("a services request expires after its deadline even with no second refresh, and only the newest reply is kept", async () => {
   const pending = [];
-  const mac = { bootstrap: { capabilities: ["ArdiaApp.shareServices"] }, invoke: () => new Promise((resolve) => pending.push(resolve)) };
+  const deadlines = [];
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-  loadShareServices(mac, () => clock);
+  const mac = { bootstrap: { capabilities: ["ArdiaApp.shareServices"] }, invoke: () => new Promise((resolve) => pending.push(resolve)) };
+  loadShareServices(mac, (expire, ms) => {
+    const deadline = { expire, ms, cleared: false };
+    deadlines.push(deadline);
+    return () => void (deadline.cleared = true);
+  });
   await tick();
   assert.equal(pending.length, 1);
+  assert.equal(deadlines[0].ms, SHARE_SERVICES_STALL_MS);
   await refreshShareServices(0);
   await tick();
-  assert.equal(pending.length, 1, "a request still within its time is reused");
-  clock = SHARE_SERVICES_STALL_MS + 1;
+  assert.equal(pending.length, 1, "a request still within its deadline is reused");
+  deadlines[0].expire();
+  pending[0]([{ title: "Late", menuTitle: "Late" }]);
+  await tick();
+  assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["Copy Link", "Email Link"], "a reply after the deadline is ignored");
   await refreshShareServices(0);
   await tick();
-  assert.equal(pending.length, 2, "a stalled request no longer holds the refresh");
-  pending[1]([{ title: "Messages", menuTitle: "Messages" }]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  pending[0]([{ title: "AirDrop", menuTitle: "AirDrop" }]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["Messages", "More…"], "the superseded reply is ignored");
+  assert.equal(pending.length, 2, "an expired request no longer holds the refresh");
+  await refreshShareServices(0);
+  pending[1]([{ title: "Messages", menuTitle: "Messages" }, { title: "Messages", menuTitle: "Messages again" }]);
+  await tick();
+  assert.equal(deadlines[1].cleared, true, "a settled request clears its deadline");
+  assert.deepEqual(linkShareItems("https://ardia.dev").map((item) => item.title), ["Messages", "More…"], "same-title services collapse into one");
+});
+
+test("More… in File › Share opens the system's sharing settings directly, whatever page is showing", async () => {
+  const { isMoreShareChoice, openSharingSettings } = await import("./hostShare.ts");
+  assert.equal(isMoreShareChoice("share", `via:${MORE_SHARE_SERVICE}`), true);
+  assert.equal(isMoreShareChoice("share", "via:copy"), false);
+  assert.equal(isMoreShareChoice("copyUrl", `via:${MORE_SHARE_SERVICE}`), false);
+  const calls = [];
+  const mac = { bootstrap: { capabilities: ["ArdiaApp.openSharingSettings"] }, invoke: async (method, args) => void calls.push([method, args.args]) };
+  await openSharingSettings(mac);
+  await openSharingSettings(host);
+  assert.deepEqual(calls, [["ArdiaApp.openSharingSettings", []]]);
 });
 
 test("a newer click supersedes an earlier app menu open, and a detached anchor never shows a menu", async () => {

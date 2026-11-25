@@ -277,13 +277,18 @@ class IssuedFiles {
     return true;
   }
 
+  struct Revoked {
+    std::vector<std::string> writing;
+    std::vector<std::string> written;
+  };
+
   template <typename Match>
-  std::vector<std::string> RevokeUnheld(Match match) {
-    std::vector<std::string> revoked;
+  Revoked RevokeUnheld(Match match) {
+    Revoked revoked;
     for (auto& [path, entry] : entries_) {
       if ((entry.slot == Slot::kIssued || entry.slot == Slot::kReserved) && match(entry.owner)) {
+        (entry.slot == Slot::kReserved ? revoked.writing : revoked.written).push_back(path);
         entry.slot = Slot::kRevoked;
-        revoked.push_back(path);
       }
     }
     return revoked;
