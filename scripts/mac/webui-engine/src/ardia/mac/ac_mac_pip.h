@@ -18,6 +18,7 @@
 #include "components/viz/common/surfaces/surface_id.h"
 #include "content/public/browser/overlay_window.h"
 #include "services/media_session/public/cpp/media_position.h"
+#include "ui/display/display_observer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -141,14 +142,14 @@ class PipPlayer : public content::VideoOverlayWindow {
 
 class PipPlane;
 
-class PipPresenter {
+class PipPresenter : public display::DisplayObserver {
  public:
   using Done = base::OnceCallback<void(bool, base::Value)>;
 
   explicit PipPresenter(ShellHostView* host);
   PipPresenter(const PipPresenter&) = delete;
   PipPresenter& operator=(const PipPresenter&) = delete;
-  ~PipPresenter();
+  ~PipPresenter() override;
 
   static bool Handles(std::string_view method);
   static bool HandlesEngineCall(std::string_view name);
@@ -169,6 +170,7 @@ class PipPresenter {
   base::WeakPtr<PipPresenter> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
  private:
+  void OnDisplayMetricsChanged(const display::Display& display, uint32_t changed_metrics) override;
   void Viewport(const base::DictValue& args, Done done);
   void Command(const base::DictValue& args, Done done);
   void SendPlayerEvent(const PipPlayer& player);
@@ -184,6 +186,7 @@ class PipPresenter {
   std::unique_ptr<PipPlane> plane_;
   uint64_t player_view_owner_ = 0;
   std::optional<uint64_t> attached_generation_;
+  display::ScopedOptionalDisplayObserver display_observer_;
   base::WeakPtrFactory<PipPresenter> weak_factory_{this};
 };
 

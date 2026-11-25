@@ -285,6 +285,14 @@ class ReadyQueue {
   std::vector<Callback> waiting_;
 };
 
+inline bool DownloadMember(bool primary_profile, int tabs_in_window) {
+  return primary_profile || tabs_in_window > 0;
+}
+
+inline bool HandsLinksToChrome(bool hosts_alive, std::size_t pending) {
+  return !hosts_alive && pending > 0;
+}
+
 inline bool CapturesOpenUrls(bool hook_installed, bool host_alive, bool host_seen) {
   return hook_installed && (host_alive || !host_seen);
 }

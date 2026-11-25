@@ -1483,7 +1483,8 @@ void ShellHostView::OnTabStripModelChanged(
     }
   }
   ReattachViewports();
-  if (system_ && change.type() == TabStripModelChange::kRemoved) {
+  if (system_ && (change.type() == TabStripModelChange::kRemoved ||
+                  change.type() == TabStripModelChange::kInserted)) {
     system_->SyncWatchesSoon();
   }
 }

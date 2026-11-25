@@ -79,9 +79,14 @@ inline std::optional<Box> PlayerBox(double x, double y, double width, double hei
              static_cast<int>(clip_bottom - clip_top)};
 }
 
-inline std::optional<int> PopOutCoordinate(double at, double grab, double scale) {
-  if (!Bounded(at) || !Bounded(grab) || !std::isfinite(scale) || scale < 0.1 || scale > 10) return std::nullopt;
-  return static_cast<int>(std::round((at - grab) * scale));
+inline constexpr int kMinPopOutWidth = 284;
+inline constexpr int kMinPopOutHeight = 160;
+
+inline std::optional<int> PopOutCoordinate(double screen_point, double grab_css, double zoom) {
+  if (!Bounded(screen_point) || !Bounded(grab_css) || !std::isfinite(zoom) || zoom < 0.1 || zoom > 10) {
+    return std::nullopt;
+  }
+  return static_cast<int>(std::round(screen_point - grab_css * zoom));
 }
 
 inline Box DefaultPlayerBox(int room_width, int room_height, int natural_width, int natural_height) {
@@ -102,6 +107,12 @@ inline Box FitInWorkArea(Box rect, Box area) {
   fitted.x = std::clamp(rect.x, area.x, area.x + area.width - fitted.width);
   fitted.y = std::clamp(rect.y, area.y, area.y + area.height - fitted.height);
   return fitted;
+}
+
+inline Box PopOutBox(Box rect, Box area) {
+  rect.width = std::max(rect.width, kMinPopOutWidth);
+  rect.height = std::max(rect.height, kMinPopOutHeight);
+  return FitInWorkArea(rect, area);
 }
 
 enum class Intent { kExplicit, kAutomatic };

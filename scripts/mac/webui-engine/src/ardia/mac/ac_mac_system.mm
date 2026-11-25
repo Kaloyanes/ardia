@@ -31,6 +31,7 @@
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/download/content/public/all_download_item_notifier.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
@@ -447,6 +448,30 @@ SystemServices::SystemServices(ShellHostView* host) : host_(host) {
 SystemServices::~SystemServices() {
   weak_factory_.InvalidateWeakPtrs();
   watches_.clear();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                           base::BindOnce(&SystemServices::HandOffOpenUrls));
+}
+
+void SystemServices::HandOffOpenUrls() {
+  if (!Hosts().empty()) {
+    return DeliverOpenUrls();
+  }
+  if (!policy::HandsLinksToChrome(false, OpenUrls().pending())) {
+    return;
+  }
+  NSMutableArray<NSURL*>* urls = [NSMutableArray array];
+  while (!OpenUrls().empty()) {
+    for (const std::string& spec : OpenUrls().Take()) {
+      if (NSURL* url = [NSURL URLWithString:base::SysUTF8ToNSString(spec)]) {
+        [urls addObject:url];
+      }
+    }
+  }
+  id delegate = NSApp.delegate;
+  Trace("open urls: " + base::NumberToString(urls.count) + " handed back to Chrome");
+  if (urls.count && delegate && g_original_open_urls) {
+    g_original_open_urls(delegate, @selector(application:openURLs:), NSApp, urls);
+  }
 }
 
 bool SystemServices::Handles(std::string_view method) {
@@ -479,7 +504,9 @@ std::set<Profile*> SystemServices::MemberProfiles() const {
   std::set<Profile*> profiles;
   for (BrowserWindowInterface* member : host_->Members()) {
     Profile* profile = member ? member->GetProfile() : nullptr;
-    if (profile && !profile->IsOffTheRecord() && !profile->ShutdownStarted()) {
+    const int tabs = member && member->GetTabStripModel() ? member->GetTabStripModel()->count() : 0;
+    if (profile && !profile->IsOffTheRecord() && !profile->ShutdownStarted() &&
+        policy::DownloadMember(member == host_->browser(), tabs)) {
       profiles.insert(profile);
     }
   }
@@ -578,6 +605,10 @@ void SystemServices::DownloadsCall(const std::string& name, Profile* profile, ba
       [](base::WeakPtr<SystemServices> self, base::WeakPtr<Profile> weak_profile, std::string name,
          base::DictValue input, Done done) {
         Profile* profile = weak_profile.get();
+        if (self && profile && !self->MemberProfiles().contains(profile)) {
+          self->SyncWatchesSoon();
+          return Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile has no tabs in this window");
+        }
         if (!self || !profile || !self->watches_.contains(profile)) {
           return Fail(std::move(done), "ERR_PROFILE_UNAVAILABLE", "This window's downloads are unavailable");
         }

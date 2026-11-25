@@ -81,8 +81,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Links from other apps: the host replaces `AppController`'s `application:openURLs:` when the shell starts, keeps
     http, https and file URLs for the shell and passes the rest on, and sends them as `ArdiaShell` `onOpenURLs` to the key
     window that called `ArdiaShell.listenForOpenURLs`; links from a cold launch wait for the first window.
-  - Download watches follow the window's members: a companion profile is watched when it joins and dropped when it
-    leaves.
+  - Download watches follow the window's members: the window's own profile always, a companion profile only while it
+    has a tab in the window. Links still queued when the last WebUI window closes go back to Chrome.
 - **Extension popups and side panels** (`ac_mac_extension_view`, rules in `ac_mac_extension_view_policy.h`).
   `extensionView.create | viewport | place | command | release` host an extension's `ExtensionViewHost` in the window,
   a side panel under the shell like a page and a popup above it, with Linux's placement, reveal and `frame` handshake.
@@ -93,7 +93,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `CreateVideoOverlayWindow`, so the host makes the player: automatic picture in picture plays inside the window that
   shows its tab, on a native plane (an `NSView` with its own compositor, hosted by a `NativeViewHost`) ordered above
   the pages and below the shell (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
-  Chrome's own window, kept inside the destination display's work area. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
+  Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
+  display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

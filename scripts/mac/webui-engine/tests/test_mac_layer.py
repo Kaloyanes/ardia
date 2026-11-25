@@ -473,6 +473,29 @@ class ContractTests(unittest.TestCase):
         member = host.split('BrowserWindowInterface* ShellHostView::EnsureMember(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('system_->SyncWatches();', member)
 
+    def test_install_prompts_wait_for_a_live_bridge(self):
+        source = (MAC / 'ac_mac_extension_view.mm').read_text()
+        live = source.split('bool ExtensionViews::ShellLive() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('handler_->Live()', live)
+        hook = source.split('bool InstallPromptHook(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(hook.index('ShellLive()'), hook.index('PendingInstall{std::move(*done)'))
+
+    def test_download_membership_counts_companion_tabs(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        members = source.split('std::set<Profile*> SystemServices::MemberProfiles() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('policy::DownloadMember(member == host_->browser(), tabs)', members)
+
+    def test_queued_links_return_to_chrome_after_the_last_window(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        teardown = source.split('SystemServices::~SystemServices() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('HandOffOpenUrls', teardown)
+
+    def test_pip_plane_follows_display_changes(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        for needle in ('viewDidChangeBackingProperties', 'NSWindowDidChangeScreenNotification',
+                       'OnDisplayMetricsChanged', 'display.id() != display_id_', 'GetDisplayNearestPoint'):
+            self.assertIn(needle, source)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)

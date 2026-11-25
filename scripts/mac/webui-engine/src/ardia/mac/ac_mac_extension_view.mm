@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_system_policy.h"
 #include "base/apple/foundation_util.h"
@@ -906,7 +907,7 @@ ExtensionViews::~ExtensionViews() {
 }
 
 bool ExtensionViews::ShellLive() const {
-  return host_->handler_ != nullptr;
+  return host_->handler_ && host_->handler_->Live();
 }
 
 void ExtensionViews::AbortPrompts() {

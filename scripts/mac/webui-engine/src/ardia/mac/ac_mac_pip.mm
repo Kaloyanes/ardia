@@ -27,6 +27,7 @@
 #include "ui/compositor/recyclable_compositor_mac.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/views/controls/native/native_view_host.h"
@@ -42,9 +43,55 @@
 #include "ui/views/widget/widget.h"
 
 @interface ArdiaPipPlaneView : NSView
+@property(nonatomic, copy) void (^displayChanged)(void);
 @end
 
-@implementation ArdiaPipPlaneView
+@implementation ArdiaPipPlaneView {
+  __weak NSWindow* _observedWindow;
+}
+
+@synthesize displayChanged = _displayChanged;
+
+- (void)dealloc {
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)notifyDisplayChanged {
+  if (self.displayChanged) {
+    self.displayChanged();
+  }
+}
+
+- (void)screenChanged:(NSNotification*)notification {
+  [self notifyDisplayChanged];
+}
+
+- (void)viewDidChangeBackingProperties {
+  [super viewDidChangeBackingProperties];
+  [self notifyDisplayChanged];
+}
+
+- (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (_observedWindow) {
+    [center removeObserver:self name:NSWindowDidChangeScreenNotification object:_observedWindow];
+    [center removeObserver:self name:NSWindowDidChangeBackingPropertiesNotification object:_observedWindow];
+  }
+  _observedWindow = self.window;
+  if (_observedWindow) {
+    [center addObserver:self
+               selector:@selector(screenChanged:)
+                   name:NSWindowDidChangeScreenNotification
+                 object:_observedWindow];
+    [center addObserver:self
+               selector:@selector(screenChanged:)
+                   name:NSWindowDidChangeBackingPropertiesNotification
+                 object:_observedWindow];
+  }
+  [self notifyDisplayChanged];
+}
+
 - (NSView*)hitTest:(NSPoint)point {
   return nil;
 }
@@ -88,15 +135,17 @@ base::TimeDelta Milliseconds(double ms) {
   return base::Milliseconds(ms);
 }
 
-gfx::Rect FitToWorkArea(const gfx::Rect& rect) {
+gfx::Rect PlacePopOut(const gfx::Rect& rect, std::optional<gfx::Point> pointer) {
   display::Screen* screen = display::Screen::Get();
   if (!screen) {
     return rect;
   }
-  const gfx::Rect area = screen->GetDisplayMatching(rect).work_area();
-  const pip::Box fitted = pip::FitInWorkArea(pip::Box{rect.x(), rect.y(), rect.width(), rect.height()},
-                                             pip::Box{area.x(), area.y(), area.width(), area.height()});
-  return gfx::Rect(fitted.x, fitted.y, fitted.width, fitted.height);
+  const display::Display display =
+      pointer ? screen->GetDisplayNearestPoint(*pointer) : screen->GetDisplayMatching(rect);
+  const gfx::Rect area = display.work_area();
+  const pip::Box placed = pip::PopOutBox(pip::Box{rect.x(), rect.y(), rect.width(), rect.height()},
+                                         pip::Box{area.x(), area.y(), area.width(), area.height()});
+  return gfx::Rect(placed.x, placed.y, placed.width, placed.height);
 }
 
 }
@@ -567,6 +616,7 @@ class PipPlane final : public ui::AcceleratedWidgetMacNSView {
   ~PipPlane() {
     fade_timer_.Stop();
     UnregisterSurface();
+    view_.displayChanged = nil;
     compositor_->widget()->ResetNSView();
     compositor_->compositor()->SetRootLayer(nullptr);
     root_->Remove(video_.get());
@@ -575,15 +625,25 @@ class PipPlane final : public ui::AcceleratedWidgetMacNSView {
 
   NSView* view() const { return view_; }
 
+  void OnDisplayChanged(base::RepeatingClosure changed) {
+    view_.displayChanged = ^{
+      changed.Run();
+    };
+  }
+
   void Resize(const gfx::Size& dip_size, const display::Display& display) {
     if (dip_size.IsEmpty()) {
       return;
     }
     const float scale = display.device_scale_factor() > 0 ? display.device_scale_factor() : 1.0f;
     const gfx::Size pixels = gfx::ToRoundedSize(gfx::ConvertSizeToPixels(dip_size, scale));
-    if (pixels != compositor_->pixel_size() || scale != compositor_->scale_factor()) {
-      compositor_->UpdateSurface(pixels, scale, display.GetColorSpaces(), display.id(),
-                                 display.display_frequency());
+    if (pixels != compositor_->pixel_size() || scale != compositor_->scale_factor() ||
+        display.id() != display_id_ || display.GetColorSpaces() != color_spaces_ ||
+        display.display_frequency() != refresh_rate_) {
+      display_id_ = display.id();
+      color_spaces_ = display.GetColorSpaces();
+      refresh_rate_ = display.display_frequency();
+      compositor_->UpdateSurface(pixels, scale, color_spaces_, display_id_, refresh_rate_);
     }
     size_ = dip_size;
     root_->SetBounds(gfx::Rect(dip_size));
@@ -666,10 +726,17 @@ class PipPlane final : public ui::AcceleratedWidgetMacNSView {
   std::optional<viz::FrameSinkId> registered_;
   gfx::Size size_;
   gfx::Size natural_size_;
+  int64_t display_id_ = display::kInvalidDisplayId;
+  gfx::DisplayColorSpaces color_spaces_;
+  float refresh_rate_ = 0;
   base::OneShotTimer fade_timer_;
 };
 
-PipPresenter::PipPresenter(ShellHostView* host) : host_(host) {
+void PipPresenter::OnDisplayMetricsChanged(const display::Display& display, uint32_t changed_metrics) {
+  SizePlane();
+}
+
+PipPresenter::PipPresenter(ShellHostView* host) : host_(host), display_observer_(this) {
   if (!g_ardia_mac_video_overlay) {
     g_ardia_mac_video_overlay = &CreatePlayer;
   }
@@ -816,13 +883,15 @@ void PipPresenter::Command(const base::DictValue& args, Done done) {
         const double at_y = at ? at->FindDouble("y").value_or(NAN) : NAN;
         const double grab_x = grab ? grab->FindDouble("x").value_or(NAN) : NAN;
         const double grab_y = grab ? grab->FindDouble("y").value_or(NAN) : NAN;
-        const double scale = host_->ShellZoom();
-        const std::optional<int> x = pip::PopOutCoordinate(at_x, grab_x, scale);
-        const std::optional<int> y = pip::PopOutCoordinate(at_y, grab_y, scale);
+        const double zoom = host_->ShellZoom();
+        const std::optional<int> x = pip::PopOutCoordinate(at_x, grab_x, zoom);
+        const std::optional<int> y = pip::PopOutCoordinate(at_y, grab_y, zoom);
+        std::optional<gfx::Point> pointer;
         if (x && y) {
           rect.set_origin(gfx::Point(*x, *y));
+          pointer = gfx::Point(static_cast<int>(std::round(at_x)), static_cast<int>(std::round(at_y)));
         }
-        screen = FitToWorkArea(rect);
+        screen = PlacePopOut(rect, pointer);
       }
       player->PopOut(screen);
       break;
@@ -840,6 +909,7 @@ void PipPresenter::ShowPlayer(PipPlayer* player) {
   player_ = player->GetWeakPtr();
   if (!player_view_) {
     plane_ = std::make_unique<PipPlane>();
+    plane_->OnDisplayChanged(base::BindRepeating(&PipPresenter::SizePlane, GetWeakPtr()));
     player_view_ = host_->AddChildView(std::make_unique<views::NativeViewHost>());
     player_view_->SetVisible(false);
     host_->Restack();

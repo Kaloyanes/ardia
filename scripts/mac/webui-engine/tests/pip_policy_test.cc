@@ -56,8 +56,10 @@ TEST(player_viewports_stay_inside_the_window) {
   CHECK(!pip::PlayerBox(0, 0, 1, 1, 0, 100, 100));
 }
 
-TEST(pop_out_points_are_finite_and_scaled) {
-  CHECK(pip::PopOutCoordinate(100, 20, 2) == 160);
+TEST(pop_out_points_scale_only_the_grab_offset) {
+  CHECK(pip::PopOutCoordinate(100, 20, 2) == 60);
+  CHECK(pip::PopOutCoordinate(1000, 100, 1.25) == 875);
+  CHECK(pip::PopOutCoordinate(1000, 100, 1) == 900);
   CHECK(!pip::PopOutCoordinate(std::numeric_limits<double>::quiet_NaN(), 0, 1));
   CHECK(!pip::PopOutCoordinate(0, 1e20, 1));
   CHECK(!pip::PopOutCoordinate(0, 0, 0));
@@ -72,6 +74,20 @@ TEST(popped_out_players_stay_inside_the_display_work_area) {
   const pip::Box second{1440, -200, 1920, 1080};
   CHECK(pip::FitInWorkArea({3300, 800, 320, 180}, second) == (pip::Box{3040, 700, 320, 180}));
   CHECK(pip::FitInWorkArea({5, 5, 10, 10}, pip::Box{}) == (pip::Box{5, 5, 10, 10}));
+}
+
+TEST(popped_out_players_keep_the_window_minimum_inside_the_work_area) {
+  const pip::Box area{0, 25, 1440, 875};
+  CHECK(pip::PopOutBox({1300, 800, 200, 100}, area) ==
+        (pip::Box{1440 - pip::kMinPopOutWidth, 900 - pip::kMinPopOutHeight, pip::kMinPopOutWidth,
+                  pip::kMinPopOutHeight}));
+  const auto x = pip::PopOutCoordinate(1400, 150, 1.25);
+  const auto y = pip::PopOutCoordinate(880, 40, 1.25);
+  CHECK(x && y);
+  const pip::Box zoomed = pip::PopOutBox({*x, *y, 240, 135}, area);
+  CHECK(zoomed.x + zoomed.width <= area.x + area.width && zoomed.y + zoomed.height <= area.y + area.height);
+  CHECK(zoomed.width == pip::kMinPopOutWidth && zoomed.height == pip::kMinPopOutHeight);
+  CHECK(pip::PopOutBox({100, 100, 480, 270}, area) == (pip::Box{100, 100, 480, 270}));
 }
 
 TEST(default_player_sits_bottom_right_with_the_video_aspect) {

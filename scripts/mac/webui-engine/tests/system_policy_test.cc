@@ -202,6 +202,20 @@ TEST(links_are_captured_before_the_first_window_and_while_windows_live) {
   CHECK(!policy::CapturesOpenUrls(false, true, true));
 }
 
+TEST(companion_profiles_count_for_downloads_only_while_they_hold_tabs) {
+  CHECK(policy::DownloadMember(true, 0));
+  CHECK(policy::DownloadMember(true, 3));
+  CHECK(!policy::DownloadMember(false, 0));
+  CHECK(policy::DownloadMember(false, 1));
+  CHECK(!policy::DownloadMember(false, -1));
+}
+
+TEST(queued_links_go_back_to_chrome_once_no_window_is_left) {
+  CHECK(policy::HandsLinksToChrome(false, 2));
+  CHECK(!policy::HandsLinksToChrome(true, 2));
+  CHECK(!policy::HandsLinksToChrome(false, 0));
+}
+
 TEST(every_method_is_advertised_once) {
   for (std::string_view method : policy::kSystemMethods) {
     size_t count = 0;

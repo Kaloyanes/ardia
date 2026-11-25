@@ -41,6 +41,7 @@ class SystemServices {
   static bool HandlesEngineCall(std::string_view name);
   static void AppendCapabilities(base::ListValue& capabilities);
   static void DeliverOpenUrls();
+  static void HandOffOpenUrls();
 
   void Invoke(const std::string& method, const base::ListValue* values, Done done);
   void EngineCall(const std::string& name, Profile* profile, const base::Value* args, Done done);
