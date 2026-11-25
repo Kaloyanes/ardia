@@ -79,6 +79,7 @@ cdp.close();
 
 const shots = cdp.events.filter((e) => e.name === "Screenshot" && e.args?.snapshot).sort((a, b) => a.ts - b.ts);
 const marks = cdp.events.filter((e) => e.cat?.includes("blink.user_timing") && String(e.name).startsWith("ardia-pager-"));
+const blockMarks = cdp.events.filter((e) => e.cat?.includes("blink.user_timing") && String(e.name).startsWith("ardia-block-"));
 const moving = marks.find((e) => e.name === "ardia-pager-moving");
 const rest = marks.filter((e) => e.name === "ardia-pager-rest").at(-1);
 const reporters = cdp.events.filter((e) => e.name === "PipelineReporter" && e.ph === "b");
@@ -118,6 +119,7 @@ if (shots.length > 2 && viewport.sidebar) {
 const result = {
   gesture,
   screenshots: shots.length,
+  blockMs: blockMarks.map((m) => Math.round((m.ts - (moving?.ts ?? 0)) / 1000)),
   restMs: rest ? Math.round((rest.ts - origin) / 100) / 10 : null,
   pipeline: states,
   scrollFrames: scrolling,
