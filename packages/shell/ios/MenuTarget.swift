@@ -18,6 +18,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
 
   @objc(commandDispatch:) func performCommand(_ sender: NSMenuItem) {
     guard let item = sender as? CommandItem else { return }
+    guard KeyRepeatGate.dispatches(item.command, fallback: NSApp.currentEvent) else { return }
     perform(item, in: NSApp.keyWindow, windowId: WindowManager.shared.keyWindowId)
   }
 

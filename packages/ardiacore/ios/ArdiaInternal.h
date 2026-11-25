@@ -67,6 +67,7 @@ void CancelHoverEpisodeAtQuit();
 void WatchPageCursor();
 NSString *PageCursorDev(NSWindow *window, NSString *_Nullable argument);
 NSString *PaintProbeLine();
+void CheckPaintingAfterProfileSwitch(NSWindow *_Nullable window);
 void WatchPainting();
 NSString *DescribeFocusWindow(NSWindow *_Nullable window);
 void NoteFocusChange(NSString *what, NSWindow *_Nullable window);
