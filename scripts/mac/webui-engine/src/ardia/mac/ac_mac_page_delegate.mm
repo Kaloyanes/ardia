@@ -138,18 +138,12 @@ class PageDelegate : public BrowserWebContentsDelegate {
                                        const blink::mojom::WindowFeatures& window_features,
                                        bool user_gesture,
                                        bool* was_blocked) override {
+    if (OpensNewContentsInPlace(source, new_contents.get(), target_url, disposition, user_gesture)) {
+      return nullptr;
+    }
     return BrowserWebContentsDelegate::AddNewContents(
         source, std::move(new_contents), target_url, PopupDisposition(source, disposition),
         window_features, user_gesture, was_blocked);
-  }
-
-  void CanDownload(const GURL& url,
-                   const std::string& request_method,
-                   base::OnceCallback<void(bool)> callback) override {
-    if (InterceptLinkDownload(browser_, url, request_method)) {
-      return std::move(callback).Run(false);
-    }
-    BrowserWebContentsDelegate::CanDownload(url, request_method, std::move(callback));
   }
 
   void UpdateTargetURL(content::WebContents* source, const GURL& url) override {

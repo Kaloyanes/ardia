@@ -18,8 +18,6 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
-class BrowserWindowInterface;
-
 namespace content {
 class NavigationHandle;
 class NavigationThrottleRegistry;
@@ -42,15 +40,17 @@ class PageLinks : public content::WebContentsObserver,
   std::uintptr_t surface() const;
   void NoteTarget(const GURL& url);
   bool PeeksInsteadOf(content::NavigationHandle& handle);
+  bool OpensInPlace(content::WebContents* opened, const GURL& url, WindowOpenDisposition disposition,
+                    bool user_gesture);
 
  private:
   void Watch(content::RenderWidgetHost* widget);
   void Unwatch();
-  void EmitSitePeek(GURL url, std::optional<link_policy::Point> point);
   void RenderFrameCreated(content::RenderFrameHost* frame) override;
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
                               content::RenderFrameHost* new_host) override;
   void PrimaryPageChanged(content::Page& page) override;
+  void DidFinishNavigation(content::NavigationHandle* handle) override;
   void WebContentsDestroyed() override;
   void OnInputEvent(const content::RenderWidgetHost& widget,
                     const blink::WebInputEvent& event,
@@ -61,6 +61,9 @@ class PageLinks : public content::WebContentsObserver,
   std::uintptr_t surface_ = 0;
   std::set<content::RenderWidgetHost*> widgets_;
   std::string target_;
+  int64_t peek_navigation_ = 0;
+  GURL peek_url_;
+  std::optional<link_policy::Point> peek_point_;
   base::WeakPtrFactory<PageLinks> weak_factory_{this};
 };
 
@@ -72,11 +75,13 @@ void AppendLinkCapabilities(base::ListValue& capabilities);
 void NoteLinkTarget(content::WebContents* source, const GURL& url);
 bool InterceptLinkOpen(content::WebContents* source, const content::OpenURLParams& params);
 WindowOpenDisposition OpeningDisposition(content::WebContents* source, const content::OpenURLParams& params);
-bool InterceptLinkDownload(const BrowserWindowInterface* browser,
-                           const GURL& url,
-                           std::string_view request_method);
 WindowOpenDisposition PopupDisposition(content::WebContents* source,
                                        WindowOpenDisposition disposition);
+bool OpensNewContentsInPlace(content::WebContents* source,
+                             content::WebContents* opened,
+                             const GURL& url,
+                             WindowOpenDisposition disposition,
+                             bool user_gesture);
 void InstallLinkHooks();
 
 }

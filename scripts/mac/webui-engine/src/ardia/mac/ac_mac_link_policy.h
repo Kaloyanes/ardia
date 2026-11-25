@@ -249,7 +249,7 @@ inline bool TargetMatches(std::string_view released_over, std::string_view url) 
   return !released_over.empty() && released_over == url;
 }
 
-inline constexpr std::int64_t kInputMatchMicros = 1000;
+inline constexpr std::int64_t kInputMatchMicros = 0;
 
 inline bool SameInput(std::int64_t navigation_input_us, std::int64_t release_input_us) {
   if (navigation_input_us <= 0 || release_input_us <= 0) return false;
@@ -294,29 +294,31 @@ struct InPlaceLink {
   bool user_gesture = false;
   bool http = false;
   bool post = false;
+  bool opener = false;
   bool target_matches = false;
   int up_flags = -1;
 };
 
 inline bool OpensInPlace(const InPlaceLink& link) {
   return link.enabled && link.small_window && link.renderer_initiated && link.user_gesture && link.http &&
-         !link.post && link.target_matches && link.up_flags == 0 &&
+         !link.post && !link.opener && link.target_matches && link.up_flags == 0 &&
          (link.opening == Opening::kForeground || link.opening == Opening::kBackground);
 }
 
 inline constexpr double kDownloadLifetime = 1;
 
 struct DownloadClick {
-  bool get = false;
-  bool same_browser = false;
+  bool follows_redirects = false;
+  bool names_file = false;
+  bool user_gesture = false;
   bool target_matches = false;
   int up_flags = -1;
   double since = -1;
 };
 
 inline bool OptionClickDownload(const DownloadClick& click) {
-  return click.get && click.same_browser && click.target_matches && click.up_flags == kAlt && click.since >= 0 &&
-         click.since <= kDownloadLifetime;
+  return click.follows_redirects && !click.names_file && click.user_gesture && click.target_matches &&
+         click.up_flags == kAlt && click.since >= 0 && click.since <= kDownloadLifetime;
 }
 
 struct SitePeekNavigation {
@@ -325,6 +327,7 @@ struct SitePeekNavigation {
   bool user_gesture = false;
   bool link = false;
   bool link_click = false;
+  bool main_frame_initiated = false;
   bool input_matches = false;
   bool post = false;
   bool same_document = false;
@@ -337,7 +340,7 @@ struct SitePeekNavigation {
 
 inline bool SitePeekCandidate(const SitePeekNavigation& navigation) {
   return navigation.primary_main_frame && navigation.renderer_initiated && navigation.user_gesture &&
-         navigation.link && navigation.link_click && navigation.input_matches && !navigation.post &&
+         navigation.link && navigation.link_click && navigation.main_frame_initiated && navigation.input_matches && !navigation.post &&
          !navigation.same_document && !navigation.history && navigation.http &&
          navigation.cross_site && navigation.tab_listed && navigation.up_flags == 0;
 }

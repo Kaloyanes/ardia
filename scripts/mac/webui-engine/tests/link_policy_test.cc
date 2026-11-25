@@ -230,26 +230,44 @@ TEST(a_link_matches_only_the_url_released_over) {
   CHECK(!lp::TargetMatches("https://a.test/x", "https://a.test/y"));
 }
 
-TEST(option_click_downloads_need_the_same_tab_browser_link_and_a_fresh_get) {
+TEST(option_click_downloads_need_that_tab_link_and_a_plain_option_click_request) {
   lp::DownloadClick click;
-  click.get = true;
-  click.same_browser = true;
+  click.follows_redirects = true;
+  click.user_gesture = true;
   click.target_matches = true;
   click.up_flags = lp::kAlt;
-  click.since = 0.2;
+  click.since = 0.6;
   CHECK(lp::OptionClickDownload(click));
   auto without = [&](auto change) {
     lp::DownloadClick copy = click;
     change(copy);
     return lp::OptionClickDownload(copy);
   };
-  CHECK(!without([](auto& c) { c.get = false; }));
-  CHECK(!without([](auto& c) { c.same_browser = false; }));
+  CHECK(!without([](auto& c) { c.follows_redirects = false; }));
+  CHECK(!without([](auto& c) { c.names_file = true; }));
+  CHECK(!without([](auto& c) { c.user_gesture = false; }));
   CHECK(!without([](auto& c) { c.target_matches = false; }));
   CHECK(!without([](auto& c) { c.up_flags = lp::kAlt | lp::kShift; }));
   CHECK(!without([](auto& c) { c.up_flags = -1; }));
   CHECK(!without([](auto& c) { c.since = lp::kDownloadLifetime + 0.01; }));
   CHECK(!without([](auto& c) { c.since = -1; }));
+}
+
+TEST(an_option_click_in_one_tab_never_claims_another_tabs_download) {
+  lp::GestureGate gate;
+  gate.NoteRelease(kPage, lp::kAlt, 1, std::nullopt, "https://a.test/report.pdf", 1000000);
+  auto click_for = [&](std::uintptr_t source) {
+    const auto release = gate.FreshRelease(source, 1.5);
+    lp::DownloadClick click;
+    click.follows_redirects = true;
+    click.user_gesture = true;
+    click.target_matches = lp::TargetMatches(release.target, "https://a.test/report.pdf");
+    click.up_flags = release.flags;
+    click.since = release.since;
+    return lp::OptionClickDownload(click);
+  };
+  CHECK(click_for(kPage));
+  CHECK(!click_for(kOther));
 }
 
 TEST(a_release_on_one_tab_is_never_fresh_for_another) {
@@ -294,6 +312,7 @@ TEST(little_ardia_keeps_plain_new_tab_links_in_place) {
   CHECK(!without([](auto& l) { l.user_gesture = false; }));
   CHECK(!without([](auto& l) { l.http = false; }));
   CHECK(!without([](auto& l) { l.post = true; }));
+  CHECK(!without([](auto& l) { l.opener = true; }));
   CHECK(!without([](auto& l) { l.target_matches = false; }));
   CHECK(!without([](auto& l) { l.up_flags = lp::kMeta; }));
   CHECK(!without([](auto& l) { l.up_flags = -1; }));
@@ -308,6 +327,7 @@ TEST(site_peek_candidates_are_plain_cross_site_link_clicks) {
   navigation.user_gesture = true;
   navigation.link = true;
   navigation.link_click = true;
+  navigation.main_frame_initiated = true;
   navigation.input_matches = true;
   navigation.http = true;
   navigation.cross_site = true;
@@ -324,6 +344,7 @@ TEST(site_peek_candidates_are_plain_cross_site_link_clicks) {
   CHECK(!without([](auto& n) { n.user_gesture = false; }));
   CHECK(!without([](auto& n) { n.link = false; }));
   CHECK(!without([](auto& n) { n.link_click = false; }));
+  CHECK(!without([](auto& n) { n.main_frame_initiated = false; }));
   CHECK(!without([](auto& n) { n.input_matches = false; }));
   CHECK(!without([](auto& n) { n.post = true; }));
   CHECK(!without([](auto& n) { n.same_document = true; }));
@@ -340,13 +361,14 @@ TEST(other_site_peeks_tell_a_real_anchor_click_from_scripted_navigations) {
   lp::GestureGate gate;
   gate.NoteRelease(kPage, 0, 5, std::nullopt, "https://other.test/a", kReleaseUs);
   const auto release = gate.FreshRelease(kPage, 5.01);
-  auto navigation_for = [&](bool link_click, std::int64_t input_us, std::string_view url) {
+  auto navigation_for = [&](bool link_click, bool from_main_frame, std::int64_t input_us, std::string_view url) {
     lp::SitePeekNavigation navigation;
     navigation.primary_main_frame = true;
     navigation.renderer_initiated = true;
     navigation.user_gesture = true;
     navigation.link = true;
     navigation.link_click = link_click;
+    navigation.main_frame_initiated = from_main_frame;
     navigation.input_matches = lp::SameInput(input_us, release.input_us) && lp::TargetMatches(release.target, url);
     navigation.http = true;
     navigation.cross_site = true;
@@ -354,16 +376,54 @@ TEST(other_site_peeks_tell_a_real_anchor_click_from_scripted_navigations) {
     navigation.up_flags = release.flags;
     return lp::SitePeekCandidate(navigation);
   };
-  CHECK(navigation_for(true, kReleaseUs, "https://other.test/a"));
-  CHECK(navigation_for(true, kReleaseUs + lp::kInputMatchMicros, "https://other.test/a"));
-  CHECK(!navigation_for(false, kReleaseUs, "https://other.test/a"));
-  CHECK(!navigation_for(false, kReleaseUs, "https://redirect.test/"));
-  CHECK(!navigation_for(true, kReleaseUs + 250000, "https://other.test/a"));
-  CHECK(!navigation_for(true, kReleaseUs + 250000, "https://elsewhere.test/"));
-  CHECK(!navigation_for(true, kReleaseUs, "https://elsewhere.test/"));
-  CHECK(!navigation_for(true, 0, "https://other.test/a"));
+  CHECK(navigation_for(true, true, kReleaseUs, "https://other.test/a"));
+  CHECK(!navigation_for(false, true, kReleaseUs, "https://other.test/a"));
+  CHECK(!navigation_for(false, true, kReleaseUs, "https://redirect.test/"));
+  CHECK(!navigation_for(true, false, kReleaseUs, "https://other.test/a"));
+  CHECK(!navigation_for(true, true, kReleaseUs + 1, "https://other.test/a"));
+  CHECK(!navigation_for(true, true, kReleaseUs - 1, "https://other.test/a"));
+  CHECK(!navigation_for(true, true, kReleaseUs + 250000, "https://other.test/a"));
+  CHECK(!navigation_for(true, true, kReleaseUs + 250000, "https://elsewhere.test/"));
+  CHECK(!navigation_for(true, true, kReleaseUs, "https://elsewhere.test/"));
+  CHECK(!navigation_for(true, true, 0, "https://other.test/a"));
+  CHECK(lp::SameInput(kReleaseUs, kReleaseUs));
   CHECK(!lp::SameInput(kReleaseUs, 0));
   CHECK(!lp::SameInput(-1, -1));
+}
+
+TEST(a_same_process_iframe_anchor_targeting_top_never_peeks) {
+  lp::SitePeekNavigation navigation;
+  navigation.primary_main_frame = true;
+  navigation.renderer_initiated = true;
+  navigation.user_gesture = true;
+  navigation.link = true;
+  navigation.link_click = true;
+  navigation.main_frame_initiated = false;
+  navigation.input_matches = true;
+  navigation.http = true;
+  navigation.cross_site = true;
+  navigation.tab_listed = true;
+  navigation.up_flags = 0;
+  CHECK(!lp::SitePeekCandidate(navigation));
+}
+
+TEST(a_synthetic_anchor_click_carries_its_own_time_and_never_peeks) {
+  constexpr std::int64_t kReleaseUs = 9000000;
+  constexpr std::int64_t kSyntheticCreatedUs = kReleaseUs + 400;
+  CHECK(!lp::SameInput(kSyntheticCreatedUs, kReleaseUs));
+  lp::SitePeekNavigation navigation;
+  navigation.primary_main_frame = true;
+  navigation.renderer_initiated = true;
+  navigation.user_gesture = true;
+  navigation.link = true;
+  navigation.link_click = true;
+  navigation.main_frame_initiated = true;
+  navigation.input_matches = lp::SameInput(kSyntheticCreatedUs, kReleaseUs);
+  navigation.http = true;
+  navigation.cross_site = true;
+  navigation.tab_listed = true;
+  navigation.up_flags = 0;
+  CHECK(!lp::SitePeekCandidate(navigation));
 }
 
 TEST(site_tab_lists_are_bounded_and_typed) {

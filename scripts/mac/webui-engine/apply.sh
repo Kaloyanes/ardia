@@ -11,6 +11,7 @@ owned=(ardia/mac)
 mode=${1:-apply}
 
 read -r -d '' edits <<'PY' || true
+import re
 import sys
 mode, src = sys.argv[1:3]
 DEV = "#if !defined(OFFICIAL_BUILD)\n"
@@ -73,16 +74,57 @@ HOOKS = [
      "void CreateAndAddChromeThrottlesForNavigation(\n",
      MAC_DEV + "void (*g_ardia_mac_add_navigation_throttles)(\n"
      "    content::NavigationThrottleRegistry& registry) = nullptr;\n#endif\n\n",
-     "before"),
+     "before",
+     r"\(\s*\*\s*g_ardia_mac_add_navigation_throttles\s*\)\s*\("),
     ("chrome/browser/chrome_content_browser_client_navigation_throttles.cc",
      "    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);\n",
      MAC_DEV + "    if (g_ardia_mac_add_navigation_throttles) {\n"
      "      g_ardia_mac_add_navigation_throttles(registry);\n    }\n#endif\n",
-     "after"),
+     "after",
+     r"if\s*\(\s*g_ardia_mac_add_navigation_throttles\s*\)"),
+    ("content/browser/renderer_host/render_frame_host_impl.cc",
+     "void RenderFrameHostImpl::DownloadURL(\n",
+     MAC_DEV + "bool (*g_ardia_mac_download_url)(RenderFrameHost* frame,\n"
+     "                                 const GURL& url,\n"
+     "                                 bool follows_redirects,\n"
+     "                                 bool names_file,\n"
+     "                                 bool user_gesture) = nullptr;\n#endif\n\n",
+     "before",
+     r"\(\s*\*\s*g_ardia_mac_download_url\s*\)\s*\("),
+    ("content/browser/renderer_host/render_frame_host_impl.cc",
+     "  std::unique_ptr<download::DownloadUrlParameters> parameters =\n"
+     "      CreateDownloadUrlParameters(blink_parameters->url, traffic_annotation);\n",
+     MAC_DEV + "  if (g_ardia_mac_download_url &&\n"
+     "      g_ardia_mac_download_url(\n"
+     "          this, blink_parameters->url,\n"
+     "          blink_parameters->cross_origin_redirects ==\n"
+     "              network::mojom::RedirectMode::kFollow,\n"
+     "          blink_parameters->suggested_name.has_value(),\n"
+     "          blink_parameters->has_user_gesture)) {\n"
+     "    return;\n  }\n#endif\n",
+     "before",
+     r"if\s*\(\s*g_ardia_mac_download_url\s*&&"),
 ]
+
+
+def blocks(s, identity):
+    pattern = re.compile(r"#if BUILDFLAG\(IS_MAC\) && !defined\(OFFICIAL_BUILD\)\n(?:(?!#endif\n)[\s\S])*?" +
+                         identity + r"(?:(?!#endif\n)[\s\S])*?#endif\n")
+    return list(pattern.finditer(s))
+
+
+def without(s, match, text):
+    end = match.end()
+    if text.endswith("\n\n") and s[end:end + 1] == "\n":
+        end += 1
+    return s[:match.start()] + s[end:]
+
+
 failed = False
 pending = {}
-for path, anchor, text, where in HOOKS:
+for hook in HOOKS:
+    path, anchor, text, where = hook[:4]
+    identity = hook[4] if len(hook) > 4 else None
     full = f"{src}/{path}"
     s = pending.get(full)
     if s is None:
@@ -93,14 +135,27 @@ for path, anchor, text, where in HOOKS:
                 continue
             sys.exit(f"apply.sh: {path} is not in {src}")
     present = text in s
+    found = blocks(s, identity) if identity else []
     if mode == "--check":
         if not present:
             print(f"apply.sh --check: missing hook in {path}: {text.strip().splitlines()[0]}", file=sys.stderr)
+            failed = True
+        elif identity and len(found) != 1:
+            print(f"apply.sh --check: {len(found)} copies of a hook in {path}: {identity}", file=sys.stderr)
             failed = True
         continue
     if mode == "--revert":
         if present:
             s = s.replace(text, "", 1)
+        for match in reversed(blocks(s, identity) if identity else []):
+            s = without(s, match, text)
+    elif identity and len(found) > 1:
+        sys.exit(f"apply.sh: {len(found)} copies of a hook in {path}; remove the extra ones: {identity}")
+    elif not present and found:
+        s = without(s, found[0], text)
+        if s.count(anchor) != 1:
+            sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
+        s = s.replace(anchor, anchor + text if where == "after" else text + anchor, 1)
     elif not present:
         if s.count(anchor) != 1:
             sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
@@ -142,7 +197,8 @@ case "$mode" in
       chrome/browser/ui/window_feature_controller/window_feature_controller.cc \
       chrome/browser/ui/views/frame/browser_frame_view_mac.mm \
       chrome/browser/ui/views/overlay/video_overlay_window_views.cc \
-      chrome/browser/chrome_content_browser_client_navigation_throttles.cc
+      chrome/browser/chrome_content_browser_client_navigation_throttles.cc \
+      content/browser/renderer_host/render_frame_host_impl.cc
     ;;
   --check)
     excludes=()

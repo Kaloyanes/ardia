@@ -190,26 +190,32 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `ac_linux_link_gesture`). The host advertises and serves `webView.setPeekModifier`, `setSplitLinkModifier`,
   `setPeekOtherSiteTabs`, `setLittleArdiaOpensNewTabLinks`, `setPopupsOpenAsTabs` and `setCommandScrollZoom`, so
   Settings › Tabs shows its Peek and Little Ardia rows and Advanced shows ⌘-scroll zoom.
-  - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions in the page delegate:
-    a renderer `kNewWindow` (⇧-click, ⌥⇧-click), the `CanDownload` check (⌥-click) and `kNewSplitView` (⌥⌘-click).
+  - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions: a renderer
+    `kNewWindow` (⇧-click, ⌥⇧-click) and `kNewSplitView` (⌥⌘-click) in the page delegate's `OpenURLFromTab`, and
+    ⌥-click's download in `RenderFrameHostImpl::DownloadURL`, which `apply.sh` hooks with `g_ardia_mac_download_url`.
     Each must match the last left mouse-up that page's `RenderWidgetHost` saw, with Linux's gate (on that page, unused,
     no press since, at most 10 s old, exactly the configured keys), carry a user gesture, and go to the link the
     pointer was over at that release (`UpdateTargetURL`). It is then sent as `ArdiaWebView` `openWindow` with `peek`
     (and the click's `point`), `split`, `window` or `background`, as Linux does.
-  - A ⌥-click download is taken only when it is a GET of that link, asked by the same window's delegate within 1 s of
-    the release; any other download, in that tab or another, goes ahead.
+  - The ⌥-click download hook sees the requesting frame, so it only takes a request from that tab with no suggested
+    file name that follows redirects (Blink's plain-link ⌥-click; `<a download>` names its file and doesn't follow
+    redirects), within 1 s of the release. `Content-Disposition: attachment` responses are navigations and never
+    reach it.
   - A renderer `kNewWindow` that matches no gesture opens as a foreground tab through Chromium's own path, so its popup
     blocker still decides.
   - Links to other sites: `apply.sh` adds `g_ardia_mac_add_navigation_throttles` to
     `CreateAndAddChromeThrottlesForNavigation`, and the host adds a throttle to primary main-frame navigations in the
-    shell's tabs while `setPeekOtherSiteTabs` lists any. In a listed tab, a plain cross-site anchor click
-    (`WasInitiatedByLinkClick`, a user gesture, not a POST, its `NavigationInputStart` within 1 ms of the release and
-    its URL the one released over) is cancelled in `WillStartRequest`, before any request goes out, and peeked. A
-    script's `location.href` from a click handler is not a link click and follows.
+    shell's tabs while `setPeekOtherSiteTabs` lists any. In a listed tab, a plain cross-site anchor click is cancelled
+    in `WillStartRequest`, before any request goes out, when it is `WasInitiatedByLinkClick`, started by the primary
+    main frame (an iframe's `_top` anchor follows), carries a user gesture, isn't a POST, goes to the URL released
+    over, and its `NavigationInputStart` is that release's own timestamp (a script's `anchor.click()` carries the time
+    it was made). The peek is sent once that navigation finishes uncommitted, and not at all if the tab closes first.
+    A script's `location.href` from a click handler is not a link click and follows.
   - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
-    (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a no-opener GET anchor that would open
-    a new tab opens in place (`openWindow` `current`); `window.open`, opener links and POST forms keep their own
-    contents.
+    (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a link that would open a new tab
+    opens in place (`openWindow` `current`) when it has no opener and no POST body, whether Chromium routes it through `OpenURLFromTab` or, for
+    `target="_blank"` and `rel="noopener"`, through `AddNewContents`, whose new contents is then dropped before it
+    loads. `window.open` with an opener and POST forms keep their own contents.
   - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll, routed by the native hit test at
     the event's own location; the count restarts when the page changes or the setting is turned off, and precise
     (trackpad, Magic Mouse) scrolling never zooms.

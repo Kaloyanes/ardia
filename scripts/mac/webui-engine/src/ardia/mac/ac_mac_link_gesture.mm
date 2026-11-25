@@ -16,6 +16,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/zoom/page_zoom.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -33,6 +36,14 @@
 #include "url/origin.h"
 
 extern void (*g_ardia_mac_add_navigation_throttles)(content::NavigationThrottleRegistry& registry);
+
+namespace content {
+extern bool (*g_ardia_mac_download_url)(RenderFrameHost* frame,
+                                        const GURL& url,
+                                        bool follows_redirects,
+                                        bool names_file,
+                                        bool user_gesture);
+}
 
 namespace ardia_mac {
 
@@ -186,6 +197,26 @@ void AddLinkNavigationThrottles(content::NavigationThrottleRegistry& registry) {
   registry.AddThrottle(std::make_unique<SitePeekThrottle>(registry));
 }
 
+bool OptionClickDownloadIntercepted(content::RenderFrameHost* frame,
+                                    const GURL& url,
+                                    bool follows_redirects,
+                                    bool names_file,
+                                    bool user_gesture) {
+  content::WebContents* source = frame ? content::WebContents::FromRenderFrameHost(frame) : nullptr;
+  PageBinding* binding = BindingFor(source);
+  if (!binding || !Http(url)) return false;
+  const lp::GestureGate::Release release = State().gate.FreshRelease(SurfaceOf(source), Now());
+  lp::DownloadClick click;
+  click.follows_redirects = follows_redirects;
+  click.names_file = names_file;
+  click.user_gesture = user_gesture;
+  click.target_matches = lp::TargetMatches(release.target, url.spec());
+  click.up_flags = release.flags;
+  click.since = release.since;
+  if (!lp::OptionClickDownload(click)) return false;
+  return EmitDecision(binding, url, Decide(binding, "alt", url));
+}
+
 PageBinding* BindingUnder(NSEvent* event) {
   NSWindow* window = event.window;
   NSView* content = window.contentView;
@@ -321,6 +352,11 @@ bool PageLinks::PeeksInsteadOf(content::NavigationHandle& handle) {
   navigation.user_gesture = handle.HasUserGesture();
   navigation.link = ui::PageTransitionCoreTypeIs(handle.GetPageTransition(), ui::PAGE_TRANSITION_LINK);
   navigation.link_click = handle.WasInitiatedByLinkClick();
+  content::RenderFrameHost* main = contents->GetPrimaryMainFrame();
+  const std::optional<blink::LocalFrameToken>& initiator = handle.GetInitiatorFrameToken();
+  navigation.main_frame_initiated =
+      main && initiator &&
+      main->GetGlobalFrameToken() == content::GlobalRenderFrameHostToken(handle.GetInitiatorProcessId(), *initiator);
   navigation.input_matches = lp::SameInput(Micros(handle.NavigationInputStart()), release.input_us) &&
                              lp::TargetMatches(release.target, url.spec());
   navigation.post = handle.IsPost();
@@ -334,17 +370,45 @@ bool PageLinks::PeeksInsteadOf(content::NavigationHandle& handle) {
   if (!lp::SitePeekCandidate(navigation)) return false;
   const lp::Decision decision = Decide(binding_, std::string(lp::kOtherSiteKey), url);
   if (decision.outcome != lp::Outcome::kPeek) return false;
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&PageLinks::EmitSitePeek, weak_factory_.GetWeakPtr(), url, decision.point));
+  peek_navigation_ = handle.GetNavigationId();
+  peek_url_ = url;
+  peek_point_ = decision.point;
   return true;
 }
 
-void PageLinks::EmitSitePeek(GURL url, std::optional<lp::Point> point) {
+void PageLinks::DidFinishNavigation(content::NavigationHandle* handle) {
+  if (!peek_navigation_ || handle->GetNavigationId() != peek_navigation_) return;
+  const GURL url = peek_url_;
   lp::Decision decision;
   decision.outcome = lp::Outcome::kPeek;
   decision.site = true;
-  decision.point = point;
+  decision.point = peek_point_;
+  peek_navigation_ = 0;
+  peek_url_ = GURL();
+  peek_point_.reset();
+  if (handle->HasCommitted()) return;
   EmitDecision(binding_, url, decision);
+}
+
+bool PageLinks::OpensInPlace(content::WebContents* opened, const GURL& url, WindowOpenDisposition disposition,
+                             bool user_gesture) {
+  content::WebContents* contents = web_contents();
+  if (!contents || !binding_ || !opened) return false;
+  const lp::GestureGate::Release release = State().gate.FreshRelease(surface_, Now());
+  const content::NavigationEntry* pending = opened->GetController().GetPendingEntry();
+  lp::InPlaceLink link;
+  link.enabled = State().new_tab_links_in_place;
+  link.small_window = SmallWindow(binding_);
+  link.opening = OpeningFor(disposition);
+  link.renderer_initiated = true;
+  link.user_gesture = user_gesture;
+  link.http = Http(url);
+  link.post = pending && pending->GetHasPostData();
+  link.opener = opened->HasOpener();
+  link.target_matches = lp::TargetMatches(release.target, url.spec());
+  link.up_flags = release.flags;
+  if (!lp::OpensInPlace(link)) return false;
+  return Emit(binding_, OpenEvent(url, "current"));
 }
 
 bool HandlesLinkRoute(std::string_view name) {
@@ -436,25 +500,6 @@ WindowOpenDisposition OpeningDisposition(content::WebContents* source, const con
              : params.disposition;
 }
 
-bool InterceptLinkDownload(const BrowserWindowInterface* browser,
-                           const GURL& url,
-                           std::string_view request_method) {
-  const double now = Now();
-  const std::uintptr_t surface = State().gate.FreshSurface(now);
-  const content::WebContents* source = reinterpret_cast<const content::WebContents*>(surface);
-  PageBinding* binding = BindingFor(source);
-  if (!binding || !binding->host() || !Http(url)) return false;
-  const lp::GestureGate::Release release = State().gate.FreshRelease(surface, now);
-  lp::DownloadClick click;
-  click.get = request_method == "GET";
-  click.same_browser = browser && binding->host()->OwnerOf(source) == browser;
-  click.target_matches = lp::TargetMatches(release.target, url.spec());
-  click.up_flags = release.flags;
-  click.since = release.since;
-  if (!lp::OptionClickDownload(click)) return false;
-  return EmitDecision(binding, url, Decide(binding, "alt", url));
-}
-
 WindowOpenDisposition PopupDisposition(content::WebContents* source,
                                        WindowOpenDisposition disposition) {
   PageBinding* binding = BindingFor(source);
@@ -464,9 +509,22 @@ WindowOpenDisposition PopupDisposition(content::WebContents* source,
              : disposition;
 }
 
+bool OpensNewContentsInPlace(content::WebContents* source,
+                             content::WebContents* opened,
+                             const GURL& url,
+                             WindowOpenDisposition disposition,
+                             bool user_gesture) {
+  PageBinding* binding = BindingFor(source);
+  PageLinks* links = binding ? binding->links() : nullptr;
+  return links && links->OpensInPlace(opened, url, disposition, user_gesture);
+}
+
 void InstallLinkHooks() {
   if (g_ardia_mac_add_navigation_throttles != &AddLinkNavigationThrottles) {
     g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;
+  }
+  if (content::g_ardia_mac_download_url != &OptionClickDownloadIntercepted) {
+    content::g_ardia_mac_download_url = &OptionClickDownloadIntercepted;
   }
   InstallCommandScrollZoom();
 }
