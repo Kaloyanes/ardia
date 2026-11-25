@@ -10,13 +10,16 @@
 
 #include "ardia/mac/ac_mac_dialog.h"
 #include "ardia/linux/ac_linux_session.h"
+#include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_delegate.h"
 #include "ardia/mac/ac_mac_page_events.h"
 #include "ardia/mac/ac_mac_page_policy.h"
+#include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_window_policy.h"
 #include "ardia/mac/ac_mac_window_events.h"
@@ -535,6 +538,9 @@ void ShellHostView::Initialize() {
                                  base::Value(std::move(data)));
           },
           GetWeakPtr()));
+  system_ = std::make_unique<SystemServices>(this);
+  extension_views_ = std::make_unique<ExtensionViews>(this);
+  pip_ = std::make_unique<PipPresenter>(this);
   StartLifecycle();
   browser_->GetTabStripModel()->AddObserver(this);
   WatchWindowDrag();
@@ -553,6 +559,9 @@ void ShellHostView::DetachBrowser() {
   RetireRenderer();
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
+  pip_.reset();
+  extension_views_.reset();
+  system_.reset();
   for (auto& [id, binding] : bindings_) {
     if (binding->viewport) {
       binding->viewport->SetWebContents(nullptr);
@@ -643,6 +652,9 @@ BrowserWindowInterface* ShellHostView::EnsureMember(Profile* profile) {
   }
   companions_.push_back(created->GetWeakPtr());
   created->GetTabStripModel()->AddObserver(this);
+  if (system_) {
+    system_->SyncWatches();
+  }
   Note("companion window joined " + window_id_);
   return created;
 }
@@ -688,6 +700,9 @@ PageBinding* ShellHostView::BindingForContents(
 
 void ShellHostView::BindingGone(PageBinding* binding) {
   const int id = binding->id();
+  if (pip_) {
+    pip_->CheckSource();
+  }
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<ShellHostView> host, int id) {
@@ -782,6 +797,9 @@ void ShellHostView::LayoutOverlay() {
   }
   Restack();
   UpdateGlassSurface();
+  if (extension_views_) {
+    extension_views_->Relayout();
+  }
 }
 
 void ShellHostView::Restack() {
@@ -793,6 +811,9 @@ void ShellHostView::Restack() {
     ReorderChildView(under_shell_, children().size());
   }
   ReorderChildView(shell_, children().size());
+  if (extension_views_) {
+    extension_views_->RaisePopups();
+  }
 }
 
 void ShellHostView::ReattachViewports() {
@@ -914,6 +935,15 @@ void ShellHostView::RetireRenderer() {
   }
   pass_.clear();
   unclaimed_listener_.reset();
+  if (extension_views_) {
+    extension_views_->RetireOlderThan(renderer_generation_);
+  }
+  if (pip_) {
+    pip_->RendererRetired();
+  }
+  if (system_) {
+    system_->RendererRetired();
+  }
   if (popovers_) {
     popovers_->CloseAll(popover::Event::kShellReloaded);
   }
@@ -1255,6 +1285,8 @@ void ShellHostView::TabCommand(const base::DictValue& args, Done done) {
   } else if (command == "close") {
     std::move(done).Run(true, base::Value());
     return CloseContents(contents);
+  } else if (command == extension_policy::kExecuteAction) {
+    return std::move(done).Run(true, base::Value(ExtensionViews::ExecuteAction(contents, values)));
   } else if (command == "navigationEntries") {
     base::ListValue entries;
     const int current = controller.GetCurrentEntryIndex();
@@ -1795,6 +1827,10 @@ void ShellHostView::OnTabStripModelChanged(
     }
   }
   ReattachViewports();
+  if (system_ && (change.type() == TabStripModelChange::kRemoved ||
+                  change.type() == TabStripModelChange::kInserted)) {
+    system_->SyncWatchesSoon();
+  }
 }
 
 bool ShellHostView::BindsContents(const content::WebContents* contents) const {

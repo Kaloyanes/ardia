@@ -32,6 +32,7 @@ HOOKED_FILES = (
     'content/app_shim_remote_cocoa/web_contents_view_cocoa.mm',
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
+    'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
 )
 
 
@@ -69,6 +70,15 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_shell_policy(self):
         compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
+
+    def test_system_policy(self):
+        compile_and_run(self, TESTS / 'system_policy_test.cc', self.out / 'system-policy')
+
+    def test_extension_view_policy(self):
+        compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
+
+    def test_pip_policy(self):
+        compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
     def test_dialog_policy(self):
         compile_and_run(self, TESTS / 'dialog_policy_test.cc', self.out / 'dialog-policy')
@@ -129,7 +139,7 @@ class BuildGraphTests(unittest.TestCase):
         for heavy in ('ac_mac_shell_host.mm', 'ac_mac_glass.mm', 'ac_mac_popover.mm', 'ac_mac_menu.mm',
                       'ac_mac_webui.mm', 'ac_mac_window.mm', 'ac_mac_dialog.mm', 'ac_mac_shell_lifecycle.mm',
                       'ac_mac_window_events.mm', 'ac_mac_page_commands.mm', 'ac_mac_page_events.mm',
-                      'ac_mac_page_delegate.mm'):
+                      'ac_mac_page_delegate.mm', 'ac_mac_system.mm', 'ac_mac_extension_view.mm', 'ac_mac_pip.mm'):
             self.assertNotIn(heavy, official)
 
     def test_only_development_builds_define_the_dev_macro(self):
@@ -178,6 +188,11 @@ class ApplyTests(unittest.TestCase):
                 'void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {\n'
                 '  if (!GetBrowserView()->GetIsNormalType() &&\n'
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
+            'chrome/browser/ui/views/overlay/video_overlay_window_views.cc':
+                '#include "build/build_config.h"\n\n'
+                'std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n'
+                '    content::VideoPictureInPictureWindowController* controller) {\n'
+                '  return VideoOverlayWindowViews::Create(controller);\n}\n',
         }
         originals = {}
         for path, text in files.items():
@@ -631,6 +646,71 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_download_watch_state_exists_before_its_notifier_calls_back(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        watch = source.split('class DownloadWatch', 1)[1].split('\n};', 1)[0]
+        notifier = watch.index('download::AllDownloadItemNotifier notifier_;')
+        for member in ('std::map<std::string, policy::ProgressMark> marks_;',
+                       'policy::ReadyQueue<base::OnceCallback<void(bool)>> ready_;', 'raw_ptr<SystemServices> owner_;'):
+            self.assertLess(watch.index(member), notifier, member)
+
+    def test_in_window_pip_is_a_native_plane_between_pages_and_the_shell(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('std::make_unique<views::NativeViewHost>()', source)
+        self.assertIn('ui::RecyclableCompositorMac', source)
+        self.assertNotIn('SetPaintToLayer', source)
+        self.assertNotIn('AddChildViewAt(std::make_unique<views::NativeViewHost>', source)
+
+    def test_links_are_captured_from_webui_start(self):
+        start = (MAC / 'ac_mac_webui.mm').read_text().split('void StartWebUIShell() {', 1)[1]
+        self.assertLess(start.index('InstallOpenUrlsHook();'), start.index('WithProfile("", base::BindOnce(&OpenLaunchWindow));'))
+
+    def test_companion_profiles_are_watched(self):
+        host = (MAC / 'ac_mac_shell_host.mm').read_text()
+        member = host.split('BrowserWindowInterface* ShellHostView::EnsureMember(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('system_->SyncWatches();', member)
+
+    def test_install_prompts_wait_for_a_live_bridge(self):
+        source = (MAC / 'ac_mac_extension_view.mm').read_text()
+        live = source.split('bool ExtensionViews::ShellLive() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('handler_->Live()', live)
+        hook = source.split('bool InstallPromptHook(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(hook.index('ShellLive()'), hook.index('PendingInstall{std::move(*done)'))
+
+    def test_download_membership_counts_companion_tabs(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        members = source.split('std::set<Profile*> SystemServices::MemberProfiles() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('policy::DownloadMember(member == host_->browser(), tabs)', members)
+
+    def test_queued_links_return_to_chrome_after_the_last_window(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        teardown = source.split('SystemServices::~SystemServices() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('HandOffOpenUrls', teardown)
+
+    def test_pip_plane_follows_display_changes(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        for needle in ('viewDidChangeBackingProperties', 'NSWindowDidChangeScreenNotification',
+                       'OnDisplayMetricsChanged', 'display.id() != display_id_', 'GetDisplayNearestPoint'):
+            self.assertIn(needle, source)
+
+    def test_round_three_contracts(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        watch_teardown = system.split('~DownloadWatch() override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('Refuse(ready_.Drop())', watch_teardown)
+        going_down = system.split('void OnManagerGoingDown(content::DownloadManager*) override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('Refuse(ready_.Close())', going_down)
+        self.assertNotIn('Run(true)', going_down)
+        handoff = system.split('void SystemServices::HandOffOpenUrls() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('browser_shutdown::IsTryingToQuit()', handoff)
+        self.assertIn('browser_shutdown::HasShutdownStarted()', handoff)
+        pip = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('ContentSettingsType::AUTO_PICTURE_IN_PICTURE', pip)
+        self.assertIn('PresentationFor(intent, presenter != nullptr, permission)', pip)
+        show = pip.split('void PipPlayer::ShowInactive() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(show.index('PermissionOf(contents)'), show.index('KeepsVisibleWindow('))
+        enter = pip.split('void PipPlayer::EnterWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(enter.index('window_->ShowInactive();'), enter.index('window_->GetMinimumSize()'))
+
     def test_page_commands_are_the_shared_handle_names(self):
         policy = self.read('ac_mac_page_policy.h')
         listed = re.findall(r'"([A-Za-z]+)"', policy.split('kPageCommands[] = {', 1)[1].split('};', 1)[0])
@@ -1049,6 +1129,12 @@ class ContractTests(unittest.TestCase):
         window = self.read('ac_mac_window.mm').split('void ShowWithoutActivating(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('widget->ShowInactive();', window)
         self.assertIn('orderWindow:NSWindowBelow relativeTo:behind_window.windowNumber', window)
+    def test_download_entry_point_refuses_through_one_route(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        call = system.split('void SystemServices::DownloadsCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('policy::RouteDownloadRequest(', call)
+        self.assertIn('RefuseQueued(std::move(done))', call)
+        self.assertNotIn('ERR_PROFILE_UNAVAILABLE', system.split('void SystemServices::EngineCall(', 1)[1].split('\n}\n', 1)[0])
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
@@ -1067,11 +1153,16 @@ class BoundaryTests(unittest.TestCase):
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
                        'session.write', 'ArdiaShell.writeDocument', 'tab.command', 'evaluate',
                        'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs',
-                       'ArdiaShell.openWindow', 'MergeLinuxSession'):
+                       'ArdiaShell.openWindow', 'MergeLinuxSession',
+                       'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
+                       'application:openURLs:', 'ArdiaShell.listenForOpenURLs', 'extensionView.create',
+                       'extensions.resolveInstallPrompt', 'executeExtensionAction', 'pip.command',
+                       'webView.setAutoPictureInPicture'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
-                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc'):
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc', 'system_policy_test.cc',
+                     'extension_view_policy_test.cc', 'pip_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

@@ -10,12 +10,15 @@
 #include <utility>
 
 #include "ardia/linux/ac_linux_session.h"
+#include "ardia/mac/ac_mac_extension_view.h"
+#include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "ardia/mac/generated/ac_desktop_window_commands.h"
 #include "base/files/file_enumerator.h"
@@ -195,6 +198,21 @@ void* EngineImage() {
   return image;
 }
 
+void ServiceCall(base::WeakPtr<ShellHostView> host,
+                 std::string name,
+                 std::optional<base::Value> args,
+                 ShellHostView::Done done,
+                 Profile* profile) {
+  const base::Value* given = args ? &*args : nullptr;
+  if (host && host->system() && SystemServices::HandlesEngineCall(name)) {
+    return host->system()->EngineCall(name, profile, given, std::move(done));
+  }
+  if (host && host->extension_views() && ExtensionViews::HandlesEngineCall(name)) {
+    return host->extension_views()->EngineCall(name, profile, given, std::move(done));
+  }
+  std::move(done).Run(false, Failure("ERR_WINDOW_CLOSED", "The window closed"));
+}
+
 }
 
 scoped_refptr<base::SequencedTaskRunner> SessionFiles() {
@@ -263,6 +281,9 @@ std::string ShellHostView::BootstrapJson() const {
   for (std::string_view capability : kCapabilities) {
     capabilities.Append(capability);
   }
+  SystemServices::AppendCapabilities(capabilities);
+  ExtensionViews::AppendCapabilities(capabilities);
+  PipPresenter::AppendCapabilities(capabilities);
   if (popover::kPopoverRendererShipped) {
     for (std::string_view capability : kPopoverCapabilities) {
       capabilities.Append(capability);
@@ -348,6 +369,15 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "tab.presentations") {
     return SetPresentations(args, std::move(done));
+  }
+  if (system_ && SystemServices::Handles(method)) {
+    return system_->Invoke(method, values, std::move(done));
+  }
+  if (extension_views_ && ExtensionViews::Handles(method)) {
+    return extension_views_->Invoke(method, args, std::move(done));
+  }
+  if (pip_ && PipPresenter::Handles(method)) {
+    return pip_->Invoke(method, args, std::move(done));
   }
   if (method == "shell.inputRegions") {
     return SetInputRegions(args, std::move(done));
@@ -593,6 +623,14 @@ void ShellHostView::EngineCall(const std::string& name,
         true, base::Value(base::WriteJson(base::DictValue().Set(
                                               "profiles", std::move(loaded)))
                               .value_or("{}")));
+  }
+  if (SystemServices::HandlesEngineCall(name) || ExtensionViews::HandlesEngineCall(name)) {
+    return WithProfile(profile, base::BindOnce(&ServiceCall, GetWeakPtr(), name,
+                                               args ? std::optional<base::Value>(args->Clone()) : std::nullopt,
+                                               std::move(done)));
+  }
+  if (pip_ && PipPresenter::HandlesEngineCall(name)) {
+    return pip_->EngineCall(name, args, std::move(done));
   }
   if (page_policy::IsZoomRoute(name)) {
     return WithProfile(profile,

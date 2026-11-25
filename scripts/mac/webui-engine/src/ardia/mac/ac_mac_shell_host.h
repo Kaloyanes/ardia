@@ -56,10 +56,13 @@ class WebView;
 namespace ardia_mac {
 
 class DialogSheets;
+class ExtensionViews;
 class GlassRegions;
 class PageCommands;
 class PageEvents;
+class PipPresenter;
 class PopoverHost;
+class SystemServices;
 class ShellBridge;
 class ShellHostView;
 
@@ -223,6 +226,9 @@ class ShellHostView : public views::View,
   std::optional<std::string> PopoverBootstrapJson(
       const content::WebContents* contents) const;
   PopoverHost* popovers() const { return popovers_.get(); }
+  SystemServices* system() const { return system_.get(); }
+  ExtensionViews* extension_views() const { return extension_views_.get(); }
+  PipPresenter* pip() const { return pip_.get(); }
   void EmitShellEvent(std::string_view name, base::Value data);
   void OnMenuCommand(const std::string& command, const std::string& argument);
   void Invoke(const std::string& method, const base::DictValue& args, Done done);
@@ -251,7 +257,10 @@ class ShellHostView : public views::View,
                            const input::NativeWebKeyboardEvent& event) override;
 
  private:
+  friend class ExtensionViews;
   friend class PageBinding;
+  friend class PipPresenter;
+  friend class SystemServices;
 
   void LayoutOverlay();
   void Restack();
@@ -359,6 +368,9 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
   std::unique_ptr<PopoverHost> popovers_;
+  std::unique_ptr<SystemServices> system_;
+  std::unique_ptr<ExtensionViews> extension_views_;
+  std::unique_ptr<PipPresenter> pip_;
   struct WindowDrag;
   std::unique_ptr<WindowDrag> drag_;
   struct PendingTab {
