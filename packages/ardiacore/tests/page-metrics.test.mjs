@@ -18,15 +18,28 @@ function page({ top = true, protocol = "https:" } = {}) {
       listeners.set(type, listener);
     }
   }
+  const videos = [];
   class Document extends EventTarget {
     getElementsByTagName() {
-      return [];
+      return videos;
     }
   }
   Object.defineProperty(Document.prototype, "visibilityState", { get: () => visibility, configurable: true });
   class HTMLMediaElement {
     constructor(code) {
       this.error = { code };
+    }
+  }
+  class Video extends HTMLMediaElement {
+    constructor() {
+      super(0);
+      this.error = null;
+      this.paused = true;
+      this.ended = false;
+      this.quality = { totalVideoFrames: 0, droppedVideoFrames: 0 };
+    }
+    getVideoPlaybackQuality() {
+      return { ...this.quality };
     }
   }
   class Performance {
@@ -55,6 +68,12 @@ function page({ top = true, protocol = "https:" } = {}) {
     receive,
     posts,
     context,
+    video: () => {
+      const v = new Video();
+      videos.push(v);
+      return v;
+    },
+    media: (type, target) => listeners.get(type)({ target }),
     mediaError: (code) => listeners.get("error")({ target: new HTMLMediaElement(code) }),
     pagehide: () => listeners.get("pagehide")(),
     hide: () => {
@@ -172,4 +191,41 @@ test("the native guard drops child-frame batches and stale generations", () => {
   assert.match(messages, /\[self notePageMetrics:dict main:main\]/);
   assert.match(mm, /ardia_page_metrics::Accept\(main, CurrentGenerationLocked\(\), batch\)/);
   assert.doesNotMatch(mm, /@"epoch"/);
+});
+
+test("a short video's frames are counted from when it starts playing to when it ends", () => {
+  const p = page();
+  generation(p.receive, 3);
+  const v = p.video();
+  v.paused = false;
+  p.media("playing", v);
+  v.quality = { totalVideoFrames: 450, droppedVideoFrames: 9 };
+  v.paused = true;
+  v.ended = true;
+  p.media("ended", v);
+  p.pagehide();
+  const sent = JSON.parse(p.posts[0].json);
+  assert.equal(sent.frames, 450);
+  assert.equal(sent.dropped, 9);
+});
+
+test("frames a video played before the generation began are never counted", () => {
+  const p = page();
+  const v = p.video();
+  v.paused = false;
+  v.quality = { totalVideoFrames: 1000, droppedVideoFrames: 50 };
+  p.media("playing", v);
+  generation(p.receive, 4);
+  v.quality = { totalVideoFrames: 1300, droppedVideoFrames: 51 };
+  v.paused = true;
+  p.media("pause", v);
+  p.pagehide();
+  assert.deepEqual(p.posts, []);
+  v.paused = false;
+  p.media("playing", v);
+  v.quality = { totalVideoFrames: 1600, droppedVideoFrames: 53 };
+  p.pagehide();
+  const sent = JSON.parse(p.posts[0].json);
+  assert.equal(sent.frames, 300);
+  assert.equal(sent.dropped, 2);
 });

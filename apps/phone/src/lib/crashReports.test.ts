@@ -21,7 +21,7 @@ test("a JavaScript error is named only by its type, never its message", () => {
   assert.equal(jsErrorReason(new RangeError("x")), "range_error");
   assert.equal(jsErrorReason(Object.assign(new Error("x"), { name: "CustomThing" })), "other");
   assert.equal(jsErrorReason("a string"), "other");
-  const pending = readPendingCrash(pendingJsCrash("type_error", NOW - 2 * HOUR), NOW);
+  const pending = readPendingCrash(pendingJsCrash("type_error", NOW - 2 * HOUR, "active"), NOW);
   assert.deepEqual(pending, { props: { kind: "js", reason: "type_error", foreground: "yes", ago: "<1d" }, at: NOW - 2 * HOUR });
   assert.equal(readPendingCrash("not json", NOW), null);
 });
@@ -52,4 +52,12 @@ test("the Android exit a fatal JavaScript error caused isn't sent again beside t
   ];
   assert.deepEqual(crashesToSend(exits, NOW, jsAt).map((c) => c.reason), ["java_crash", "anr"]);
   assert.equal(crashesToSend(exits, NOW).length, 3);
+});
+
+test("a fatal JavaScript error says whether Ardia was on screen from the app state it was seen in", () => {
+  assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "active"), NOW)?.props.foreground, "yes");
+  assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "background"), NOW)?.props.foreground, "no");
+  assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "inactive"), NOW)?.props.foreground, "no");
+  assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "unknown"), NOW)?.props.foreground, "unknown");
+  assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, null), NOW)?.props.foreground, "unknown");
 });

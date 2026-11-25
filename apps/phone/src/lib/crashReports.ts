@@ -48,8 +48,10 @@ export function crashProps(raw: unknown, now: number): EventProps<"app_crashed">
   return { kind, reason, foreground: shown, ago: crashAge(Math.max(0, now - at)) };
 }
 
-export function pendingJsCrash(reason: CrashReason, at: number): string {
-  return JSON.stringify({ kind: "js", reason, foreground: "yes", at });
+export const foregroundOf = (appState: string | null | undefined): "yes" | "no" | "unknown" => (appState === "active" ? "yes" : appState === "background" || appState === "inactive" ? "no" : "unknown");
+
+export function pendingJsCrash(reason: CrashReason, at: number, appState: string | null | undefined): string {
+  return JSON.stringify({ kind: "js", reason, foreground: foregroundOf(appState), at });
 }
 
 const SAME_EXIT_MS = 30_000;

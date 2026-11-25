@@ -50,6 +50,7 @@
   const flush = () => {
     flushing = false;
     if (burst) endBurst(burst);
+    sampleVideos();
     const t = tally;
     tally = fresh();
     if (!generation || !(t.e0 || t.e1 || t.e2 || t.e3 || t.e4 || t.frames || t.scrolls)) return;
@@ -87,26 +88,36 @@
     { capture: true, passive: true },
   ]);
 
+  const collect = (video, stopped) => {
+    if (!generation || typeof video.getVideoPlaybackQuality !== "function") return;
+    const q = video.getVideoPlaybackQuality();
+    const seen = { dropped: count(q && q.droppedVideoFrames), total: count(q && q.totalVideoFrames) };
+    const before = quality.get(video);
+    if (stopped) quality.delete(video);
+    else quality.set(video, seen);
+    if (!before) return;
+    const total = seen.total - before.total;
+    const dropped = seen.dropped - before.dropped;
+    if (total > 0 && dropped >= 0 && dropped <= total) {
+      tally.frames = min(MOST, tally.frames + total);
+      tally.dropped = min(MOST, tally.dropped + dropped);
+      soon();
+    }
+  };
+
   const sampleVideos = () => {
-    if (!generation || !visible()) return;
+    if (!generation) return;
     const videos = apply(byTag, document, ["video"]);
     for (let i = 0; i < videos.length; i++) {
       const video = videos[i];
-      if (video.paused || video.ended || typeof video.getVideoPlaybackQuality !== "function") continue;
-      const q = video.getVideoPlaybackQuality();
-      const at = now();
-      const before = quality.get(video);
-      const seen = { dropped: count(q && q.droppedVideoFrames), total: count(q && q.totalVideoFrames), at };
-      quality.set(video, seen);
-      if (!before || at - before.at > 2 * SAMPLE_MS) continue;
-      const total = seen.total - before.total;
-      const dropped = seen.dropped - before.dropped;
-      if (total > 0 && dropped >= 0 && dropped <= total) {
-        tally.frames = min(MOST, tally.frames + total);
-        tally.dropped = min(MOST, tally.dropped + dropped);
-        soon();
-      }
+      const stopped = video.paused || video.ended;
+      if (stopped ? quality.has(video) : visible()) collect(video, stopped);
     }
+  };
+
+  const videoStopped = (e) => {
+    const target = e.target;
+    if (generation && target instanceof MediaElement && quality.has(target)) collect(target, true);
   };
 
   const endBurst = (b) => {
@@ -147,6 +158,16 @@
     { capture: true, passive: true },
   ]);
 
+  apply(listen, document, [
+    "playing",
+    (e) => {
+      const target = e.target;
+      if (generation && target instanceof MediaElement) collect(target, false);
+    },
+    { capture: true, passive: true },
+  ]);
+  apply(listen, document, ["pause", videoStopped, { capture: true, passive: true }]);
+  apply(listen, document, ["ended", videoStopped, { capture: true, passive: true }]);
   apply(listen, document, [
     "visibilitychange",
     () => {

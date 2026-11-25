@@ -31,3 +31,14 @@ export function measureLaunch(committedAt: number, done: (contentAt: number, usa
   };
   probe();
 }
+
+export const LAUNCH_LEAD_GRACE_MS = 1000;
+
+export type LaunchSample<Token> = { committedAt: number; contentAt: number; usableAt: number; consent: Token };
+
+export function deliverLaunch<Token>(sample: LaunchSample<Token>, now: number, stillValid: (consent: Token) => boolean, report: (sample: LaunchSample<Token>) => void): boolean {
+  if (sample.consent === null || !stillValid(sample.consent)) return false;
+  if (now - Math.max(sample.usableAt, sample.committedAt) > LAUNCH_LEAD_GRACE_MS) return false;
+  report(sample);
+  return true;
+}

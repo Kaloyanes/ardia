@@ -94,7 +94,8 @@ import { linuxTelemetryHooks, reportRecoverableRender, reportUncaughtRender, sta
 import { launchCommitted } from "../../browser/src/state/telemetry/journeys";
 import { markFirstWindow } from "../../browser/src/state/telemetry/track";
 import { probeKeyringAfterLaunch } from "./keyringProbe";
-import { measureLaunch } from "./launchMeasure";
+import { deliverLaunch, measureLaunch } from "./launchMeasure";
+import { consentToken, stillValid } from "../../browser/src/state/telemetry/choice";
 import type { LeaderLocks } from "./telemetryLeader";
 import { liveOf } from "../../browser/src/state/tabs/tabLive";
 
@@ -102,19 +103,19 @@ Object.assign(globalThis, { ardiaLinux: { store: useBrowser, pages: usePages, em
 setHostPageHooks({ reset: resetHostPage, applyTheme: applyHostPageTheme, depart: (tabId) => ardiaHost && forgetDepartedPage(tabId, ardiaHost.bootstrap.windowId) });
 setWindowCloseDecider(decideLinuxWindowClose);
 
-const LAUNCH_LEAD_GRACE_MS = 1000;
-
 function FirstWindowCommitted({ typeahead, launch }: { typeahead: boolean; launch: boolean }) {
   const [renderedAt] = useState(Date.now);
   useLayoutEffect(() => {
     if (!launch) return;
     const committedAt = Date.now();
+    const consent = consentToken();
     measureLaunch(committedAt, (contentAt, usableAt) =>
       whenTelemetryLeads(() => {
         if (ardiaHost) probeKeyringAfterLaunch(ardiaHost);
-        if (Date.now() - Math.max(usableAt, committedAt) > LAUNCH_LEAD_GRACE_MS) return;
-        launchCommitted(renderedAt, committedAt, contentAt, usableAt);
-        markFirstWindow(committedAt);
+        deliverLaunch({ committedAt, contentAt, usableAt, consent }, Date.now(), stillValid, (sample) => {
+          launchCommitted(renderedAt, sample.committedAt, sample.contentAt, sample.usableAt, sample.consent);
+          markFirstWindow(sample.committedAt);
+        });
       }),
     );
   }, []);

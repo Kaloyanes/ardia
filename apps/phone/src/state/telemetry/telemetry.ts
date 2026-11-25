@@ -69,7 +69,7 @@ type ErrorUtilsShape = { getGlobalHandler(): GlobalErrorHandler | undefined; set
 
 function noteJsError(error: unknown, isFatal: boolean | undefined) {
   if (!gate.isSharing() || isDemoSession()) return;
-  if (isFatal) writePreference(browserDatabase(), PENDING_CRASH_KEY, pendingJsCrash(jsErrorReason(error), Date.now()));
+  if (isFatal) writePreference(browserDatabase(), PENDING_CRASH_KEY, pendingJsCrash(jsErrorReason(error), Date.now(), AppState.currentState));
   else gate.count("js_errors");
 }
 
