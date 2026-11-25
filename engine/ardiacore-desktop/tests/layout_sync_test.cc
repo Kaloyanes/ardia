@@ -782,6 +782,84 @@ void ScaleChangesReapplyTheActiveDrag() {
 }
 }
 
+void ClockJumpsNeverChargeAMiss() {
+  sync::SurfaceSyncTracker tracker(16667);
+  tracker.Begin();
+  CHECK(tracker.ExpectLayout(1, {0, 0, 100, 100}, {{4, {0, 0, 50, 50}}}, 0).has_value());
+  CHECK(tracker.ShellSubmitted(tracker.ExpectedShell()));
+  CHECK(tracker.Decide(16667).reason == sync::PresentReason::kDeadline);
+  CHECK(!tracker.IsStalled(4));
+  CHECK(tracker.ExpectLayout(2, {0, 0, 100, 100}, {{4, {0, 0, 51, 51}}}, 20000).has_value());
+  CHECK(tracker.ExpectLayout(3, {0, 0, 100, 100}, {{4, {0, 0, 52, 52}}}, 3).has_value());
+  CHECK(tracker.ShellSubmitted(tracker.ExpectedShell()));
+  const auto jumped = tracker.Decide(4);
+  CHECK(jumped.reason == sync::PresentReason::kDeadline && jumped.present);
+  CHECK(!tracker.IsStalled(4));
+  CHECK(tracker.Counts().stalls == 0 && tracker.Counts().clock_jumps == 1);
+  CHECK(tracker.ExpectLayout(4, {0, 0, 100, 100}, {{4, {0, 0, 53, 53}}}, 10).has_value());
+  CHECK(tracker.ShellSubmitted(tracker.ExpectedShell()));
+  CHECK(tracker.Decide(11).reason == sync::PresentReason::kHolding);
+  CHECK(tracker.Decide(16677).reason == sync::PresentReason::kDeadline);
+  CHECK(tracker.IsStalled(4) && tracker.Counts().stalls == 1);
+
+  sync::SurfaceSyncTracker idle(16667);
+  idle.Begin();
+  CHECK(idle.ExpectLayout(1, {0, 0, 100, 100}, {{4, {0, 0, 50, 50}}}, 1000000).has_value());
+  CHECK(idle.ShellSubmitted(idle.ExpectedShell()));
+  const auto expected = idle.Expected(4);
+  if (expected) CHECK(idle.ChildSubmitted(4, *expected));
+  CHECK(idle.Decide(1000001).reason == sync::PresentReason::kMatched);
+  CHECK(idle.ExpectLayout(2, {0, 0, 100, 100}, {{4, {0, 0, 60, 60}}}, 5).has_value());
+  const auto fresh_hold = idle.Decide(5);
+  CHECK(fresh_hold.reason == sync::PresentReason::kDeadline && fresh_hold.present);
+  CHECK(!idle.IsStalled(4) && idle.Counts().clock_jumps == 1);
+  CHECK(idle.ExpectLayout(3, {0, 0, 100, 100}, {{4, {0, 0, 61, 61}}}, 6).has_value());
+  CHECK(idle.Decide(7).reason == sync::PresentReason::kHolding);
+}
+
+void TerminateNeverCollapsesTheSidebar() {
+  sync::LayoutInput input = Window(1200, 800);
+  input.collapse_below = 140;
+  sync::LayoutDragSession session(input);
+  CHECK(session.BeginSidebar(190));
+  CHECK(session.Move(0));
+  CHECK(session.Snapshot().sidebar_collapsed);
+  const auto terminated = session.Terminate();
+  CHECK(terminated && !terminated->collapsed && !terminated->needs_settle);
+  CHECK(terminated && terminated->target == 160 && terminated->kept == 160);
+  CHECK(session.Active() == sync::DragKind::kNone);
+  CHECK(!session.Snapshot().sidebar_collapsed && session.Snapshot().sidebar_width == 160);
+  CHECK(session.Input().sidebar_shown);
+}
+
+void EndSpendsOneSequence() {
+  constexpr uint64_t kLast = std::numeric_limits<uint64_t>::max();
+  sync::LayoutDragSession sidebar(Window(1200, 800), kLast - 3);
+  CHECK(sidebar.BeginSidebar(190));
+  CHECK(sidebar.Sequence() == kLast - 1);
+  const auto released = sidebar.End(250);
+  CHECK(released && released->target == 250 && !released->needs_settle);
+  CHECK(sidebar.Sequence() == kLast && sidebar.Active() == sync::DragKind::kNone);
+  CHECK(sidebar.Snapshot().sidebar_width == 250 && !sidebar.Input().sidebar_live);
+
+  sync::LayoutInput input = Window(1200, 800);
+  input.sidebar_shown = false;
+  input.card_insets = {};
+  input.split_slots = Slots({0.5, 0.5});
+  sync::LayoutDragSession split(input, kLast - 3);
+  CHECK(split.BeginSplit(Root(0), 600));
+  const auto split_release = split.End(700);
+  CHECK(split_release && Near(split_release->target, 700.0 / 1200));
+  CHECK(split.Sequence() == kLast && split.Active() == sync::DragKind::kNone);
+  CHECK(Near(split.Snapshot().split_ratio, 700.0 / 1200));
+
+  sync::LayoutDragSession spring(Window(1200, 800), kLast - 3);
+  CHECK(spring.BeginSidebar(190));
+  const auto stretched = spring.End(900);
+  CHECK(stretched && stretched->needs_settle && spring.SettleTarget() == 400.0);
+  CHECK(spring.Sequence() == kLast && spring.Input().sidebar_width > 400);
+}
+
 int main() {
   SidebarLimitMatchesTheBrowserUi();
   RubberBandRoundTrips();
@@ -811,6 +889,9 @@ int main() {
   TerminationCommitsAndCancelRollsBack();
   FailedBeginsLeaveTheSessionUntouched();
   ScaleChangesReapplyTheActiveDrag();
+  ClockJumpsNeverChargeAMiss();
+  TerminateNeverCollapsesTheSidebar();
+  EndSpendsOneSequence();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return EXIT_FAILURE;

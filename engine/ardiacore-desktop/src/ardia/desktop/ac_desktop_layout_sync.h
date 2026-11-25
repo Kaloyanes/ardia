@@ -213,8 +213,9 @@ class LayoutDragSession {
 
   bool Apply(const LayoutInput& next, const Drag& drag);
   bool Reapply(LayoutInput next);
-  std::optional<Release> FinishSidebar(double raw, bool spring);
-  std::optional<Release> FinishSplit();
+  bool Step(double pointer, LayoutInput& next, Drag& drag) const;
+  std::optional<Release> FinishSidebar(const LayoutInput& from, const Drag& drag, bool released);
+  std::optional<Release> FinishSplit(const LayoutInput& from);
   double SidebarWidthAt(const Drag& drag, double pointer, double max, bool* dragged) const;
   std::optional<std::vector<SplitSlot>> SlotsAt(const LayoutInput& next, const Drag& drag, double pointer) const;
 
@@ -309,6 +310,7 @@ class SurfaceSyncTracker {
   uint64_t last_generation_ = 0;
   bool pending_ = false;
   int64_t deadline_micros_ = 0;
+  bool clock_jump_fallback_ = false;
   bool has_clock_ = false;
   int64_t last_now_micros_ = 0;
   Surface shell_;

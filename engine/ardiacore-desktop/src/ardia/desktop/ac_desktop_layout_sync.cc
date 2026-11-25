@@ -458,22 +458,27 @@ bool LayoutDragSession::BeginSplit(DividerRef divider, double pointer) {
   return true;
 }
 
-bool LayoutDragSession::Move(double pointer) {
+bool LayoutDragSession::Step(double pointer, LayoutInput& next, Drag& drag) const {
   if (!Finite(pointer)) return false;
-  LayoutInput next = input_;
-  Drag drag = drag_;
-  drag.last_pointer = pointer;
   if (drag_.kind == DragKind::kSidebar && !drag_.settle_target) {
+    drag.last_pointer = pointer;
     next.sidebar_width = SidebarWidthAt(drag_, pointer, SidebarWidthLimit(next.window.width), &drag.dragged);
-    return Apply(next, drag);
+    return true;
   }
   if (drag_.kind == DragKind::kSplit) {
     std::optional<std::vector<SplitSlot>> slots = SlotsAt(next, drag_, pointer);
     if (!slots) return false;
+    drag.last_pointer = pointer;
     next.split_slots = std::move(*slots);
-    return Apply(next, drag);
+    return true;
   }
   return false;
+}
+
+bool LayoutDragSession::Move(double pointer) {
+  LayoutInput next = input_;
+  Drag drag = drag_;
+  return Step(pointer, next, drag) && Apply(next, drag);
 }
 
 bool LayoutDragSession::Reapply(LayoutInput next) {
@@ -509,20 +514,22 @@ bool LayoutDragSession::SetDeviceScale(double device_scale) {
   return Reapply(std::move(next));
 }
 
-std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSplit() {
-  LayoutInput next = input_;
+std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSplit(const LayoutInput& from) {
+  LayoutInput next = from;
   next.ratio_divider = drag_.divider;
   if (!Apply(next, Drag{})) return std::nullopt;
   const double ratio = snapshot_.split_ratio;
   return Release{ratio, ratio, ratio, false, false};
 }
 
-std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(double raw, bool spring) {
-  const double max = SidebarWidthLimit(input_.window.width);
-  const double collapse_below = Finite(input_.collapse_below) ? input_.collapse_below : 0;
-  LayoutInput next = input_;
+std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(const LayoutInput& from, const Drag& drag,
+                                                                          bool released) {
+  const double raw = from.sidebar_width;
+  const double max = SidebarWidthLimit(from.window.width);
+  const double collapse_below = Finite(from.collapse_below) ? from.collapse_below : 0;
+  LayoutInput next = from;
   next.sidebar_live = false;
-  if (collapse_below > 0 && raw < collapse_below) {
+  if (released && collapse_below > 0 && raw < collapse_below) {
     next.sidebar_shown = false;
     next.sidebar_width = before_drag_.sidebar_width;
     if (!Apply(next, Drag{})) return std::nullopt;
@@ -530,10 +537,10 @@ std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(doubl
   }
   const double target = ClampWidth(raw, kSidebarMinWidth, max);
   const double kept = KeptSidebarWidth(target, max, before_drag_.sidebar_width);
-  if (spring && raw != target) {
-    Drag drag = drag_;
-    drag.settle_target = target;
-    if (!Apply(input_, drag)) return std::nullopt;
+  if (released && raw != target) {
+    Drag settling = drag;
+    settling.settle_target = target;
+    if (!Apply(from, settling)) return std::nullopt;
     return Release{raw, target, kept, true, false};
   }
   next.sidebar_width = kept;
@@ -543,15 +550,20 @@ std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(doubl
 
 std::optional<LayoutDragSession::Release> LayoutDragSession::End(double pointer) {
   if (drag_.kind == DragKind::kNone || drag_.settle_target) return std::nullopt;
-  if (Finite(pointer)) Move(pointer);
-  if (drag_.kind == DragKind::kSplit) return FinishSplit();
-  return FinishSidebar(input_.sidebar_width, true);
+  LayoutInput next = input_;
+  Drag drag = drag_;
+  if (!Step(pointer, next, drag)) {
+    next = input_;
+    drag = drag_;
+  }
+  if (drag_.kind == DragKind::kSplit) return FinishSplit(next);
+  return FinishSidebar(next, drag, true);
 }
 
 std::optional<LayoutDragSession::Release> LayoutDragSession::Terminate() {
-  if (drag_.kind == DragKind::kSplit) return FinishSplit();
+  if (drag_.kind == DragKind::kSplit) return FinishSplit(input_);
   if (drag_.kind == DragKind::kSidebar && drag_.settle_target) return FinishSettle();
-  if (drag_.kind == DragKind::kSidebar) return FinishSidebar(input_.sidebar_width, false);
+  if (drag_.kind == DragKind::kSidebar) return FinishSidebar(input_, drag_, false);
   return std::nullopt;
 }
 
@@ -609,11 +621,13 @@ void SurfaceSyncTracker::SetDeviceScale(double device_scale) {
 void SurfaceSyncTracker::Begin() {
   active_ = true;
   pending_ = false;
+  clock_jump_fallback_ = false;
 }
 
 void SurfaceSyncTracker::End() {
   active_ = false;
   pending_ = false;
+  clock_jump_fallback_ = false;
   shell_.participating = false;
   for (Surface& child : children_) child.participating = false;
 }
@@ -694,9 +708,8 @@ std::optional<std::vector<SurfaceId>> SurfaceSyncTracker::ExpectLayout(uint64_t 
   if (!pending_) {
     pending_ = true;
     deadline_micros_ = SaturatingAdd(now_micros, hold_budget_);
-  } else if (clock_went_back) {
-    deadline_micros_ = std::min(deadline_micros_, now_micros);
   }
+  if (clock_went_back) clock_jump_fallback_ = true;
   ++counts_.layouts;
   return out;
 }
@@ -750,13 +763,14 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
     last_now_micros_ = now_micros;
     return decision;
   }
-  const bool clock_went_back = ClockWentBack(now_micros);
+  const bool clock_jumped = ClockWentBack(now_micros) || clock_jump_fallback_;
   size_t waiting = ShellCaught() ? 0 : 1;
   for (const Surface& child : children_) {
     if (child.participating && !child.stalled && !Caught(child)) ++waiting;
   }
   if (waiting == 0) {
     pending_ = false;
+    clock_jump_fallback_ = false;
     ++counts_.matched;
     for (Surface& child : children_) {
       if (child.participating) child.misses = 0;
@@ -764,10 +778,11 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
     decision.reason = PresentReason::kMatched;
     return decision;
   }
-  if (clock_went_back || now_micros >= deadline_micros_) {
+  if (clock_jumped || now_micros >= deadline_micros_) {
     pending_ = false;
+    clock_jump_fallback_ = false;
     ++counts_.deadline_fallbacks;
-    if (!clock_went_back) {
+    if (!clock_jumped) {
       for (Surface& child : children_) {
         if (!child.participating || child.stalled || Caught(child)) continue;
         if (++child.misses >= kMissesBeforeStalled) {
