@@ -19,6 +19,8 @@ import { SESSION_MIGRATIONS, SESSION_VERSION } from "../../browser/src/state/ses
 import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
+import { noteSessionFromOtherShell } from "../../browser/src/state/telemetry/sessionWrites";
+import { SESSION_ROWS, sessionRowLists } from "../../browser/src/state/session/savedShapes";
 
 type StoredWindow = Partial<BrowserWindow> & { incognito?: unknown; originalProfileId?: unknown; sidebarOpen?: unknown };
 
@@ -111,13 +113,17 @@ const withoutWindowTabsShown = (session: HydrateData): HydrateData => {
   };
 };
 
+const withRowsKeyed = (saved: HydrateData): HydrateData => {
+  const lists = SESSION_ROWS.filter((key) => Array.isArray(saved[key]));
+  return lists.length ? { ...saved, ...Object.fromEntries(lists.map((key) => [key, keyedById(saved[key]) ?? {}])) } : saved;
+};
+
 const sniffedSessionShape = (saved: HydrateData): HydrateData => {
-  const settled = settledSession(saved);
+  const settled = settledSession(withRowsKeyed(saved));
   return withoutWindowTabsShown(withAutoHideTabsSetting(withPinChoiceStamps(legacySession(settled) ? withoutAbsent(currentSessionShape(settled)) : settled)));
 };
 
 export const SNIFFED_SESSION_VERSION = 9;
-const DISK_LISTS = ["windows", "tabs", "groups", "splits"] as const;
 
 export const linuxSessionVersion = (saved: HydrateData): number | undefined => {
   const version = (saved as { version?: unknown }).version;
@@ -126,7 +132,7 @@ export const linuxSessionVersion = (saved: HydrateData): number | undefined => {
 
 function migratedSession(session: HydrateData, from: number): HydrateData {
   if (from >= SESSION_VERSION) return session;
-  const tables = DISK_LISTS.filter((key) => !!session[key] && !Array.isArray(session[key]));
+  const tables = SESSION_ROWS.filter((key) => !!session[key] && !Array.isArray(session[key]));
   const disk = { ...session, ...Object.fromEntries(tables.map((key) => [key, Object.values(session[key]!)])), version: from } as unknown as SavedObject;
   const next = upgraded(disk, SESSION_VERSION, SESSION_MIGRATIONS);
   if (!next) return session;
@@ -418,6 +424,7 @@ function withoutStandIn(state: BrowserState, standIn: StandIn | undefined): Brow
 
 export function startHostPersistence(host: ArdiaHost, store: SessionStore, stored: HydrateData = host.bootstrap.session ?? {}, snapshot: (state: BrowserState, canonical: HydrateData) => HydrateData = snapshotHostSession) {
   const initial = linuxSessionShape(stored);
+  if (host.bootstrap.startup === true && sessionRowLists(stored as SavedObject)) noteSessionFromOtherShell();
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
   const snapshotOf = (state: BrowserState) => snapshot(withoutStandIn(state, standIn), canonical);

@@ -6,13 +6,15 @@ import { parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSett
 import { sessionWithOwnTabMutes } from "../tabs/mute";
 import { pinChoicesFromDisk, sessionWithPinChoiceStamps } from "../pins/pinChoices";
 import { isFields, isString, isStringList } from "../../lib/decode";
-import { pageFromDisk, pinFromDisk, splitsChecked, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
+import { pageFromDisk, pinFromDisk, splitsChecked, sessionWithListedRows, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
 import { profilesKeepingLegacyDots } from "../profiles/switcherMark";
 import { profilesWithOwnLooks } from "../../lib/presetLook";
 import { layoutDrops } from "../browser/hydratedLayout";
 
 export const SESSION_VERSION = 11;
-export const SESSION_MIGRATIONS: Migrations = { 2: sessionWithCleanUpMinutes, 3: sessionWithOwnTabMutes, 4: sessionWithTabPages, 5: sessionWithTabPins, 6: sessionWithSplitSlots, 7: sessionWithSettingsMeta, 8: sessionWithPinChoiceStamps, 9: sessionWithNewTabLinksInLittleArdia, 10: sessionWithUnreadCountsOffByDefault };
+const onListedRows = (migrations: Migrations): Migrations =>
+  Object.fromEntries(Object.entries(migrations).map(([version, migrate]) => [version, (doc: SavedObject) => migrate(sessionWithListedRows(doc))]));
+export const SESSION_MIGRATIONS: Migrations = onListedRows({ 2: sessionWithCleanUpMinutes, 3: sessionWithOwnTabMutes, 4: sessionWithTabPages, 5: sessionWithTabPins, 6: sessionWithSplitSlots, 7: sessionWithSettingsMeta, 8: sessionWithPinChoiceStamps, 9: sessionWithNewTabLinksInLittleArdia, 10: sessionWithUnreadCountsOffByDefault });
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter(isString) : []);
 const has = (o: SavedObject, keys: readonly string[]) => keys.every((k) => isString(o[k]));
@@ -62,7 +64,8 @@ export function parseSession(json: string | null | undefined): SavedSession | nu
   return raw ? sessionFromSaved(raw) : null;
 }
 
-export function sessionFromSaved(raw: SavedObject): SavedSession {
+export function sessionFromSaved(saved: SavedObject): SavedSession {
+  const raw = sessionWithListedRows(saved);
   const savedWindowRows = rows<SavedObject>(raw.windows, windowOk);
   const settings = settingsWithAutoHideTabs(raw.settings, savedWindowRows);
   return {
@@ -95,7 +98,7 @@ const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 const keyed = (value: unknown) => (isFields(value) ? Object.keys(value).length : 0);
 const CLOSED_LISTS = ["closedTabs", "closedWindows", "closedGroups", "deletedGroups", "cleanedTabs"] as const;
 
-export const droppedRows = (raw: SavedObject, session: SavedSession) =>
+export const droppedRows = (saved: SavedObject, session: SavedSession, raw = sessionWithListedRows(saved)) =>
   layoutDrops(session) ||
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||

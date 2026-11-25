@@ -237,6 +237,13 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   saved window into a closed window the way `closedForLaunch` does (tab layout kept, macOS's last-window marks and
   empty entries dropped). The snapshot saves every field the shared session saves except the Mac's early launch tab,
   including which settings were chosen (`settingsMeta`); `session.test.mjs` fails when the shared session adds one.
+- **One session format for both shells.** The React Native Mac app saves `windows`, `tabs`, `groups` and `splits` as
+  lists; the WebUI shells save them as tables keyed by row id, which the Linux engine's startup tab reads. Both readers
+  take either form, row collection by row collection, so a file mixing the two (a native merge keeps an unchanged
+  collection in the form it found) loads whole. The Mac app lists tables before its migrations and its row checks
+  (`sessionWithListedRows`), and the WebUI keys lists before shaping, so shaping a second time changes nothing.
+  `sessionShells.test.mjs` (desktop and browser) round-trips Mac → WebUI → Mac and WebUI → Mac → WebUI. Telemetry
+  counts launches on the other shell's form as `session_from_other_shell`.
 
 ### Pages
 

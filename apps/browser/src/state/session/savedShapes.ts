@@ -6,6 +6,11 @@ import { isIncognitoProfile } from "../browser/model";
 import type { AdoptId, SplitSlot, SplitView, Tab, TabPage, TabPin, TileFolder } from "../browser/types";
 
 type SavedPage = Extract<TabPage, { kind: "idle" | "asleep" }>;
+export const SESSION_ROWS = ["windows", "tabs", "groups", "splits"] as const;
+export const sessionRowTables = (doc: SavedObject) => SESSION_ROWS.some((key) => isFields(doc[key]));
+export const sessionRowLists = (doc: SavedObject) => SESSION_ROWS.some((key) => Array.isArray(doc[key]));
+export const sessionWithListedRows = (doc: SavedObject): SavedObject =>
+  sessionRowTables(doc) ? { ...doc, ...Object.fromEntries(SESSION_ROWS.filter((key) => isFields(doc[key])).map((key) => [key, Object.values(doc[key] as SavedObject)])) } : doc;
 const isRestoreId = (v: unknown): v is AdoptId => isString(v) && isAdoptKind(v, "restore");
 const LEGACY_PAGE_FIELDS = ["navigation", "adoptId", "pageIn", "unloaded", "wakeAdoptId"];
 export const sessionWithTabPages = (doc: SavedObject): SavedObject => ({
