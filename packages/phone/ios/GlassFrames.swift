@@ -178,7 +178,7 @@ final class GlassFrames: NSObject {
       let capture = captures.object(forKey: entry.owner) ?? GlassCapture(warmed: warmedOwners.contains(entry.owner))
       captures.setObject(capture, forKey: entry.owner)
       if capture.page.onMainWork == nil {
-        capture.page.onMainWork = { [weak capture] ms in capture?.noteMainThread(ms: ms, now: CACurrentMediaTime(), captured: false) }
+        capture.page.onMainWork = { [weak capture] ms, privately in capture?.noteMainThread(ms: ms, now: CACurrentMediaTime(), captured: false, privately: privately) }
       }
       collect(capture, entry.space, entry.members, owner: entry.owner, blurs: &blurs, now: now, frameMs: frameMs)
       for surface in entry.members {
@@ -218,21 +218,23 @@ final class GlassFrames: NSObject {
 
   private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, blurs: inout [GlassBlurJob], now: CFTimeInterval, frameMs: Double) {
     let started = CACurrentMediaTime()
+    let workPrivately = members.contains(where: \.privately)
     var capturedNow = false
     var marks: [String] = []
     func mark(_ name: String) { if PhoneTestBuild.isOn { marks.append("\(name)=\(String(format: "%.1f", (CACurrentMediaTime() - started) * 1000))") } }
     defer {
       let spent = (CACurrentMediaTime() - started) * 1000
       if PhoneTestBuild.isOn, spent > frameMs { NSLog("PAGELAB look glass slow pass %@ %.1f ms: %@", members.map(\.label).joined(separator: ","), spent, marks.joined(separator: " ")) }
-      capture.noteMainThread(ms: spent, now: now, captured: capturedNow)
+      capture.noteMainThread(ms: spent, now: now, captured: capturedNow, privately: workPrivately)
       if capturedNow { warmedOwners.add(owner) }
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
       if capture.overBudget(now: now, frameMs: frameMs), !isOverBudget(owner) {
+        let publiclyOverBudget = capture.overBudgetPublicly(now: now, frameMs: frameMs)
         let box = cooldowns.object(forKey: owner) ?? GlassCooldownBox()
         box.cooldown.trip(now: CACurrentMediaTime())
         cooldowns.setObject(box, forKey: owner)
         capture.forgetSamples()
-        if !members.contains(where: \.privately) { PendingCounts.add(PendingCounts.glassCapturesOverBudget) }
+        if publiclyOverBudget, !members.contains(where: \.privately) { PendingCounts.add(PendingCounts.glassCapturesOverBudget) }
         NSLog("PAGELAB look glass capture over budget: %@ turns to clear glass for %.0f s (trip %d, last %.1f ms)", members.map(\.label).joined(separator: ","), LiquidGlassRules.budgetCooldown(trips: box.cooldown.trips), box.cooldown.trips, spent)
         members.forEach { $0.needsPath() }
       }
@@ -310,7 +312,7 @@ final class GlassFrames: NSObject {
     mark("survey")
     if let web, let page {
       let under = strip.applying(page.transform.inverted())
-      capture.page.request(web, around: under, pixelsPerPoint: pixelsPerPoint, now: now)
+      capture.page.request(web, around: under, pixelsPerPoint: pixelsPerPoint, now: now, privately: workPrivately)
       let toneStrip = GlassFrames.toneStrip(of: members, in: space)
       if !toneStrip.isNull, let luminance = capture.page.luminance(under: toneStrip.applying(page.transform.inverted()), of: web), capture.tone.observe(luminance: luminance, now: now), let dark = capture.tone.dark {
         NotificationCenter.default.post(name: GlassTone.changed, object: web, userInfo: [GlassTone.darkKey: dark])

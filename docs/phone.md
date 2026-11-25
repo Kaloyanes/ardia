@@ -1654,7 +1654,12 @@ Metal.
   glass instead of its lens for over 3 s is counted once in `glass_lens_withheld`. No glass count is taken while the
   glass is private (`privately`): it is set from the surface's own tab (the bar, the menus, Reader opened from a
   private tab, whose glass keeps Reader's look), from the Incognito look, and for every glass while Incognito is on or
-  a private tab is selected (`useBrowsingPrivately`). The stretch starts again when privacy or the sharing consent
+  a private tab is selected (`useBrowsingPrivately`); the deck instead follows its visible side (`GlassPrivacy`), so
+  its glass is private on the Incognito side and while that side fades out, and public on the regular list even with
+  a private tab still selected. Capture work is tagged private when it starts (the frame's main-thread work and each
+  WebKit PDF or snapshot it asks for), so work for a private page that lands after a switch to a public tab can still
+  cool the glass down but never counts toward `glass_captures_over_budget`, which is taken only when the public work
+  alone crosses the budget. The stretch starts again when privacy or the sharing consent
   changes, or the lens shows, and a count lands only in the consent window the frame read, checked under the same lock
   as the write, so sharing turned off and on again mid-frame can't carry an old stretch into the new window. A menu's
   glass also drops its lens at once when the page under it goes missing for a frame (a tab change before the new

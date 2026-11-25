@@ -303,6 +303,10 @@ public enum GlassFlowRules {
     documentBusy(spans, now: now) > documentBusyShare
   }
 
+  public static func documentOverBudgetPublicly(_ spans: [(start: TimeInterval, end: TimeInterval?, privately: Bool)], now: TimeInterval) -> Bool {
+    documentOverBudget(spans.filter { !$0.privately }.map { (start: $0.start, end: $0.end) }, now: now)
+  }
+
   public static func captureReach(speed: CGFloat) -> CGFloat {
     min(max(captureReach, speed * captureReachSeconds), captureReachLongest)
   }

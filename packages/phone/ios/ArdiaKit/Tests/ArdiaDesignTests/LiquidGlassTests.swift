@@ -234,6 +234,20 @@ struct LiquidGlassTests {
     #expect(!stillGone && !pageBack)
   }
 
+  @Test func `private capture work can cool the glass down but never counts toward the budget telemetry`() {
+    let frameMs = 1000.0 / 60
+    let privateWork = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2, ms: 40, privately: true) }
+    let publicLight = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2 + 0.1, ms: 0.5) }
+    let afterSwitch = privateWork + publicLight
+    #expect(LiquidGlassRules.overBudget(afterSwitch, now: 2, frameMs: frameMs), "the private work still cools the glass down")
+    #expect(!LiquidGlassRules.overBudgetPublicly(afterSwitch, now: 2, frameMs: frameMs), "a private page's work, still landing after the switch to a public tab, isn't counted")
+    let publicHeavy = (0..<10).map { LiquidGlassRules.CaptureSample(at: Double($0) * 0.2, ms: 40) }
+    #expect(LiquidGlassRules.overBudgetPublicly(publicHeavy, now: 2, frameMs: frameMs))
+    let privateDocument: [(start: TimeInterval, end: TimeInterval?, privately: Bool)] = [(start: 0.1, end: 1.9, privately: true), (start: 1.9, end: 2.0, privately: false)]
+    #expect(GlassFlowRules.documentOverBudget(privateDocument.map { (start: $0.start, end: $0.end) }, now: 2))
+    #expect(!GlassFlowRules.documentOverBudgetPublicly(privateDocument, now: 2), "WebKit's PDF work for a private page stays out of the count")
+  }
+
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {
     let light = LiquidGlassRules.light(LiquidGlassParams.defaults.lightAngle)
     #expect(light.x < 0 && light.y < 0)

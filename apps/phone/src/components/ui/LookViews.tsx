@@ -43,6 +43,16 @@ export const START_FROST = "start";
 
 const GlassSourceContext = createContext<string>(SURFACES_FROST);
 
+const GlassPrivacyContext = createContext<boolean | null>(null);
+
+export const GlassPrivacy = GlassPrivacyContext.Provider;
+
+function useGlassPrivately() {
+  const side = useContext(GlassPrivacyContext);
+  const browsing = useBrowsingPrivately();
+  return side ?? browsing;
+}
+
 const makeHeldFrostSource = () => Animated.createAnimatedComponent(FrostSource);
 
 let heldFrostSource: ReturnType<typeof makeHeldFrostSource> | null = null;
@@ -249,7 +259,7 @@ export function LookFrost({
   const look = useProfileLook();
   const theme = useTheme();
   const privateContext = useIncognitoLook();
-  const browsingPrivately = useBrowsingPrivately();
+  const browsingPrivately = useGlassPrivately();
   const reduceTransparency = useReduceTransparency();
   const nativeLook = useNativeLook();
   if (!nativeLook || solid)
@@ -339,7 +349,7 @@ export function ChromeSurface({
   const theme = useTheme();
   const surface = useChromeStyle();
   const privateContext = useIncognitoLook();
-  const browsingPrivately = useBrowsingPrivately();
+  const browsingPrivately = useGlassPrivately();
   const incognito = incognitoChosen ?? privateContext;
   const source = useContext(GlassSourceContext);
   const branch = useContext(GlassBranchContext);
@@ -395,7 +405,7 @@ export function LookGlass({
   const look = useProfileLook();
   const theme = useTheme();
   const privateContext = useIncognitoLook();
-  const browsingPrivately = useBrowsingPrivately();
+  const browsingPrivately = useGlassPrivately();
   if (!glassIsNative()) return <LookFrost {...frost} />;
   const shade = (frost.incognito ?? false) || (frost.dark ?? theme.dark);
   return (

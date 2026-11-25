@@ -2,7 +2,9 @@ import { Image, Platform } from "react-native";
 import { act } from "react-test-renderer";
 import { renderSurface, someTabs, unmount } from "../../test/render/harness";
 import { ReaderView } from "../components/browsing/ReaderView";
+import { TabDeck } from "../components/tabs/TabDeck";
 import { ChromeSurface, DesignProvider } from "../components/ui";
+import { useBrowse } from "../state/browse/store";
 import * as pageActions from "../state/page/actions";
 import { usePreferences } from "../state/settings/store";
 import { useTabs } from "../state/tabs/store";
@@ -72,4 +74,23 @@ onIPhone("any glass shown while browsing privately is private, whatever look it 
   const publicTab = surface();
   expect(glasses(publicTab)[0]?.props.privately).toBe(false);
   unmount(publicTab);
+});
+
+onIPhone("the deck's glass follows its visible side: private on the Incognito side and while that side fades out, public on the regular list even with a private tab still selected", () => {
+  withPublicAndPrivate("p0");
+  useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: "p0", frozenOrder: null, opening: null });
+  const deck = renderSurface(
+    <DesignProvider design="redesigned">
+      <TabDeck />
+    </DesignProvider>,
+    { flushTimers: false },
+  );
+  const deckGlass = () => glasses(deck).filter((node) => ["deckHeaderMore", "deckSearchTabs", "deckBarPlus"].includes(node.props.testID));
+  expect(deckGlass().length).toBeGreaterThan(0);
+  expect(deckGlass().every((node) => node.props.privately === false)).toBe(true);
+  act(() => useTabs.setState({ incognito: true }));
+  expect(deckGlass().every((node) => node.props.privately === true)).toBe(true);
+  act(() => useTabs.setState({ incognito: false }));
+  expect(deckGlass().every((node) => node.props.privately === true)).toBe(true);
+  unmount(deck);
 });

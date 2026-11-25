@@ -89,12 +89,14 @@ final class GlassCapture {
 
   func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, strikes: strikes) || page.isOverBudget(now: now) }
 
+  func overBudgetPublicly(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudgetPublicly(samples, now: now, frameMs: frameMs, strikes: strikes) || page.isOverBudgetPublicly(now: now) }
+
   func forgetSamples() {
     samples = []
   }
 
-  func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool) {
-    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms, cold: captured && !warmed)]
+  func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool, privately: Bool) {
+    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms, cold: captured && !warmed, privately: privately)]
     if captured { warmed = true }
   }
 
