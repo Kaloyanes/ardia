@@ -3,8 +3,7 @@ import { useBrowser } from "../../browser/src/state/browser/store";
 import { consentEpoch } from "../../browser/src/state/telemetry/client";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
-import { isImeKey } from "./textInputKeys";
-import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
+import { composingKey, dispatchesKeyPress, keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
 
 let capturing = false;
 let holding = 0;
@@ -81,7 +80,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
     if (!capturing) void host.invoke("ArdiaShell.restoreShortcutFocus", { args: [] }).catch(reportHostError);
   });
   window.addEventListener("keydown", (event) => {
-    if (isImeKey(event)) return;
+    if (composingKey(event)) return;
     const combo = keyboardCombo(event);
     if (recording) {
       event.preventDefault();
@@ -106,6 +105,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
     if (binding.notInText && document.activeElement?.matches("input,textarea,[contenteditable]:not([contenteditable=false])")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (!dispatchesKeyPress(binding, event)) return;
     if (binding.command === "tabSwitcher") hold(binding);
     emitNativeEvent("ArdiaShell", "onCommand", { command: binding.command, arg: binding.arg, windowId: host.bootstrap.windowId, epoch: consentEpoch() });
   }, true);

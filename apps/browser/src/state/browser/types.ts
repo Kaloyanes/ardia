@@ -165,6 +165,7 @@ export type ClosedTab = {
   closeBatch?: string;
   windowId: string;
   index: number;
+  profileIndex?: number;
   group: ClosedGroupInfo | null;
   parents?: ClosedGroupInfo[];
   closedAt: number;
@@ -202,6 +203,7 @@ export type ClosedGroup = {
   nested?: NestedGroupSnapshot[];
   windowId: string;
   index: number;
+  profileIndex?: number;
   closedAt: number;
 };
 
