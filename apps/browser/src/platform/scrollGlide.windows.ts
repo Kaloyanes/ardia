@@ -1,9 +1,10 @@
-export const wheelSteersSections = false;
+import { glideWebScroll, steerWebScroll } from "./webWheelSteer";
 
-export function glideNativeScroll(_tag: number, _y: number, _durationMs: number): boolean {
-  return false;
-}
+const hasDom = typeof document !== "undefined";
 
-export function steerNativeScroll(_tag: number, _lo: number, _hi: number, _glideMs: number, _canForward: boolean, _canBack: boolean): boolean {
-  return false;
-}
+export const wheelSteersSections = hasDom;
+
+export const glideNativeScroll = (tag: number, y: number, durationMs: number): boolean => (hasDom ? glideWebScroll(tag, y, durationMs) : false);
+
+export const steerNativeScroll = (tag: number, lo: number, hi: number, glideMs: number, canForward: boolean, canBack: boolean): boolean =>
+  hasDom ? steerWebScroll(tag, lo, hi, glideMs, canForward, canBack) : false;
