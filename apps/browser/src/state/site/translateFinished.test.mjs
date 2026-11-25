@@ -39,7 +39,7 @@ beforeEach(() => {
 const EMPTY = { passages: [], more: false, gone: false, done: 0, total: 0 };
 const ONE = { passages: [[1, [[10, "Bonjour"]]]], more: false, gone: false, done: 0, total: 1 };
 
-function openTab({ sample = { lang: "fr", text: "", active: true }, start = true, batches = [ONE], apply = () => true } = {}) {
+function openTab({ sample = { lang: "fr", text: "", active: true }, start = true, batches = [ONE], apply = () => true, fail = {} } = {}) {
   S().hydrate({});
   const windowId = S().createWindow({ url: "https://a.com/x", profileId: S().createProfile({ name: "Work" }) });
   const tabId = S().windows[windowId].tabIds[0];
@@ -47,7 +47,9 @@ function openTab({ sample = { lang: "fr", text: "", active: true }, start = true
   webviews.set(tabId, {
     evaluate: async (script) => {
       const ops = [...script.matchAll(/ardia\.translator"\)\]\.(\w+)\(/g)];
-      return answers[ops.at(-1)?.[1]]?.();
+      const op = ops.at(-1)?.[1];
+      if (op && fail[op]) throw new Error(fail[op]);
+      return answers[op]?.();
     },
   });
   return { tabId, toast: () => useToasts.getState().toasts[windowId]?.title };
@@ -126,12 +128,30 @@ test("a page whose language can't be told, or is already the target, is refused 
   ]);
 });
 
+test("a language check that throws is a failure at detect, sent once, and the error still reaches the caller", async () => {
+  const { tabId } = openTab({ fail: { sample: "the page script threw on example.com/private" } });
+  await assert.rejects(translatePage(tabId, "en"), /the page script threw/);
+  const [event, ...more] = finished();
+  assert.equal(more.length, 0);
+  assert.deepEqual([event.outcome, event.stage, event.reason, event.first_pass_ms, event.passages], ["failed", "detect", "other", null, 0]);
+  everyValueIsALabel(event);
+  assert.ok(!JSON.stringify(sent).includes("example.com"));
+});
+
+test("a page that can't be put back before translating is a failure at revert, and the error still reaches the caller", async () => {
+  const { tabId } = openTab({ fail: { revert: "the page script threw" } });
+  await assert.rejects(translatePage(tabId, "en"), /the page script threw/);
+  const [event, ...more] = finished();
+  assert.equal(more.length, 0);
+  assert.deepEqual([event.outcome, event.stage, event.reason, event.first_pass_ms], ["failed", "revert", "other", null]);
+});
+
 test("a page that isn't ready to start is a failure at start with the reason page_not_ready", async () => {
   const { tabId, toast } = openTab({ start: false });
   await translatePage(tabId, "en");
   const [event] = finished();
   assert.deepEqual([event.outcome, event.stage, event.reason, event.passages], ["failed", "start", "page_not_ready", 0]);
-  assert.equal(event.first_pass_ms, null, "the page was never asked to start");
+  assert.equal(event.first_pass_ms, null, "the page said it wasn't ready, so the first pass never began");
   assert.equal(toast(), "Translation error (the page isn't ready)");
 });
 

@@ -232,8 +232,18 @@ export async function translatePage(tabId: string, target = defaultTarget()) {
     reportFirstPass("refused", 0, progress, consent, reason);
     toast(tabId, message);
   };
-  await revertPage(tabId, { quiet: true });
-  const source = stateOf(tabId).source ?? (await pageLanguage(tabId))?.language ?? null;
+  const detecting = async () => {
+    try {
+      progress.stage = "revert";
+      await revertPage(tabId, { quiet: true });
+      progress.stage = "detect";
+      return stateOf(tabId).source ?? (await pageLanguage(tabId))?.language ?? null;
+    } catch (error) {
+      reportFirstPass("failed", 0, progress, consent, failureReason(error, progress.stage));
+      throw error;
+    }
+  };
+  const source = await detecting();
   if (!source) return refuse("detect", "other", "Translation error (can't tell the page's language)");
   if (baseLanguage(source) === baseLanguage(target)) return refuse("same_language", "other", `Translation error (the page is already in ${languageName(target)})`);
   let shown = false;

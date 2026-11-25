@@ -2,7 +2,7 @@ import { errorText } from "../../lib/errors";
 
 export type TranslateStage = "detect" | "start" | "collect" | "model" | "apply" | "follow";
 
-export type FinishStage = TranslateStage | "same_language" | "status" | "prepare" | "open";
+export type FinishStage = TranslateStage | "revert" | "same_language" | "status" | "prepare" | "open";
 
 export type TranslateReason = "pair_unavailable" | "no_window" | "page_not_ready" | "model_no_answer" | "page_closed" | "other";
 
