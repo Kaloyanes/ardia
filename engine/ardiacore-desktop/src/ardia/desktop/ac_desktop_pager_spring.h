@@ -409,6 +409,11 @@ class PagerSpring {
     Settle(target, Towards(target, v));
   }
 
+  double WithoutOvershoot(int target, double v) const {
+    const double reach = kOmega * std::abs(target - position_);
+    return std::clamp(v, -reach, reach);
+  }
+
   double Towards(int target, double v) const {
     const double d = target - position_;
     return d != 0 && v != 0 && (d > 0) == (v > 0) ? v : 0;
@@ -438,8 +443,9 @@ class PagerSpring {
       return;
     }
     phase_ = PagerPhase::kSettling;
-    velocity_ = v;
-    spring_ = Spring{position_, target, v, std::nullopt};
+    const double bounded = WithoutOvershoot(target, v);
+    velocity_ = bounded;
+    spring_ = Spring{position_, target, bounded, std::nullopt};
   }
 
   void AdvanceSpring(double t) {

@@ -1231,6 +1231,55 @@ void ATouchInAnotherWindowReleasesItsOwnPreparedPager() {
   }
 }
 
+void FastFlicksNeverOvershootTheTarget() {
+  for (const bool forward : {true, false}) {
+    PagerSpring spring = Configured(3, forward ? 0 : 2);
+    const int direction = forward ? -1 : 1;
+    double t = 0;
+    spring.Input(PagerInput::kBegan, 0, direction, kWidth, t);
+    for (int i = 1; i <= 4; ++i) spring.Input(PagerInput::kChanged, 450.0 * i, direction, kWidth, t += 0.01);
+    spring.Input(PagerInput::kEnded, 1800, direction, kWidth, t);
+    EXPECT_NEAR(spring.position(), forward ? 0.9 : 1.1, 1e-12);
+    EXPECT(spring.selected() == 1);
+    EXPECT(std::abs(spring.velocity()) <= pager::kOmega * 0.1 + 1e-12);
+    double now = t;
+    bool beyond = false;
+    for (int i = 0; i < 600 && spring.phase() != PagerPhase::kIdle; ++i) {
+      const pager::Frame frame = spring.StepFrame(now += kFrame);
+      if (forward ? frame.position > 1.0 : frame.position < 1.0) beyond = true;
+    }
+    EXPECT(!beyond);
+    EXPECT(spring.position() == 1);
+    EXPECT(now - t <= 0.3);
+  }
+  for (const double start : {0.05, 0.3, 0.6, 0.95}) {
+    for (const double speed : {0.5, 2.0, 8.0, 40.0}) {
+      PagerSpring spring = Configured(3, 0);
+      double t = 0;
+      const double distance = start * kWidth / pager::kTrackingScale;
+      spring.Input(PagerInput::kBegan, 0, -1, kWidth, t);
+      spring.Input(PagerInput::kChanged, distance - speed * 0.05 * kWidth / pager::kTrackingScale, -1, kWidth,
+                   t += 0.05);
+      spring.Input(PagerInput::kChanged, distance, -1, kWidth, t += 0.05);
+      spring.Input(PagerInput::kEnded, distance, -1, kWidth, t);
+      double now = t;
+      const Settle settle = RunFrames(spring, now);
+      EXPECT(!settle.overshoot);
+      EXPECT(settle.monotonic);
+      EXPECT(settle.seconds > 0);
+    }
+  }
+  PagerSpring carried = Configured(3, 0);
+  EXPECT(carried.SwitchTo(2));
+  double now = 0;
+  for (int i = 0; i < 12; ++i) carried.StepFrame(now += kFrame);
+  EXPECT(carried.SwitchTo(1));
+  EXPECT(std::abs(carried.velocity()) <= pager::kOmega * std::abs(1 - carried.position()) + 1e-12);
+  const Settle settle = RunFrames(carried, now);
+  EXPECT(!settle.overshoot);
+  EXPECT(carried.position() == 1);
+}
+
 struct Case {
   const char* name;
   void (*run)();
@@ -1272,6 +1321,7 @@ int main() {
       {"content refusal latches for the gesture", ContentRefusalLatchesForTheGesture},
       {"a removed profile does not revive its selection event", ARemovedProfileDoesNotReviveItsSelectionEvent},
       {"a touch in another window releases its own prepared pager", ATouchInAnotherWindowReleasesItsOwnPreparedPager},
+      {"fast flicks never overshoot the target", FastFlicksNeverOvershootTheTarget},
   });
   for (const Case& test : cases) {
     current = test.name;
