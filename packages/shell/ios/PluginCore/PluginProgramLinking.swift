@@ -22,10 +22,20 @@ extension PluginPrograms {
     BinFolder.open(places.binDir, creating: creating)
   }
 
+  static func isLauncherPath(_ path: String, in store: String, plugin: String? = nil) -> Bool {
+    let base = Array(store.utf8) + (store.utf8.last == 0x2F ? [] : [0x2F])
+    let bytes = Array(path.utf8)
+    guard bytes.starts(with: base), let parts = BinFolder.components(Array(bytes.dropFirst(base.count))) else { return false }
+    guard parts.count >= 3, !parts.contains(where: { $0 == [0x2E] || $0 == [0x2E, 0x2E] }), parts[1] == Array(currentName.utf8) else { return false }
+    let owner = String(decoding: parts[0], as: UTF8.self)
+    guard isName(owner), plugin.map({ Array($0.utf8) == parts[0] }) ?? true else { return false }
+    return !path.utf8.split(separator: 0x2F, omittingEmptySubsequences: false).dropFirst().contains { $0.isEmpty }
+  }
+
   static func isArdiaLink(_ name: String, existing: String, target: String, in bin: BinFolder, places: ProgramPlaces, deadLegacyLauncher: String?) -> Bool {
     if bin.leadsNowhere(name) {
       if let deadLegacyLauncher, existing == deadLegacyLauncher { return true }
-      if isInside(existing, places.store) { return true }
+      if isLauncherPath(existing, in: places.store) { return true }
     }
     return bin.isSameFile(name, as: target)
   }
@@ -48,7 +58,7 @@ extension PluginPrograms {
     guard present else { return nil }
     let taken = LinkRefusal(reason: "\(path) is someone else's; remove it to use this one", cause: .taken)
     guard let existing = bin.target(program.name) else { return taken }
-    if existing == target || isInside(existing, places.pluginStore(plugin)) || (adoptTarget != nil && existing == adoptTarget) { return nil }
+    if existing == target || isLauncherPath(existing, in: places.store, plugin: plugin) || (adoptTarget != nil && existing == adoptTarget) { return nil }
     if isArdiaLink(program.name, existing: existing, target: target, in: bin, places: places, deadLegacyLauncher: deadLegacyLauncher) { return nil }
     if isInside(existing, places.store), let other = owner(of: existing, store: places.store) {
       return LinkRefusal(reason: "\(program.name) comes from the \(other) plugin; turn that one off to use this one", cause: .otherPlugin)

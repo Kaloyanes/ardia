@@ -224,8 +224,15 @@ final class OfficialPluginsTests: XCTestCase {
       (URLError(.noPermissionsToReadFile), .permission),
       (NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError), .permission),
       (NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError), .disk),
+      (NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut), .timeout),
+      (NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet), .network),
+      (NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotCreateFile, userInfo: [NSUnderlyingErrorKey: posix(EACCES)]), .permission),
+      (NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotWriteToFile, userInfo: [NSUnderlyingErrorKey: posix(ENOSPC)]), .disk),
+      (NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotMoveFile), .io),
     ]
     for (error, expected) in cases { XCTAssertEqual(FailureCause(transfer: error), expected, "\(error)") }
+    XCTAssertEqual(FailureCause.urlCode(of: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)), .cancelled, "a raw delegate error is read by domain and code")
+    XCTAssertNil(FailureCause.urlCode(of: NSError(domain: NSPOSIXErrorDomain, code: Int(NSURLErrorCancelled))))
   }
 
   func testPromotionTakesOnlyTheExactApprovalOfTheDownload() throws {

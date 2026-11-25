@@ -216,12 +216,12 @@ final class OfficialPluginFetch: NSObject, URLSessionDownloadDelegate {
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
     guard let error, let found = take(task) else { return }
-    let urlError = error as? URLError
-    if urlError?.code == .cancelled {
+    let code = FailureCause.urlCode(of: error)
+    if code == .cancelled {
       let tooBig = task.countOfBytesReceived > OfficialArchive.maxDownload || task.countOfBytesExpectedToReceive > OfficialArchive.maxDownload
       return found.finish(.failure(tooBig ? Failure(code: "verify", reason: "the download is over \(OfficialArchive.maxDownload >> 20) MB", cause: .mismatch) : Failure(code: "cancelled", reason: "Cancelled.")))
     }
-    let offline = urlError.map { Self.offlineCodes.contains($0.code) } ?? false
+    let offline = code.map { Self.offlineCodes.contains($0) } ?? false
     found.finish(.failure(Failure(code: offline ? "offline" : "failed", reason: error.localizedDescription, cause: FailureCause(transfer: error))))
   }
 }

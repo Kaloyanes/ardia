@@ -284,6 +284,61 @@ final class PluginProgramsTests: XCTestCase {
     XCTAssertEqual(PluginPrograms.linkTarget(binPath), "greeter/current/bin/hello")
   }
 
+  func testMissingBinFoldersAreMadeOnlyUnderFoldersThatAreChecked() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    places = ProgramPlaces(store: places.store, binDir: "\(root)/home/a/b/bin")
+    XCTAssertEqual(try install(folder, version: "1.0.0").linked, ["hello-tool"], "missing folders under private ones are made, one by one")
+    var info = stat()
+    XCTAssertEqual(lstat("\(root)/home/a/b/bin", &info), 0)
+    XCTAssertEqual(info.st_uid, geteuid())
+    XCTAssertEqual(PluginPrograms.linkTarget("\(root)/home/a/b/bin/hello-tool"), "\(pluginStore)/current/bin/hello")
+
+    try FileManager.default.createDirectory(atPath: "\(root)/shared", withIntermediateDirectories: true)
+    XCTAssertEqual(chmod("\(root)/shared", 0o777), 0)
+    places = ProgramPlaces(store: places.store, binDir: "\(root)/shared/new/bin")
+    XCTAssertEqual(try install(folder, version: "1.0.0").causes["hello-tool"], "bin_shared")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: "\(root)/shared/new"), "nothing is made inside a folder other users can change")
+
+    let foreign = "/usr/ardia-test-\(UUID().uuidString)"
+    places = ProgramPlaces(store: places.store, binDir: "\(foreign)/bin")
+    XCTAssertEqual(try install(folder, version: "1.0.0").causes["hello-tool"], "bin_folder")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: foreign))
+  }
+
+  func testAPathIsSplitOnSlashBytesSoACombiningMarkCantHideAFolder() throws {
+    XCTAssertEqual(BinFolder.components(Array("/a/\u{0301}b".utf8)), [Array("a".utf8), Array("\u{0301}b".utf8)])
+    XCTAssertTrue("/a/\u{0301}b".split(separator: "/").contains { $0.utf8.contains(0x2F) }, "Swift's own split keeps the slash inside the mark's character")
+    XCTAssertNil(BinFolder.components([0x2F, 0x61, 0x00, 0x62]), "a NUL byte is refused")
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    let hidden = "\(root)/shared/\u{0301}evil"
+    try FileManager.default.createDirectory(atPath: "\(hidden)/bin", withIntermediateDirectories: true)
+    XCTAssertEqual(chmod("\(root)/shared", 0o777), 0)
+    places = ProgramPlaces(store: places.store, binDir: "\(hidden)/bin")
+    let refused = try install(folder, version: "1.0.0")
+    XCTAssertEqual(refused.causes["hello-tool"], "bin_shared", "the shared folder before the mark is checked like any other")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: "\(hidden)/bin/hello-tool"))
+  }
+
+  func testTheBinFolderDescriptorIsClosedOnExec() throws {
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    let bin = try BinFolder.open(places.binDir, creating: false).get()
+    XCTAssertNotEqual(fcntl(bin.fd, F_GETFD) & FD_CLOEXEC, 0, "a program Ardia starts never inherits it")
+  }
+
+  func testADeadLinkThatEscapesTheStoreIsntTakenForArdias() throws {
+    let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
+    try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)
+    for escaping in ["\(places.store)/../outside", "\(places.store)/gone/current/../../../outside/hello", "\(places.store)/greeter/current/../../../outside", "\(places.store)//gone/current/bin/hello"] {
+      unlink(binPath)
+      XCTAssertEqual(symlink(escaping, binPath), 0)
+      XCTAssertEqual(try install(folder, version: "1.0.0").linked, [], escaping)
+      XCTAssertEqual(PluginPrograms.linkTarget(binPath), escaping, "only the exact launcher shape Ardia makes is its own")
+    }
+    XCTAssertFalse(PluginPrograms.isLauncherPath("\(places.store)/../outside", in: places.store))
+    XCTAssertTrue(PluginPrograms.isLauncherPath("\(places.store)/gone/current/bin/hello", in: places.store))
+    XCTAssertFalse(PluginPrograms.isLauncherPath("\(places.store)/gone/1.0.0-abc/bin/hello", in: places.store))
+  }
+
   func testADeadLinkIntoArdiasOwnStoreIsReplaced() throws {
     let folder = try makePlugin("greeter", version: "1.0.0", say: "one")
     try FileManager.default.createDirectory(atPath: places.binDir, withIntermediateDirectories: true)

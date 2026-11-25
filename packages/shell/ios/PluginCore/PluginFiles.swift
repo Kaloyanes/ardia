@@ -56,8 +56,13 @@ enum FailureCause: String {
     }
   }
 
+  static func urlCode(of error: Error) -> URLError.Code? {
+    let raw = error as NSError
+    return raw.domain == NSURLErrorDomain ? URLError.Code(rawValue: raw.code) : nil
+  }
+
   init(transfer error: Error) {
-    guard let code = (error as? URLError)?.code else {
+    guard let code = Self.urlCode(of: error) else {
       self.init(file: error)
       return
     }

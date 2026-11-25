@@ -15,15 +15,26 @@ final class BinFolder {
   deinit { close(fd) }
 
   static func open(_ given: String, creating: Bool) -> Result<BinFolder, LinkRefusal> {
-    var info = stat()
-    if creating && lstat(given, &info) != 0 && errno == ENOENT { _ = PluginPrograms.realFolder(given, creating: true) }
-    switch resolve(given) {
+    switch resolve(Array(given.utf8), creating: creating) {
     case .failure(let cause):
       let reason = cause == .binShared ? "\(given) is inside a folder other users can change" : "\(given) isn't a folder you own"
       return .failure(LinkRefusal(reason: reason, cause: cause))
     case .success(let (fd, path)):
       return .success(BinFolder(fd: fd, path: path))
     }
+  }
+
+  private static let slash: UInt8 = 0x2F
+  private static let dot: [UInt8] = [0x2E]
+  private static let dotDot: [UInt8] = [0x2E, 0x2E]
+
+  static func components(_ bytes: [UInt8]) -> [[UInt8]]? {
+    let parts = bytes.split(separator: slash, omittingEmptySubsequences: true).map(Array.init)
+    return parts.contains { $0.contains(slash) || $0.contains(0) } ? nil : parts
+  }
+
+  private static func withName<T>(_ name: [UInt8], _ body: (UnsafePointer<CChar>) -> T) -> T {
+    (name.map { CChar(bitPattern: $0) } + [0]).withUnsafeBufferPointer { body($0.baseAddress!) }
   }
 
   private static func trustedOwner(_ info: stat) -> Bool {
@@ -44,83 +55,69 @@ final class BinFolder {
     return nil
   }
 
-  private static func components(_ text: String) -> [String] {
-    text.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-  }
-
-  private static func resolve(_ given: String) -> Result<(Int32, String), LinkRefusal.Cause> {
-    guard given.hasPrefix("/") else { return .failure(.binFolder) }
+  private static func resolve(_ given: [UInt8], creating: Bool) -> Result<(Int32, String), LinkRefusal.Cause> {
+    guard given.first == slash, let start = components(given) else { return .failure(.binFolder) }
     let root = Darwin.open("/", O_SEARCH | O_DIRECTORY | O_CLOEXEC)
     guard root >= 0 else { return .failure(.binFolder) }
-    var trail: [(fd: Int32, name: String)] = [(root, "")]
-    func release() { for entry in trail { close(entry.fd) } }
-    guard trustedAncestor(root) else {
-      release()
-      return .failure(.binShared)
+    var trail: [(fd: Int32, name: [UInt8])] = [(root, [])]
+    func fail(_ cause: LinkRefusal.Cause) -> Result<(Int32, String), LinkRefusal.Cause> {
+      for entry in trail { close(entry.fd) }
+      return .failure(cause)
     }
-    var pending = Array(components(given).reversed())
+    guard trustedAncestor(root) else { return fail(.binShared) }
+    var pending = start.reversed().map { (name: $0, given: true) }
     var hops = 0
-    while let part = pending.popLast() {
-      if part == "." { continue }
-      if part == ".." {
+    while let (part, given) = pending.popLast() {
+      if part == dot { continue }
+      if part == dotDot {
         if trail.count > 1 { close(trail.removeLast().fd) }
         continue
       }
       let here = trail[trail.count - 1].fd
       var info = stat()
-      guard fstatat(here, part, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
-        release()
-        return .failure(.binFolder)
+      var found = withName(part) { fstatat(here, $0, &info, AT_SYMLINK_NOFOLLOW) } == 0
+      if !found && errno == ENOENT && creating && given {
+        let made = withName(part) { mkdirat(here, $0, 0o755) } == 0 || errno == EEXIST
+        found = made && withName(part) { fstatat(here, $0, &info, AT_SYMLINK_NOFOLLOW) } == 0
       }
+      guard found else { return fail(.binFolder) }
       switch info.st_mode & S_IFMT {
       case S_IFLNK:
         hops += 1
-        guard hops <= maxHops, trustedOwner(info), let target = readLink(here, part), !target.isEmpty else {
-          release()
-          return .failure(hops > maxHops ? .binFolder : .binShared)
-        }
-        if target.hasPrefix("/") {
+        guard hops <= maxHops else { return fail(.binFolder) }
+        guard trustedOwner(info), let target = readLinkBytes(here, part), !target.isEmpty, let parts = components(target) else { return fail(.binShared) }
+        if target.first == slash {
           while trail.count > 1 { close(trail.removeLast().fd) }
         }
-        pending.append(contentsOf: components(target).reversed())
+        pending.append(contentsOf: parts.reversed().map { (name: $0, given: false) })
       case S_IFDIR:
-        let next = openat(here, part, O_SEARCH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let next = withName(part) { openat(here, $0, O_SEARCH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
         var opened = stat()
-        guard next >= 0, fstat(next, &opened) == 0, opened.st_dev == info.st_dev, opened.st_ino == info.st_ino else {
-          if next >= 0 { close(next) }
-          release()
-          return .failure(.binFolder)
-        }
+        guard next >= 0 else { return fail(.binFolder) }
         trail.append((next, part))
-        guard trustedAncestor(next) || pending.isEmpty else {
-          release()
-          return .failure(.binShared)
-        }
+        guard fstat(next, &opened) == 0, opened.st_dev == info.st_dev, opened.st_ino == info.st_ino else { return fail(.binFolder) }
+        guard trustedAncestor(next) || pending.isEmpty else { return fail(.binShared) }
       default:
-        release()
-        return .failure(.binFolder)
+        return fail(.binFolder)
       }
     }
-    let last = trail[trail.count - 1].fd
-    if trail.count == 1 {
-      release()
-      return .failure(.binFolder)
-    }
-    if let refused = privateDestination(last) {
-      release()
-      return .failure(refused)
-    }
-    let kept = dup(last)
-    let path = "/" + trail.dropFirst().map(\.name).joined(separator: "/")
-    release()
-    return kept >= 0 ? .success((kept, path)) : .failure(.binFolder)
+    guard trail.count > 1 else { return fail(.binFolder) }
+    if let refused = privateDestination(trail[trail.count - 1].fd) { return fail(refused) }
+    let kept = trail.removeLast()
+    for entry in trail { close(entry.fd) }
+    let path = "/" + (trail.dropFirst().map(\.name) + [kept.name]).map { String(decoding: $0, as: UTF8.self) }.joined(separator: "/")
+    return .success((kept.fd, path))
+  }
+
+  private static func readLinkBytes(_ dir: Int32, _ name: [UInt8]) -> [UInt8]? {
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = withName(name) { readlinkat(dir, $0, &buffer, Int(PATH_MAX)) }
+    guard count > 0 else { return nil }
+    return buffer[0..<count].map { UInt8(bitPattern: $0) }
   }
 
   private static func readLink(_ dir: Int32, _ name: String) -> String? {
-    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
-    let count = readlinkat(dir, name, &buffer, Int(PATH_MAX))
-    guard count > 0 else { return nil }
-    return String(decoding: buffer[0..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    readLinkBytes(dir, Array(name.utf8)).map { String(decoding: $0, as: UTF8.self) }
   }
 
   func entryPath(_ name: String) -> String { (path as NSString).appendingPathComponent(name) }
