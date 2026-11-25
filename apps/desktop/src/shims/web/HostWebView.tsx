@@ -138,7 +138,9 @@ export function watchPageBelowShell(node: HTMLElement, regions: InputRegionsRegi
     last = json;
     const mine = ++revision;
     void current.viewport(sent).then(() => {
-      if (mine === revision && !current.disposed && viewport.visible) regions.setPage(node, true, radii, cardRadii);
+      if (mine !== revision || current.disposed || !viewport.visible) return;
+      regions.pageViewport(node, viewport.rect);
+      regions.setPage(node, true, radii, cardRadii);
     }, (error) => {
       if (mine === revision) last = "";
       reportHostError(error);

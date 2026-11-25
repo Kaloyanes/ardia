@@ -28,7 +28,6 @@ export function domRegionDeps(host: ArdiaHost): Omit<RegionDeps, "conceal"> {
       return { x, y, width, height };
     },
     pageRectOf: clippedRectOf,
-    pageFrozen: (slot) => !!slot.closest?.(MOVING_STAGE),
     receivesPointer: (element) => getComputedStyle(element).pointerEvents !== "none",
     watch: (element, changed) => {
       const mutations = new MutationObserver(changed);
@@ -67,11 +66,13 @@ function conceal(element: Element, hidden: boolean) {
 
 export function startShellAbove(host: ArdiaHost, root: HTMLElement = document.body) {
   document.documentElement.classList.add(SHELL_ABOVE_CLASS);
-  const painter = createPageHoles(root, () => host.bootstrap.shellZoom ?? 1, currentWindowCorners);
+  const inMovingStage = (element: Element) => !!element.closest?.(MOVING_STAGE);
+  const painter = createPageHoles(root, () => host.bootstrap.shellZoom ?? 1, currentWindowCorners, inMovingStage);
   const stopCorners = onWindowCornersChanged(() => painter.windowChanged());
   const glass = startShellGlass(host);
   const registry = createInputRegions({
     ...domRegionDeps(host),
+    pageFrozen: inMovingStage,
     conceal,
     pagesChanged: (areas) => {
       painter.pagesChanged(areas);
@@ -85,9 +86,12 @@ export function startShellAbove(host: ArdiaHost, root: HTMLElement = document.bo
     registry.refresh();
     painter.windowChanged();
   };
+  const stagesMoving = new MutationObserver(resized);
+  stagesMoving.observe(root, { subtree: true, attributes: true, attributeFilter: [PEEK_MOVING_ATTRIBUTE] });
   window.addEventListener("resize", resized);
   window.addEventListener("scroll", refresh, true);
   return () => {
+    stagesMoving.disconnect();
     window.removeEventListener("resize", resized);
     window.removeEventListener("scroll", refresh, true);
     document.documentElement.classList.remove(SHELL_ABOVE_CLASS);

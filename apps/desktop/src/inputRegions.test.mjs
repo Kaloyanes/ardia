@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createInputRegions, REVEAL_DEADLINE_MS, subtract } from "./inputRegions.ts";
-import { createPageHoles, holeClipPath, holesOf, localHoles, pagesAbove, paintersBeneath, PAGE_CORNER_RADIUS, separateHoles, windowCornerRadii } from "./pageHoles.ts";
+import { createPageHoles, holeClipPath, holesOf, localHoles, pagesAbove, pagesPaintedThrough, paintersBeneath, PAGE_CORNER_RADIUS, separateHoles, windowCornerRadii } from "./pageHoles.ts";
 
 function node(rect, { children = [], pointer = true } = {}) {
   const element = { rect, children, pointer, isConnected: true, parent: null };
@@ -657,4 +657,64 @@ test("a page inside a moving Peek stage keeps its cutout and hit-region rect unt
   assert.deepEqual(h.pagesSeen.at(-1), [{ x: 380, y: 100, width: 520, height: 500 }]);
   assert.deepEqual(h.sent.at(-1).pages, [{ x: 380, y: 100, width: 520, height: 500 }]);
   stop();
+});
+
+test("a page whose first viewport ack lands mid-motion is cut and routed at the rect the host was sent, not the transformed DOM rect", async () => {
+  const frozen = new Set();
+  const h = harness({ frozen });
+  const peekPage = node({ x: 300, y: 100, width: 600, height: 500 });
+  h.registry.pageViewport(peekPage, { x: 300, y: 100, width: 600, height: 500 });
+  frozen.add(peekPage);
+  peekPage.rect = { x: 360, y: 130, width: 480, height: 400 };
+  h.registry.setPage(peekPage, true);
+  await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 300, y: 100, width: 600, height: 500 }]);
+  assert.deepEqual(h.sent.at(-1).pages, [{ x: 300, y: 100, width: 600, height: 500 }]);
+  frozen.delete(peekPage);
+  h.registry.refresh();
+  await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 360, y: 130, width: 480, height: 400 }]);
+});
+
+test("painters moving with a Peek stage drop the frozen page's hole, while painters that stay put keep it at the window rect the native page holds", () => {
+  const stage = { moving: true };
+  const inStage = (element) => element.stage === stage && stage.moving;
+  const peekSlot = { stage };
+  const tabSlot = {};
+  const pages = [{ slot: peekSlot, rect: { x: 300, y: 100, width: 600, height: 500 } }, { slot: tabSlot, rect: { x: 0, y: 0, width: 200, height: 800 } }];
+  const card = { stage };
+  const windowLayer = {};
+  assert.deepEqual(pagesPaintedThrough(card, pages, inStage).map((page) => page.slot), [tabSlot]);
+  assert.deepEqual(pagesPaintedThrough(windowLayer, pages, inStage).map((page) => page.rect), pages.map((page) => page.rect));
+  stage.moving = false;
+  assert.equal(pagesPaintedThrough(card, pages, inStage).length, 2);
+
+  const saved = { ResizeObserver: globalThis.ResizeObserver, MutationObserver: globalThis.MutationObserver };
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  try {
+    const root = { ownerDocument: { documentElement: { getBoundingClientRect: () => ({ width: 1200, height: 800 }) } }, closest: () => null };
+    let cardBox = { x: 300, y: 100, width: 600, height: 500 };
+    const movingLayer = { style: { clipPath: "" }, offsetWidth: 600, offsetHeight: 500, closest: () => null, stage, getBoundingClientRect: () => cardBox };
+    const fixedLayer = { style: { clipPath: "" }, offsetWidth: 1200, offsetHeight: 800, closest: () => null, getBoundingClientRect: () => ({ x: 0, y: 0, width: 1200, height: 800 }) };
+    const peekPage = { slot: { parentElement: root, stage }, rect: { x: 300, y: 100, width: 600, height: 500 } };
+    const painter = createPageHoles(root, () => 1, undefined, (element) => inStage(element));
+    painter.addLayer(movingLayer);
+    painter.addLayer(fixedLayer);
+    painter.pagesChanged([peekPage]);
+    assert.notEqual(movingLayer.style.clipPath, "");
+    const fixedBefore = fixedLayer.style.clipPath;
+    stage.moving = true;
+    cardBox = { x: 360, y: 130, width: 480, height: 400 };
+    painter.windowChanged();
+    assert.equal(movingLayer.style.clipPath, "", "the card no longer carries a hole that would slide off the native page");
+    assert.equal(fixedLayer.style.clipPath, fixedBefore, "the window's hole stays where the native page is");
+    stage.moving = false;
+    cardBox = { x: 300, y: 100, width: 600, height: 500 };
+    painter.windowChanged();
+    assert.notEqual(movingLayer.style.clipPath, "");
+  } finally {
+    globalThis.ResizeObserver = saved.ResizeObserver;
+    globalThis.MutationObserver = saved.MutationObserver;
+  }
 });

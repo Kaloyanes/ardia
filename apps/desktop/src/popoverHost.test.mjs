@@ -426,3 +426,37 @@ test("the host never receives a non-finite anchor or scale", async () => {
     }
   }
 });
+
+test("a parent whose native open fails and whose DOM fallback throws closes its nested children and detaches every listener", async () => {
+  const h = harness({ childPanels: true, holdOpen: true, mountThrows: true });
+  const parent = h.host.open(h.spec());
+  const child = h.host.open(h.spec({ nested: true }));
+  await tick();
+  assert.equal(h.pendingOpens.length, 2);
+  h.pendingOpens[1].resolve(null);
+  await child.ready;
+  h.pendingOpens[0].reject(new Error("no panel"));
+  await assert.rejects(parent.ready, /mount failed/);
+  assert.equal(child.closed(), true);
+  assert.equal(parent.closed(), true);
+  assert.equal(h.host.openCount(), 0);
+  assert.equal(h.listening(), false);
+  await tick();
+  assert.deepEqual(h.calls.filter((c) => c.method === POPOVER_CLOSE_METHOD).map((c) => c.args.id), [child.id]);
+});
+
+test("a host dismissal that lands after a local close but before the open is acknowledged suppresses the close", async () => {
+  const h = harness({ childPanels: true, holdOpen: true });
+  const handle = h.host.open(h.spec());
+  await tick();
+  handle.close();
+  assert.equal(h.host.openCount(), 0);
+  assert.equal(h.listening(), true, "listeners stay while the open is in flight");
+  h.shell(POPOVER_DISMISSED_EVENT, { id: handle.id, windowId: "w1", reason: "outside" });
+  h.pendingOpens[0].resolve(null);
+  await handle.ready;
+  await tick();
+  assert.deepEqual(h.calls.map((c) => c.method), [POPOVER_OPEN_METHOD]);
+  assert.equal(h.listening(), false);
+  assert.deepEqual(h.dismissed, ["closed"]);
+});

@@ -96,3 +96,16 @@ test("a fractional work area narrower than a device pixel keeps its zero-sized r
     assert.ok(y >= work.y && y <= work.y + work.height, `y ${y} at ${scale}`);
   }
 });
+
+test("snap tolerance never lets an edge escape a tiny work area", () => {
+  const work = { x: 10.0000000001, y: 20.0000000001, width: 0.3, height: 0.3 };
+  for (const scale of [1, 2, 3]) {
+    const placed = placePopover({ anchor: { x: 0, y: 0, width: 1, height: 1 }, size: { width: 50, height: 50 }, area: work, scale });
+    const { x, y, width, height } = placed.rect;
+    assert.ok(x >= work.x && x + width <= work.x + work.width, `x ${x} at ${scale}`);
+    assert.ok(y >= work.y && y + height <= work.y + work.height, `y ${y} at ${scale}`);
+    assert.ok(width >= 0 && height >= 0);
+  }
+  const edge = placePopover({ anchor: { x: 0, y: 0, width: 1, height: 1 }, size: { width: 50, height: 50 }, area: { x: 10.0000000001, y: 0, width: 100.0000000001, height: 100 }, scale: 1 });
+  assert.ok(edge.rect.x >= 10.0000000001 + 8 - 1e-12);
+});

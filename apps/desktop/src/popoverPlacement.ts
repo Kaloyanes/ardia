@@ -46,9 +46,10 @@ function snapSpan(start: number, length: number, low: number, high: number, scal
   const floorEdge = Math.ceil(low * ratio - 1e-9) / ratio;
   const ceilEdge = Math.floor(high * ratio + 1e-9) / ratio;
   if (floorEdge > ceilEdge) return { start: Math.min(Math.max(start, low), high), length: 0 };
-  const begin = Math.min(Math.max(snapToDevice(start, ratio), floorEdge), ceilEdge);
-  const end = Math.min(Math.max(snapToDevice(start + length, ratio), begin), ceilEdge);
-  return { start: begin, length: end - begin };
+  const within = (value: number) => Math.min(Math.max(value, low), high);
+  const begin = within(Math.min(Math.max(snapToDevice(start, ratio), floorEdge), ceilEdge));
+  const end = within(Math.min(Math.max(snapToDevice(start + length, ratio), begin), ceilEdge));
+  return { start: begin, length: Math.max(0, end - begin) };
 }
 
 export function placePopover(request: PlacementRequest): Placement {

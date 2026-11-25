@@ -202,7 +202,7 @@ test("a page that stops drawing because shell UI covers it is reported once, and
   try {
     let wanted = true;
     let covered = 0;
-    const regions = { setPage() {}, refresh() {}, dropPage() {}, ...cover() };
+    const regions = { setPage() {}, refresh() {}, dropPage() {}, pageViewport() {}, ...cover() };
     const stop = watchPageBelowShell(page, regions, () => wanted, () => null, undefined, () => covered++);
     hit = toolbar;
     s.mutate();
@@ -240,7 +240,7 @@ test("a page that only just overlaps the window's bottom edge is hidden but not 
   try {
     let covered = 0;
     const hidden = [];
-    const regions = { setPage: (_slot, visible) => hidden.push(!visible), refresh() {}, dropPage() {}, ...cover() };
+    const regions = { setPage: (_slot, visible) => hidden.push(!visible), refresh() {}, dropPage() {}, pageViewport() {}, ...cover() };
     const stop = watchPageBelowShell(page, regions, () => true, () => null, undefined, () => covered++);
     rect = box(200, 795, 800, 600);
     s.mutate();
@@ -261,7 +261,7 @@ test("a tab page sends its card radii with each viewport and gives the same gett
     const cardRadii = () => card;
     const sent = [];
     const pages = [];
-    const regions = { setPage: (...args) => pages.push(args), refresh() {}, dropPage() {}, ...cover() };
+    const regions = { setPage: (...args) => pages.push(args), refresh() {}, dropPage() {}, pageViewport() {}, ...cover() };
     const tab = { identity: {}, disposed: false, viewport: (viewport) => (sent.push(viewport), Promise.resolve()) };
     const stop = watchPageBelowShell(page, regions, () => true, () => tab, undefined, undefined, cardRadii);
     s.mutate();
@@ -386,7 +386,7 @@ test("the page watcher leaves counting a refused viewport to the tab that sent i
   client.setSharing(true, "onboarding");
   placement.takeWindowPlacementCounts();
   try {
-    const regions = { setPage() {}, refresh() {}, dropPage() {}, ...cover() };
+    const regions = { setPage() {}, refresh() {}, dropPage() {}, pageViewport() {}, ...cover() };
     const tab = { identity: {}, disposed: false, viewport: () => Promise.reject(new Error("Viewport radii must be four finite, nonnegative corners")) };
     const stop = watchPageBelowShell(page, regions, () => true, () => tab, undefined, undefined, () => ({ upperLeft: 0, upperRight: 0, lowerRight: 10, lowerLeft: 10 }));
     s.mutate();

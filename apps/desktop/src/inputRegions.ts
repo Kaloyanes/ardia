@@ -104,9 +104,12 @@ export function createInputRegions(deps: RegionDeps) {
 
   const measuredPageRect = deps.pageRectOf ?? deps.rectOf;
   const settledPageRects = new WeakMap<Element, Rect>();
+  const hostPageRects = new WeakMap<Element, Rect>();
   const pageRectOf = (slot: Element) => {
-    const settled = settledPageRects.get(slot);
-    if (settled && deps.pageFrozen?.(slot)) return settled;
+    if (deps.pageFrozen?.(slot)) {
+      const frozen = hostPageRects.get(slot) ?? settledPageRects.get(slot);
+      if (frozen) return frozen;
+    }
     const rect = measuredPageRect(slot);
     settledPageRects.set(slot, rect);
     return rect;
@@ -229,7 +232,14 @@ export function createInputRegions(deps: RegionDeps) {
       pages.set(slot, { visible, ...(keptRadii ? { radii: keptRadii } : {}), ...(keptCardRadii ? { cardRadii: keptCardRadii } : {}) });
       schedule();
     },
+    pageViewport(slot: Element, rect: Rect) {
+      const known = hostPageRects.get(slot);
+      if (known && known.x === rect.x && known.y === rect.y && known.width === rect.width && known.height === rect.height) return;
+      hostPageRects.set(slot, { ...rect });
+      schedule();
+    },
     dropPage(slot: Element) {
+      hostPageRects.delete(slot);
       if (pages.delete(slot)) schedule();
     },
     addOverlay(element: Element, shape: RegionShape = "box", gated = true) {

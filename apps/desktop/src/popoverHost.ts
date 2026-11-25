@@ -105,6 +105,7 @@ const modifierFree = (event: KeyboardEvent) => !event.ctrlKey && !event.metaKey 
 
 export function createPopoverHost(deps: PopoverHostDeps) {
   const stack: Entry[] = [];
+  const opening = new Map<string, Entry>();
   let detach: (() => void) | null = null;
 
   const call = (method: string, args: Record<string, unknown>) => Promise.resolve().then(() => deps.invoke(method, args));
@@ -161,12 +162,15 @@ export function createPopoverHost(deps: PopoverHostDeps) {
     if (entry.dom) safely(() => entry.dom!.unmount(), undefined);
     entry.dom = null;
     if (returnFocus) safely(() => entry.prior!.focus({ preventScroll: true }), undefined);
-    if (!stack.length) {
-      detach?.();
-      detach = null;
-    }
+    detachIfIdle();
     safely(() => entry.spec.onDismiss?.(reason), undefined);
   };
+
+  function detachIfIdle() {
+    if (stack.length || opening.size) return;
+    detach?.();
+    detach = null;
+  }
 
   const closeFrom = (index: number, reason: PopoverDismissReason) => {
     for (const entry of stack.slice(Math.max(0, index)).reverse()) finish(entry, reason, true);
@@ -202,7 +206,12 @@ export function createPopoverHost(deps: PopoverHostDeps) {
       if (!event || event.windowId !== deps.windowId || typeof event.id !== "string") return;
       const index = stack.findIndex((entry) => entry.id === event.id);
       const entry = stack[index];
-      if (!entry || entry.mode !== "native") return;
+      if (!entry) {
+        const pending = opening.get(event.id);
+        if (pending) pending.hostDismissed = true;
+        return;
+      }
+      if (entry.mode !== "native") return;
       const reason = event.reason ?? "host";
       closeFrom(index + 1, reason);
       entry.hostDismissed = true;
@@ -226,8 +235,14 @@ export function createPopoverHost(deps: PopoverHostDeps) {
 
   const openNative = (entry: Entry): Promise<PopoverMode> => {
     const request: PopoverOpenRequest = { ...geometry(entry), beyondWindow: deps.capabilities.beyondWindow, takesFocus: entry.spec.takesFocus !== false, content: entry.spec.content };
+    opening.set(entry.id, entry);
+    const settle = () => {
+      opening.delete(entry.id);
+      detachIfIdle();
+    };
     return call(POPOVER_OPEN_METHOD, request).then(
       () => {
+        settle();
         if (entry.state === "closed") {
           if (!entry.hostDismissed) closePanel(entry);
           return "native";
@@ -241,6 +256,7 @@ export function createPopoverHost(deps: PopoverHostDeps) {
         return "native";
       },
       (error) => {
+        settle();
         deps.report?.(error);
         entry.updateQueued = false;
         if (entry.state === "closed") return "native";
@@ -248,7 +264,8 @@ export function createPopoverHost(deps: PopoverHostDeps) {
         try {
           mountDom(entry);
         } catch (mountError) {
-          finish(entry, "failed", false);
+          const at = stack.indexOf(entry);
+          if (at >= 0) closeFrom(at, "failed");
           throw mountError;
         }
         return "dom";
