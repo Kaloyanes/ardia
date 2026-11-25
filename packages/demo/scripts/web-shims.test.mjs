@@ -42,7 +42,9 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
     colorPad: true,
     themedBackdrop: true,
     darkVisualEffect: true,
-    hudStaysDark: true,
+    lightToastOnLightHud: true,
+    darkToastOnDarkHud: true,
+    hudCloseOnDarkHud: true,
     breathe: true,
     holdKeyLookQuiet: true,
   });

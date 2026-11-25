@@ -10,6 +10,9 @@ import { holdThemedWindowsKeyLook, ThemeSwatch, WindowBackdrop } from "../src/sh
 import { Breathe } from "../src/shims/shell";
 import { VisualEffect } from "../src/shims/web/chrome";
 import { useBrowser } from "../../../apps/browser/src/state/browser/store";
+import { ThemeContext, themeFor } from "../../../apps/browser/src/components/ui/theme";
+import { Panel } from "../../../apps/browser/src/components/ui/Panel";
+import { Button } from "../../../apps/browser/src/components/ui/Button";
 
 document.body.style.cssText = "margin:40px;background:#f6f5f2;color:#202020;font:18px system-ui";
 document.getElementById("root")!.innerHTML = `
@@ -64,7 +67,13 @@ document.getElementById("run")!.addEventListener("click", async (event) => {
     createElement("div", { key: "pad", id: "pad" }, createElement(ThemeSwatch, { colors: [], padLightness: 0.5, style: box })),
     createElement("div", { key: "backdrop", id: "backdrop" }, createElement(WindowBackdrop, { colors: ["#000000", "#000000"], vibrancy: true, themeColors: [1, 0, 0, 1, 0, 0, 1, 1], themeOpacity: 0.7, themeBaseAlpha: 0.4, themeGrain: 0.2, themeTexture: "denim", themeAppearance: "dark", style: box })),
     createElement("div", { key: "effect", id: "effect" }, createElement(VisualEffect, { material: "sidebar", style: box })),
-    createElement("div", { key: "hud", id: "hud" }, createElement(VisualEffect, { material: "hudWindow", style: box })),
+    createElement(ThemeContext.Provider, { key: "light", value: themeFor("plum:light") },
+      createElement("div", { id: "toast" }, createElement(Panel, { fill: themeFor("plum:light").toastFill, radius: 12, material: "hudWindow", style: box })),
+      createElement("div", { id: "close" }, createElement(Button, { variant: "close", look: "hud", onPress: () => {} })),
+    ),
+    createElement(ThemeContext.Provider, { key: "dark", value: themeFor("plum:dark") },
+      createElement("div", { id: "toast-dark" }, createElement(Panel, { fill: themeFor("plum:dark").toastFill, radius: 12, material: "hudWindow", style: box })),
+    ),
     createElement("div", { key: "breathe", id: "breathe" }, createElement(Breathe, { running: true, cycleMs: 1000, opacityRange: [0.4, 1], scaleRange: [1, 1.1], style: box })),
   ]));
   const swatch = document.querySelector<HTMLElement>("#swatch > div");
@@ -74,10 +83,12 @@ document.getElementById("run")!.addEventListener("click", async (event) => {
   const backdrop = document.querySelector<HTMLElement>("#backdrop > div");
   checks.themedBackdrop = !!backdrop && backdrop.querySelectorAll("linearGradient").length === 1 && /linear-gradient/.test(backdrop.querySelector<HTMLElement>(":scope > div")?.style.backgroundImage ?? "") && !backdrop.querySelector("canvas");
   checks.darkVisualEffect = getComputedStyle(document.querySelector("#effect > div")!).backgroundColor === "rgba(46, 46, 48, 0.5)";
-  const hudFill = () => getComputedStyle(document.querySelector("#hud > div")!).backgroundColor;
-  const darkHud = hudFill();
-  flushSync(() => useBrowser.setState((s) => ({ ui: { ...s.ui, appDark: false } })));
-  checks.hudStaysDark = darkHud === "rgba(30, 30, 30, 0.6)" && hudFill() === "rgba(30, 30, 30, 0.6)";
+  const fillsIn = (id: string) => [...document.querySelectorAll(`#${id} *`)].map((node) => getComputedStyle(node).backgroundColor);
+  const LIGHT_HUD = "rgba(246, 246, 246, 0.6)";
+  const DARK_HUD = "rgba(30, 30, 30, 0.6)";
+  checks.lightToastOnLightHud = fillsIn("toast").includes(LIGHT_HUD) && !fillsIn("toast").includes(DARK_HUD);
+  checks.darkToastOnDarkHud = fillsIn("toast-dark").includes(DARK_HUD);
+  checks.hudCloseOnDarkHud = fillsIn("close").includes(DARK_HUD) && !fillsIn("close").includes(LIGHT_HUD);
   checks.breathe = /ardia-breathe-/.test(getComputedStyle(document.querySelector("#breathe > div > div")!).animationName);
   console.warn = warn;
   console.error = error;

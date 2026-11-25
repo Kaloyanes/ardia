@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 const frames = new Map();
 let nextFrame = 1;
@@ -25,6 +26,9 @@ const { paletteColors, PALETTES } = await import("./shims/web/gl/colors.ts");
 const { trackHover } = await import("./shims/web/motion/hover.ts");
 const { isSoftwareRenderer, MEADOW_POSTERS, MEADOW_POSTER_URLS, meadowToneOf, nearestMeadowPoster } = await import("./shims/web/gl/meadow.ts");
 const { backdropFragment, haloFragment, powerUpFragment } = await import("./shims/web/gl/sources.ts");
+const { materialFill } = await import("./shims/web/materials.ts");
+const { colorRoles } = await import("../../browser/src/components/ui/tokens.ts");
+const { parseColor } = await import("./shims/web/chrome.tsx");
 const { frameSubscription, measuredSize, MIN_FRAME_INTERVAL, stepAnimation, wantsFrames } = await import("./shims/web/gl/viewClock.ts");
 
 function runFrame(now) {
@@ -196,4 +200,47 @@ test("an onscreen GL view with no size holds no frame subscription, and takes on
   clock.done = true;
   sync(true);
   assert.deepEqual([frames.active(), subscribed, unsubscribed], [false, 2, 2]);
+});
+
+test("a light toast keeps a light HUD under its dark text, and the HUD close button keeps a dark plate under its white glyph, with or without page glass", () => {
+  const over = (top, bottom) => {
+    const [r, g, b, a] = parseColor(top);
+    return [0, 1, 2].map((i) => [r, g, b][i] * a + bottom[i] * (1 - a));
+  };
+  const luminance = (rgb) => {
+    const [r, g, b] = rgb.map((v) => {
+      const c = v / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const material = (name, dark, opaque) => {
+    const fill = materialFill(name, dark);
+    if (!opaque) return fill;
+    const [r, g, b] = parseColor(fill);
+    return `rgba(${r},${g},${b},1)`;
+  };
+  const light = colorRoles.light;
+  const dark = colorRoles.dark;
+  const backdrops = [[255, 255, 255], [128, 128, 128], [0, 0, 0]];
+  for (const opaque of [false, true]) {
+    for (const page of backdrops) {
+      const toast = over(material("hudWindow", false, opaque), over(light.toastFill, page));
+      assert.ok(contrast(over(light.textPrimary, toast), toast) >= 7, `light toast text over ${page}, opaque ${opaque}`);
+      assert.ok(contrast(over(light.textSecondary, toast), toast) >= 3, `light toast secondary text over ${page}, opaque ${opaque}`);
+      const darkToast = over(material("hudWindow", true, opaque), over(dark.toastFill, page));
+      assert.ok(contrast(over(dark.textPrimary, darkToast), darkToast) >= 7, `dark toast text over ${page}, opaque ${opaque}`);
+      const plate = over(light.hudCloseFill, over(material("hudWindow", true, opaque), page));
+      assert.ok(contrast(over(light.hudCloseGlyph, plate), plate) >= 4.5, `light HUD close over ${page}, opaque ${opaque}`);
+      const darkPlate = over(dark.hudCloseFill, over(material("hudWindow", true, opaque), page));
+      assert.ok(contrast(over(dark.hudCloseGlyph, darkPlate), darkPlate) >= 3, `dark HUD close over ${page}, opaque ${opaque}`);
+    }
+  }
+  const lightPlateOnWhite = over(light.hudCloseFill, over(material("hudWindow", false, false), [255, 255, 255]));
+  assert.ok(contrast(over(light.hudCloseGlyph, lightPlateOnWhite), lightPlateOnWhite) < 2, "a light HUD material under the white glyph is what the plate's dark scope avoids");
+  assert.match(readFileSync(new URL("../../browser/src/components/ui/ButtonKinds.tsx", import.meta.url), "utf8"), /<ThemeOverride theme=\{themeFor\(HUD_PLATE_THEME\)\}>\s*<VisualEffect material="hudWindow"/);
 });

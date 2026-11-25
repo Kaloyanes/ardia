@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { StyleSheet, View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../../apps/browser/src/state/browser/store";
 import { useScopedTheme } from "../../../../../apps/browser/src/components/ui/theme";
-import { popoverMenuMaterial } from "../../../../../apps/browser/src/components/ui/tokens";
+import { materialFill } from "./materials";
 import type { MiddleClickEvent } from "./MouseArea";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
@@ -90,18 +90,6 @@ export function Surface({ fill, fillColors, fillStops, fade, fadeStops, cornerRa
   );
 }
 
-type MaterialFill = { light: string; dark: string };
-
-const MATERIAL_FILL: Record<string, MaterialFill> = {
-  popover: popoverMenuMaterial,
-  menu: popoverMenuMaterial,
-  hudWindow: { light: "rgba(30,30,30,0.6)", dark: "rgba(30,30,30,0.6)" },
-  sidebar: { light: "rgba(240,240,240,0.5)", dark: "rgba(46,46,48,0.5)" },
-  underWindowBackground: { light: "rgba(240,240,240,0.4)", dark: "rgba(30,30,30,0.4)" },
-};
-
-const PLAIN_MATERIAL: MaterialFill = { light: "rgba(246,246,246,0.6)", dark: "rgba(40,40,42,0.6)" };
-
 export function useSurfaceDark(): boolean {
   const appDark = useBrowser((s) => s.ui.appDark);
   return useScopedTheme()?.dark ?? appDark;
@@ -110,7 +98,7 @@ export function useSurfaceDark(): boolean {
 export type VisualEffectProps = ViewProps & { material?: string; blendingMode?: "withinWindow" | "behindWindow"; cornerRadius?: number };
 
 export function VisualEffect({ material = "popover", cornerRadius, style, ...props }: VisualEffectProps) {
-  const fill = (MATERIAL_FILL[material] ?? PLAIN_MATERIAL)[useSurfaceDark() ? "dark" : "light"];
+  const fill = materialFill(material, useSurfaceDark());
   const glass: Style = {
     backgroundColor: fill,
     backdropFilter: "blur(24px) saturate(180%)",
