@@ -250,7 +250,7 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   file back as lists at launch, edited or not. A Mac app write that changes a collection's form while a WebUI window is
   running is the one case still replaced whole; the two shells don't run on one profile at once.
 - **What the WebUI keeps for the Mac app.** A sleeping tab's `page.wake` restore handle (left out of the WebUI's live
-  tab, written back while the tab keeps its address) and the early launch hints (`launchTab`, `launchBackdrop`,
+  tab, written back while the tab keeps its address and the WebUI hasn't loaded it) and the early launch hints (`launchTab`, `launchBackdrop`,
   `linkProfile`), kept while the focused window's profile, tabs and active tabs, the profiles, Restore Session and the
   engine mode are unchanged.
 - **Rows the readers drop.** Rows that aren't objects, ids the object prototype holds (`__proto__`, `constructor`,

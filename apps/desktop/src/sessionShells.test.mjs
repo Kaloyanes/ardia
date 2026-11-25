@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { initialLinuxSession } from "./session.ts";
-import { linuxSessionShape, snapshotHostSession, startHostPersistence } from "./hostSession.ts";
+import { createSessionWriter, linuxSessionShape, snapshotHostSession, startHostPersistence } from "./hostSession.ts";
 import { mergeSession } from "./hostSessionMerge.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import { readSaved } from "../../browser/src/lib/savedDocument.ts";
@@ -553,4 +553,66 @@ test("a version-current list session holding only an invalid group row is writte
   onlyNull.groups = [null];
   const cleaned = JSON.parse((await webuiLaunch(JSON.stringify(onlyNull))).written);
   assert.deepEqual(cleaned.groups, []);
+});
+
+test("tab rows without a string windowId, profileId or url are dropped by both shells, and their valid siblings stay", async () => {
+  const broken = [
+    { ...tab("noprofile", "w1", "default"), profileId: undefined },
+    { ...tab("nowindow", "w1", "default"), windowId: 7 },
+    { ...tab("nourl", "w1", "default"), url: null },
+  ].map((row) => JSON.parse(JSON.stringify(row)));
+  const lists = macSession();
+  lists.tabs = [...lists.tabs, ...broken];
+  lists.windows[0].tabIds = [...lists.windows[0].tabIds, "noprofile", "nowindow", "nourl"];
+  const tables = JSON.parse(await tableFile());
+  tables.tabs = { ...tables.tabs, ...Object.fromEntries(broken.map((row) => [row.id, row])) };
+  tables.windows.w1.tabIds = [...tables.windows.w1.tabIds, "noprofile", "nowindow", "nourl"];
+  for (const saved of [lists, tables]) {
+    const json = JSON.stringify(saved);
+    const shaped = linuxSessionShape(JSON.parse(json));
+    assert.deepEqual(["noprofile", "nowindow", "nourl"].filter((id) => Object.hasOwn(shaped.tabs, id)), []);
+    const webui = await webuiLaunch(json);
+    assert.deepEqual(webui.seen.windows.w1.tabs, w1Tabs());
+    macLaunch(json, { damaged: true });
+    assert.deepEqual(S().windows.w1.tabIds.filter((id) => ["noprofile", "nowindow", "nourl"].includes(id)), []);
+  }
+});
+
+test("a restore handle stays for an untouched lazy tab and goes once the WebUI loaded that tab, even at the same address", async () => {
+  const saved = macSession();
+  saved.tabs.find((t) => t.id === "right").page = { kind: "asleep", wake: "restore:right" };
+  saved.tabs.find((t) => t.id === "left").page = { kind: "idle", wake: "restore:left" };
+  const json = macLaunch(JSON.stringify(saved)).written;
+  const loadRight = () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, right: { ...s.tabs.right, page: { kind: "loaded", nav: { url: s.tabs.right.url, title: "", canGoBack: false, canGoForward: false, seq: 1 } } } } }));
+  const webui = await webuiLaunch(json, "w1", loadRight);
+  const disk = linuxSessionShape(JSON.parse(webui.written));
+  assert.deepEqual(disk.tabs.right.page, { kind: "idle" });
+  assert.deepEqual(disk.tabs.left.page, { kind: "idle", wake: "restore:left" });
+});
+
+test("a session event arriving before the reply to a list-form first write keeps its remote rows in the writer's base", async () => {
+  const disk = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+  const shaped = linuxSessionShape(structuredClone(disk));
+  const remote = { ...shaped, tabs: { ...shaped.tabs, remote: { ...shaped.tabs.a, id: "remote", url: "https://remote.test/" } } };
+  const pairs = [];
+  let writer;
+  const host = {
+    bootstrap: launch("w1").bootstrap,
+    invoke: async (method, pair) => {
+      pairs.push(structuredClone(pair));
+      if (pairs.length === 1) writer.acceptCanonical(remote);
+      return structuredClone(disk);
+    },
+    onEvent: () => () => {},
+  };
+  writer = createSessionWriter(host, disk, undefined, disk);
+  const local = { ...shaped, tabs: { ...shaped.tabs, a: { ...shaped.tabs.a, title: "Local" } } };
+  writer.queue(local);
+  await writer.flush();
+  writer.queue({ ...local, tabs: { ...local.tabs, b: { ...local.tabs.b, title: "Again" } } });
+  await writer.flush();
+  assert.equal(pairs.length, 2);
+  assert.ok(Array.isArray(pairs[1].base.tabs), "the write goes out in the file's list form");
+  assert.ok(pairs[1].base.tabs.some((t) => t.id === "remote"), "the remote row survives in the base");
+  assert.equal(pairs[1].base.tabs.find((t) => t.id === "a").title, "Local");
 });

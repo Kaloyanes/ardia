@@ -33,10 +33,10 @@ const savedRow = (v: unknown): v is Record<string, unknown> & { id: string } =>
 type SessionRows = (typeof SESSION_ROWS)[number];
 const tabIdList = (v: unknown) => Array.isArray(v) && v.every(isString);
 const ROW_SHAPES: Record<SessionRows, (row: Record<string, unknown>) => boolean> = {
-  windows: (w) => tabIdList(w.tabIds) && isFields(w.activeTabIds) && Object.values(w.activeTabIds).every(isString),
-  tabs: () => true,
-  groups: (g) => tabIdList(g.tabIds),
-  splits: () => true,
+  windows: (w) => isOwnId(w.profileId) && tabIdList(w.tabIds) && isFields(w.activeTabIds) && Object.values(w.activeTabIds).every(isString),
+  tabs: (t) => isOwnId(t.windowId) && isOwnId(t.profileId) && isString(t.url),
+  groups: (g) => isOwnId(g.windowId) && isOwnId(g.profileId) && tabIdList(g.tabIds),
+  splits: (v) => isOwnId(v.windowId),
 };
 const rowOf = (rows?: SessionRows) => (v: unknown): v is Record<string, unknown> & { id: string } => savedRow(v) && (!rows || ROW_SHAPES[rows](v));
 const keyedById = <T,>(list: unknown, rows?: SessionRows): Record<string, T> | undefined =>
@@ -261,12 +261,15 @@ function launchHintsHold(snapshot: HydrateData, canonical: HydrateData): boolean
     (!hint || (hint.id === active?.id && hint.url === active?.url && active?.url === activeTabOf(canonical)?.url));
 }
 
-export function withSavedOnlyFields(snapshot: HydrateData, canonical: HydrateData): HydrateData {
+const UNLOADED_PAGES: ReadonlySet<Tab["page"]["kind"]> = new Set(["idle", "asleep", "frozen"]);
+
+export function withSavedOnlyFields(snapshot: HydrateData, canonical: HydrateData, live?: Record<string, Tab>): HydrateData {
   let tabs = snapshot.tabs;
   for (const [id, tab] of Object.entries(snapshot.tabs ?? {})) {
-    const saved = canonical.tabs?.[id];
+    const saved = ownRow(canonical.tabs, id);
     const wake = saved && saved.url === tab.url && saved.profileId === tab.profileId ? pageFromDisk(saved.page).wake : undefined;
-    if (!wake || (tab.page.kind !== "idle" && tab.page.kind !== "asleep")) continue;
+    const runtime = ownRow(live, id)?.page ?? tab.page;
+    if (!wake || !UNLOADED_PAGES.has(runtime.kind) || (tab.page.kind !== "idle" && tab.page.kind !== "asleep")) continue;
     if (tabs === snapshot.tabs) tabs = { ...snapshot.tabs };
     tabs![id] = { ...tab, page: { kind: tab.page.kind, wake } };
   }
@@ -352,6 +355,10 @@ export function snapshotHostSession(s: BrowserState): HydrateData {
 type SessionPair = { base: HydrateData; session: HydrateData };
 const sessionObject = (value: unknown): value is HydrateData => value !== null && typeof value === "object" && !Array.isArray(value);
 
+const listRowsKeyed = (session: HydrateData): HydrateData => {
+  const lists = SESSION_ROWS.filter((key) => Array.isArray(session[key]));
+  return lists.length ? { ...session, ...Object.fromEntries(lists.map((key) => [key, keyedById(session[key])])) } : session;
+};
 const listedOnDisk = (onDisk: unknown) => new Set(SESSION_ROWS.filter((key) => sessionObject(onDisk) && Array.isArray(onDisk[key])));
 const inDiskForm = (session: HydrateData, listed: ReadonlySet<SessionRows>): HydrateData => {
   const tables = [...listed].filter((key) => isFields(session[key]));
@@ -409,7 +416,7 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
           acceptCanonical(onDisk);
           onCanonical?.(pair.session, onDisk);
         } else if (sessionObject(reply)) {
-          canonical = mergeSession(pair.base, pair.session, canonical);
+          canonical = mergeSession(listRowsKeyed(pair.base), pair.session, canonical);
         }
         const stale = sessionObject(reply) && generation === reconciled && dirty && latest !== pair ? latest : undefined;
         const requeue = !!stale && !pending;
@@ -455,7 +462,7 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
     generation++;
     pending = undefined;
     if (!dirty || !latest || latest === issued && !issuedFailed) return finalWrite;
-    const final = inFlight ? { base: mergeSession(inFlight.base, inFlight.session, latest.base), session: latest.session } : latest;
+    const final = inFlight ? { base: mergeSession(listRowsKeyed(inFlight.base), inFlight.session, listRowsKeyed(latest.base)), session: latest.session } : latest;
     issued = latest;
     try {
       finalWrite = Promise.resolve(host.invoke("session.write", diskPair(final))).then(() => {});
@@ -502,7 +509,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   const initial = linuxSessionShape(stored);
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
-  const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical);
+  const snapshotOf = (state: BrowserState) => withSavedOnlyFields(snapshot(withoutStandIn(state, standIn), canonical), canonical, state.tabs);
   const written = withPinChoicesOnDisk(equalSessionValue(initial, stored) ? initial : stored, stored);
   const writer = createSessionWriter(host, written, (base, session) => receive(base, session), stored);
   let timer: ReturnType<typeof setTimeout> | undefined;
