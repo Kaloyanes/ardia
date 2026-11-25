@@ -42,11 +42,15 @@ export function goToSettingsPane(pane: SettingsPane, profileId: string | null = 
   useSettingsNav.setState({ pane, profileId, detail, scroll: 0, visit: newSettingsVisit(), back: [...current.back, stopOf(current)].slice(-30), forward: [] });
 }
 
+const replacedOffsets = new Map<string, number>();
+
 export function replaceSettingsPlace(profileId: string | null, detail: string | null = null) {
-  const { pane, back } = useSettingsNav.getState();
+  const current = useSettingsNav.getState();
+  const { pane, back } = current;
+  replacedOffsets.set(settingsPlaceKey(current), stopOf(current).scroll);
   const prev = back.at(-1);
   const same = prev?.pane === pane && prev.profileId === profileId && prev.detail === detail;
-  const stop = same ? { scroll: prev.scroll, visit: prev.visit } : { scroll: 0, visit: newSettingsVisit() };
+  const stop = same ? { scroll: prev.scroll, visit: prev.visit } : { scroll: replacedOffsets.get(settingsPlaceKey({ pane, profileId, detail })) ?? 0, visit: newSettingsVisit() };
   useSettingsNav.setState({ profileId, detail, ...stop, back: same ? back.slice(0, -1) : back, forward: [] });
 }
 
@@ -67,6 +71,7 @@ const atTop = (s: SettingsStop): SettingsStop => ({ ...s, scroll: 0 });
 export function forgetSettingsScroll() {
   const { back, forward } = useSettingsNav.getState();
   shownOffset = { visit: -1, y: 0 };
+  replacedOffsets.clear();
   useSettingsNav.setState({ scroll: 0, back: back.map(atTop), forward: forward.map(atTop) });
 }
 

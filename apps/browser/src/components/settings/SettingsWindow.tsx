@@ -1,5 +1,5 @@
 import { Button, ListRow, NativeFormContext, space, Symbol, Text, VisualEffect, WindowDragRegion } from "../ui";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { useProfile } from "../../state/browser/hooks";
 import { usePluginTitle } from "../../state/plugins/hooks";
@@ -36,7 +36,9 @@ import { WindowControls } from "../window/WindowControls";
 import { LeadingWindowControls } from "../window/LeadingWindowControls";
 import { useWindowChrome } from "../../state/windows/windowButtons";
 import { noteSettingsScroll } from "../../state/settings/growingRows";
-import { paneScroll, restorePlan, settingsLayoutKey } from "../../state/settings/paneScroll";
+import { settingsLayoutKey, settingsScroller, type ScrollMove } from "../../state/settings/paneScroll";
+import { noteSettingsScrollRestore } from "../../state/telemetry/usage";
+import { consentToken, type ConsentToken } from "../../state/telemetry/choice";
 
 const SIDEBAR = settingsLayout.sidebarWidth;
 const TOOLBAR = pageToolbar.window.height;
@@ -109,23 +111,18 @@ export function SettingsWindow() {
   const key = shown ? settingsPlaceKey(shown) : "";
   const page = shown ? settingsPageKey(shown) : "";
   const visit = shown?.visit ?? 0;
-  const paneScroller = useMemo(() => paneScroll(visit, settingsScrollFor(visit)), [visit]);
-  const contentHeight = useRef(0);
-  const laidOut = useRef("");
   const layout = shown ? settingsLayoutKey(shown) : "";
-  const settle = (height: number, evenToTop: boolean) => {
-    const y = paneScroller.firstLayout(viewport.current, height + settingsLayout.paneBottom);
-    if (y !== null && (y > 0 || evenToTop)) scroller.current?.scrollTo({ y, animated: false });
-  };
-  const noteLayout = (height: number) => {
-    contentHeight.current = height;
-    laidOut.current = layout;
+  const [scrollMemory] = useState(settingsScroller);
+  const restoreConsent = useRef<ConsentToken | null>(null);
+  const move = (to: ScrollMove | null) => {
+    if (!to) return;
+    scroller.current?.scrollTo({ y: to.y, animated: false });
+    if (to.restore) noteSettingsScrollRestore(to.restore, restoreConsent.current);
   };
   useLayoutEffect(() => {
     if (!shown) return;
-    const plan = restorePlan(laidOut.current, shown);
-    if (plan === "cached") return settle(contentHeight.current, true);
-    if (plan === "top") scroller.current?.scrollTo({ y: 0, animated: false });
+    restoreConsent.current = consentToken();
+    move(scrollMemory.begin(visit, settingsScrollFor(visit), shown));
   }, [visit]);
   useEffect(() => forgetSettingsScroll, []);
   useEffect(() => closeProfileIconPickerIn(SETTINGS_WINDOW_ID), [key]);
@@ -193,20 +190,19 @@ export function SettingsWindow() {
           scrollEventThrottle={16}
           onScroll={({ nativeEvent: { contentOffset, layoutMeasurement, contentSize } }) => {
             scrollTop.current = contentOffset.y;
-            paneScroller.scrolled(contentOffset.y);
+            scrollMemory.scrolled(contentOffset.y);
             noteSettingsScroll(contentOffset.y, layoutMeasurement.height, contentSize.height);
           }}
-          onLayout={(e) => void (viewport.current = e.nativeEvent.layout.height)}
+          onLayout={(e) => {
+            viewport.current = e.nativeEvent.layout.height;
+            scrollMemory.resized(e.nativeEvent.layout.height);
+          }}
           contentContainerStyle={PANE_SCROLL}>
           <View
             key={page}
             ref={content}
             collapsable={false}
-            style={PANE_COLUMN}
-            onLayout={(e) => {
-              noteLayout(e.nativeEvent.layout.height);
-              settle(e.nativeEvent.layout.height, false);
-            }}>
+            style={PANE_COLUMN}>
             {shown ? (
               <NativeFormContext.Provider value>
                 <SettingsPaneContext.Provider value={shown.pane}>
@@ -214,13 +210,7 @@ export function SettingsWindow() {
                 </SettingsPaneContext.Provider>
               </NativeFormContext.Provider>
             ) : null}
-            <View
-              key={layout}
-              onLayout={(e) => {
-                noteLayout(e.nativeEvent.layout.y);
-                settle(e.nativeEvent.layout.y, true);
-              }}
-            />
+            <View key={layout} onLayout={(e) => move(scrollMemory.laidOut(layout, e.nativeEvent.layout.y + settingsLayout.paneBottom))} />
           </View>
         </ScrollView>
       </View>
