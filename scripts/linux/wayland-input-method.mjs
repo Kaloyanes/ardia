@@ -101,8 +101,12 @@ export class WaylandInputMethod {
       const size = word >>> 16;
       if (size < 8 || this.pending.length < size) break;
       const body = this.pending.subarray(8, size);
-      this.handlers.get(objectId)?.(word & 0xffff, body);
       this.pending = this.pending.subarray(size);
+      try {
+        this.handlers.get(objectId)?.(word & 0xffff, body);
+      } catch (error) {
+        this.fail(new Error(`malformed Wayland message for object ${objectId}: ${error.message}`));
+      }
     }
     for (const wake of this.waiters) wake();
   }
