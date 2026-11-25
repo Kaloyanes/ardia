@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { StyleSheet, View } from "react-native";
-import { Button, type IconPalette } from "../ui";
+import { Button, clippedContinuousCorners, continuousCorners, type IconPalette } from "../ui";
 import { useTheme } from "../ui/theme";
 import { GlassFill, useGlass } from "../ui/Glass";
 import { SIDEBAR_FIELD, SIDEBAR_FIELD_CONTROL } from "./geometry";
@@ -25,7 +25,7 @@ export const SidebarFieldFill = memo(function SidebarFieldFill({
       style={[
         StyleSheet.absoluteFill,
         {
-          borderRadius: SIDEBAR_FIELD.radius,
+          ...clippedContinuousCorners(SIDEBAR_FIELD.radius),
           borderWidth: FIELD_BORDER,
           borderColor: theme.pinnedRestingStroke,
           backgroundColor: hovered ? theme.tabHover : theme.pinnedResting,
@@ -57,7 +57,7 @@ export function FieldSiteButton({
         marginLeft: SIDEBAR_FIELD_CONTROL.inset,
         width: SIDEBAR_FIELD_CONTROL.box,
         height: SIDEBAR_FIELD_CONTROL.box,
-        borderRadius: SIDEBAR_FIELD_CONTROL.radius,
+        ...continuousCorners(SIDEBAR_FIELD_CONTROL.radius),
         backgroundColor: tokens.fieldButtonPlate,
       }}
       variant="icon"
