@@ -29,7 +29,7 @@ import { openInternalPage } from "../pages/urls";
 import { openImport, openSettings } from "../settings/settingsWindows";
 import { focusSettingsSearch } from "../settings/searchState";
 import { closePanelToHeroBar, dismissBarByCommandKey, focusHeroBar } from "../omnibox/barState";
-import { closeNewTabBar, isEmptyCardTab, showNewTabBar, toggleNewTabBar } from "../omnibox/newTabBar";
+import { closeNewTabBar, commandKeyOpenedNewTabBar, dismissNewTabBarByCommandKey, isEmptyCardTab, showNewTabBarForCommandKey, toggleNewTabBar } from "../omnibox/newTabBar";
 import { NEW_TAB_BAR_POLICY } from "../omnibox/newTabBarPolicy";
 import { addressBarInSidebar } from "../windows/layout";
 import { commandKeyPlacement } from "../omnibox/barPlacement";
@@ -187,9 +187,10 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return arg ? s.restoreClosed(arg, windowId) : undefined;
     case "focusCommandBar": {
       const placement = commandKeyPlacement(s, windowId);
+      if (user && ui?.panel.open && ui.panel.newTab && commandKeyOpenedNewTabBar(ui.panel)) return dismissNewTabBarByCommandKey(windowId, user.consent);
       if (user && tabId && ui?.panel.open && !ui.panel.newTab) return dismissBarByCommandKey(windowId, tabId, user.consent);
       if (page) return s.openPanel(windowId, page.url, undefined, placement);
-      if (isEmptyCardTab(s, tab) && showNewTabBar(windowId)) return;
+      if (isEmptyCardTab(s, tab) && showNewTabBarForCommandKey(windowId)) return;
       if (tab && addressBarInSidebar(s, windowId) && placement === "field") return s.openPanel(windowId, "", undefined, placement);
       if (!focusHeroBar(windowId, tabId)) return tab ? s.openPanel(windowId, "", undefined, placement) : undefined;
       return ui?.panel.open ? s.closePanel(windowId) : undefined;

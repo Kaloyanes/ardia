@@ -229,3 +229,27 @@ test("automation's Open Command Bar opens and focuses the bar every time and nev
     assert.equal(S().windowUi[w].panel.open, true, `the control socket's run, call ${n}`);
   }
 });
+
+test("in a blank window with New tab opens set to the command bar, ⌘L opens the new-tab bar and the next ⌘L closes it, while ⌘T's bar keeps its handoff", async () => {
+  const { runCommand } = await import("../commands/commands.ts");
+  const user = { user: { consent: null } };
+  S().hydrate({});
+  S().updateSettings({ newTabOpens: "commandBar", commandBarPlacement: "field", addressBar: "toolbar" });
+  const w = S().createWindow({});
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, user);
+  assert.equal(S().windowUi[w].panel.open, true);
+  assert.ok(S().windowUi[w].panel.newTab, "⌘L in a blank window shows the new-tab bar");
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, user);
+  assert.equal(S().windowUi[w].panel.open, false, "the second ⌘L closes it");
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, user);
+  assert.equal(S().windowUi[w].panel.open, true, "the third opens it again");
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w });
+  assert.equal(S().windowUi[w].panel.open, true, "automation never closes it");
+  S().closePanel(w);
+  runCommand({ command: "newTab", arg: null, windowId: w }, user);
+  assert.ok(S().windowUi[w].panel.newTab, "⌘T shows its bar");
+  const opened = S().windowUi[w].panel;
+  runCommand({ command: "focusCommandBar", arg: null, windowId: w }, user);
+  assert.equal(S().windowUi[w].panel.open, true, "⌘L over ⌘T's bar hands off instead of closing it");
+  assert.notEqual(S().windowUi[w].panel, opened);
+});

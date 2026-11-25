@@ -265,6 +265,14 @@ struct MenuKeyboard {
 
   static bool IgnoresKeyRepeat(std::string const &command) noexcept { return command == "focusCommandBar"; }
 
+  bool SwallowsRepeat(UINT virtualKey, LPARAM flags) noexcept {
+    if ((flags & (1u << 30)) == 0) return false;
+    KeyPress press = ReadKeyPress(virtualKey, flags);
+    if (press.windowsKey || press.altGraph) return false;
+    CommandEntry const *entry = MenuStore::Shared().Match(press);
+    return entry && !entry->Native() && IgnoresKeyRepeat(entry->command);
+  }
+
   bool Dispatch(KeyPress const &press, bool repeat = false) noexcept {
     MenuStore &store = MenuStore::Shared();
     CommandEntry const *entry = store.Match(press);
@@ -567,6 +575,7 @@ struct MenuKeyboard {
       }
       return false;
     }
+    if (!recording && !IsModifierKey(virtualKey) && SwallowsRepeat(virtualKey, flags)) return true;
     if (FocusHold::Shared().Key(virtualKey, flags) == FocusHold::Taken::Held) return true;
     if (IsModifierKey(virtualKey)) return false;
     if (capturedWHeld && virtualKey == 'W') {
