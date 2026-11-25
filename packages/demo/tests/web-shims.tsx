@@ -33,18 +33,22 @@ document.getElementById("root")!.innerHTML = `
   <div id="swatches" style="position:relative;width:240px;height:120px"></div>
   <div id="images" style="position:relative"></div>
   <div id="ring" style="display:inline-block;padding:8px;background:#1e1e1e"></div>
+  <div id="ring-under" style="display:inline-block;padding:8px;background:#1e1e1e"></div>
   <div class="ardia-window" style="position:relative;margin-left:120px;width:360px"><div id="drag"></div></div>
+  <div style="position:relative;width:2400px;height:1800px"><div class="ardia-window" style="position:absolute;left:1700px;top:1500px;width:360px"><div id="drag-far"></div></div></div>
   <div id="checks"></div>
   <pre id="results" style="font:16px ui-monospace;white-space:pre-wrap"></pre>
 `;
 
-const sliderValues: string[] = [];
-(window as unknown as { sliderValues: string[] }).sliderValues = sliderValues;
-function DragHarness() {
+const sliderValues: Record<string, string[]> = { drag: [], "drag-far": [] };
+(window as unknown as { sliderValues: Record<string, string[]> }).sliderValues = sliderValues;
+function DragHarness({ log }: { log: string[] }) {
   const [value, setValue] = useState(0.2);
-  return createElement(Slider, { label: "Intensity", value, onChange: (next: number, settle: boolean) => { sliderValues.push(`${next.toFixed(3)}${settle ? "!" : ""}`); setValue(next); } });
+  return createElement(Slider, { label: "Intensity", value, onChange: (next: number, settle: boolean) => { log.push(`${next.toFixed(3)}${settle ? "!" : ""}`); setValue(next); } });
 }
-createRoot(document.getElementById("drag")!).render(createElement(ThemeContext.Provider, { value: themeFor("plum:light") }, createElement(DragHarness)));
+for (const id of Object.keys(sliderValues)) {
+  createRoot(document.getElementById(id)!).render(createElement(ThemeContext.Provider, { value: themeFor("plum:light") }, createElement(DragHarness, { log: sliderValues[id]! })));
+}
 
 document.getElementById("run")!.addEventListener("click", async (event) => {
   const checks: Record<string, boolean> = {};
@@ -139,6 +143,11 @@ document.getElementById("run")!.addEventListener("click", async (event) => {
   const ring = createRoot(document.getElementById("ring")!);
   flushSync(() => ring.render(createElement(ThemeContext.Provider, { value: themeFor("plum:dark") },
     createElement(SelectableCard, { selected: true, fill: false, style: { width: 120, height: 104, flexDirection: "row" }, children: createElement(View, { style: { flex: 1, backgroundColor: "#2A2A2C" } }) }))));
+  const ringUnder = createRoot(document.getElementById("ring-under")!);
+  flushSync(() => ringUnder.render(createElement(ThemeContext.Provider, { value: themeFor("plum:dark") },
+    createElement(View, { style: { width: 120, height: 104 } },
+      createElement(SelectableCard, { selected: true, fill: false, style: { width: 120, height: 104, flexDirection: "row" }, children: createElement(View, { style: { flex: 1, backgroundColor: "#2A2A2C" } }) }),
+      createElement(View, { style: { position: "absolute", left: 0, top: 0, width: 30, height: 30, zIndex: 1, backgroundColor: "#FF0000" } })))));
 
   let enters = 0;
   const mount = document.getElementById("hover")!;

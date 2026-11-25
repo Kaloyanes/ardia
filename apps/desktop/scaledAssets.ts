@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { Plugin } from "vite";
+import { dirname } from "node:path";
+import { normalizePath, type ModuleNode, type Plugin, type ViteDevServer } from "vite";
 
 export const PIXEL_SCALES = [3, 2] as const;
 const SCALED_PREFIX = "\0ardia-scaled:";
@@ -33,14 +34,48 @@ export function scaledAssetModule(asset: ScaledAsset) {
   ].join("\n");
 }
 
+export function scaledSiblingBase(file: string) {
+  const posix = normalizePath(file);
+  return SCALED_PNG.test(posix) ? posix.replace(SCALED_PNG, ".png") : null;
+}
+
+function reloadScaledBase(server: ViteDevServer, file: string) {
+  const base = scaledSiblingBase(file);
+  if (!base) return;
+  const graph = server.moduleGraph;
+  const modules = [graph.getModuleById(SCALED_PREFIX + base), ...(graph.getModulesByFile(base) ?? [])].filter((mod): mod is ModuleNode => !!mod);
+  if (!modules.length) return;
+  const stale = new Set<ModuleNode>();
+  for (const mod of modules) {
+    stale.add(mod);
+    for (const importer of mod.importers) stale.add(importer);
+  }
+  for (const mod of stale) graph.invalidateModule(mod);
+  server.ws.send({ type: "full-reload" });
+}
+
 export function scaledAssets(name: string): Plugin {
+  let server: ViteDevServer | undefined;
+  const watched = new Set<string>();
+  const watchFolderOf = (file: string) => {
+    const folder = dirname(file);
+    if (!server || watched.has(folder)) return;
+    watched.add(folder);
+    server.watcher.add(folder);
+  };
   return {
     name,
     enforce: "pre",
+    configureServer(dev) {
+      server = dev;
+      dev.watcher.on("add", (file) => reloadScaledBase(dev, file));
+      dev.watcher.on("unlink", (file) => reloadScaledBase(dev, file));
+    },
     async resolveId(source, importer, options) {
       if (!source.endsWith(".png") || importer?.startsWith(SCALED_PREFIX)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       if (!resolved || resolved.external || resolved.id.includes("?")) return null;
+      watchFolderOf(resolved.id);
       return scaledAsset(resolved.id) ? SCALED_PREFIX + resolved.id : null;
     },
     load(id) {

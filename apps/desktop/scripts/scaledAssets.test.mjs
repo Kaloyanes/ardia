@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { scaledAsset, scaledAssetModule } from "../scaledAssets.ts";
+import { scaledAsset, scaledAssetModule, scaledAssets } from "../scaledAssets.ts";
+import { normalizePath } from "vite";
 import { alphaDrift, BROWSER_ASSETS, bundledImages, hiDpiBrowserPngs, PIXEL_SCALES, pngSize, scaledBrowserAssets } from "./scaledAssetsBundle.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -51,6 +54,45 @@ test("assets without a Retina sibling, and the siblings themselves, resolve as t
 test("a scaled asset module exports a React Native image source with 1x points", () => {
   const module = scaledAssetModule({ file: "/a/tidy-broom@3x.png", scale: 3, width: 11, height: 11 });
   assert.equal(module, 'import uri from "/a/tidy-broom@3x.png";\nexport default { uri, width: 11, height: 11, scale: 3 };');
+});
+
+test("in dev, a Retina sibling added or removed later reloads the image that already resolved to the old file", async (t) => {
+  const folder = normalizePath(mkdtempSync(join(tmpdir(), "ardia-scaled-")));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const base = `${folder}/mark.png`;
+  copyFileSync(asset("tidy-broom.png"), base);
+  const watcher = new EventEmitter();
+  const watchedFolders = [];
+  watcher.add = (path) => watchedFolders.push(normalizePath(path));
+  const importer = { id: "/src/App.tsx", importers: new Set() };
+  const plain = { id: base, importers: new Set([importer]) };
+  const invalidated = [];
+  const sent = [];
+  const plugin = scaledAssets("test:scaled");
+  plugin.configureServer({
+    watcher,
+    moduleGraph: {
+      getModuleById: () => undefined,
+      getModulesByFile: (file) => (file === base ? new Set([plain]) : undefined),
+      invalidateModule: (mod) => invalidated.push(mod.id),
+    },
+    ws: { send: (message) => sent.push(message.type) },
+  });
+  const context = { resolve: async (source) => ({ id: source }) };
+  assert.equal(await plugin.resolveId.call(context, base, "/src/App.tsx", {}), null);
+  assert.deepEqual(watchedFolders, [folder]);
+  copyFileSync(asset("tidy-broom@2x.png"), `${folder}/mark@2x.png`);
+  watcher.emit("add", `${folder}/mark@2x.png`);
+  assert.deepEqual(invalidated.sort(), [base, "/src/App.tsx"].sort());
+  assert.deepEqual(sent, ["full-reload"]);
+  assert.equal(await plugin.resolveId.call(context, base, "/src/App.tsx", {}), `\0ardia-scaled:${base}`);
+  watcher.emit("add", `${folder}/other.png`);
+  assert.deepEqual(sent, ["full-reload"], "a plain PNG reloads nothing");
+  assert.deepEqual(watchedFolders, [folder], "each folder is watched once");
+  rmSync(`${folder}/mark@2x.png`);
+  watcher.emit("unlink", `${folder}/mark@2x.png`);
+  assert.deepEqual(sent, ["full-reload", "full-reload"]);
+  assert.equal(await plugin.resolveId.call(context, base, "/src/App.tsx", {}), null);
 });
 
 for (const mode of ["mac", "linux", "win"]) {

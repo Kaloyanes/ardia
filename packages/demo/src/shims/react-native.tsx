@@ -10,8 +10,16 @@ export { ScaledImage as Image } from "./web/ScaledImage";
 export const unstable_batchedUpdates = batchedUpdates;
 
 type Measured = (x: number, y: number, width: number, height: number) => void;
+type MeasuredOnPage = (x: number, y: number, width: number, height: number, pageX: number, pageY: number) => void;
 const pageMeasureInWindow = (UIManager as unknown as { measureInWindow: (node: Element, callback: Measured) => void }).measureInWindow;
+const layoutMeasure = (UIManager as unknown as { measure: (node: Element, callback: MeasuredOnPage) => void }).measure;
 Object.assign(UIManager, {
+  measure(node: Element, callback: MeasuredOnPage) {
+    layoutMeasure(node, (x, y, width, height) => {
+      const box = node.getBoundingClientRect();
+      callback(x, y, width, height, box.left + window.scrollX, box.top + window.scrollY);
+    });
+  },
   measureInWindow(node: Element, callback: Measured) {
     pageMeasureInWindow(node, (x, y, width, height) => {
       const frame = node.closest?.(".ardia-window")?.getBoundingClientRect();

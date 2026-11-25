@@ -51,5 +51,5 @@ export function borderBoxClip(style: ClipStyle | null | undefined): { style: Cli
     zIndex: ABOVE_CONTENT,
   };
   CORNERS.forEach((corner, i) => (ring[`border${corner}Radius`] = radii[i]!));
-  return { style: { ...BORDER_BOX_CLIP, ...CLEAR_BORDER }, ring };
+  return { style: { ...BORDER_BOX_CLIP, ...CLEAR_BORDER, isolation: "isolate" }, ring };
 }

@@ -272,6 +272,7 @@ test("a bordered view that clips its content draws its border as a ring above th
   assert.equal(clip.style.overflow, "clip");
   assert.equal(clip.style.overflowClipMargin, "border-box");
   assert.equal(clip.style.borderTopColor, "transparent");
+  assert.equal(clip.style.isolation, "isolate");
   assert.deepEqual(clip.ring, {
     position: "absolute", top: -2, right: -2, bottom: -2, left: -2, boxSizing: "border-box",
     borderStyle: "solid", borderWidth: 2, borderColor: "#0A84FF", pointerEvents: "none", zIndex: 2147483647,
