@@ -1,6 +1,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "ardia/mac/ac_mac_menu_model.h"
 #include "ardia/mac/ac_mac_window_layout.h"
@@ -315,6 +316,26 @@ TEST(settings_windows_center_their_lights_in_the_settings_toolbar_as_the_mac_app
   CHECK(settings && settings->center == (window::Point{25, 26}));
   CHECK(window::TitlebarFor(*settings, {14, 14}) == (window::TitlebarMetrics{18, 52}));
   CHECK(settings->center.y - window::kButtonSide / 2 == 19);
+}
+
+TEST(a_requested_frame_lands_on_the_screen_it_overlaps_most_and_stays_inside_it) {
+  const std::vector<window::Frame> screens{{0, 0, 1512, 982}, {1512, 0, 2560, 1440}};
+  CHECK(window::PlacedOnScreens({100, 80, 1280, 800}, screens) == (window::Frame{100, 80, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1400, 100, 1280, 800}, screens) == (window::Frame{1512, 100, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1000, 600, 1280, 800}, screens) == (window::Frame{1512, 600, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1000, 600, 400, 600}, screens) == (window::Frame{1000, 382, 400, 600}));
+  CHECK(window::PlacedOnScreens({100, 80, 4000, 3000}, screens) == (window::Frame{1512, 0, 2560, 1440}));
+  CHECK(window::PlacedOnScreens({100, 80, 1400, 3000}, screens) == (window::Frame{100, 0, 1400, 982}));
+  CHECK(!window::PlacedOnScreens({9000, 9000, 800, 600}, screens));
+  CHECK(!window::PlacedOnScreens({100, 80, 800, 600}, {}));
+}
+
+TEST(new_windows_honor_focus_behind_and_maximized_and_background_shows_nothing) {
+  CHECK(window::PresentationForOpen(false, true, false, false) == (window::OpenPresentation{true, true, false, false}));
+  CHECK(window::PresentationForOpen(false, false, false, false) == (window::OpenPresentation{true, false, false, false}));
+  CHECK(window::PresentationForOpen(false, true, true, false) == (window::OpenPresentation{true, false, true, false}));
+  CHECK(window::PresentationForOpen(false, true, false, true) == (window::OpenPresentation{true, true, false, true}));
+  CHECK(window::PresentationForOpen(true, true, true, true) == window::OpenPresentation{});
 }
 
 int main(int argc, char** argv) {

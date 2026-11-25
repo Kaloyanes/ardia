@@ -13,7 +13,6 @@
 
 namespace ardia_mac::shell_policy {
 
-inline constexpr std::size_t kSessionLimit = 64 * 1024 * 1024;
 inline constexpr std::size_t kDocumentNameLimit = 200;
 inline constexpr std::string_view kSessionFile = "session.json";
 
@@ -35,12 +34,12 @@ inline bool ValidDocumentName(std::string_view name) {
   return charset && !EqualsIgnoringAsciiCase(name, kSessionFile);
 }
 
-inline bool SessionFits(std::size_t serialized_bytes) {
-  return serialized_bytes <= kSessionLimit;
-}
-
 inline constexpr std::size_t kMergeableSessionBytes = 8 * 1024 * 1024;
 inline constexpr std::string_view kSetAsideSessionPrefix = "session-backup-oversized-";
+
+inline bool SessionFitsOnDisk(std::size_t serialized_bytes) {
+  return serialized_bytes <= kMergeableSessionBytes;
+}
 
 enum class SessionFile { kAbsent, kUse, kSetAside };
 
@@ -215,6 +214,13 @@ inline WindowRefusal CheckWindowRequest(const WindowRequest& request) {
 inline std::string_view PageProfileFor(std::string_view kind, std::string_view profile) {
   if (UtilityKind(kind) || profile == "default") return std::string_view();
   return profile;
+}
+
+enum class DepartureStep { kNone, kCommit, kDiscard };
+
+inline DepartureStep DepartureStepFor(bool held, bool window_closing, bool same_close) {
+  if (!held) return DepartureStep::kNone;
+  return window_closing && same_close ? DepartureStep::kCommit : DepartureStep::kDiscard;
 }
 
 inline bool AcceleratorsLive(bool attached, bool renderer, bool recording) {

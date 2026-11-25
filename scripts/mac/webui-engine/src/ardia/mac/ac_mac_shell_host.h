@@ -99,9 +99,16 @@ void BroadcastSession(const MergedSession& merged,
 
 std::vector<ShellHostView*>& Hosts();
 ShellHostView* HostForWindow(std::string_view id);
+struct OpenPlacement {
+  bool focus = true;
+  bool maximized = false;
+  std::string behind;
+};
+
 ShellHostView* OpenShellWindow(Profile* profile,
                                WindowSpec spec,
-                               std::optional<gfx::Rect> frame);
+                               std::optional<gfx::Rect> frame,
+                               const OpenPlacement& placement = OpenPlacement());
 ShellHostView* HostForShell(content::WebContents* contents);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
@@ -284,6 +291,7 @@ class ShellHostView : public views::View,
   void OpenWindow(const base::ListValue* values, Done done);
   void WriteSession(const base::DictValue& args, Done done);
   void WatchRecordedKeys(bool recording);
+  void CommitHeldDeparture();
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
@@ -335,6 +343,12 @@ class ShellHostView : public views::View,
   bool startup_ = true;
   base::DictValue utility_;
   bool utility_ready_ = false;
+  struct HeldDeparture {
+    window_policy::CloseIdentity identity;
+    base::DictValue base;
+    base::DictValue session;
+  };
+  std::optional<HeldDeparture> held_departure_;
   bool closing_ = false;
   bool painted_ = false;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;

@@ -18,6 +18,8 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
+#include "ardia/mac/ac_mac_window_policy.h"
+#include "ardia/mac/ac_mac_window_events.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
@@ -545,6 +547,7 @@ void ShellHostView::DetachBrowser() {
   if (!browser_) {
     return;
   }
+  CommitHeldDeparture();
   closing_ = true;
   recording_keys_.reset();
   RetireRenderer();
@@ -1553,8 +1556,34 @@ void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
                              static_cast<double>(bounds.y()),
                              static_cast<double>(bounds.width()),
                              static_cast<double>(bounds.height())};
+  std::optional<window::Frame> requested;
+  const base::ListValue* wanted = options ? options->FindList("frame") : nullptr;
+  if (!utility && wanted && wanted->size() == 4 &&
+      std::ranges::all_of(*wanted, [](const base::Value& value) {
+        return value.is_int() || value.is_double();
+      })) {
+    if (const std::optional<window_policy::Frame> parsed = window_policy::FrameFrom(
+            (*wanted)[0].GetDouble(), (*wanted)[1].GetDouble(), (*wanted)[2].GetDouble(),
+            (*wanted)[3].GetDouble())) {
+      std::vector<window::Frame> screens;
+      if (window_events_) {
+        for (const window_policy::Frame& screen : window_events_->Screens()) {
+          screens.push_back(window::Frame{screen.x, screen.y, screen.width, screen.height});
+        }
+      }
+      requested = window::PlacedOnScreens(
+          window::Frame{parsed->x, parsed->y, parsed->width, parsed->height}, screens);
+    }
+  }
   const window::Frame frame =
-      utility ? window::UtilityFrameOver(opener, kind) : window::CascadedFrom(opener);
+      utility ? window::UtilityFrameOver(opener, kind)
+              : requested.value_or(window::CascadedFrom(opener));
+  OpenPlacement placement;
+  placement.focus = !options || options->FindBool("focus").value_or(true);
+  placement.maximized = !utility && options && options->FindBool("maximized").value_or(false);
+  if (const std::string* behind = options ? options->FindString("behind") : nullptr) {
+    placement.behind = *behind;
+  }
   WindowSpec spec;
   spec.id = id;
   spec.kind = std::string(shell_policy::WindowKindFor(kind));
@@ -1566,7 +1595,8 @@ void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
                        gfx::Rect(glass::ClampToInt(frame.x, 1e5),
                                  glass::ClampToInt(frame.y, 1e5),
                                  std::max(1, glass::ClampToInt(frame.width, 1e5)),
-                                 std::max(1, glass::ClampToInt(frame.height, 1e5))))) {
+                                 std::max(1, glass::ClampToInt(frame.height, 1e5))),
+                       placement)) {
     return std::move(done).Run(
         false, Failure("ERR_WINDOW_OPEN", "The window could not open"));
   }

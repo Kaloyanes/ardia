@@ -25,10 +25,12 @@ TEST(document_names_keep_their_charset) {
 }
 
 TEST(oversized_sessions_are_refused_before_writing) {
-  CHECK(policy::SessionFits(0));
-  CHECK(policy::SessionFits(policy::kSessionLimit));
-  CHECK(!policy::SessionFits(policy::kSessionLimit + 1));
-  CHECK(policy::kSessionLimit == 64u * 1024u * 1024u);
+  CHECK(policy::SessionFitsOnDisk(0));
+  CHECK(policy::SessionFitsOnDisk(policy::kMergeableSessionBytes));
+  CHECK(!policy::SessionFitsOnDisk(policy::kMergeableSessionBytes + 1));
+  CHECK(policy::kMergeableSessionBytes == 8u * 1024u * 1024u);
+  CHECK(policy::SessionFileFor(true, policy::kMergeableSessionBytes, true, true) == policy::SessionFile::kUse);
+  CHECK(policy::SessionFileFor(true, policy::kMergeableSessionBytes + 2, true, true) == policy::SessionFile::kSetAside);
 }
 
 TEST(default_profile_offers_use_the_empty_engine_name) {
@@ -251,6 +253,15 @@ TEST(a_backup_that_cannot_be_moved_blocks_saves_instead_of_looking_absent) {
   CHECK(policy::SessionLoadFor(SessionFile::kAbsent, false) == SessionLoad::kAbsent);
   CHECK(policy::SessionLoadFor(SessionFile::kUse, false) == SessionLoad::kUse);
   CHECK(policy::SessionWritable(SessionLoad::kAbsent) && policy::SessionWritable(SessionLoad::kUse));
+}
+
+TEST(a_departure_is_saved_only_once_the_window_really_closes) {
+  using policy::DepartureStep;
+  CHECK(policy::DepartureStepFor(false, true, true) == DepartureStep::kNone);
+  CHECK(policy::DepartureStepFor(true, true, true) == DepartureStep::kCommit);
+  CHECK(policy::DepartureStepFor(true, false, true) == DepartureStep::kDiscard);
+  CHECK(policy::DepartureStepFor(true, true, false) == DepartureStep::kDiscard);
+  CHECK(policy::DepartureStepFor(true, false, false) == DepartureStep::kDiscard);
 }
 
 int main(int argc, char** argv) {

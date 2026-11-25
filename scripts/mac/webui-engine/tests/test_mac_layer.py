@@ -309,7 +309,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('window::PresentationFor(BackgroundInstance())', entry)
         for call in ('ShowInactive', 'orderBack:', 'orderFront:', 'makeKeyAndOrderFront'):
             self.assertNotIn(call, entry)
-        self.assertRegex(entry, r'if \(presentation\.show\) \{\n\s+browser->GetWindow\(\)->Show\(\);')
+        self.assertRegex(entry, r'if \(presentation\.show && opening\.activate\) \{\n\s+browser->GetWindow\(\)->Show\(\);')
+        self.assertRegex(entry, r'\} else if \(presentation\.show && opening\.show\) \{\n\s+ShowWithoutActivating\(')
+        self.assertIn('if (presentation.show && opening.maximize) {', entry)
 
     def test_presented_is_posted_and_gated_by_clear(self):
         glass = self.read('ac_mac_glass.mm')
@@ -469,7 +471,7 @@ class ContractTests(unittest.TestCase):
         for capability in ('requestWindowClose', 'beginWindowCloseDrain', 'acknowledgeWindowClose', 'rejectWindowClose'):
             self.assertIn(f'"ArdiaShell.{capability}",', lifecycle)
         acknowledge = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(acknowledge.index('close_.Acknowledge('), acknowledge.index('base::BindOnce(&MergeAndWriteSession,'))
+        self.assertLess(acknowledge.index('close_.Acknowledge('), acknowledge.index('held_departure_ = HeldDeparture{'))
         self.assertIn('window_policy::ValidDeparture(', acknowledge)
         self.assertNotIn('AttemptExit', self.read('ac_mac_shell_calls.mm'))
         shell = (REPO / 'apps/desktop/src/shims/shell.tsx').read_text()
@@ -540,7 +542,12 @@ class ContractTests(unittest.TestCase):
         calls = self.read('ac_mac_shell_calls.mm')
         self.assertIn('return shell_policy::ValidDocumentName(name);', calls)
         write = calls.split('bool WriteSessionFile(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(write.index('shell_policy::SessionFits(json->size())'), write.index('WriteFileAtomically'))
+        self.assertLess(write.index('shell_policy::SessionFitsOnDisk(json->size())'), write.index('WriteFileAtomically'))
+        self.assertIn('base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, ardia::kLinuxSessionMaxDepth', write)
+        self.assertIn('static_assert(shell_policy::kMergeableSessionBytes == ardia::kLinuxSessionMaxBytes);', calls)
+        merge = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc').read_text()
+        self.assertIn('base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION', merge)
+        self.assertIn('json->size() > kLinuxSessionMaxBytes', merge)
 
     def test_cross_profile_replacement_opens_before_it_retires(self):
         host = self.read('ac_mac_shell_host.mm')
@@ -955,8 +962,9 @@ class ContractTests(unittest.TestCase):
         self.assertLess(merge.index('result.blocked = true;'), merge.index('ardia::MergeLinuxSession(base, local, result.previous)'))
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         ack = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('base::BindOnce(&MergeAndWriteSession, departure->FindDict("base")->Clone(),', ack)
-        self.assertIn('BroadcastSession(merged, host->window_id(), nullptr);', ack)
+        commit = lifecycle.split('void ShellHostView::CommitHeldDeparture() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('base::BindOnce(&MergeAndWriteSession, std::move(departure.base), std::move(departure.session))', commit)
+        self.assertIn('BroadcastSession(merged, window, nullptr);', commit)
         self.assertNotIn('WriteSessionInBackground', lifecycle)
         broadcast = calls.split('void BroadcastSession(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('for (ShellHostView* host : Hosts())', broadcast)
@@ -1011,6 +1019,36 @@ class ContractTests(unittest.TestCase):
         self.assertIn('webui_policy::ReadsSession(path)', request)
         self.assertIn('scoped_refptr<base::TaskRunner>(SessionFiles())', request)
         self.assertIn('constexpr bool ReadsSession(std::string_view asset) {', self.read('ac_mac_webui_policy.h'))
+
+    def test_departures_are_saved_only_after_chromium_closes_the_window(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        ack = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('MergeAndWriteSession', ack)
+        self.assertNotIn('BroadcastSession', ack)
+        self.assertLess(ack.index('held_departure_ = HeldDeparture{'), ack.rindex('CloseAcknowledgedWindow(*identity);'))
+        cancel = lifecycle.split('void ShellHostView::CancelWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(cancel.index('held_departure_.reset();'), cancel.index('if (!close_.Cancel(identity)) {'))
+        commit = lifecycle.split('void ShellHostView::CommitHeldDeparture() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::DepartureStepFor(held, close_.phase() == window_policy::ClosePhase::kClosing,', commit)
+        self.assertLess(commit.index('base::BindOnce(&MergeAndWriteSession'), commit.index('BroadcastSession(merged, window, nullptr);'))
+        detach = self.read('ac_mac_shell_host.mm').split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(detach.index('CommitHeldDeparture();'), detach.index('RetireRenderer();'))
+
+    def test_new_windows_take_their_frame_focus_behind_and_maximized(self):
+        host = self.read('ac_mac_shell_host.mm')
+        opening = host.split('void ShellHostView::OpenWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('options->FindList("frame")', opening)
+        self.assertIn('window_policy::FrameFrom(', opening)
+        self.assertIn('window::PlacedOnScreens(', opening)
+        self.assertIn('placement.focus = !options || options->FindBool("focus").value_or(true);', opening)
+        self.assertIn('options->FindBool("maximized")', opening)
+        self.assertIn('options->FindString("behind")', opening)
+        self.assertIn('placement)) {', opening)
+        entry = self.read('ac_mac_webui.mm')
+        self.assertIn('window::PresentationForOpen(', entry)
+        window = self.read('ac_mac_window.mm').split('void ShowWithoutActivating(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('widget->ShowInactive();', window)
+        self.assertIn('orderWindow:NSWindowBelow relativeTo:behind_window.windowNumber', window)
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

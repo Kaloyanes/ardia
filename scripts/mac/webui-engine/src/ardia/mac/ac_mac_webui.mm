@@ -326,7 +326,8 @@ webui_policy::Decision ShellDecision() {
 
 ShellHostView* OpenShellWindow(Profile* profile,
                                WindowSpec spec,
-                               std::optional<gfx::Rect> frame) {
+                               std::optional<gfx::Rect> frame,
+                               const OpenPlacement& placement) {
   if (!profile || profile->ShutdownStarted() ||
       GetBrowserWindowCreationStatusForProfile(*profile) !=
           BrowserWindowInterface::CreationStatus::kOk) {
@@ -363,8 +364,18 @@ ShellHostView* OpenShellWindow(Profile* profile,
   if (presentation.order_out) {
     [ns_window orderOut:nil];
   }
-  if (presentation.show) {
+  ShellHostView* behind = placement.behind.empty() ? nullptr : HostForWindow(placement.behind);
+  views::Widget* behind_widget =
+      behind && behind->browser() ? behind->GetWidget() : nullptr;
+  const window::OpenPresentation opening = window::PresentationForOpen(
+      BackgroundInstance(), placement.focus, behind_widget != nullptr, placement.maximized);
+  if (presentation.show && opening.activate) {
     browser->GetWindow()->Show();
+  } else if (presentation.show && opening.show) {
+    ShowWithoutActivating(view->GetWidget(), opening.order_behind ? behind_widget : nullptr);
+  }
+  if (presentation.show && opening.maximize) {
+    browser->GetWindow()->Maximize();
   }
   Trace("window " + id +
         (presentation.show ? " shown" : " kept off screen (background)"));

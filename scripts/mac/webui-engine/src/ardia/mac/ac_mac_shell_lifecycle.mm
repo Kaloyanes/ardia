@@ -10,12 +10,14 @@
 #include <utility>
 #include <vector>
 
+#include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_dialog.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_window_policy.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -570,25 +572,15 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue& request, Done 
     std::move(done).Run(true, base::Value());
     return CloseAcknowledgedWindow(*identity);
   }
-  SessionFiles()->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(&MergeAndWriteSession, departure->FindDict("base")->Clone(),
-                     departure->FindDict("session")->Clone()),
-      base::BindOnce(
-          [](base::WeakPtr<ShellHostView> host, window_policy::CloseIdentity identity, Done done,
-             MergedSession merged) {
-            if (!host) {
-              return;
-            }
-            if (!merged.ok) {
-              std::move(done).Run(false, Failure("ERR_DOCUMENT_STORAGE", "The window's departure could not be saved"));
-              return host->CancelWindowClose(identity, "the departure could not be saved");
-            }
-            BroadcastSession(merged, host->window_id(), nullptr);
-            std::move(done).Run(true, base::Value());
-            host->CloseAcknowledgedWindow(identity);
-          },
-          GetWeakPtr(), *identity, std::move(done)));
+  if (!ardia::ValidLinuxSession(*departure->FindDict("base")) ||
+      !ardia::ValidLinuxSession(*departure->FindDict("session"))) {
+    std::move(done).Run(false, Failure("ERR_DOCUMENT_STORAGE", "The window's departure could not be saved"));
+    return CancelWindowClose(*identity, "the departure was not a mergeable session");
+  }
+  held_departure_ = HeldDeparture{*identity, departure->FindDict("base")->Clone(),
+                                  departure->FindDict("session")->Clone()};
+  std::move(done).Run(true, base::Value());
+  CloseAcknowledgedWindow(*identity);
 }
 
 void ShellHostView::CloseAcknowledgedWindow(window_policy::CloseIdentity identity) {
@@ -643,7 +635,39 @@ void ShellHostView::RejectWindowClose(const base::DictValue& request, Done done)
   }
 }
 
+void ShellHostView::CommitHeldDeparture() {
+  const bool held = held_departure_.has_value();
+  switch (shell_policy::DepartureStepFor(held, close_.phase() == window_policy::ClosePhase::kClosing,
+                                         held && close_.identity() == held_departure_->identity)) {
+    case shell_policy::DepartureStep::kNone:
+      return;
+    case shell_policy::DepartureStep::kDiscard:
+      held_departure_.reset();
+      return;
+    case shell_policy::DepartureStep::kCommit:
+      break;
+  }
+  HeldDeparture departure = std::move(*held_departure_);
+  held_departure_.reset();
+  SessionFiles()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&MergeAndWriteSession, std::move(departure.base), std::move(departure.session)),
+      base::BindOnce(
+          [](std::string window, MergedSession merged) {
+            if (!merged.ok) {
+              LOG(WARNING) << "Ardia Mac WebUI: window " << window
+                           << " closed but its departure could not be saved";
+              return;
+            }
+            BroadcastSession(merged, window, nullptr);
+          },
+          window_id_));
+}
+
 void ShellHostView::CancelWindowClose(const window_policy::CloseIdentity& identity, std::string_view reason) {
+  if (held_departure_ && held_departure_->identity == identity) {
+    held_departure_.reset();
+  }
   if (!close_.Cancel(identity)) {
     return;
   }

@@ -112,6 +112,8 @@ bool MoveSessionAside(const base::FilePath& path) {
   return false;
 }
 
+static_assert(shell_policy::kMergeableSessionBytes == ardia::kLinuxSessionMaxBytes);
+
 struct SessionRead {
   shell_policy::SessionLoad load = shell_policy::SessionLoad::kAbsent;
   std::optional<base::DictValue> session;
@@ -149,8 +151,9 @@ std::optional<base::DictValue> ReadSessionFile() {
 }
 
 bool WriteSessionFile(const base::DictValue& session) {
-  std::optional<std::string> json = base::WriteJson(session);
-  if (!json || !shell_policy::SessionFits(json->size())) {
+  std::optional<std::string> json = base::WriteJsonWithOptions(
+      session, base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, ardia::kLinuxSessionMaxDepth);
+  if (!json || !shell_policy::SessionFitsOnDisk(json->size())) {
     return false;
   }
   return base::ImportantFileWriter::WriteFileAtomically(

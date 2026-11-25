@@ -5,6 +5,7 @@
 #include <cmath>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace ardia_mac::window {
 
@@ -168,6 +169,38 @@ inline Frame UtilityFrameOver(const Frame& opener, std::string_view kind) {
   const double height = settings ? kSettingsHeight : kImportHeight;
   return Frame{std::round(opener.x + (opener.width - width) / 2), std::round(opener.y + (opener.height - height) / 2),
                width, height};
+}
+
+inline std::optional<Frame> PlacedOnScreens(const Frame& wanted, const std::vector<Frame>& screens) {
+  const Frame* best = nullptr;
+  double best_overlap = 0;
+  for (const Frame& screen : screens) {
+    const double overlap_x = std::min(wanted.x + wanted.width, screen.x + screen.width) - std::max(wanted.x, screen.x);
+    const double overlap_y = std::min(wanted.y + wanted.height, screen.y + screen.height) - std::max(wanted.y, screen.y);
+    const double overlap = overlap_x > 0 && overlap_y > 0 ? overlap_x * overlap_y : 0;
+    if (overlap > best_overlap) {
+      best_overlap = overlap;
+      best = &screen;
+    }
+  }
+  if (!best) return std::nullopt;
+  const double width = std::min(wanted.width, best->width);
+  const double height = std::min(wanted.height, best->height);
+  return Frame{std::clamp(wanted.x, best->x, best->x + best->width - width),
+               std::clamp(wanted.y, best->y, best->y + best->height - height), width, height};
+}
+
+struct OpenPresentation {
+  bool show = false;
+  bool activate = false;
+  bool order_behind = false;
+  bool maximize = false;
+  bool operator==(const OpenPresentation&) const = default;
+};
+
+inline OpenPresentation PresentationForOpen(bool background_instance, bool focus, bool behind, bool maximized) {
+  if (background_instance) return OpenPresentation{};
+  return OpenPresentation{true, focus && !behind, behind, maximized};
 }
 
 inline Translucency TranslucencyFor(bool webui_shell) {
