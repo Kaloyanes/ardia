@@ -223,6 +223,21 @@ test("paths: protected roots are refused through case changes and symlinks", () 
   assert.equal(assertScratch(join(dir, "ok")), join(dir, "ok"));
 });
 
+test("paths: the guard folds case and follows dangling links on every OS, whatever exists under HOME", () => {
+  assert.equal(canonicalPath("/tmp/WebUI-Bench-Case/X"), canonicalPath("/tmp/webui-bench-case/x"));
+  assert.equal(canonicalPath("/tmp/WebUI-Bench-Case/X", { caseInsensitive: false }).endsWith("WebUI-Bench-Case/X"), true);
+  const fakeHome = join(scratch(), "home-that-does-not-exist");
+  assert.throws(() => assertScratch(join(fakeHome, "documents", "bench"), { home: fakeHome }), /refusing/);
+  assert.throws(() => assertScratch(join(fakeHome, "Library", "Application Support", "Ardia"), { home: fakeHome }), /refusing/);
+  assert.throws(() => assertBuild(join(fakeHome, "Applications", "Ardia.app"), { home: fakeHome }), /installed/);
+  const links = scratch();
+  symlinkSync(join(fakeHome, "Documents"), join(links, "dangling"));
+  assert.throws(() => assertScratch(join(links, "dangling", "bench"), { home: fakeHome }), /refusing/);
+  symlinkSync(join(links, "loop"), join(links, "loop"));
+  assert.equal(assertScratch(join(links, "loop", "x"), { home: fakeHome }), join(links, "loop", "x"));
+  assert.equal(assertScratch(join(scratch(), "fine"), { home: fakeHome }).endsWith("fine"), true);
+});
+
 test("hidden: open args are always hidden and -g/-n must come before --args", () => {
   const data = join(scratch(), "d");
   const args = hiddenOpenArgs({ app: "/tmp/b/Ardia WebUI.app", data, port: 9333, owner: "tok-1", env: { ARDIA_BACKGROUND: "0", EXTRA: "1" } });

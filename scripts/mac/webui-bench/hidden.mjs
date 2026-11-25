@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -20,18 +20,41 @@ export const OWNED_MARKER = ".webui-bench-owned";
 export const OPEN_TIMEOUT_MS = 30000;
 export const PS_TIMEOUT_MS = 20000;
 
-export function canonicalPath(path, { caseInsensitive = process.platform === "darwin" } = {}) {
+const linkTarget = (path) => {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : null;
+  } catch {
+    return null;
+  }
+};
+const present = (path) => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export function realPathOf(path, depth = 0) {
   let existing = resolve(path);
   const rest = [];
-  while (!existsSync(existing) && dirname(existing) !== existing) {
+  while (!present(existing) && dirname(existing) !== existing) {
     rest.unshift(existing.slice(dirname(existing).length).replace(/^\/+/, ""));
     existing = dirname(existing);
   }
-  let real = existing;
+  let real;
   try {
     real = realpathSync(existing);
-  } catch {}
-  const full = rest.length ? join(real, ...rest) : real;
+  } catch {
+    const target = depth < 40 ? linkTarget(existing) : null;
+    real = target ? realPathOf(target, depth + 1) : existing;
+  }
+  return rest.length ? join(real, ...rest) : real;
+}
+
+export function canonicalPath(path, { caseInsensitive = true } = {}) {
+  const full = realPathOf(path);
   return caseInsensitive ? full.toLowerCase() : full;
 }
 
