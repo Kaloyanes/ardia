@@ -3,7 +3,7 @@ import { PagerSpring, type MirroredFrame, type PagerFrame, type PagerInput } fro
 
 export type { PagerInput } from "./pagerSpring";
 
-export type NativePagerFrame = MirroredFrame & { sequence: number; profileId?: string | null };
+export type NativePagerFrame = MirroredFrame & { frame: number; sequence: number; selectionSequence: number; profileId?: string | null };
 
 export type PagerArea = {
   pageWidth: () => number;
@@ -59,8 +59,10 @@ export class Pager {
   private frameId = 0;
   private motion = 0;
   private stats: SettleStats | null = null;
-  private nativeDriven = false;
-  private nativeSeen = -Infinity;
+  private owner: "js" | "native" = "js";
+  private nativeFrameSeen = 0;
+  private nativeSelection = 0;
+  private revokedSelection: number | null = null;
   private nativeAt = 0;
   private nativeWatch: ReturnType<typeof setTimeout> | undefined;
   private stopReduceMotion: () => void;
@@ -81,7 +83,9 @@ export class Pager {
     this.key = key;
     this.spring.setReduceMotion(clock.reduceMotion());
     this.stopReduceMotion = clock.watchReduceMotion(() => {
-      this.spring.setReduceMotion(clock.reduceMotion());
+      const reduce = clock.reduceMotion();
+      this.spring.setReduceMotion(reduce);
+      if (reduce) this.revokeNative();
       this.flush();
     });
   }
@@ -104,7 +108,7 @@ export class Pager {
   configure({ selected, count, ack, order }: NativePagerConfig) {
     const first = !this.spring.configured;
     this.spring.configure(count, selected, ack ?? 0, order ?? null);
-    if (this.spring.phase === "idle") this.endNative();
+    if (this.spring.phase === "idle") this.releaseNative();
     this.flush(first ? { quiet: true } : undefined);
   }
 
@@ -112,7 +116,7 @@ export class Pager {
     if (!this.spring.configured) return;
     if (input === "abandon" && this.spring.phase === "tracking" && this.dragArea !== area) return;
     if ((input === "changed" || input === "ended" || input === "cancelled") && this.dragArea !== area) return;
-    this.endNative();
+    this.revokeNative();
     if (input === "began") this.dragArea = area;
     const width = (this.dragArea ?? area).pageWidth();
     this.spring.input(input, distance, direction, width, timestamp);
@@ -121,7 +125,7 @@ export class Pager {
   }
 
   switchTo(index: number, order?: readonly string[]) {
-    this.endNative();
+    this.revokeNative();
     this.dragArea = null;
     const ok = this.spring.switchTo(index, order);
     this.flush();
@@ -129,7 +133,7 @@ export class Pager {
   }
 
   step(delta: number, wrap: boolean, order?: readonly string[]) {
-    this.endNative();
+    this.revokeNative();
     const ok = this.spring.step(delta, wrap, order);
     if (this.spring.phase !== "tracking") this.dragArea = null;
     this.flush();
@@ -137,7 +141,7 @@ export class Pager {
   }
 
   select(profileId: string, order: readonly string[]) {
-    this.endNative();
+    this.revokeNative();
     if (!this.spring.select(profileId, order)) return false;
     this.dragArea = null;
     this.stopFrames();
@@ -146,15 +150,30 @@ export class Pager {
   }
 
   applyNativeFrame(native: NativePagerFrame) {
-    if (!this.spring.configured || native.sequence <= this.nativeSeen) return false;
-    const frame = this.resolveNative(native);
-    if (!frame || !this.spring.mirror(frame)) return false;
-    this.nativeSeen = native.sequence;
+    if (!this.spring.configured || native.frame <= this.nativeFrameSeen) return false;
+    this.nativeFrameSeen = native.frame;
+    if (this.revokedSelection !== null) {
+      if (!native.began && native.selectionSequence <= this.revokedSelection) return false;
+      this.revokedSelection = null;
+    }
+    if (native.count !== this.spring.count) return false;
+    if (native.profileId !== undefined && native.profileId !== null) {
+      const index = this.spring.orderIndex(native.profileId);
+      if (index < 0) return false;
+      if (index !== native.selected) {
+        this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
+        this.revokeNative(true);
+        this.flush();
+        return false;
+      }
+    }
+    if (!this.spring.mirror(native)) return false;
+    this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
     this.dragArea = null;
     this.stopFrames();
-    if (frame.phase === "idle") this.endNative();
+    if (native.phase === "idle") this.releaseNative();
     else {
-      this.nativeDriven = true;
+      this.owner = "native";
       this.nativeAt = clock.now();
       this.armNativeWatch();
     }
@@ -162,28 +181,21 @@ export class Pager {
     return true;
   }
 
-  private resolveNative(native: NativePagerFrame): MirroredFrame | null {
-    if (native.profileId === undefined || native.profileId === null) return native;
-    const index = this.spring.orderIndex(native.profileId);
-    return index < 0 ? null : { ...native, selected: index, count: this.spring.count };
-  }
-
   get drivenNatively() {
-    return this.nativeDriven;
+    return this.owner === "native";
   }
 
   private armNativeWatch() {
     if (this.nativeWatch) return;
     const check = () => {
       this.nativeWatch = undefined;
-      if (!this.nativeDriven) return;
+      if (this.owner !== "native") return;
       const quiet = clock.now() - this.nativeAt;
       if (quiet < NATIVE_FRAME_TIMEOUT) {
         this.nativeWatch = setTimeout(check, (NATIVE_FRAME_TIMEOUT - quiet) * 1000);
         return;
       }
-      this.nativeDriven = false;
-      this.spring.takeOver();
+      this.revokeNative();
       this.flush();
     };
     this.nativeWatch = setTimeout(check, NATIVE_FRAME_TIMEOUT * 1000);
@@ -194,10 +206,15 @@ export class Pager {
     this.nativeWatch = undefined;
   }
 
-  private endNative() {
-    if (!this.nativeDriven) return;
-    this.nativeDriven = false;
+  private releaseNative() {
+    this.owner = "js";
     this.stopNativeWatch();
+  }
+
+  private revokeNative(always = false) {
+    if (this.owner !== "native" && !always) return;
+    this.releaseNative();
+    this.revokedSelection = this.nativeSelection;
     this.spring.takeOver();
   }
 
@@ -206,8 +223,9 @@ export class Pager {
     const frame = this.spring.drain();
     if (!options.outOfMotion && wasIdle && frame.phase !== "idle") this.motion = ++motions;
     this.emit(frame, options);
-    if (frame.phase === "settling" && !this.nativeDriven) {
-      this.stats ??= { last: clock.now(), frames: 0, long: 0, worst: 0 };
+    if (frame.phase === "settling" && this.owner === "js") {
+      if (!this.stats) this.stats = { last: clock.now(), frames: 0, long: 0, worst: 0 };
+      else if (!this.frameId) this.stats.last = clock.now();
       this.startFrames();
     }
   }
@@ -236,7 +254,7 @@ export class Pager {
     if (this.frameId) return;
     const step = (timestampMs: number) => {
       this.frameId = 0;
-      if (this.nativeDriven || this.spring.phase !== "settling") return;
+      if (this.owner !== "js" || this.spring.phase !== "settling") return;
       const now = Number.isFinite(timestampMs) ? timestampMs / 1000 : clock.now();
       const stats = this.stats;
       if (stats) {
@@ -289,7 +307,7 @@ export class Pager {
   }
 
   debug() {
-    return { ...this.snapshot(), areas: this.areas.size, propSelected: this.spring.pendingSelection, propAck: this.spring.ack, history: this.spring.historySize, nativeDriven: this.nativeDriven, reduceMotion: this.spring.reduceMotion };
+    return { ...this.snapshot(), areas: this.areas.size, propSelected: this.spring.pendingSelection, propAck: this.spring.ack, history: this.spring.historySize, owner: this.owner, revokedSelection: this.revokedSelection, reduceMotion: this.spring.reduceMotion };
   }
 }
 

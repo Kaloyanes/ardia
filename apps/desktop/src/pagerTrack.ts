@@ -6,11 +6,33 @@ export type PagerTrack = { scroller: HTMLElement; span: number };
 
 const clamp = (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), hi);
 
-export function neighbourPages<Page extends TrackPage>(pages: readonly Page[], current: string, held: string | null = null): Page[] {
-  const home = pages.find((page) => page.id === current);
-  if (!home) return pages.filter((page) => page.id === held);
-  return pages.filter((page) => Math.abs(page.slot - home.slot) <= 1 || page.id === held);
+export type TravelRange = { lo: number; hi: number };
+
+export function travelRange(position: number, home: number): TravelRange | null {
+  if (!Number.isFinite(position) || Math.abs(position - home) < 1e-6) return null;
+  return { lo: Math.floor(Math.min(position, home)), hi: Math.ceil(Math.max(position, home)) };
 }
+
+export function widenTravel(range: TravelRange | null, position: number, home: number): TravelRange | null {
+  const next = travelRange(position, home);
+  if (!next) return null;
+  if (!range) return next;
+  return { lo: Math.min(range.lo, next.lo), hi: Math.max(range.hi, next.hi) };
+}
+
+export function neighbourPages<Page extends TrackPage>(pages: readonly Page[], current: string, held: string | null = null, travel: TravelRange | null = null): Page[] {
+  const home = pages.find((page) => page.id === current);
+  const travelled = (page: Page) => !!travel && page.slot >= travel.lo && page.slot <= travel.hi;
+  if (!home) return pages.filter((page) => page.id === held || travelled(page));
+  return pages.filter((page) => Math.abs(page.slot - home.slot) <= 1 || page.id === held || travelled(page));
+}
+
+export const coversTravel = (pages: readonly TrackPage[], range: TravelRange | null) => {
+  if (!range) return true;
+  const slots = new Set(pages.map((page) => page.slot));
+  for (let slot = range.lo; slot <= range.hi; slot++) if (!slots.has(slot)) return false;
+  return true;
+};
 
 export const trackSpan = (pages: readonly TrackPage[]) => pages.reduce((span, page) => Math.max(span, page.slot + 1), 1);
 
@@ -46,6 +68,19 @@ export function tintKeyframes(slot: number, span: number): TintKeyframe[] {
   return frames;
 }
 
+export type ScrollTimelineConstructor = new (options: { source: Element; axis: "x" | "y" | "block" | "inline" }) => AnimationTimeline;
+
+export const scrollTimelineConstructor = () => (globalThis as { ScrollTimeline?: ScrollTimelineConstructor }).ScrollTimeline;
+
+export function supportsScrollTimeline(track: PagerTrack | null, element: { animate?: unknown } | null, timeline: unknown = scrollTimelineConstructor()): timeline is ScrollTimelineConstructor {
+  return !!track && !!element && typeof timeline === "function" && typeof element.animate === "function";
+}
+
+export function seededPosition(read: (() => number) | undefined, fallback: number) {
+  const value = read?.();
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 export const tintFallbackOpacity = (slot: number, variable: string) => (slot <= 0 ? "1" : `clamp(0, calc(var(${variable}) - ${slot - 1}), 1)`);
 
 export type RevealSpot = { listTop: number; rowTop: number; rowHeight: number; viewport: number; scrollY: number };
@@ -54,6 +89,51 @@ export function revealOffset({ listTop, rowTop, rowHeight, viewport, scrollY }: 
   if (!(viewport > 0) || ![listTop, rowTop, rowHeight, scrollY].every(Number.isFinite)) return null;
   const target = Math.max(0, Math.round(listTop + rowTop + rowHeight / 2 - viewport / 2));
   return Math.abs(target - scrollY) < 1 ? null : target;
+}
+
+export type RevealAttempt = "done" | "wait";
+
+export type RevealTarget = {
+  viewport: number;
+  scrollY: number;
+  regions: Record<string, number>;
+  scroller: { scrollTo?: (to: { y: number; animated: boolean }) => void } | null;
+};
+
+export type RevealRow = { section: string; top: number; height: number };
+
+export function revealRow(spot: RevealTarget | undefined, row: () => RevealRow | null, listInset: number): RevealAttempt {
+  if (!spot || !spot.scroller?.scrollTo || !(spot.viewport > 0)) return "wait";
+  const span = row();
+  if (!span) return "done";
+  const target = revealOffset({ listTop: listInset + (spot.regions[span.section] ?? 0), rowTop: span.top, rowHeight: span.height, viewport: spot.viewport, scrollY: spot.scrollY });
+  if (target !== null) spot.scroller.scrollTo({ y: target, animated: false });
+  return "done";
+}
+
+export class RevealQueue {
+  private pending = new Set<string>();
+
+  want(ids: Iterable<string>) {
+    for (const id of ids) this.pending.add(id);
+  }
+
+  forget(id: string) {
+    this.pending.delete(id);
+  }
+
+  get size() {
+    return this.pending.size;
+  }
+
+  has(id: string) {
+    return this.pending.has(id);
+  }
+
+  pump(attempt: (id: string) => RevealAttempt) {
+    for (const id of [...this.pending]) if (attempt(id) === "done") this.pending.delete(id);
+    return this.pending.size;
+  }
 }
 
 type TrackListener = (track: PagerTrack | null) => void;

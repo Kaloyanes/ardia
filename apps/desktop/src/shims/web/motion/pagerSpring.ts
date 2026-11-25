@@ -240,9 +240,9 @@ export class PagerSpring {
   }
 
   takeOver() {
-    if (this.phaseValue === "idle" || this.phaseValue === "holding" || this.spring) return;
+    if (this.phaseValue === "idle" || this.spring) return;
     const target = this.selectedValue;
-    this.settle(target, this.towards(target, this.velocityValue));
+    this.settle(target, this.phaseValue === "holding" ? 0 : this.towards(target, this.velocityValue));
   }
 
   get configured() {

@@ -69,4 +69,3 @@ export const SidebarPages = memo(function SidebarPages({ windowId, pages, paging
     </View>
   );
 });
-

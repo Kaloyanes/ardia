@@ -6,25 +6,22 @@ import { profileTheme } from "../../browser/src/components/ui/theme";
 import { useProfileLooks } from "../../browser/src/state/profiles/hooks";
 import { useWindowId } from "../../browser/src/state/browser/hooks";
 import { usePagerPages } from "../../browser/src/state/windows/profilePager";
-import { tintFallbackOpacity, tintKeyframes, watchPagerTrack } from "./pagerTrack";
+import { useBrowser } from "../../browser/src/state/browser/store";
+import { scrollTimelineConstructor, seededPosition, supportsScrollTimeline, tintFallbackOpacity, tintKeyframes, watchPagerTrack } from "./pagerTrack";
 
 export const PAGER_POSITION_VARIABLE = "--ardia-pager-position";
-
-type ScrollTimelineConstructor = new (options: { source: Element; axis: "x" | "y" | "block" | "inline" }) => AnimationTimeline;
-
-const scrollTimeline = () => (globalThis as { ScrollTimeline?: ScrollTimelineConstructor }).ScrollTimeline;
 
 function TintLayer({ windowId, slot, children }: { windowId: string; slot: number; children: ReactNode }) {
   const layer = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const element = layer.current;
-    const Timeline = scrollTimeline();
     if (!element || slot <= 0) return;
     let animation: Animation | null = null;
     const stop = watchPagerTrack(windowId, (track) => {
       animation?.cancel();
       animation = null;
-      if (!track || !Timeline || typeof element.animate !== "function") {
+      const Timeline = scrollTimelineConstructor();
+      if (!track || !supportsScrollTimeline(track, element, Timeline)) {
         element.style.opacity = tintFallbackOpacity(slot, PAGER_POSITION_VARIABLE);
         return;
       }
@@ -45,6 +42,12 @@ function TintLayer({ windowId, slot, children }: { windowId: string; slot: numbe
 
 type ReadableValue = { __getValue?: () => number };
 
+function selectedSlot(windowId: string) {
+  const s = useBrowser.getState();
+  const w = s.windows[windowId];
+  return Math.max(0, w ? s.profileOrder.indexOf(w.profileId) : 0);
+}
+
 function usePositionVariable(windowId: string, host: React.RefObject<HTMLElement | null>, paging: boolean) {
   const { pager } = usePagerPages(windowId);
   useEffect(() => {
@@ -53,10 +56,10 @@ function usePositionVariable(windowId: string, host: React.RefObject<HTMLElement
     const write = (value: number) => element.style.setProperty(PAGER_POSITION_VARIABLE, String(value));
     let listener: string | null = null;
     const stop = watchPagerTrack(windowId, (track) => {
-      const follow = !track || !scrollTimeline();
+      const follow = !supportsScrollTimeline(track, element);
       if (follow && listener === null) {
-        const current = (pager.pos as unknown as ReadableValue).__getValue?.();
-        if (typeof current === "number") write(current);
+        const value = pager.pos as unknown as ReadableValue;
+        write(seededPosition(value.__getValue?.bind(value), selectedSlot(windowId)));
         listener = pager.pos.addListener(({ value }) => write(value));
       } else if (!follow && listener !== null) {
         pager.pos.removeListener(listener);

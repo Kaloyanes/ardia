@@ -25,10 +25,12 @@ export function readPagerFrame(value: unknown): HostPagerFrame | null {
   const count = value.count;
   const selected = value.selected;
   const sequence = value.sequence;
+  const frameNumber = value.frame;
+  const selectionSequence = own(value, "selectionSequence", "selection_sequence");
   if (!token(key, MAX_KEY_LENGTH)) return null;
   if (typeof phase !== "string" || !PAGER_PHASES.includes(phase as PagerPhase)) return null;
   if (!wholeAtLeast(count, 1) || !wholeAtLeast(selected, 0) || selected >= count) return null;
-  if (!wholeAtLeast(sequence, 1)) return null;
+  if (!wholeAtLeast(sequence, 0) || !wholeAtLeast(selectionSequence, 0) || !wholeAtLeast(frameNumber, 1)) return null;
   if (!finite(value.position, MAX_POSITION)) return null;
   const velocity = value.velocity === undefined ? 0 : value.velocity;
   if (!finite(velocity, MAX_VELOCITY)) return null;
@@ -36,7 +38,9 @@ export function readPagerFrame(value: unknown): HostPagerFrame | null {
   if (rawProfile !== undefined && rawProfile !== null && !token(rawProfile, MAX_PROFILE_ID_LENGTH)) return null;
   const frame: HostPagerFrame = {
     key,
+    frame: frameNumber,
     sequence,
+    selectionSequence,
     position: value.position,
     velocity,
     phase: phase as PagerPhase,

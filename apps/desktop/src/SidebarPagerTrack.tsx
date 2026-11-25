@@ -8,29 +8,20 @@ import { GLOW_ROOM, type PageSpot } from "../../browser/src/components/sidebar/p
 import { SCROLL_EDGE } from "../../browser/src/components/sidebar/ScrollEdge";
 import { SidebarPage } from "../../browser/src/components/sidebar/SidebarPage";
 import type { SidebarPagesProps } from "../../browser/src/components/sidebar/SidebarPages";
-import { neighbourPages, revealOffset, setPagerTrack, trackScrollLeft, trackSpan, trackWidth } from "./pagerTrack";
+import { coversTravel, neighbourPages, RevealQueue, revealRow, setPagerTrack, trackScrollLeft, trackSpan, trackWidth, widenTravel, type RevealAttempt, type RevealTarget, type TravelRange } from "./pagerTrack";
+
+const MAX_REVEAL_FRAMES = 120;
 
 const TRACK_STYLE = { ...StyleSheet.absoluteFillObject, overflow: "hidden" } as const;
 
 type ReadableValue = { __getValue?: () => number };
 
-type Scrollable = { scrollTo?: (to: { y: number; animated: boolean }) => void };
-
-function preReveal(windowId: string, profileId: string, spot: PageSpot | undefined) {
-  const scroller = spot?.scroller as unknown as Scrollable | null | undefined;
-  if (!spot || !scroller?.scrollTo) return;
-  const s = useBrowser.getState();
-  const tabId = activeTabId(s, windowId, profileId);
-  const span = tabId ? rowSpan(s, windowId, profileId, tabId, spot.newTabAtTop) : null;
-  if (!span) return;
-  const target = revealOffset({
-    listTop: GLOW_ROOM + SCROLL_EDGE.inset + spot.regions[span.section],
-    rowTop: span.top,
-    rowHeight: span.height,
-    viewport: spot.viewport,
-    scrollY: spot.scrollY,
-  });
-  if (target !== null) scroller.scrollTo({ y: target, animated: false });
+function preReveal(windowId: string, profileId: string, spot: PageSpot | undefined): RevealAttempt {
+  return revealRow(spot as unknown as RevealTarget | undefined, () => {
+    const s = useBrowser.getState();
+    const tabId = activeTabId(s, windowId, profileId);
+    return tabId && spot ? rowSpan(s, windowId, profileId, tabId, spot.newTabAtTop) : null;
+  }, GLOW_ROOM + SCROLL_EDGE.inset);
 }
 
 export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, paging, width, current, dragging, canDock, available, topField, geometry, onScrollView, onScrollY }: SidebarPagesProps) {
@@ -45,11 +36,15 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
   }, [dragging, waiting, pager]);
   const shown = dragging || !pages.some((page) => page.id === settled) ? current : settled;
   const [neighbours, setNeighbours] = useState(false);
-  const mounted = neighbourPages(pages, current, shown).filter((page) => neighbours || page.id === current || page.id === shown);
+  const [travel, setTravel] = useState<TravelRange | null>(null);
   const span = trackSpan(pages);
   const home = pages.find((page) => page.id === current)?.slot ?? 0;
   const position = useRef<number | null>(null);
   position.current ??= (pager.pos as unknown as ReadableValue).__getValue?.() ?? home;
+  const renderTravel = paging ? widenTravel(travel, position.current, home) : null;
+  const mounted = neighbourPages(pages, current, shown, renderTravel).filter((page) => neighbours || renderTravel || page.id === current || page.id === shown);
+  const live = useRef({ home, mounted, travel: renderTravel });
+  live.current = { home, mounted, travel: renderTravel };
   const selected = useBrowser((s) => mounted.map((page) => activeTabId(s, windowId, page.id) ?? "").join("\n"));
 
   useLayoutEffect(() => {
@@ -80,6 +75,12 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
       position.current = value;
       const left = trackScrollLeft(paging ? value : home, span, width);
       if (Math.abs(element.scrollLeft - left) >= 0.5) element.scrollLeft = left;
+      if (!paging) return;
+      const now = live.current;
+      const next = widenTravel(now.travel, value, now.home);
+      if (!next) {
+        if (now.travel) setTravel(null);
+      } else if (!coversTravel(now.mounted, next)) setTravel(next);
     };
     place(paging ? (position.current ?? home) : home);
     setPagerTrack(windowId, paging && width > 0 ? { scroller: element, span } : null);
@@ -90,15 +91,31 @@ export const SidebarPages = memo(function SidebarPagerTrack({ windowId, pages, p
 
   useEffect(() => () => setPagerTrack(windowId, null), [windowId]);
 
+  const [reveals] = useState(() => new RevealQueue());
+  const revealFrame = useRef(0);
   const launched = useRef(false);
+  const mountedKey = mounted.map((page) => page.id).join("\n");
   useLayoutEffect(() => {
-    if (!launched.current && spots.get(current)?.viewport) {
+    if (!launched.current) {
       launched.current = true;
-      preReveal(windowId, current, spots.get(current));
+      reveals.want([current]);
     }
-    if (!neighbours) return;
-    for (const page of mounted) if (page.id !== shown) preReveal(windowId, page.id, spots.get(page.id));
-  }, [neighbours, selected, current, shown, available]);
+    if (neighbours) reveals.want(mounted.filter((page) => page.id !== shown).map((page) => page.id));
+    let frames = 0;
+    const attempt = (id: string) => (mounted.some((page) => page.id === id) ? preReveal(windowId, id, spots.get(id)) : "done");
+    const pump = () => {
+      revealFrame.current = 0;
+      if (!reveals.pump(attempt)) return;
+      if (++frames > MAX_REVEAL_FRAMES) {
+        for (const page of mounted) reveals.forget(page.id);
+        return;
+      }
+      revealFrame.current = requestAnimationFrame(pump);
+    };
+    cancelAnimationFrame(revealFrame.current);
+    pump();
+    return () => cancelAnimationFrame(revealFrame.current);
+  }, [neighbours, selected, current, shown, available, mountedKey]);
 
   return (
     <View ref={(view) => void (scroller.current = view as unknown as HTMLElement | null)} pointerEvents={shown === current ? "box-none" : "none"} style={TRACK_STYLE}>
