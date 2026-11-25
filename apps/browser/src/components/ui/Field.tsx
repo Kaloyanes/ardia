@@ -83,7 +83,7 @@ export function SearchField({
         placeholder={placeholder}
         placeholderTextColor={bare ? theme.placeholder : theme.textTertiary}
         selectionColor={theme.selection}
-        cursorColor={caretColor(theme)}
+        cursorColor={caretColor(theme, bare ? "ntpBarSolid" : "field")}
         autoFocus={autoFocus}
         enableFocusRing={false}
         ardiaCentersCapitals
@@ -170,7 +170,7 @@ export function TextField({
           placeholder={placeholder}
           placeholderTextColor={theme.textTertiary}
           selectionColor={theme.selection}
-          cursorColor={caretColor(theme)}
+          cursorColor={caretColor(theme, "field")}
           autoFocus={autoFocus}
           secureTextEntry={secure}
           enableFocusRing={false}

@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useLayoutEffect, useRef, type ComponentProps, type ForwardedRef, type KeyboardEvent } from "react";
 import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
-import { Animated as WebAnimated, TextInput as WebTextInput, UIManager } from "react-native-web";
+import { Animated as WebAnimated, StyleSheet as WebStyleSheet, TextInput as WebTextInput, UIManager } from "react-native-web";
 import { watchLayout } from "./web/mountLayout";
 
 export * from "react-native-web";
@@ -45,6 +45,7 @@ type MacTextInputProps = ComponentProps<typeof WebTextInput> & {
   keyDownEvents?: KeyMatch[];
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
   cursorColor?: string | null;
+  dataSet?: Record<string, string>;
 };
 
 const MODIFIERS = ["metaKey", "shiftKey", "altKey", "ctrlKey"] as const;
@@ -57,6 +58,13 @@ function assignRef<T>(ref: ForwardedRef<T>, value: T | null) {
 }
 
 export const NATIVE_CHANGE = Symbol("ardiaNativeChange");
+
+export function fieldLook(style: unknown, selectionColor: unknown, cursorColor: unknown, caretHidden?: boolean) {
+  const ink = (WebStyleSheet.flatten(style as never) as { color?: unknown } | undefined)?.color;
+  const selection = typeof selectionColor === "string" && selectionColor ? { "--ardia-selection-bg": selectionColor, ...(typeof ink === "string" && ink ? { "--ardia-selection-fg": ink } : {}) } : null;
+  const caret = typeof cursorColor === "string" && cursorColor && !caretHidden ? { caretColor: cursorColor } : null;
+  return { selection: !!selection, style: selection || caret ? [style, { ...selection, ...caret }] : style };
+}
 
 export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacTextInput({ keyDownEvents, onKeyDown, cursorColor, ...props }, ref) {
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -90,6 +98,6 @@ export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacText
     if (field && props.onSelectionChange) props.onSelectionChange({ nativeEvent: { selection: { start: field.selectionStart ?? 0, end: field.selectionEnd ?? 0 } } } as never);
     (props.onChange as ((event: unknown) => void) | undefined)?.(e);
   };
-  const style = cursorColor && !props.caretHidden ? [props.style, { caretColor: cursorColor }] : props.style;
-  return <Input {...props} style={style} onLayout={undefined} ref={attach} onChange={onChange} onKeyPress={onKeyDown || keyDownEvents ? handleKeyDown : props.onKeyPress} />;
+  const look = fieldLook(props.style, props.selectionColor, cursorColor, props.caretHidden);
+  return <Input {...props} style={look.style} dataSet={look.selection ? { ...props.dataSet, ardiaSelection: "" } : props.dataSet} onLayout={undefined} ref={attach} onChange={onChange} onKeyPress={onKeyDown || keyDownEvents ? handleKeyDown : props.onKeyPress} />;
 });

@@ -129,8 +129,10 @@ function readableInk(theme: Theme, preferred: string, surface: string, stockSurf
   return [theme.textPrimary, ink.black, ink.white].reduce((best, color) => (shownContrast(color, shownOn) > shownContrast(best, shownOn) ? color : best), preferred);
 }
 
-export const caretColor = (theme: Theme, surface: string = theme.ntpBarSolid): string =>
-  readableInk(theme, fieldInk.caret[theme.dark ? "dark" : "light"], surface, stockRoles(theme).ntpBarSolid);
+export type FieldSurface = "ntpBarSolid" | "field" | "panel";
+
+export const caretColor = (theme: Theme, surface: FieldSurface = "ntpBarSolid"): string =>
+  readableInk(theme, fieldInk.caret[theme.dark ? "dark" : "light"], theme[surface], stockRoles(theme)[surface]);
 
 const quietInk = (theme: Theme) => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
 

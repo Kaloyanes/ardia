@@ -42,7 +42,20 @@ test("a custom light palette whose bar matches the caret ink gets a readable car
   assert.ok(shown(quietGoLabel(custom), idleGoOf(custom)) >= 3, `disabled Go: ${quietGoLabel(custom)}`);
   const dim = { ...stock(true), ntpBarSolid: "#F2F2F2", panel: "#F2F2F2" };
   assert.ok(shown(caretColor(dim), barOf(dim)) >= 3, `a light bar in dark mode: ${caretColor(dim)}`);
-  assert.ok(shown(caretColor(dim, dim.panel), dim.panel) >= 3, "a field on another surface is checked against that surface");
+  assert.ok(shown(caretColor(dim, "panel"), dim.panel) >= 3, "a field on another surface is checked against that surface");
+});
+
+test("a form field's caret is resolved against the field fill it paints, not the bar's, and keeps the stock ink on the stock fill", () => {
+  for (const dark of [false, true]) {
+    const theme = stock(dark);
+    assert.equal(caretColor(theme, "field"), fieldInk.caret[dark ? "dark" : "light"], `${dark ? "dark" : "light"} stock field`);
+  }
+  const custom = { ...stock(false), field: "#787D86", ntpBarSolid: "#FEFFFF", textPrimary: "#FFFFFF" };
+  assert.equal(caretColor(custom), fieldInk.caret.light, "the bar itself is untouched");
+  const onField = caretColor(custom, "field");
+  assert.ok(shown(onField, custom.field) >= 3, `caret on the custom field fill: ${onField} at ${shown(onField, custom.field).toFixed(2)}`);
+  const field = readFileSync(fileURLToPath(new URL("./Field.tsx", import.meta.url)), "utf8");
+  assert.equal((field.match(/cursorColor=\{caretColor\(theme, (?:bare \? "ntpBarSolid" : )?"field"\)\}/g) ?? []).length, 2, "SearchField and TextField pass the field fill they paint");
 });
 
 test("every text field that sets a selection colour sets its caret too", () => {

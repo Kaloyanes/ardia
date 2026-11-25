@@ -1009,21 +1009,22 @@ index 386405335b411e70a82909033febc7dd5b4adabe..ace454e53458fb82d2fd6b456c4e9562
  
  @end
 diff --git a/Libraries/Text/TextInput/Singleline/RCTUITextField.h b/Libraries/Text/TextInput/Singleline/RCTUITextField.h
-index 61242af88da2f235e5ae506e79dfb9898742eb51..259868183aa018ac6c0e7a83a9008ad63a2bb3dd 100644
+index 61242af88da2f235e5ae506e79dfb9898742eb51..75e3a670371a2c2f5b1466c29c6009aa3cbc8de5 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTUITextField.h
 +++ b/Libraries/Text/TextInput/Singleline/RCTUITextField.h
-@@ -50,6 +50,9 @@ NS_ASSUME_NONNULL_BEGIN
+@@ -50,6 +50,10 @@ NS_ASSUME_NONNULL_BEGIN
  @property (nonatomic, assign, readonly) CGPoint contentOffset;
  @property (nonatomic, assign, readonly) UIEdgeInsets contentInset;
  @property (nonatomic, assign) BOOL disableKeyboardShortcuts;
 +#if TARGET_OS_OSX
 +@property (nonatomic, assign) BOOL ardiaCentersCapitals;
++- (void)ardia_applySelectionLookToEditor:(NSTextView *)editor;
 +#endif
  
  #if TARGET_OS_OSX // [macOS
  @property (nonatomic, copy, nullable) NSString *text;
 diff --git a/Libraries/Text/TextInput/Singleline/RCTUITextField.mm b/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
-index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8cf2d80f0 100644
+index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..a2c8f83ae53736f96ad339b34b7163b74a299d7e 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
 +++ b/Libraries/Text/TextInput/Singleline/RCTUITextField.mm
 @@ -10,6 +10,7 @@
@@ -1175,12 +1176,8 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  @property (nonatomic, assign) UIEdgeInsets textContainerInset;
  @property (nonatomic, getter=isAutomaticTextReplacementEnabled) BOOL automaticTextReplacementEnabled;
  @property (nonatomic, getter=isAutomaticSpellingCorrectionEnabled) BOOL automaticSpellingCorrectionEnabled;
-@@ -27,9 +160,33 @@ @interface RCTUITextFieldCell : NSTextFieldCell
- @property (nonatomic, strong, nullable) RCTUIColor *selectionColor;
- @property (nonatomic, strong, nullable) RCTUIColor *insertionPointColor;
+@@ -29,7 +162,29 @@ @interface RCTUITextFieldCell : NSTextFieldCell
  
-+- (void)ardia_applySelectionLookToEditor:(NSTextView *)editor;
-+
  @end
  
 -@implementation RCTUITextFieldCell
@@ -1210,7 +1207,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  
  - (NSRect)titleRectForBounds:(NSRect)rect
  {
-@@ -63,13 +220,22 @@ - (NSText *)setUpFieldEditorAttributes:(NSText *)textObj
+@@ -63,10 +218,14 @@ - (NSText *)setUpFieldEditorAttributes:(NSText *)textObj
    fieldEditor.automaticTextReplacementEnabled = self.isAutomaticTextReplacementEnabled;
    fieldEditor.continuousSpellCheckingEnabled = self.isContinuousSpellCheckingEnabled;
    fieldEditor.grammarCheckingEnabled = self.isGrammarCheckingEnabled;
@@ -1218,26 +1215,18 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
 -  selectTextAttributes[NSBackgroundColorAttributeName] = self.selectionColor ?: [NSColor selectedControlColor];
 -  fieldEditor.selectedTextAttributes = selectTextAttributes;
 -  fieldEditor.insertionPointColor = self.insertionPointColor ?: [NSColor textColor];
-+  [self ardia_applySelectionLookToEditor:fieldEditor];
++  if ([self.controlView isKindOfClass:[RCTUITextField class]]) {
++    [(RCTUITextField *)self.controlView ardia_applySelectionLookToEditor:fieldEditor];
++  } else {
++    NSMutableDictionary *selectTextAttributes = fieldEditor.selectedTextAttributes.mutableCopy;
++    selectTextAttributes[NSBackgroundColorAttributeName] = self.selectionColor ?: [NSColor selectedControlColor];
++    fieldEditor.selectedTextAttributes = selectTextAttributes;
++    fieldEditor.insertionPointColor = self.insertionPointColor ?: [NSColor textColor];
++  }
    return fieldEditor;
  }
  
-+- (void)ardia_applySelectionLookToEditor:(NSTextView *)editor
-+{
-+  NSMutableDictionary *selectTextAttributes = editor.selectedTextAttributes.mutableCopy;
-+  selectTextAttributes[NSBackgroundColorAttributeName] = self.selectionColor ?: [NSColor selectedControlColor];
-+  NSColor *ink = [self.controlView isKindOfClass:[RCTUITextField class]]
-+    ? ((RCTUITextField *)self.controlView).defaultTextAttributes[NSForegroundColorAttributeName]
-+    : nil;
-+  selectTextAttributes[NSForegroundColorAttributeName] = ink ?: [NSColor selectedTextColor];
-+  editor.selectedTextAttributes = selectTextAttributes;
-+  editor.insertionPointColor = self.insertionPointColor ?: [NSColor textColor];
-+}
-+
- @end
- #endif // macOS]
- 
-@@ -84,6 +250,8 @@ @implementation RCTUITextField {
+@@ -84,6 +243,8 @@ @implementation RCTUITextField {
  #if TARGET_OS_OSX // [macOS
    BOOL _isUpdatingPlaceholderText;
    NSArray<NSPasteboardType> *_readablePasteboardTypes;
@@ -1246,7 +1235,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  #endif // macOS]
  }
  
-@@ -155,6 +323,11 @@ - (BOOL)hasMarkedText
+@@ -155,6 +316,11 @@ - (BOOL)hasMarkedText
  	return ((NSTextView *)self.currentEditor).validAttributesForMarkedText ?: @[];
  }
  
@@ -1258,7 +1247,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  #endif // macOS]
  
  #pragma mark - Accessibility
-@@ -284,6 +457,15 @@ - (BOOL)isGrammarCheckingEnabled
+@@ -284,6 +450,25 @@ - (BOOL)isGrammarCheckingEnabled
  - (void)setSelectionColor:(RCTUIColor *)selectionColor
  {
    ((RCTUITextFieldCell*)self.cell).selectionColor = selectionColor;
@@ -1269,12 +1258,22 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
 +{
 +  NSTextView *editor = (NSTextView *)self.currentEditor;
 +  if ([editor isKindOfClass:[NSTextView class]]) {
-+    [(RCTUITextFieldCell *)self.cell ardia_applySelectionLookToEditor:editor];
++    [self ardia_applySelectionLookToEditor:editor];
 +  }
++}
++
++- (void)ardia_applySelectionLookToEditor:(NSTextView *)editor
++{
++  RCTUITextFieldCell *cell = (RCTUITextFieldCell *)self.cell;
++  NSMutableDictionary *selectTextAttributes = editor.selectedTextAttributes.mutableCopy;
++  selectTextAttributes[NSBackgroundColorAttributeName] = cell.selectionColor ?: [NSColor selectedControlColor];
++  selectTextAttributes[NSForegroundColorAttributeName] = self.defaultTextAttributes[NSForegroundColorAttributeName] ?: [NSColor selectedTextColor];
++  editor.selectedTextAttributes = selectTextAttributes;
++  editor.insertionPointColor = cell.insertionPointColor ?: [NSColor textColor];
  }
  
  - (RCTUIColor*)selectionColor
-@@ -294,6 +476,7 @@ - (RCTUIColor*)selectionColor
+@@ -294,6 +479,7 @@ - (RCTUIColor*)selectionColor
  - (void)setCursorColor:(NSColor *)cursorColor
  {
      ((RCTUITextFieldCell*)self.cell).insertionPointColor = cursorColor;
@@ -1282,15 +1281,15 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  }
  
  - (RCTUIColor*)cursorColor
-@@ -304,8 +487,110 @@ - (RCTUIColor*)cursorColor
+@@ -304,8 +490,110 @@ - (RCTUIColor*)cursorColor
  - (void)setFont:(UIFont *)font
  {
    ((RCTUITextFieldCell*)self.cell).font = font;
 +#if TARGET_OS_OSX // [Ardia
 +  [self ardia_applyOpticalLift];
 +#endif // Ardia]
-+}
-+
+ }
+ 
 +#if TARGET_OS_OSX
 +// [Ardia: typed and placeholder text get RCTTextView's optical lift. The field grows upward by the lift inside its
 +// unchanged layout box, so its text sits that much higher and the caret, which AppKit clips to the field's bounds,
@@ -1359,8 +1358,8 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
 +- (void)drawFocusRingMask
 +{
 +  [self.cell drawFocusRingMaskWithFrame:[self ardia_layoutBounds] inView:self];
- }
- 
++}
++
 +- (void)ardia_interfaceScaleDidChange:(NSNotification *)notification
 +{
 +  [self ardia_applyOpticalLift];
@@ -1393,7 +1392,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  - (UIFont *)font
  {
    return ((RCTUITextFieldCell*)self.cell).font;
-@@ -330,7 +615,9 @@ - (void)setPlaceholder:(NSString *)placeholder
+@@ -330,7 +618,9 @@ - (void)setPlaceholder:(NSString *)placeholder
  #if !TARGET_OS_OSX // [macOS]
    [super setPlaceholder:placeholder];
  #else // [macOS
@@ -1403,7 +1402,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  #endif // macOS]
    [self _updatePlaceholder];
  }
-@@ -367,6 +654,7 @@ - (void)setDefaultTextAttributes:(NSDictionary<NSAttributedStringKey, id> *)defa
+@@ -367,6 +657,7 @@ - (void)setDefaultTextAttributes:(NSDictionary<NSAttributedStringKey, id> *)defa
                                                            attributes:[self defaultTextAttributes]]];
  
    self.font = [[self defaultTextAttributes] objectForKey:NSFontAttributeName];
@@ -1411,7 +1410,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  #endif // macOS]
  }
  
-@@ -385,6 +673,20 @@ - (void)_updatePlaceholder
+@@ -385,6 +676,20 @@ - (void)_updatePlaceholder
    _isUpdatingPlaceholderText = YES;
    self.placeholderAttributedString = [[NSAttributedString alloc] initWithString:self.placeholder ?: @""
  																	 attributes:[self _placeholderTextAttributes]];
@@ -1432,7 +1431,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
    _isUpdatingPlaceholderText = NO;
  #endif // macOS]
  }
-@@ -710,6 +1012,9 @@ - (void)keyUp:(NSEvent *)event {
+@@ -710,6 +1015,9 @@ - (void)keyUp:(NSEvent *)event {
  - (void)setReadablePasteBoardTypes:(NSArray<NSPasteboardType> *)readablePasteboardTypes
  {
    _readablePasteboardTypes = readablePasteboardTypes;
@@ -1443,7 +1442,7 @@ index 137d0ee9f51616ea27c397a8bf595fe2c0ff5e91..65764e300d01db387995bb1e3c0bcfd8
  #endif // macOS]
  
 diff --git a/Libraries/Text/TextInput/Singleline/macOS/RCTUISecureTextField.mm b/Libraries/Text/TextInput/Singleline/macOS/RCTUISecureTextField.mm
-index 6f332dc1701cada0aff0e9a2678fa7bdcea0ef85..462853ec8b76f004cd5b9e92291473bc673a7ed1 100644
+index 6f332dc1701cada0aff0e9a2678fa7bdcea0ef85..8a552a32ee23e7ba7a0e10ed1e2e3ec0e4eb07ba 100644
 --- a/Libraries/Text/TextInput/Singleline/macOS/RCTUISecureTextField.mm
 +++ b/Libraries/Text/TextInput/Singleline/macOS/RCTUISecureTextField.mm
 @@ -14,6 +14,11 @@
@@ -1458,7 +1457,26 @@ index 6f332dc1701cada0aff0e9a2678fa7bdcea0ef85..462853ec8b76f004cd5b9e92291473bc
  @interface RCTUISecureTextFieldCell : NSSecureTextFieldCell
  
  @property (nonatomic, assign) UIEdgeInsets textContainerInset;
-@@ -71,13 +76,53 @@ - (NSText *)setUpFieldEditorAttributes:(NSText *)textObj
+@@ -60,10 +65,14 @@ - (NSText *)setUpFieldEditorAttributes:(NSText *)textObj
+   fieldEditor.automaticTextReplacementEnabled = self.isAutomaticTextReplacementEnabled;
+   fieldEditor.continuousSpellCheckingEnabled = self.isContinuousSpellCheckingEnabled;
+   fieldEditor.grammarCheckingEnabled = self.isGrammarCheckingEnabled;
+-  NSMutableDictionary *selectTextAttributes = fieldEditor.selectedTextAttributes.mutableCopy;
+-  selectTextAttributes[NSBackgroundColorAttributeName] = self.selectionColor ?: [NSColor selectedControlColor];
+-  fieldEditor.selectedTextAttributes = selectTextAttributes;
+-  fieldEditor.insertionPointColor = self.insertionPointColor ?: [NSColor textColor];
++  if ([self.controlView isKindOfClass:[RCTUITextField class]]) {
++    [(RCTUITextField *)self.controlView ardia_applySelectionLookToEditor:fieldEditor];
++  } else {
++    NSMutableDictionary *selectTextAttributes = fieldEditor.selectedTextAttributes.mutableCopy;
++    selectTextAttributes[NSBackgroundColorAttributeName] = self.selectionColor ?: [NSColor selectedControlColor];
++    fieldEditor.selectedTextAttributes = selectTextAttributes;
++    fieldEditor.insertionPointColor = self.insertionPointColor ?: [NSColor textColor];
++  }
+   return fieldEditor;
+ }
+ 
+@@ -71,13 +80,53 @@ - (NSText *)setUpFieldEditorAttributes:(NSText *)textObj
  
  #pragma mark - RCTUISecureTextField
  
