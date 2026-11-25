@@ -87,16 +87,25 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
     },
     scrolled(y: number, max: number, contentHeight: number, source?: ScrollSource) {
       if (source && (source.generation !== shown?.generation || source.layout !== shown.layout)) return;
-      if (source) observe(source.generation, y);
       if (!shown?.settled) return;
-      if (!source && contentHeight >= 0 && Math.abs(contentHeight - content) >= 1 && shown.expect && now() < shown.expect.until) return;
-      if (!source) observe(shown.generation, y);
       const expect = shown.expect;
-      if (!expect) return rememberSettingsScrollOffset(shown.visit, y);
-      if (now() >= expect.until) return conclude(shown, null, y);
-      if (Math.abs(y - expect.y) < 1) return conclude(shown, "applied", y);
-      if (expect.y > max + 0.5 && Math.abs(y - max) < 1) return conclude(shown, "clamped", y);
-      if (contentHeight >= 0 && Math.abs(contentHeight - content) < 1) conclude(shown, null, y);
+      if (!expect) {
+        observe(shown.generation, y);
+        return rememberSettingsScrollOffset(shown.visit, y);
+      }
+      if (now() >= expect.until) {
+        observe(shown.generation, y);
+        return conclude(shown, null, y);
+      }
+      if (contentHeight >= 0 && Math.abs(contentHeight - content) >= 1) return;
+      if (Math.abs(y - expect.y) < 1) {
+        observe(shown.generation, y);
+        return conclude(shown, "applied", y);
+      }
+      if (expect.y > max + 0.5 && Math.abs(y - max) < 1) {
+        observe(shown.generation, y);
+        return conclude(shown, "clamped", y);
+      }
     },
     revealTop(): number {
       return top;

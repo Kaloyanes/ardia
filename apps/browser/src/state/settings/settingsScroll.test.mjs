@@ -275,15 +275,16 @@ test("after a restore, a queued offset delivered through the current handler is 
   const settings = window();
   settings.show();
   assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
-  settings.scrolled(120);
+  settings.scrolled(120, 800, 1400, nav());
+  assert.equal(settings.memory.revealTop(), 500, "queued offset doesn't shift revealTop");
   settingsForward();
   settingsBack();
   assert.equal(nav().scroll, 500, "the stale 120 didn't overwrite the restored 500");
   settings.show();
   settings.lay(1400);
-  settings.scrolled(120);
-  settings.scrolled(500);
-  settings.scrolled(530);
+  settings.scrolled(120, 800, 1400, nav());
+  settings.scrolled(500, 800, 1400, nav());
+  settings.scrolled(530, 800, 1400, nav());
   settingsForward();
   settingsBack();
   assert.equal(nav().scroll, 530, "once the restored spot is reported, the user's scroll counts");
@@ -499,19 +500,27 @@ test("S5 (round 2): Back to a deleted profile, now shown as another one, doesn't
   assert.equal(settingsScrollFor(nav().visit), 0, "the page shows the default profile, so 400 isn't restored on it");
 });
 
-test("S2 (round 3): a restore seen landing short on the page itself keeps the observed offset, and a search reveal doesn't count it as applied", () => {
+test("S2 (round 3): a restore that never confirms keeps its offset against queued same-height events, and records scrolls after settle or search reveal", () => {
   returnToSaved(500);
   const settings = window();
   settings.show();
   assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
-  settings.scrolled(350, 1e9, 9999);
-  assert.deepEqual(settings.reports, [], "an event from another page's content is ignored");
-  settings.scrolled(350, 1e9, 1400);
+  settings.scrolled(350, 800, 9999, nav());
+  settings.scrolled(120, 800, 1400, nav());
+  assert.deepEqual(settings.reports, [], "unacknowledged events before the restore confirms are ignored");
+  assert.equal(settings.memory.revealTop(), 500, "queued events don't move revealTop away from the pending restore");
+  settingsForward();
+  settings.show();
+  settingsBack();
+  assert.equal(nav().scroll, 500, "navigating away before acknowledgement keeps the saved 500");
+  settings.show();
+  assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
   settings.memory.moved();
+  settings.scrolled(350, 800, 1400, nav());
   assert.deepEqual(settings.reports, []);
   settingsForward();
   settingsBack();
-  assert.equal(nav().scroll, 350, "history holds what was observed, not the unconfirmed 500");
+  assert.equal(nav().scroll, 350, "a scroll after a search reveal is recorded without counting the restore as applied");
 });
 
 test("S2 (round 3): an unconfirmed restore left by navigation isn't counted, and nothing observed keeps the position it came back to", () => {
