@@ -105,3 +105,7 @@ test("outside a Flatpak cobalt is never used, and without a sandbox the launch i
   assert.deepEqual(launch(t, ["--version"], { env: { FLATPAK_ID: "dev.ardia.Ardia" }, command: null }), ["browser --version"]);
   assert.deepEqual(launch(t, ["--version"], { namespaces: false, env: { FLATPAK_ID: "dev.ardia.Ardia" }, command: null, status: 1 }), [""]);
 });
+
+test("inside another app's Flatpak the launcher starts the browser itself, not through cobalt", (t) => {
+  assert.deepEqual(launch(t, ["--version"], { flatpak: true, env: { FLATPAK_ID: "org.gnome.Builder" }, command: null }), ["browser --version"]);
+});

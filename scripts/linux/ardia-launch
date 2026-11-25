@@ -75,7 +75,7 @@ for argument in "$@"; do
   fi
 done
 
-if [[ -f /.flatpak-info && -n "${FLATPAK_ID:-}" ]]; then
+if [[ -f /.flatpak-info && "${FLATPAK_ID:-}" == dev.ardia.Ardia ]]; then
   exec cobalt "$@"
 fi
 
