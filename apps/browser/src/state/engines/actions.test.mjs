@@ -907,3 +907,88 @@ test("S9: an unsaved-work check the page rejects counts as no unsaved work inste
   dropSwap(tabId);
   webviews.clear();
 });
+
+test("S4: a page that moves on within its site while the unsaved-work prompt is open isn't moved under the old page's answer", async () => {
+  const tabId = streamingTab("https://www.crunchyroll.com/account", unsavedWork(true));
+  let answerDialog;
+  let asked = 0;
+  shellNativeModules.ArdiaDialogs.confirm = () => (++asked, new Promise((resolve) => (answerDialog = resolve)));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    S().updateTab(tabId, { url: "https://www.crunchyroll.com/profile" });
+    followSiteChoice(tabId, "chromium", "https://www.crunchyroll.com/profile", "https://www.crunchyroll.com/account");
+    answerDialog({ confirmed: true, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.notEqual(S().tabs[tabId].engine, "webkit", "/profile was never checked for unsaved work");
+    assert.equal(asked, 1);
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S8: Stay on Page on a prompt an address typed since made stale declines nothing", async () => {
+  const tabId = streamingTab("https://www.peacocktv.com/watch/9", unsavedWork(true));
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    S().navigate(tabId, "https://news.example/today");
+    answerDialog({ confirmed: false, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+  }
+  const later = liveTab("https://www.peacocktv.com/watch/10", "chromium");
+  offerWebKit(later, { keySystem: "com.widevine.alpha", main: true });
+  assert.ok(await waitFor(() => tabEngine(S(), later) === "webkit"), "peacocktv.com isn't declined");
+  dropSwap(later);
+  webviews.clear();
+});
+
+async function queuedDisneyFromHulu(t, now) {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
+  const flush = async () => {
+    for (let i = 0; i < 200; i++) await Promise.resolve();
+  };
+  const tabId = streamingTab("https://www.netflix.com/watch/1", () => Promise.resolve(false));
+  S().updateSettings({ engineSwitchCarriesSiteData: false, websiteEngines: { "https://www.hulu.com": "chromium" } });
+  S().updateTab(tabId, { engine: "webkit" });
+  S().updateTab(tabId, { url: "https://www.hulu.com/" });
+  followSiteChoice(tabId, "webkit", "https://www.hulu.com/", "https://www.netflix.com/watch/1");
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium");
+  dropSwap(tabId);
+  patchPage(tabId, { engineBack: null });
+  S().updateTab(tabId, { url: "https://www.disneyplus.com/" });
+  followSiteChoice(tabId, "chromium", "https://www.disneyplus.com/", "https://www.hulu.com/");
+  await flush();
+  return { tabId, flush };
+}
+
+test("S10: a queued move for Disney+ is dropped when the tab goes on to a news site, even once that site gets a WebKit rule", async (t) => {
+  const { tabId, flush } = await queuedDisneyFromHulu(t, 3_000_000);
+  S().updateTab(tabId, { url: "https://news.example/today" });
+  followSiteChoice(tabId, "chromium", "https://news.example/today", "https://www.disneyplus.com/");
+  S().updateSettings({ websiteEngines: { "https://www.hulu.com": "chromium", "https://news.example": "webkit" } });
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium");
+  assert.equal(pageOf(tabId).engineBack ?? null, null, "no Back to Hulu on the news page");
+  S().updateSettings({ engineSwitchCarriesSiteData: true, websiteEngines: {} });
+  webviews.clear();
+});
+
+test("S10: a queued move whose page has moved to another site is dropped when the gap ends, even before the new page reports", async (t) => {
+  const { tabId, flush } = await queuedDisneyFromHulu(t, 4_000_000);
+  S().updateTab(tabId, { url: "https://news.example/today" });
+  S().updateSettings({ websiteEngines: { "https://www.hulu.com": "chromium", "https://news.example": "webkit" } });
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium");
+  assert.equal(pageOf(tabId).engineBack ?? null, null);
+  S().updateSettings({ engineSwitchCarriesSiteData: true, websiteEngines: {} });
+  webviews.clear();
+});

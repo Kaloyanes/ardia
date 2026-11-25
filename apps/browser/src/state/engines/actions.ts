@@ -104,6 +104,7 @@ async function mayLeavePage(t: Tab, title: string, message: string, confirmTitle
   if (!wantsPage(t) || !asksAboutUnsavedWork() || !(await hasUnsavedWork(t.id))) return stillWanted() ? "leave" : "stale";
   if (!stillWanted()) return "stale";
   const { confirmed } = await ask({ title, message, confirmTitle, cancelTitle: "Stay on Page", windowId: t.windowId });
+  if (!stillWanted()) return "stale";
   return confirmed ? "leave" : "stay";
 }
 
@@ -163,14 +164,16 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
     return true;
   }
   const holds = modeStillHolds();
+  const checksWork = options.checkWork !== false;
   const navigation = navigationOf(t)?.seq ?? null;
   const stillWanted = () => {
     const now = store().tabs[tabId];
     if (!holds() || !now || (navigationOf(now)?.seq ?? null) !== navigation) return false;
     const at = pageUrl(now);
-    return options.routedHere ? siteOf(at) === siteOf(url) && options.routedHere(at) : at === url;
+    if (options.routedHere && !options.routedHere(at)) return false;
+    return checksWork || !options.routedHere ? at === url : siteOf(at) === siteOf(url);
   };
-  if (options.checkWork !== false) {
+  if (checksWork) {
     const answer = await mayLeavePage(t, `Open this page in ${ENGINE_NAMES[engine]}?`, `The page reloads in ${ENGINE_NAMES[engine]}, so changes you made on it may not be saved.`, `Open in ${ENGINE_NAMES[engine]}`, confirm, stillWanted);
     if (answer === "stay") options.onStayed?.();
     if (answer !== "leave") return false;

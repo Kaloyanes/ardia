@@ -2,6 +2,7 @@ import type { PageEngine, ProtectedMediaRequest } from "../../platform/tabs";
 import { useBrowser } from "../browser/store";
 import { patchPage } from "../tabs/pageState";
 import { canSwitchEngine, chosenEngine, chromiumOnly, modeEngineFor, needsChromium, singleEngine, siteOf, tabEngine, webStorePage } from "./engines";
+import { navigationOf } from "../tabs/pageSession";
 import { declineSite, modeStillHolds, openPageIn, pageUrl, showEngineOffer, siteDeclined, tellChromiumModeBlocks } from "./actions";
 import { openedByPage, openerState } from "./openedPages";
 import { noteSiteMove } from "../telemetry/engineSwitchCounts";
@@ -10,7 +11,7 @@ import { consentToken, type ConsentToken } from "../telemetry/client";
 const store = () => useBrowser.getState();
 const SITE_MOVE_SPACING_MS = 10_000;
 
-type Move = { from: PageEngine; to: PageEngine; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string } };
+type Move = { from: PageEngine; to: PageEngine; url: string; navigation: number | null; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string } };
 type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null; cooling: ReturnType<typeof setTimeout> | null };
 
 const tabMoves = new Map<string, TabMoves>();
@@ -37,6 +38,18 @@ function queue(moves: TabMoves, move: Move) {
 }
 
 const declinedVideo = (move: Move) => !!move.forVideo && siteDeclined(move.forVideo.site);
+
+const navigationNow = (tabId: string) => navigationOf(store().tabs[tabId])?.seq ?? null;
+
+function stillFor(tabId: string, move: Move): boolean {
+  const t = store().tabs[tabId];
+  return !!t && navigationNow(tabId) === move.navigation && siteOf(pageUrl(t)) === siteOf(move.url);
+}
+
+function dropMovesLeftBehind(tabId: string) {
+  const moves = tabMoves.get(tabId);
+  if (moves?.pending && !stillFor(tabId, moves.pending)) moves.pending = null;
+}
 
 function dropVideoMovesFor(tabId: string, site: string) {
   const moves = tabMoves.get(tabId);
@@ -115,7 +128,7 @@ function settlePending(tabId: string, move: Move) {
   if (!t) return;
   const url = pageUrl(t);
   const from = tabEngine(store(), tabId);
-  if (from === move.to || declinedVideo(move) || !routedTo(tabId, move.to)(url)) return;
+  if (from === move.to || !stillFor(tabId, move) || declinedVideo(move) || !routedTo(tabId, move.to)(url)) return;
   startMove(tabId, { ...move, from });
 }
 
@@ -134,17 +147,19 @@ export function followSiteChoice(tabId: string, engine: PageEngine, url: string,
   const t = s.tabs[tabId];
   if (!t) return;
   const consent = consentToken();
+  dropMovesLeftBehind(tabId);
+  const navigation = navigationNow(tabId);
   if (singleEngine(s)) {
     const forced = modeEngineFor(s, t, url);
     const followsMode = forced === "chromium" || chromiumOnly(previousUrl) || (leftForChromium(previousUrl) && !googleSignIn(url));
-    if (forced && forced !== engine && followsMode && (canSwitchEngine(url) || needsChromium(url))) startMove(tabId, { from: engine, to: forced, previousUrl, consent });
+    if (forced && forced !== engine && followsMode && (canSwitchEngine(url) || needsChromium(url))) startMove(tabId, { from: engine, to: forced, url, navigation, previousUrl, consent });
     return;
   }
   const site = siteOf(url);
   if (!site || site === siteOf(previousUrl)) return;
   const chosen = chosenEngine(s, url);
   if (!chosen || chosen === engine) return;
-  const move = { from: engine, to: chosen, previousUrl, consent };
+  const move = { from: engine, to: chosen, url, navigation, previousUrl, consent };
   if (openedByPage(tabId)) return void moveOpenedTab(tabId, url, move);
   startMove(tabId, move);
 }
@@ -169,7 +184,7 @@ async function moveForProtectedVideo(tabId: string, site: string, keySystem: str
     noteSiteMove(opener === "live" ? "keptForOpener" : "dropped", true, consent);
     return showEngineOffer(tabId, site, keySystem);
   }
-  startMove(tabId, { from: tabEngine(store(), tabId), to: "webkit", previousUrl: "", consent, forVideo: { site } });
+  startMove(tabId, { from: tabEngine(store(), tabId), to: "webkit", url: pageUrl(store().tabs[tabId]), navigation: navigationNow(tabId), previousUrl: "", consent, forVideo: { site } });
 }
 
 export function offerWebKit(tabId: string, { keySystem }: ProtectedMediaRequest) {
