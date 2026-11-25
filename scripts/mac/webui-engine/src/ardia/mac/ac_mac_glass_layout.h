@@ -319,6 +319,20 @@ inline std::vector<Region> Mounted(const std::vector<Region>& backdrops, const s
   return all;
 }
 
+inline std::vector<Page> MountablePages(const std::vector<Page>& pages, const std::set<int>& with_native_view) {
+  std::vector<Page> mountable;
+  for (const Page& page : pages) {
+    if (with_native_view.contains(page.id)) mountable.push_back(page);
+  }
+  return mountable;
+}
+
+inline Layout KeepAttached(Layout layout, const std::set<SlotKey>& attached) {
+  std::erase_if(layout.placements,
+                [&attached](const Placement& placement) { return !attached.contains(SlotKey{placement.plane, placement.page, placement.source, placement.id}); });
+  return layout;
+}
+
 inline std::vector<std::string> MountedGlass(const std::vector<Placement>& placements) {
   std::vector<std::string> mounted;
   std::set<std::string> seen;

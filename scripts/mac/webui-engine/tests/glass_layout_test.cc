@@ -368,6 +368,23 @@ TEST(nothing_is_accepted_without_a_native_surface) {
   CHECK(glass::MountedGlass(offscreen.placements).empty());
 }
 
+TEST(a_page_without_a_native_view_mounts_nothing_on_it) {
+  const std::vector<Page> pages{{7, {300, 0, 980, 800}}};
+  const Region bar = Make("bar", {400, 100, 200, 40}, Layer::kOverPage);
+  const auto unmountable = glass::Lay(glass::Mounted({}, {bar}), glass::MountablePages(pages, {}), kWindow, 1);
+  CHECK(unmountable.placements.size() == 1);
+  CHECK(unmountable.placements[0].plane == Plane::kBehindWindow && unmountable.placements[0].page == 0);
+  const auto planned = glass::Lay(glass::Mounted({}, {bar}), pages, kWindow, 1);
+  CHECK(planned.placements.size() == 1 && planned.placements[0].page == 7);
+  const auto unattached = glass::KeepAttached(planned, {});
+  CHECK(unattached.placements.empty());
+  CHECK(glass::MountedGlass(unattached.placements).empty());
+  const auto attached = glass::KeepAttached(planned, {glass::KeyOf(planned.placements[0])});
+  CHECK(glass::MountedGlass(attached.placements) == (std::vector<std::string>{"bar"}));
+  const auto live = glass::Lay(glass::Mounted({}, {bar}), glass::MountablePages(pages, {7}), kWindow, 1);
+  CHECK(live.placements.size() == 1 && live.placements[0].page == 7);
+}
+
 TEST(mounted_glass_names_a_region_on_two_pages_once) {
   const std::vector<Page> pages{{1, {0, 0, 600, 800}}, {2, {610, 0, 670, 800}}};
   const auto split = glass::Lay(glass::Mounted({}, {Make("peek", {500, 100, 300, 200}, Layer::kOverPage)}), pages, kWindow, 1);

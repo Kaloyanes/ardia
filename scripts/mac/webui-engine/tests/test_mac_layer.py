@@ -287,6 +287,10 @@ class ContractTests(unittest.TestCase):
         relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1]
         self.assertRegex(relayout, r'if \(!content \|\| !frame\) \{\n\s+return glass::Layout\{\};')
         self.assertIn('region.source = glass::Source::kBackdrop;', glass)
+        self.assertIn('glass::MountablePages(pages, with_native_view)', relayout)
+        self.assertIn('glass::Layout mounted = glass::KeepAttached(layout, attached);', relayout)
+        self.assertIn('placed_ = mounted.placements;', relayout)
+        self.assertNotIn('placed_ = layout.placements;', relayout)
         self.assertIn('glass_->Clear();', self.read('ac_mac_shell_host.mm'))
 
     def test_queued_context_menu_binds_no_view(self):

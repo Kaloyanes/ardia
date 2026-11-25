@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -293,13 +294,20 @@ glass::Layout GlassRegions::Relayout() {
   if (!content || !frame) {
     return glass::Layout{};
   }
+  std::map<int, NSView*> live_pages;
   std::vector<glass::Page> pages;
+  std::set<int> with_native_view;
   pages.reserve(pages_.size());
   for (const GlassPage& page : pages_) {
     pages.push_back(page.page);
+    if (NSView* view = page.view.GetNativeNSView()) {
+      live_pages[page.page.id] = view;
+      with_native_view.insert(page.page.id);
+    }
   }
   const glass::Layout layout =
-      glass::Lay(glass::Mounted(backdrops_, regions_), pages,
+      glass::Lay(glass::Mounted(backdrops_, regions_),
+                 glass::MountablePages(pages, with_native_view),
                  glass::Rect{0, 0, shell_.width, shell_.height}, zoom_);
   const bool liquid = LiquidGlassAvailable();
   if (!views_->behind) {
@@ -313,12 +321,6 @@ glass::Layout GlassRegions::Relayout() {
       convertRect:NSMakeRect(shell_.x, top, shell_.width, shell_.height)
            toView:frame];
 
-  std::map<int, NSView*> live_pages;
-  for (const GlassPage& page : pages_) {
-    if (NSView* view = page.view.GetNativeNSView()) {
-      live_pages[page.page.id] = view;
-    }
-  }
   for (auto it = views_->page_slots.begin(); it != views_->page_slots.end();) {
     NSView* host = views_->page_views[it->first];
     if (!live_pages.contains(it->first) || live_pages[it->first] != host) {
@@ -387,6 +389,7 @@ glass::Layout GlassRegions::Relayout() {
       Style(found->second, placement);
     }
   }
+  std::set<glass::SlotKey> attached;
   for (const glass::Placement& placement : layout.placements) {
     auto found = views_->effects.find(glass::KeyOf(placement));
     NSView* parent = parent_for(glass::KeyOf(placement));
@@ -396,9 +399,13 @@ glass::Layout GlassRegions::Relayout() {
     } else if (!diff.create.empty()) {
       [parent addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
     }
+    if (found->second.superview == parent) {
+      attached.insert(glass::KeyOf(placement));
+    }
   }
-  placed_ = layout.placements;
-  return layout;
+  glass::Layout mounted = glass::KeepAttached(layout, attached);
+  placed_ = mounted.placements;
+  return mounted;
 }
 
 }
