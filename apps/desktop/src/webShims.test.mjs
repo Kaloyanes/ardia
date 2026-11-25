@@ -244,3 +244,28 @@ test("a light toast keeps a light HUD under its dark text, and the HUD close but
   assert.ok(contrast(over(light.hudCloseGlyph, lightPlateOnWhite), lightPlateOnWhite) < 2, "a light HUD material under the white glyph is what the plate's dark scope avoids");
   assert.match(readFileSync(new URL("../../browser/src/components/ui/ButtonKinds.tsx", import.meta.url), "utf8"), /<ThemeOverride theme=\{themeFor\(HUD_PLATE_THEME\)\}>\s*<VisualEffect material="hudWindow"/);
 });
+
+test("the folder icon draws FolderIconView's back tab, interior and flap, and tilts the flap open on smoothstep", async () => {
+  const art = await import("./shims/web/folderArt.ts");
+  const closed = art.folderShapes(0);
+  const open = art.folderShapes(1);
+  assert.equal(closed.top, 18);
+  assert.equal(open.top, 28);
+  assert.equal(art.folderShapes(-1).rear, closed.rear);
+  assert.equal(art.folderShapes(2).front, open.front);
+  assert.match(closed.rear, /^M34 88Q26 88 26 80L26 29Q26 21 /);
+  assert.match(closed.front, /^M26 45Q26 36 35 36L87 36Q96 36 96 45/);
+  assert.match(open.front, /^M/);
+  assert.equal(art.smoothstep(0.5), 0.5);
+  assert.ok(art.smoothstep(0.25) < 0.25);
+  const half = art.folderShapes(0.5);
+  assert.notEqual(half.rear, closed.rear);
+  assert.equal(half.top, 23);
+  assert.deepEqual(art.FOLDER_PALETTE, { stroke: "#443AFF", face: "#F4F3FF", insideTop: "#BFBCFF", insideBottom: "#8781FF" });
+  assert.equal(art.VIEW_BOX, "0.25 -7.75 121.5 121.5");
+  const icon = readFileSync(new URL("./shims/web/FolderIcon.tsx", import.meta.url), "utf8");
+  for (const prop of ["face", "insideTop", "insideBottom", "stroke"]) assert.doesNotMatch(icon, new RegExp(`${prop}: _`), `${prop} is drawn, not dropped`);
+  assert.match(icon, /prefers-reduced-motion/);
+  assert.equal(readFileSync(new URL("../../../packages/demo/src/shims/web/folderArt.ts", import.meta.url), "utf8"), readFileSync(new URL("./shims/web/folderArt.ts", import.meta.url), "utf8"), "the demo draws the same folder");
+  assert.equal(readFileSync(new URL("../../../packages/demo/src/shims/web/FolderIcon.tsx", import.meta.url), "utf8"), icon, "the demo animates the same folder");
+});

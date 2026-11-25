@@ -32,6 +32,7 @@ HOOKED_FILES = (
     'content/app_shim_remote_cocoa/web_contents_view_cocoa.mm',
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
+    'components/renderer_context_menu/render_view_context_menu_base.cc',
 )
 
 
@@ -69,6 +70,12 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_shell_policy(self):
         compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
+
+    def test_share_policy(self):
+        compile_and_run(self, TESTS / 'share_policy_test.cc', self.out / 'share-policy')
+
+    def test_shared_folders_policy(self):
+        compile_and_run(self, TESTS / 'shared_folders_policy_test.cc', self.out / 'shared-folders-policy')
 
     def test_shared_hostile_corpus_reaches_no_sink(self):
         node = shutil.which('node')
@@ -156,6 +163,10 @@ class ApplyTests(unittest.TestCase):
                 'void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {\n'
                 '  if (!GetBrowserView()->GetIsNormalType() &&\n'
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
+            'components/renderer_context_menu/render_view_context_menu_base.cc':
+                '#include "build/build_config.h"\n#include "url/origin.h"\n\n'
+                'void RenderViewContextMenuBase::Init() {\n  InitMenu();\n  if (toolkit_delegate_)\n'
+                '    toolkit_delegate_->Init(&menu_model_);\n}\n',
         }
         originals = {}
         for path, text in files.items():
@@ -434,6 +445,63 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_share_is_advertised_served_and_never_shown_in_background(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('share::AppendCapabilities(capabilities);', calls)
+        self.assertIn('return share::Invoke(*this, method, values, std::move(done));', calls)
+        share = self.read('ac_mac_share.mm')
+        for method in ('ArdiaApp.share', 'ArdiaApp.shareText', 'ArdiaApp.shareVia', 'ArdiaApp.shareServices',
+                       'ArdiaApp.openSharingSettings'):
+            self.assertIn(f'"{method}",', share)
+        show = share.split('void ShowPicker(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(show.index('BackgroundInstance()'), show.index('showRelativeToRect'))
+        via = share.split('void ShareVia(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(via.index('BackgroundInstance()'), via.index('performWithItems'))
+        self.assertIn('share_policy::ClassifyUrl(url)', share)
+        desktop = (REPO / 'apps/desktop/src/hostShare.ts').read_text()
+        self.assertIn('isLinkShareService(service)', desktop)
+        self.assertIn('"ArdiaApp.openSharingSettings"', desktop)
+
+    def test_page_menus_share_through_the_shell(self):
+        self.assertIn('share::InstallPageMenu();', self.read('ac_mac_webui.mm'))
+        self.assertIn('g_ardia_mac_page_menu_observer', self.read('ac_mac_hooks.h'))
+        apply = (ROOT / 'apply.sh').read_text()
+        self.assertIn('observers_.AddObserver(observer);', apply)
+        share = self.read('ac_mac_share.mm')
+        self.assertIn('g_ardia_mac_page_menu_observer = &PageMenuObserver;', share)
+        observer = share.split('class PageShareObserver', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('content::GlobalRenderFrameHostId frame_;', observer)
+        self.assertNotIn('RenderViewContextMenuBase*', observer)
+        self.assertIn('.Set("name", "command")', share)
+        self.assertIn('Emit("ArdiaWebView"', share)
+
+    def test_shared_folders_are_advertised_located_and_watched_per_window(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('shared_folders::AppendCapabilities(capabilities);', calls)
+        self.assertIn('->Set("location", shared_folders::Location());', calls)
+        script = calls.split('std::optional<std::string> BootstrapScript(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shared_folders::Location()', script)
+        host = self.read('ac_mac_shell_host.mm')
+        detach = host.split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shared_folder_watcher_.reset();', detach)
+        folders = self.read('ac_mac_shared_folders.mm')
+        self.assertIn('Emit("ArdiaSharedFolders", "onChange"', folders)
+        self.assertIn('dispatch_sync(core->queue', folders)
+        modules = (REPO / 'apps/desktop/src/hostModules.ts').read_text()
+        self.assertIn('host.bootstrap.nativeModules?.ArdiaSharedFolders?.location', modules)
+        self.assertIn('"ArdiaSharedFolders.location",', folders)
+
+    def test_shared_folder_writes_match_the_swift_directory(self):
+        folders = self.read('ac_mac_shared_folders.mm')
+        write = folders.split('Step Write(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('RENAME_EXCL', write)
+        self.assertIn('NSFileCoordinatorWritingForReplacing', write)
+        self.assertIn('LinkUrl(folder, name) != expect', write)
+        self.assertIn('O_NOFOLLOW', folders.split('Opened OpenDirectoryIn(', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('policy::RelativeParts(*path)', folders)
+        self.assertIn('policy::RefusedFolder(*real, HomeDirectory())', folders)
+        self.assertNotIn('DeletePathRecursively', folders)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -449,11 +517,14 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
-                       'session.write', 'ArdiaShell.writeDocument'):
+                       'session.write', 'ArdiaShell.writeDocument', 'ArdiaApp.share', 'ArdiaApp.shareVia',
+                       'ArdiaApp.shareText', 'ArdiaSharedFolders.apply', 'ArdiaSharedFolders.read',
+                       'ArdiaSharedFolders.watch', 'ArdiaShell.pickFolder'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
-                     'hostile_corpus_test.cc', 'shell_policy_test.cc'):
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'share_policy_test.cc',
+                     'shared_folders_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

@@ -66,6 +66,25 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Share** (`ac_mac_share.mm`, rules in `ac_mac_share_policy.h`), as `packages/shell/ios/SharePicker.swift` does.
+  - `ArdiaApp.share` and `ArdiaApp.shareText` open `NSSharingServicePicker` beside their anchor (CSS pixels in the
+    shell, scaled by its zoom), or centred under the toolbar without one. They settle when the picker closes.
+  - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
+    `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
+    `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
+  - Only http(s) links, temporary page images and directories (Share Folder…) are shared.
+  - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
+    places them, through a dev-only `RenderViewContextMenuObserver` hook in
+    `render_view_context_menu_base.cc`. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
+    share ends.
+  - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
+- **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
+  `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`, plus `ArdiaShell.pickFolder`
+  for Add Shared Folder…. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator`, as the Mac app does. Unlike the Swift code,
+  coordination has no 20-second timeout. The folder panel and Finder are never shown in background mode.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's

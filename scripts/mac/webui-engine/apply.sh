@@ -57,6 +57,17 @@ HOOKS = [
      DEV + "  if (g_ardia_mac_hosts_normal_windows &&\n      GetBrowserView()->GetIsNormalType()) {\n"
      "    return;\n  }\n#endif\n",
      "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     '#include "url/origin.h"\n',
+     "\n" + MAC_DEV + HOOKS_INCLUDE + "\nRenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n"
+     "    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n#endif\n",
+     "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     "  InitMenu();\n",
+     MAC_DEV + "  if (g_ardia_mac_page_menu_observer) {\n    if (RenderViewContextMenuObserver* observer =\n"
+     "            g_ardia_mac_page_menu_observer(this, &menu_model_)) {\n      observers_.AddObserver(observer);\n"
+     "    }\n  }\n#endif\n",
+     "after"),
 ]
 failed = False
 pending = {}
@@ -118,7 +129,8 @@ case "$mode" in
     printf '%s\n' chrome/BUILD.gn chrome/browser/chrome_browser_main.cc \
       content/app_shim_remote_cocoa/web_contents_view_cocoa.mm \
       chrome/browser/ui/window_feature_controller/window_feature_controller.cc \
-      chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+      chrome/browser/ui/views/frame/browser_frame_view_mac.mm \
+      components/renderer_context_menu/render_view_context_menu_base.cc
     ;;
   --check)
     excludes=()

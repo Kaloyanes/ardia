@@ -49,6 +49,7 @@ const ADAPTER_REPLACEMENTS = [
   ["components/settings/Form.tsx", "settingsForm.tsx", ["Anchor", "Group", "Row", "SectionHeader", "SettingsPaneContext"]],
   ["state/engines/engines.ts", "hostEngines.ts", ["canSwitchEngine", "chosenEngine", "defaultEngine", "offersEngineChoice", "tabEngine", "siteOf"]],
   ["state/import/apply.ts", "importApply.ts", ["applyResult", "applySafari", "emptyCounts", "importBookmarks"]],
+  ["platform/sharedFolders.ts", "hostSharedFolders.ts", ["revealSharedFolder", "sharedFoldersAvailable", "readSharedFolder", "watchSharedFolders"]],
 ];
 
 function assertAdapterReplacements(graph, ids) {

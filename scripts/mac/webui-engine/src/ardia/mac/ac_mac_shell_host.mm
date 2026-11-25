@@ -11,6 +11,7 @@
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
@@ -472,6 +473,7 @@ void ShellHostView::DetachBrowser() {
   }
   bindings_.clear();
   StopWatchingWindowDrag();
+  shared_folder_watcher_.reset();
   popovers_.reset();
   glass_.reset();
   if (focus_manager_) {

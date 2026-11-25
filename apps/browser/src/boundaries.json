@@ -2367,6 +2367,44 @@
    "detected": false
   },
   {
+   "id": "mac-webui-share:picker",
+   "source": "frame",
+   "guard": "Mac WebUI host: ArdiaApp.share, ArdiaApp.shareText, ArdiaApp.shareVia, ArdiaApp.shareServices and ArdiaApp.openSharingSettings come only through the trusted shell bridge; a link is shared only when it is http(s) or file:/// with no control characters and at most 64 KiB (ClassifyUrl), and a file is shared only when it is a temporary image this host wrote under its own shared-images directory (one level, no . or .. segments, InsideDirectory) or an existing directory that is not a symlink (ShareableFile, the Share Folder… directory); titles are at most 4 KiB (ValidTitle), text at most 1 MiB (ShareableText), a service name is 1-200 bytes without control characters and must match a macOS sharing service by title (ValidServiceName, ShareVia), shareVia takes only http(s) links, and an anchor is four finite coordinates within +/-1e6 with a non-negative size, scaled by a sanitized zoom (AnchorFrom, Scaled); in background mode the picker, the service and the sharing settings are logged to activation.log and never shown. Page context menus on pages this host binds get Share… items (SharesFor, the same rules as ArdiaCore's ContextMenuSharesFor) through a dev-only RenderViewContextMenuObserver hook; the observer keeps the frame's id and a copy of the menu params, never the menu, and its share goes to the shell as a page command event so cleanUrl still runs before ArdiaApp.share; a page's image is written to a temporary file of at most 64 MiB that is deleted when the share ends, is cancelled or the shell starts. tests/share_policy_test.cc hostile_sinks runs NaN, infinities, 1e20, 1e308 and hostile schemes and paths through each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share_policy.h#ClassifyUrl",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share_policy.h#InsideDirectory",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share_policy.h#AnchorFrom",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share_policy.h#ValidServiceName",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share_policy.h#SharesFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share.mm#ShareableFile",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share.mm#ShareVia",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_share.mm#PageMenuObserver",
+    "scripts/mac/webui-engine/tests/share_policy_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#share_guards"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-shared-folders:directory",
+   "source": "frame",
+   "guard": "Mac WebUI host: ArdiaSharedFolders.read, ArdiaSharedFolders.apply, ArdiaSharedFolders.resolve, ArdiaSharedFolders.discard, ArdiaSharedFolders.create, ArdiaSharedFolders.watch, ArdiaSharedFolders.revealFolder and ArdiaShell.pickFolder come only through the trusted shell bridge and run off the UI thread; every root path is absolute, at most 4 KiB and without NUL (ValidAbsolutePath), and an identity is a whole device and inode in 0..2^53-1 (IdentityFrom), so a folder that was replaced by a symlink or another directory is refused (OpenRoot opens with O_NOFOLLOW and compares fstat's device and inode); folder changes are at most 16 MiB of JSON and 20000 ops, each op's path is relative, at most 32 parts of 1-255 bytes with no ., .. or NUL (RelativeParts), every directory on the way is opened with openat(O_NOFOLLOW) and a symlink at the end is refused (ParentOf), only .webloc links and .ardia-folder.json are written (WritableName), only links and folders are renamed and only links are deleted, a new link lands with renameatx_np(RENAME_EXCL) from a same-volume staging directory, a changed or deleted link is replaced only while its URL is the one Ardia last saw, a directory is removed only when it holds nothing but housekeeping files, and every write goes through NSFileCoordinator, as SharedFolderDirectory.swift does; a scan stops at 20000 entries or 32 MiB of links and 8 levels; resolve refuses system and home folders (RefusedFolder) and create cleans the name like the Mac app (FolderName); at most 256 folders are watched (WatchedPathsValid) and FSEvents changes are matched to them by path (WatchHit); the folder panel and Finder are never shown in background mode. tests/shared_folders_policy_test.cc hostile_sinks runs traversal, NUL bytes, huge paths and non-finite identities through each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#RelativeParts",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#IdentityFrom",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#ValidAbsolutePath",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#WritableName",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#RefusedFolder",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#FolderName",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders_policy.h#WatchedPathsValid",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders.mm#OpenRoot",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders.mm#ParentOf",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shared_folders.mm#ApplyOne",
+    "scripts/mac/webui-engine/tests/shared_folders_policy_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#shared_folder_guards"
+   ],
+   "detected": false
+  },
+  {
    "id": "pasteboard:addressFieldPaste",
    "source": "other-app",
    "guard": "The address and command bar field editor pastes only text: the pasteboard's plain string or URL, else the first item's file: URL (any other scheme under public.file-url is ignored) or the plain text of its RTFD, RTF or HTML with attachment characters removed; RCTUISingleLinePastedText folds every line terminator (CR, LF, VT, FF, NEL, U+2028, U+2029) into one line before the text reaches the field, an image alone beeps, and nothing is opened until the user presses Return through the omnibox's own resolve",

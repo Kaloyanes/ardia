@@ -37,6 +37,12 @@ if (is_official_build) {
       "ac_mac_popover.h",
       "ac_mac_popover.mm",
       "ac_mac_popover_policy.h",
+      "ac_mac_share.h",
+      "ac_mac_share.mm",
+      "ac_mac_share_policy.h",
+      "ac_mac_shared_folders.h",
+      "ac_mac_shared_folders.mm",
+      "ac_mac_shared_folders_policy.h",
       "ac_mac_shell_bridge.cc",
       "ac_mac_shell_bridge.h",
       "ac_mac_shell_calls.mm",
@@ -58,10 +64,14 @@ if (is_official_build) {
       "//base",
       "//chrome/browser",
       "//chrome/browser/profiles:profile",
+      "//chrome/common",
+      "//components/lens:lens_mojo",
+      "//components/renderer_context_menu",
       "//components/sessions",
       "//components/version_info",
       "//components/zoom",
       "//content/public/browser",
+      "//mojo/public/cpp/bindings",
       "//services/network/public/mojom",
       "//skia",
       "//third_party/blink/public/common",
@@ -73,6 +83,7 @@ if (is_official_build) {
     ]
     frameworks = [
       "AppKit.framework",
+      "CoreServices.framework",
       "QuartzCore.framework",
     ]
   }
