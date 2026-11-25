@@ -433,3 +433,36 @@ test("a page inside a moving Peek stage stays attached where it was, is not re-s
     s.restore();
   }
 });
+
+test("an older viewport the host acknowledges after a newer one was queued or refused still records the rect the native page holds", async () => {
+  const { watchPageBelowShell } = await import("./shims/web/HostWebView.tsx");
+  let x = 300;
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(x, 50, 600, 500), contains: (node) => node === page };
+  const s = stage({ elementFromPoint: () => page });
+  try {
+    const replies = [];
+    const recorded = [];
+    const shown = [];
+    const regions = { setPage: (_slot, visible) => shown.push(visible), refresh() {}, dropPage() {}, pageViewport: (_slot, rect) => recorded.push(rect), ...cover() };
+    const tab = { identity: {}, disposed: false, viewport: (viewport) => new Promise((resolve, reject) => replies.push({ viewport, resolve, reject })) };
+    const stop = watchPageBelowShell(page, regions, () => true, () => tab);
+    assert.equal(replies.length, 1);
+    x = 320;
+    s.mutate();
+    assert.equal(replies.length, 2);
+    replies[1].reject(new Error("refused"));
+    replies[0].resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(recorded, [{ x: 300, y: 50, width: 600, height: 500 }]);
+    assert.deepEqual(shown, [true]);
+    stop();
+    const late = { identity: {}, disposed: false, viewport: () => new Promise((resolve) => replies.push({ resolve })) };
+    const stopLate = watchPageBelowShell(page, regions, () => true, () => late);
+    stopLate();
+    replies.at(-1).resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(recorded.length, 1, "an ack after unmount records nothing");
+  } finally {
+    s.restore();
+  }
+});

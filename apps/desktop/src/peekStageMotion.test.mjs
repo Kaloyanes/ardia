@@ -240,3 +240,28 @@ test("an animator whose run throws synchronously still releases the hold", async
   await tick();
   assert.deepEqual(released, ["hold", "release"]);
 });
+
+test("a card animation cancelled because the scrim's animate() threw never surfaces an unhandled rejection", async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const card = {
+      setAttribute() {},
+      removeAttribute() {},
+      animate() {
+        let reject;
+        const finished = new Promise((_resolve, rejectFinished) => (reject = rejectFinished));
+        return { finished, cancel: () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })) };
+      },
+    };
+    const scrim = { setAttribute() {}, removeAttribute() {}, animate() { throw new Error("animate failed"); } };
+    const animator = createWebAnimator(() => fakeNode(), () => card, () => scrim, () => {});
+    await assert.rejects(animator.run("enter", stageMotion("enter", geometry, false)), /animate failed/);
+    await tick();
+    await tick();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});

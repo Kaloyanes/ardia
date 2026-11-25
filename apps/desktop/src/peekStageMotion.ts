@@ -75,7 +75,9 @@ export function createWebAnimator(root: () => AnimatedNode | null, card: () => A
   const play = (node: AnimatedNode | null, frames: StageFrame[], motion: StageMotion) => {
     if (!node?.animate) return null;
     const keyframes = frames.length === 1 ? [frames[0]!, frames[0]!] : frames;
-    return node.animate(keyframes as Keyframe[], { duration: motion.duration, easing: motion.easing, fill: "forwards" });
+    const animation = node.animate(keyframes as Keyframe[], { duration: motion.duration, easing: motion.easing, fill: "forwards" });
+    animation.finished.catch(() => {});
+    return animation;
   };
   return {
     hold() {

@@ -125,7 +125,11 @@ export function watchPageBelowShell(node: HTMLElement, regions: InputRegionsRegi
   let last = "";
   let shown = false;
   let revision = 0;
+  let acked = 0;
+  let stopped = false;
+  let wantedVisible = false;
   const stop = watchTabViewport(node, visible, (viewport, coveredByShell) => {
+    wantedVisible = viewport.visible;
     if (!viewport.visible) regions.setPage(node, false, radii, cardRadii);
     if (shown && coveredByShell) covered?.();
     shown = viewport.visible;
@@ -138,15 +142,18 @@ export function watchPageBelowShell(node: HTMLElement, regions: InputRegionsRegi
     last = json;
     const mine = ++revision;
     void current.viewport(sent).then(() => {
-      if (mine !== revision || current.disposed || !viewport.visible) return;
+      if (stopped || current.disposed || mine <= acked) return;
+      acked = mine;
+      if (!viewport.visible) return;
       regions.pageViewport(node, viewport.rect);
-      regions.setPage(node, true, radii, cardRadii);
+      if (wantedVisible) regions.setPage(node, true, radii, cardRadii);
     }, (error) => {
       if (mine === revision) last = "";
       reportHostError(error);
     });
   }, regions, clipToAncestors);
   return () => {
+    stopped = true;
     revision++;
     stop();
     regions.dropPage(node);
