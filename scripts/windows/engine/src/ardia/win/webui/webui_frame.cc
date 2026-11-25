@@ -76,6 +76,15 @@ bool IsMouseButtonMessage(UINT message) {
          (message >= WM_NCXBUTTONDOWN && message <= WM_NCXBUTTONDBLCLK);
 }
 
+bool PrimaryButtonDownOrQueued() {
+  const int primary =
+      ::GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+  if ((::GetAsyncKeyState(primary) & 0x8000) != 0) {
+    return true;
+  }
+  return (HIWORD(::GetQueueStatus(QS_MOUSEBUTTON)) & QS_MOUSEBUTTON) != 0;
+}
+
 bool IsMaximizeButtonInput(UINT message, WPARAM hit) {
   return hit == HTMAXBUTTON &&
          (message == WM_NCMOUSEMOVE || message == WM_NCLBUTTONDOWN ||
@@ -246,7 +255,8 @@ bool CaptionInput::PointerOnMaximizeButton() const {
 }
 
 void CaptionInput::Track(bool on_max_button) {
-  Publish(state_.OnNcMouseMove(on_max_button));
+  Publish(
+      state_.OnPointerChecked(on_max_button, PrimaryButtonDownOrQueued()));
 }
 
 void CaptionInput::Press() {
@@ -269,7 +279,8 @@ void CaptionInput::LeaveReported() {
     StopWatchingPointer();
     return;
   }
-  Publish(state_.OnLeaveReported(PointerOnMaximizeButton()));
+  Publish(state_.OnPointerChecked(PointerOnMaximizeButton(),
+                                  PrimaryButtonDownOrQueued()));
 }
 
 void CaptionInput::CancelPress() {
@@ -311,9 +322,9 @@ bool CaptionInput::FilterMessage(HWND hwnd,
     case WM_NCMOUSELEAVE:
     case WM_MOUSEMOVE:
     case WM_MOUSELEAVE:
-    case WM_CAPTURECHANGED:
       LeaveReported();
       return false;
+    case WM_CAPTURECHANGED:
     case WM_CANCELMODE:
       CancelPress();
       return false;

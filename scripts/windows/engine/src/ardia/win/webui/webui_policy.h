@@ -628,10 +628,11 @@ class MaximizeButtonStateMachine {
  public:
   constexpr MaximizeButtonVisualState state() const { return state_; }
 
-  constexpr bool OnNcMouseMove(bool on_max_button) {
+  constexpr bool OnPointerChecked(bool on_max_button,
+                                  bool primary_button_down) {
     return Apply(MaximizeButtonVisualState{
         .hovered = on_max_button,
-        .pressed = on_max_button ? state_.pressed : false,
+        .pressed = on_max_button && primary_button_down && state_.pressed,
     });
   }
 
@@ -651,10 +652,6 @@ class MaximizeButtonStateMachine {
         .hovered = on_max_button,
         .pressed = false,
     });
-  }
-
-  constexpr bool OnLeaveReported(bool pointer_on_max_button) {
-    return pointer_on_max_button ? false : Reset();
   }
 
   constexpr bool OnPressCancelled(bool pointer_on_max_button) {
