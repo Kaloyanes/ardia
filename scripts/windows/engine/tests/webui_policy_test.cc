@@ -210,6 +210,34 @@ void TestDownloadCommands() {
   assert(command_routes == 4);
 }
 
+void TestShellSelection() {
+  static_assert(WebUIShellSelected(L"", L"", false, false));
+  static_assert(WebUIShellSelected(L"", L"webui", false, false));
+  static_assert(WebUIShellSelected(L"", L"webui", false, true));
+  static_assert(!WebUIShellSelected(L"", L"rnw", false, false));
+  static_assert(!WebUIShellSelected(L"", L"rnw", false, true));
+  static_assert(!WebUIShellSelected(L"", L"", false, true));
+  static_assert(!WebUIShellSelected(L"", L"", true, false));
+  static_assert(!WebUIShellSelected(L"", L"", true, true));
+  static_assert(WebUIShellSelected(L"", L"webui", true, false));
+  static_assert(WebUIShellSelected(L"", L"webui", true, true));
+  static_assert(!WebUIShellSelected(L"", L"rnw", true, false));
+  assert(WebUIShellSelected(L"", L"RNW", false, false));
+  assert(!WebUIShellSelected(L"", L"RNW", false, true));
+  assert(!WebUIShellSelected(L"", L"RNW", true, false));
+  assert(WebUIShellSelected(L"", L"rnw ", false, false));
+  assert(WebUIShellSelected(L"", L" rnw", false, false));
+  assert(WebUIShellSelected(L"", L"WebUI", false, false));
+  assert(!WebUIShellSelected(L"", L"WebUI", false, true));
+  assert(!WebUIShellSelected(L"", L"WebUI", true, false));
+  assert(WebUIShellSelected(L"", L"anything", false, false));
+  assert(!WebUIShellSelected(L"renderer", L"", false, false));
+  assert(!WebUIShellSelected(L"gpu-process", L"webui", false, false));
+  assert(!WebUIShellSelected(L"crashpad-handler", L"rnw", false, true));
+  assert(!WebUIShellSelected(L"utility", L"webui", false, true));
+  assert(!WebUIShellSelected(L"utility", L"webui", true, false));
+}
+
 void TestStartupMigrationGate() {
   using Outcome = StartupMigrationOutcome;
   static_assert(kStartupMigrationTimeoutMs == 60000);
@@ -440,38 +468,106 @@ void TestDesktopTelemetryPolicy() {
 }
 
 void TestMaximizeButtonStateMachine() {
+  using State = MaximizeButtonVisualState;
   MaximizeButtonStateMachine machine;
-  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(machine.state() == (State{false, false}));
 
-  assert(!machine.OnNcMouseMove(false));
-  assert(machine.OnNcMouseMove(true));
-  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
-  assert(!machine.OnNcMouseMove(true));
+  assert(!machine.OnPointerChecked(false, false));
+  assert(machine.OnPointerChecked(true, false));
+  assert(machine.state() == (State{true, false}));
+  assert(!machine.OnPointerChecked(true, true));
+  assert(machine.state() == (State{true, false}));
 
   assert(machine.OnNcLeftButtonDown(true));
-  assert(machine.state() == (MaximizeButtonVisualState{true, true}));
+  assert(machine.state() == (State{true, true}));
   assert(!machine.OnNcLeftButtonDown(true));
-
-  assert(!machine.OnNcMouseMove(true));
-  assert(machine.state() == (MaximizeButtonVisualState{true, true}));
+  assert(!machine.OnPointerChecked(true, true));
+  assert(machine.state() == (State{true, true}));
 
   assert(machine.OnNcLeftButtonUp(true));
-  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
+  assert(machine.state() == (State{true, false}));
   assert(!machine.OnNcLeftButtonUp(true));
 
   assert(machine.OnNcMouseLeave());
-  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(machine.state() == (State{false, false}));
   assert(!machine.OnNcMouseLeave());
 
   assert(machine.OnNcLeftButtonDown(true));
-  assert(machine.OnNcMouseMove(false));
-  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(machine.OnNcLeftButtonUp(false));
+  assert(machine.state() == (State{false, false}));
 
-  assert(machine.OnNcMouseMove(true));
+  assert(machine.OnPointerChecked(true, false));
   assert(machine.OnNcLeftButtonDown(true));
   assert(machine.Reset());
-  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(machine.state() == (State{false, false}));
   assert(!machine.Reset());
+}
+
+void TestMaximizeCaptureLossKeepsHoverOnly() {
+  using State = MaximizeButtonVisualState;
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnPressCancelled(true));
+  assert(machine.state() == (State{true, false}));
+  assert(!machine.OnPressCancelled(true));
+
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnPressCancelled(false));
+  assert(machine.state() == (State{false, false}));
+  assert(!machine.OnPressCancelled(false));
+}
+
+void TestMaximizeReleaseOutsideThenReturn() {
+  using State = MaximizeButtonVisualState;
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(!machine.OnPointerChecked(true, true));
+  assert(machine.state() == (State{true, true}));
+  assert(machine.OnPointerChecked(true, false));
+  assert(machine.state() == (State{true, false}));
+  assert(!machine.OnPointerChecked(true, true));
+  assert(machine.state() == (State{true, false}));
+}
+
+void TestMaximizeLeavingClearsBoth() {
+  using State = MaximizeButtonVisualState;
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnPointerChecked(false, true));
+  assert(machine.state() == (State{false, false}));
+  assert(machine.OnPointerChecked(true, true));
+  assert(machine.state() == (State{true, false}));
+  assert(machine.OnPointerChecked(false, false));
+  assert(machine.state() == (State{false, false}));
+}
+
+void TestMaximizeDeactivationClearsBoth() {
+  using State = MaximizeButtonVisualState;
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.Reset());
+  assert(machine.state() == (State{false, false}));
+  assert(machine.OnPointerChecked(true, false));
+  assert(machine.Reset());
+  assert(machine.state() == (State{false, false}));
+}
+
+void TestMaximizeClick() {
+  assert(MaximizeClickCompletes(true, true, 0));
+  assert(MaximizeClickCompletes(true, true, kMaximizeClickLimitMs));
+  assert(!MaximizeClickCompletes(true, true, kMaximizeClickLimitMs + 1));
+  assert(!MaximizeClickCompletes(false, true, 10));
+  assert(!MaximizeClickCompletes(true, false, 10));
+  assert(!MaximizeClickCompletes(true, true, 0xffffffffu));
+
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnPointerChecked(true, false));
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(!machine.OnPointerChecked(true, true));
+  const bool was_pressed = machine.state().pressed;
+  assert(machine.OnNcLeftButtonUp(true));
+  assert(MaximizeClickCompletes(was_pressed, true, 60));
+  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
 }
 
 }
@@ -484,9 +580,15 @@ int main() {
   TestCanonicalPathContainment();
   TestStartupMigrationPolicy();
   TestStartupMigrationGate();
+  TestShellSelection();
   TestWinRenameHelpers();
   TestDesktopTelemetryPolicy();
   TestMaximizeButtonStateMachine();
+  TestMaximizeCaptureLossKeepsHoverOnly();
+  TestMaximizeReleaseOutsideThenReturn();
+  TestMaximizeLeavingClearsBoth();
+  TestMaximizeDeactivationClearsBoth();
+  TestMaximizeClick();
   std::cout << "webui_policy_test: all assertions passed\n";
   return 0;
 }
