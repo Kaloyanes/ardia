@@ -500,6 +500,48 @@ void TestMaximizeButtonStateMachine() {
   assert(machine.Reset());
   assert(machine.state() == (MaximizeButtonVisualState{false, false}));
   assert(!machine.Reset());
+
+  assert(machine.OnNcMouseMove(true));
+  assert(!machine.OnLeaveReported(true));
+  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(!machine.OnLeaveReported(true));
+  assert(machine.state() == (MaximizeButtonVisualState{true, true}));
+  assert(machine.OnLeaveReported(false));
+  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(!machine.OnLeaveReported(false));
+
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnPressCancelled(true));
+  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
+  assert(!machine.OnPressCancelled(true));
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnPressCancelled(false));
+  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+  assert(!machine.OnPressCancelled(false));
+
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(machine.OnNcLeftButtonUp(false));
+  assert(machine.state() == (MaximizeButtonVisualState{false, false}));
+}
+
+void TestMaximizeClick() {
+  assert(MaximizeClickCompletes(true, true, 0));
+  assert(MaximizeClickCompletes(true, true, kMaximizeClickLimitMs));
+  assert(!MaximizeClickCompletes(true, true, kMaximizeClickLimitMs + 1));
+  assert(!MaximizeClickCompletes(false, true, 10));
+  assert(!MaximizeClickCompletes(true, false, 10));
+  assert(!MaximizeClickCompletes(true, true, 0xffffffffu));
+
+  MaximizeButtonStateMachine machine;
+  assert(machine.OnNcMouseMove(true));
+  assert(!machine.OnLeaveReported(true));
+  assert(machine.OnNcLeftButtonDown(true));
+  assert(!machine.OnLeaveReported(true));
+  const bool was_pressed = machine.state().pressed;
+  assert(machine.OnNcLeftButtonUp(true));
+  assert(MaximizeClickCompletes(was_pressed, true, 60));
+  assert(machine.state() == (MaximizeButtonVisualState{true, false}));
 }
 
 }
@@ -516,6 +558,7 @@ int main() {
   TestWinRenameHelpers();
   TestDesktopTelemetryPolicy();
   TestMaximizeButtonStateMachine();
+  TestMaximizeClick();
   std::cout << "webui_policy_test: all assertions passed\n";
   return 0;
 }
