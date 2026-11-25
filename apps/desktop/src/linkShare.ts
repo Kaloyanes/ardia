@@ -33,6 +33,8 @@ export const setShareServices = (next: readonly ShareService[], refresh: (() => 
   refreshServices = refresh;
 };
 export const shareServices = (): readonly ShareService[] => services;
+export const shareServicesListed = () => refreshServices !== null;
+export const refreshShareServices = () => void refreshServices?.();
 export const isLinkShareService = (service: unknown): service is "copy" | "email" => service === COPY || service === EMAIL;
 
 const unavailable = () => Object.assign(new Error("Sharing is unavailable in this window"), { code: "ERR_UNAVAILABLE" });

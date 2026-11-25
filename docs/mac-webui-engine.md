@@ -77,8 +77,11 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
     and a shell reload or window close closes that window's pickers.
   - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
-    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder; a later instance
-    deletes the folders of processes that have exited and leaves running ones alone.
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
+    binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
+    deleted. Each instance holds an advisory `flock` on its folder's `.lock`; a later instance deletes only
+    recognized folders whose lock it can take (or that have no lock and whose process is gone), never anything
+    else. Every picker and service callback is matched by sender. File › Share always ends with More….
   - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
     places them, through a dev-only `RenderViewContextMenuObserver` hook in
     `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`

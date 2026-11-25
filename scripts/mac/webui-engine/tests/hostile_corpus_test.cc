@@ -289,6 +289,10 @@ TEST(share_guards) {
     share::IssuedFiles<std::string> issued;
     issued.Issue("/tmp/ardia-images/1-a/image.png", "w1");
     CHECK(!issued.Take(text, "w1") || text == "/tmp/ardia-images/1-a/image.png");
+    CHECK(!issued.Take("/tmp/ardia-images/1-a/image.png", text) || text == "w1");
+    if (share::SweepsInstance(share::InstancePid(text).has_value(), false, share::InstanceLock::kFree, true)) {
+      CHECK(share::InstancePid(text).has_value());
+    }
   }
   CHECK(share::ClassifyUrl("https://ardia.dev/") == share::UrlKind::kWeb);
 }

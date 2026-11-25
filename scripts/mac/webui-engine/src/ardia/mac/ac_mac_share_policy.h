@@ -217,50 +217,72 @@ class KeyedOwner {
   std::map<Key, std::unique_ptr<Value>> entries_;
 };
 
+struct Issuance {
+  bool issued = false;
+  std::optional<std::string> evicted;
+};
+
 template <typename Owner>
 class IssuedFiles {
  public:
-  std::optional<std::string> Issue(std::string path, Owner owner) {
-    Forget(path);
+  Issuance Issue(std::string path, Owner owner) {
+    if (entries_.contains(path)) return Issuance{};
+    std::optional<std::string> evicted;
+    if (entries_.size() >= kMaxIssuedFiles) {
+      const auto waiting = std::find_if(order_.begin(), order_.end(),
+                                        [this](const std::string& held) { return !entries_.at(held).taken; });
+      if (waiting == order_.end()) return Issuance{};
+      evicted = *waiting;
+      Release(*evicted);
+    }
     order_.push_back(path);
-    owners_[std::move(path)] = std::move(owner);
-    if (order_.size() <= kMaxIssuedFiles) return std::nullopt;
-    std::string evicted = std::move(order_.front());
-    order_.pop_front();
-    owners_.erase(evicted);
-    return evicted;
+    entries_[std::move(path)] = Entry{std::move(owner), false};
+    return Issuance{true, std::move(evicted)};
   }
 
-  std::optional<Owner> Take(std::string_view path, const Owner& owner) {
-    const auto found = owners_.find(std::string(path));
-    if (found == owners_.end() || !(found->second == owner)) return std::nullopt;
-    Owner taken = std::move(found->second);
-    Forget(std::string(path));
-    return taken;
+  bool Take(std::string_view path, const Owner& owner) {
+    const auto found = entries_.find(std::string(path));
+    if (found == entries_.end() || found->second.taken || !(found->second.owner == owner)) return false;
+    found->second.taken = true;
+    return true;
   }
 
-  bool Holds(std::string_view path) const { return owners_.contains(std::string(path)); }
+  bool Holds(std::string_view path) const { return entries_.contains(std::string(path)); }
+
+  bool Release(std::string_view path) {
+    const std::string key(path);
+    std::erase(order_, key);
+    return entries_.erase(key) > 0;
+  }
 
   std::vector<std::string> ReleaseOwner(const Owner& owner) {
     std::vector<std::string> released;
-    for (const auto& [path, held] : owners_) {
-      if (held == owner) released.push_back(path);
+    for (const auto& [path, entry] : entries_) {
+      if (entry.owner == owner) released.push_back(path);
     }
-    for (const std::string& path : released) Forget(path);
+    for (const std::string& path : released) Release(path);
     return released;
   }
 
-  std::size_t size() const { return owners_.size(); }
+  std::size_t size() const { return entries_.size(); }
 
  private:
-  void Forget(const std::string& path) {
-    owners_.erase(path);
-    std::erase(order_, path);
-  }
+  struct Entry {
+    Owner owner;
+    bool taken = false;
+  };
 
-  std::map<std::string, Owner> owners_;
+  std::map<std::string, Entry> entries_;
   std::deque<std::string> order_;
 };
+
+enum class InstanceLock { kMissing, kHeld, kFree };
+
+inline bool SweepsInstance(bool recognized, bool own, InstanceLock lock, bool process_alive) {
+  if (!recognized || own) return false;
+  if (lock == InstanceLock::kFree) return true;
+  return lock == InstanceLock::kMissing && !process_alive;
+}
 
 inline bool NonceCharacter(char c) {
   return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-';

@@ -307,12 +307,11 @@ void ShowContextMenu(LiveMenuView live_view,
   for (const ardia_mac::share::Service& service : services) {
     [menu insertItem:[self shareItem:base::SysUTF8ToNSString(service.menu_title) service:service.title] atIndex:at++];
   }
-  if (services.empty()) {
-    return;
+  if (!services.empty()) {
+    NSMenuItem* gap = [NSMenuItem separatorItem];
+    gap.tag = ardia_mac::kShareServiceTag;
+    [menu insertItem:gap atIndex:at];
   }
-  NSMenuItem* gap = [NSMenuItem separatorItem];
-  gap.tag = ardia_mac::kShareServiceTag;
-  [menu insertItem:gap atIndex:at];
   NSMenuItem* more = [self shareItem:@"More\u2026" service:ardia_mac::menu::kShareMoreService];
   more.image = [NSImage imageWithSystemSymbolName:@"ellipsis.circle" accessibilityDescription:nil];
   [menu addItem:more];

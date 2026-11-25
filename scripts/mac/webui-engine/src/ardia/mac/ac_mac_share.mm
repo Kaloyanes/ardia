@@ -3,7 +3,9 @@
 #import <AppKit/AppKit.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -22,6 +24,7 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -50,9 +53,10 @@
 #include "url/gurl.h"
 
 namespace ardia_mac::share {
-void PickerChose(std::uint64_t request, NSSharingServicePicker* picker, bool cancelled);
-void ServiceFinished(std::uint64_t request);
-NSWindow* SourceWindow(std::uint64_t request);
+bool PickerOwns(std::uint64_t request, NSSharingServicePicker* picker, NSSharingService* service);
+void PickerChose(std::uint64_t request, NSSharingServicePicker* picker, NSSharingService* service);
+void ServiceFinished(std::uint64_t request, NSSharingService* service);
+NSWindow* SourceWindow(std::uint64_t request, NSSharingService* service);
 }
 
 @interface ArdiaMacShareRequest : NSObject <NSSharingServicePickerDelegate, NSSharingServiceDelegate>
@@ -73,28 +77,28 @@ NSWindow* SourceWindow(std::uint64_t request);
 
 - (id<NSSharingServiceDelegate>)sharingServicePicker:(NSSharingServicePicker*)picker
                            delegateForSharingService:(NSSharingService*)service {
-  return self;
+  return ardia_mac::share::PickerOwns(_request, picker, service) ? self : nil;
 }
 
 - (void)sharingServicePicker:(NSSharingServicePicker*)picker
      didChooseSharingService:(NSSharingService*)service {
-  ardia_mac::share::PickerChose(_request, picker, service == nil);
+  ardia_mac::share::PickerChose(_request, picker, service);
 }
 
 - (void)sharingService:(NSSharingService*)service didShareItems:(NSArray*)items {
-  ardia_mac::share::ServiceFinished(_request);
+  ardia_mac::share::ServiceFinished(_request, service);
 }
 
 - (void)sharingService:(NSSharingService*)service
     didFailToShareItems:(NSArray*)items
                   error:(NSError*)error {
-  ardia_mac::share::ServiceFinished(_request);
+  ardia_mac::share::ServiceFinished(_request, service);
 }
 
 - (NSWindow*)sharingService:(NSSharingService*)service
     sourceWindowForShareItems:(NSArray*)items
           sharingContentScope:(NSSharingContentScope*)scope {
-  return ardia_mac::share::SourceWindow(_request);
+  return ardia_mac::share::SourceWindow(_request, service);
 }
 
 @end
@@ -111,6 +115,7 @@ constexpr int kShareFirst = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + 890;
 constexpr int kLargestSharedImage = 8192;
 constexpr int kMaxSharedImageBytes = 64 * 1024 * 1024;
 constexpr char kSharedImagesFolder[] = "ardia-webui-shared-images";
+constexpr char kInstanceLockName[] = ".lock";
 constexpr char kSharingSettings[] =
     "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.share-services";
 
@@ -126,6 +131,7 @@ struct Request {
   std::string owner;
   ArdiaMacShareRequest* delegate = nil;
   NSSharingServicePicker* picker = nil;
+  NSSharingService* service = nil;
   __weak NSWindow* window = nil;
   std::optional<Done> done;
   std::optional<base::FilePath> file;
@@ -173,9 +179,11 @@ bool InInstanceDirectory(const std::string& path) {
 }
 
 void RemoveTemporary(const base::FilePath& path) {
-  if (!InInstanceDirectory(StandardPath(path.value()))) {
+  const std::string standard = StandardPath(path.value());
+  if (!InInstanceDirectory(standard)) {
     return;
   }
+  Issued().Release(standard);
   base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
                              base::BindOnce(base::IgnoreResult(&base::DeleteFile), path));
 }
@@ -421,7 +429,8 @@ void ShareLink(ShellHostView& caller, const base::ListValue* values, Done done) 
   const std::optional<share_policy::Anchor> anchor = AnchorAt(values, 3);
   const std::string description = "url=" + url + " title=\"" + title.value_or("") + "\"";
   if (kind == share_policy::UrlKind::kFile) {
-    std::optional<SharedFile> file = ShareableFile(link, caller.window_id());
+    std::optional<SharedFile> file =
+        host == &caller ? ShareableFile(link, host->window_id()) : std::nullopt;
     if (!file) {
       return std::move(done).Run(
           false, Failure("ERR_SHARE_REQUEST", "Only shared folders and images this window took can be shared from disk"));
@@ -477,6 +486,7 @@ void ShareVia(ShellHostView& caller, const base::ListValue* values, Done done) {
   request.owner = host->window_id();
   request.delegate = [[ArdiaMacShareRequest alloc] initWithRequest:id];
   request.window = ShellView(host).window;
+  request.service = match;
   match.delegate = request.delegate;
   match.subject = title ? base::SysUTF8ToNSString(*title) : nil;
   Requests()[id] = std::move(request);
@@ -565,12 +575,45 @@ std::optional<base::ListValue> ShellAnchor(ShellHostView* host, content::WebCont
   return base::ListValue().Append(x).Append(y).Append(1).Append(1);
 }
 
-void Deliver(content::WebContents* contents,
+struct PageOrigin {
+  std::string window_id;
+  int binding = 0;
+  std::string claim;
+  uint64_t generation = 0;
+};
+
+std::optional<PageOrigin> OriginOf(content::WebContents* contents) {
+  PageBinding* binding = nullptr;
+  ShellHostView* host = contents ? HostOfPage(contents, &binding) : nullptr;
+  if (!host || !binding) {
+    return std::nullopt;
+  }
+  return PageOrigin{host->window_id(), binding->id(), binding->claim, binding->renderer_generation};
+}
+
+ShellHostView* StillBound(const PageOrigin& origin, content::WebContents* contents, PageBinding** binding) {
+  for (ShellHostView* host : Hosts()) {
+    if (host->window_id() != origin.window_id) {
+      continue;
+    }
+    PageBinding* found = contents ? host->BindingForContents(contents) : nullptr;
+    if (found && found->id() == origin.binding && !found->claim.empty() && found->claim == origin.claim &&
+        found->renderer_generation == origin.generation) {
+      *binding = found;
+      return host;
+    }
+    return nullptr;
+  }
+  return nullptr;
+}
+
+void Deliver(const PageOrigin& origin,
+             content::WebContents* contents,
              base::DictValue share,
              const gfx::PointF& point,
              std::optional<base::FilePath> file) {
   PageBinding* binding = nullptr;
-  ShellHostView* host = contents ? HostOfPage(contents, &binding) : nullptr;
+  ShellHostView* host = StillBound(origin, contents, &binding);
   if (!host || !binding) {
     if (file) {
       RemoveTemporary(*file);
@@ -579,11 +622,16 @@ void Deliver(content::WebContents* contents,
   }
   if (file) {
     const std::string issued = StandardPath(file->value());
-    if (std::optional<std::string> evicted = Issued().Issue(issued, host->window_id())) {
-      RemoveTemporary(base::FilePath(*evicted));
+    const share_policy::Issuance issuance = Issued().Issue(issued, host->window_id());
+    if (issuance.evicted) {
+      RemoveTemporary(base::FilePath(*issuance.evicted));
     }
-    share.Set("fileUrl",
-              base::SysNSStringToUTF8([NSURL fileURLWithPath:base::SysUTF8ToNSString(issued)].absoluteString));
+    if (issuance.issued) {
+      share.Set("fileUrl",
+                base::SysNSStringToUTF8([NSURL fileURLWithPath:base::SysUTF8ToNSString(issued)].absoluteString));
+    } else {
+      RemoveTemporary(*file);
+    }
   }
   base::DictValue data;
   data.Set("command", "share");
@@ -597,7 +645,8 @@ void Deliver(content::WebContents* contents,
   host->Emit("ArdiaWebView", base::NumberToString(binding->id()), base::Value(std::move(delivery)));
 }
 
-void DeliverImage(base::WeakPtr<content::WebContents> contents,
+void DeliverImage(PageOrigin origin,
+                  base::WeakPtr<content::WebContents> contents,
                   std::unique_ptr<ChromeRenderFrame> frame,
                   GURL source,
                   std::string title,
@@ -617,7 +666,7 @@ void DeliverImage(base::WeakPtr<content::WebContents> contents,
     share.Set("url", source.spec());
   }
   if (image.empty() || image.size() > static_cast<size_t>(kMaxSharedImageBytes)) {
-    return Deliver(contents.get(), std::move(share), point, std::nullopt);
+    return Deliver(origin, contents.get(), std::move(share), point, std::nullopt);
   }
   const base::FilePath path = InstanceDirectory().Append(base::Uuid::GenerateRandomV4().AsLowercaseString() + "." +
                                                          std::string(share_policy::ImageExtension(mime_type)));
@@ -629,21 +678,25 @@ void DeliverImage(base::WeakPtr<content::WebContents> contents,
           },
           path, image),
       base::BindOnce(
-          [](base::WeakPtr<content::WebContents> contents, base::DictValue share, gfx::PointF point,
-             base::FilePath path, bool written) {
+          [](PageOrigin origin, base::WeakPtr<content::WebContents> contents, base::DictValue share,
+             gfx::PointF point, base::FilePath path, bool written) {
             if (!contents) {
               return RemoveTemporary(path);
             }
-            Deliver(contents.get(), std::move(share), point, written ? std::optional(path) : std::nullopt);
+            Deliver(origin, contents.get(), std::move(share), point, written ? std::optional(path) : std::nullopt);
+            if (!written) {
+              RemoveTemporary(path);
+            }
           },
-          contents, std::move(share), point, path));
+          std::move(origin), contents, std::move(share), point, path));
 }
 
 void ShareFromMenu(content::RenderFrameHost& frame,
                    const content::ContextMenuParams& params,
                    share_policy::PageShare share) {
   content::WebContents* contents = content::WebContents::FromRenderFrameHost(&frame);
-  if (!contents) {
+  std::optional<PageOrigin> origin = OriginOf(contents);
+  if (!origin) {
     return;
   }
   const gfx::PointF point(params.x, params.y);
@@ -672,12 +725,12 @@ void ShareFromMenu(content::RenderFrameHost& frame,
       (*requester)->RequestImageForContextNode(
           0, gfx::Size(kLargestSharedImage, kLargestSharedImage), chrome::mojom::ImageFormat::ORIGINAL,
           chrome::mojom::kDefaultQuality,
-          base::BindOnce(&DeliverImage, contents->GetWeakPtr(), std::move(remote), params.src_url,
+          base::BindOnce(&DeliverImage, std::move(*origin), contents->GetWeakPtr(), std::move(remote), params.src_url,
                          base::UTF16ToUTF8(!params.alt_text.empty() ? params.alt_text : params.title_text), point));
       return;
     }
   }
-  Deliver(contents, std::move(item), point, std::nullopt);
+  Deliver(*origin, contents, std::move(item), point, std::nullopt);
 }
 
 class PageShareObserver : public RenderViewContextMenuObserver {
@@ -761,18 +814,36 @@ void PageMenuDestroyed(RenderViewContextMenuBase* menu) {
   MenuObservers().Release(menu);
 }
 
-void SweepStaleInstances(base::FilePath root, base::FilePath own) {
-  base::FileEnumerator entries(root, false, base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
+share_policy::InstanceLock LockOf(const base::FilePath& directory) {
+  base::ScopedFD fd(open(directory.Append(kInstanceLockName).value().c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+  if (!fd.is_valid()) {
+    return errno == ENOENT ? share_policy::InstanceLock::kMissing : share_policy::InstanceLock::kHeld;
+  }
+  if (flock(fd.get(), LOCK_EX | LOCK_NB) == 0) {
+    return share_policy::InstanceLock::kFree;
+  }
+  return share_policy::InstanceLock::kHeld;
+}
+
+bool ProcessAlive(long pid) {
+  return kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
+}
+
+void ClaimAndSweep(base::FilePath root, base::FilePath own) {
+  if (base::CreateDirectory(own)) {
+    const int fd = open(own.Append(kInstanceLockName).value().c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0 || flock(fd, LOCK_EX | LOCK_NB) != 0) {
+      Trace("the shared-images lock could not be taken");
+    }
+  }
+  base::FileEnumerator entries(root, false, base::FileEnumerator::DIRECTORIES);
   for (base::FilePath entry = entries.Next(); !entry.empty(); entry = entries.Next()) {
-    if (entry == own) {
-      continue;
-    }
-    if (!entries.GetInfo().IsDirectory()) {
-      base::DeleteFile(entry);
-      continue;
-    }
     const std::optional<long> pid = share_policy::InstancePid(entry.BaseName().value());
-    if (!pid || (kill(static_cast<pid_t>(*pid), 0) != 0 && errno == ESRCH)) {
+    struct stat info = {};
+    const bool directory = lstat(entry.value().c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+    const bool recognized = pid.has_value() && directory;
+    const share_policy::InstanceLock lock = recognized ? LockOf(entry) : share_policy::InstanceLock::kHeld;
+    if (share_policy::SweepsInstance(recognized, entry == own, lock, recognized && ProcessAlive(*pid))) {
       base::DeletePathRecursively(entry);
     }
   }
@@ -780,25 +851,38 @@ void SweepStaleInstances(base::FilePath root, base::FilePath own) {
 
 }
 
-void PickerChose(std::uint64_t id, NSSharingServicePicker* picker, bool cancelled) {
+bool PickerOwns(std::uint64_t id, NSSharingServicePicker* picker, NSSharingService* service) {
   auto found = Requests().find(id);
-  if (found == Requests().end() || found->second.picker != picker) {
+  if (found == Requests().end() || !picker || found->second.picker != picker || !service) {
+    return false;
+  }
+  found->second.service = service;
+  return true;
+}
+
+void PickerChose(std::uint64_t id, NSSharingServicePicker* picker, NSSharingService* service) {
+  auto found = Requests().find(id);
+  if (found == Requests().end() || !picker || found->second.picker != picker) {
     return;
   }
   found->second.picker = nil;
-  if (cancelled) {
+  if (!service) {
     return EndRequest(id);
   }
+  found->second.service = service;
   Settle(found->second);
 }
 
-void ServiceFinished(std::uint64_t id) {
-  EndRequest(id);
+void ServiceFinished(std::uint64_t id, NSSharingService* service) {
+  auto found = Requests().find(id);
+  if (found != Requests().end() && service && found->second.service == service) {
+    EndRequest(id);
+  }
 }
 
-NSWindow* SourceWindow(std::uint64_t id) {
+NSWindow* SourceWindow(std::uint64_t id, NSSharingService* service) {
   auto found = Requests().find(id);
-  return found == Requests().end() ? nil : found->second.window;
+  return found == Requests().end() || !service || found->second.service != service ? nil : found->second.window;
 }
 
 std::vector<Service> LinkServices() {
@@ -867,7 +951,7 @@ void InstallPageMenu() {
   g_ardia_mac_page_menu_observer = &PageMenuObserver;
   g_ardia_mac_page_menu_destroyed = &PageMenuDestroyed;
   base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-                             base::BindOnce(&SweepStaleInstances, SharedImagesRoot(), InstanceDirectory()));
+                             base::BindOnce(&ClaimAndSweep, SharedImagesRoot(), InstanceDirectory()));
 }
 
 }

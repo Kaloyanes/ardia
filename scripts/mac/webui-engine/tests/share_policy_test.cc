@@ -159,20 +159,49 @@ TEST(each_context_menu_owns_its_observer_until_it_is_destroyed) {
 
 TEST(only_issued_images_are_taken_and_only_by_their_window) {
   policy::IssuedFiles<std::string> issued;
-  CHECK(!issued.Issue("/tmp/i/1-a/one.png", "w1"));
-  CHECK(!issued.Issue("/tmp/i/1-a/two.png", "w2"));
+  CHECK(issued.Issue("/tmp/i/1-a/one.png", "w1").issued);
+  CHECK(issued.Issue("/tmp/i/1-a/two.png", "w2").issued);
+  CHECK(!issued.Issue("/tmp/i/1-a/one.png", "w2").issued);
   CHECK(!issued.Take("/tmp/i/1-a/one.png", "w2"));
-  CHECK(issued.Holds("/tmp/i/1-a/one.png"));
-  CHECK(issued.Take("/tmp/i/1-a/one.png", "w1") == std::optional<std::string>("w1"));
+  CHECK(issued.Take("/tmp/i/1-a/one.png", "w1"));
   CHECK(!issued.Take("/tmp/i/1-a/one.png", "w1"));
+  CHECK(issued.Holds("/tmp/i/1-a/one.png"));
   CHECK(!issued.Take("/tmp/i/1-a/never.png", "w1"));
+  CHECK(issued.Release("/tmp/i/1-a/one.png"));
+  CHECK(!issued.Holds("/tmp/i/1-a/one.png"));
   CHECK((issued.ReleaseOwner("w2") == std::vector<std::string>{"/tmp/i/1-a/two.png"}));
   CHECK(issued.size() == 0);
+}
+
+TEST(taken_images_hold_their_slot_until_the_file_is_deleted) {
+  policy::IssuedFiles<std::string> issued;
   for (std::size_t index = 0; index < policy::kMaxIssuedFiles; ++index) {
-    CHECK(!issued.Issue("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1"));
+    CHECK(issued.Issue("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1").issued);
   }
-  CHECK(issued.Issue("/tmp/i/1-a/last.png", "w1") == std::optional<std::string>("/tmp/i/1-a/0.png"));
-  CHECK(issued.size() == policy::kMaxIssuedFiles);
+  CHECK(issued.Take("/tmp/i/1-a/0.png", "w1"));
+  const auto evicting = issued.Issue("/tmp/i/1-a/next.png", "w1");
+  CHECK(evicting.issued && evicting.evicted == std::optional<std::string>("/tmp/i/1-a/1.png"));
+  CHECK(issued.Holds("/tmp/i/1-a/0.png") && issued.size() == policy::kMaxIssuedFiles);
+  for (std::size_t index = 2; index < policy::kMaxIssuedFiles; ++index) {
+    CHECK(issued.Take("/tmp/i/1-a/" + std::to_string(index) + ".png", "w1"));
+  }
+  CHECK(issued.Take("/tmp/i/1-a/next.png", "w1"));
+  const auto refused = issued.Issue("/tmp/i/1-a/full.png", "w1");
+  CHECK(!refused.issued && !refused.evicted && !issued.Holds("/tmp/i/1-a/full.png"));
+  CHECK(issued.Release("/tmp/i/1-a/0.png"));
+  CHECK(issued.Issue("/tmp/i/1-a/full.png", "w1").issued);
+}
+
+TEST(only_exited_instances_are_swept) {
+  using Lock = policy::InstanceLock;
+  CHECK(policy::SweepsInstance(true, false, Lock::kFree, true));
+  CHECK(policy::SweepsInstance(true, false, Lock::kFree, false));
+  CHECK(!policy::SweepsInstance(true, false, Lock::kHeld, false));
+  CHECK(!policy::SweepsInstance(true, false, Lock::kHeld, true));
+  CHECK(policy::SweepsInstance(true, false, Lock::kMissing, false));
+  CHECK(!policy::SweepsInstance(true, false, Lock::kMissing, true));
+  CHECK(!policy::SweepsInstance(true, true, Lock::kFree, false));
+  CHECK(!policy::SweepsInstance(false, false, Lock::kFree, false));
 }
 
 TEST(instance_directories_name_their_process) {

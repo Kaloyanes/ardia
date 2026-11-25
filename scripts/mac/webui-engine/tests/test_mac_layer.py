@@ -233,6 +233,43 @@ class ApplyTests(unittest.TestCase):
                 self.assertEqual((root / path).read_text(), originals[path], path)
             self.assertFalse((root / 'ardia/mac').exists())
 
+    def test_apply_upgrades_an_earlier_page_menu_hook_and_reverts_it(self):
+        target = 'components/renderer_context_menu/render_view_context_menu_base.cc'
+        earlier = ('\n#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
+                   '#include "ardia/mac/ac_mac_hooks.h"  // nogncheck\n\n'
+                   'RenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n'
+                   '    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n#endif\n')
+        with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as fresh_dir, \
+                tempfile.TemporaryDirectory(prefix='ardia-mac-upgrade-') as old_dir:
+            fresh, old = pathlib.Path(fresh_dir), pathlib.Path(old_dir)
+            originals = self.fake_tree(fresh)
+            self.fake_tree(old)
+            self.assertEqual(self.run_apply(fresh).returncode, 0)
+            expected = (fresh / target).read_text()
+            anchor = '#include "url/origin.h"\n'
+            (old / target).write_text(originals[target].replace(anchor, anchor + earlier, 1))
+            stale = self.run_apply(old, '--check')
+            self.assertNotEqual(stale.returncode, 0)
+            upgraded = self.run_apply(old)
+            self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+            text = (old / target).read_text()
+            self.assertEqual(text, expected)
+            self.assertEqual(text.count('(*g_ardia_mac_page_menu_observer)('), 1)
+            self.assertEqual(self.run_apply(old, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            doubled = expected.replace(anchor, anchor + earlier, 1)
+            (old / target).write_text(doubled)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            duplicated = expected.replace('  InitMenu();\n', '  InitMenu();\n' + expected.split('  InitMenu();\n', 1)[1].split('  if (toolkit_delegate_)', 1)[0], 1)
+            (old / target).write_text(duplicated)
+            self.assertNotEqual(self.run_apply(old, '--check').returncode, 0)
+            (old / target).write_text(doubled)
+            reverted = self.run_apply(old, '--revert')
+            self.assertEqual(reverted.returncode, 0, reverted.stderr)
+            self.assertEqual((old / target).read_text(), originals[target])
+
     def test_apply_refuses_a_missing_anchor(self):
         with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
             root = pathlib.Path(scratch)
@@ -732,9 +769,28 @@ class ContractTests(unittest.TestCase):
         self.assertIn('Issued().Take(path, owner)', shareable)
         self.assertIn('InInstanceDirectory(path)', shareable)
         self.assertIn('share_policy::InstanceDirectoryName(', share)
-        sweep = share.split('void SweepStaleInstances(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('entry == own', sweep)
-        self.assertIn('ESRCH', sweep)
+        sweep = share.split('void ClaimAndSweep(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('flock(fd, LOCK_EX | LOCK_NB)', sweep)
+        self.assertIn('share_policy::SweepsInstance(', sweep)
+        self.assertIn('base::FileEnumerator::DIRECTORIES)', sweep)
+        self.assertNotIn('DeleteFile(entry)', sweep)
+        lock = share.split('share_policy::InstanceLock LockOf(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('LOCK_EX | LOCK_NB', lock)
+        self.assertIn('O_NOFOLLOW', lock)
+        for callback in ('bool PickerOwns(std::uint64_t id,', 'void ServiceFinished(std::uint64_t id,',
+                         'NSWindow* SourceWindow(std::uint64_t id,'):
+            body = share.split(callback, 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('service', body)
+        self.assertIn('return ardia_mac::share::PickerOwns(_request, picker, service) ? self : nil;', share)
+        self.assertIn('Issued().Release(standard);', share.split('void RemoveTemporary(', 1)[1].split('\n}\n', 1)[0])
+        deliver = share.split('void Deliver(const PageOrigin& origin,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('StillBound(origin, contents, &binding)', deliver)
+        bound = share.split('ShellHostView* StillBound(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('found->renderer_generation == origin.generation', bound)
+        self.assertIn('found->claim == origin.claim', bound)
+        self.assertIn('base::BindOnce(&DeliverImage, std::move(*origin),', share)
+        link = share.split('void ShareLink(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('host == &caller ? ShareableFile(link, host->window_id())', link)
 
     def test_file_share_lists_the_system_services(self):
         model = self.read('ac_mac_menu_model.h')
@@ -743,6 +799,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('submenu.delegate = ShareMenuFiller();', menu)
         self.assertIn('ardia_mac::share::LinkServices()', menu)
         self.assertIn('menu::FillsShareServices(item.role, app_menus)', menu)
+        filler = menu.split('- (void)menuNeedsUpdate:(NSMenu*)menu {', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('return;', filler)
+        self.assertIn('kShareMoreService', filler)
         app_menu = (REPO / 'apps/desktop/src/appMenu.ts').read_text()
         self.assertIn('shareServices().map(', app_menu)
 
