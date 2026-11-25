@@ -130,3 +130,14 @@ test("a tab group's Color menu draws each colour's swatch as the Mac does: the d
   assert.equal(menuSwatch({ id: "copy", title: "Copy Link" }, false), null);
   assert.equal(menuSwatch({ separator: true }, false), null);
 });
+
+test("in a forced-colours (high contrast) theme every swatch keeps a solid CanvasText edge, so None's ring doesn't vanish with its box-shadow", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(new URL("./base.css", import.meta.url), "utf8");
+  const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+  assert.ok(forced.length < css.length, "no forced-colors block");
+  const rule = (selector) => forced.match(new RegExp(`${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  assert.match(rule(".ardia-menu-swatch"), /border:\s*1px solid CanvasText/);
+  assert.match(rule(".ardia-menu-swatch"), /forced-color-adjust:\s*none/, "the colour discs keep their colours");
+  assert.match(rule(".ardia-menu-swatch.empty"), /opacity:\s*1/, "None's ring is drawn at full strength");
+});

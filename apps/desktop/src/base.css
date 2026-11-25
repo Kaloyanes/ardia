@@ -200,6 +200,20 @@ textarea:focus,
   opacity: 0.35;
 }
 
+@media (forced-colors: active) {
+  .ardia-menu-swatch {
+    forced-color-adjust: none;
+    box-sizing: border-box;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .ardia-menu-swatch.empty {
+    background: transparent;
+    opacity: 1;
+  }
+}
+
 .ardia-menu-title {
   flex: 1;
   white-space: nowrap;
