@@ -21,7 +21,7 @@
   const SOON_MS = 5000;
   const MOST = 1000000;
   const MAX_GENERATION = 2147483647;
-  const count = (value) => (typeof value === "number" && isFiniteNumber(value) && value >= 0 ? min(MOST, floor(value)) : 0);
+  const cumulative = (value) => (typeof value === "number" && isFiniteNumber(value) && value >= 0 ? floor(value) : 0);
   const fresh = () => {
     const t = create(null);
     t.e0 = 0;
@@ -94,7 +94,7 @@
   const collect = (video, stopped) => {
     if (!generation || typeof video.getVideoPlaybackQuality !== "function") return;
     const q = video.getVideoPlaybackQuality();
-    const seen = { dropped: count(q && q.droppedVideoFrames), total: count(q && q.totalVideoFrames) };
+    const seen = { dropped: cumulative(q && q.droppedVideoFrames), total: cumulative(q && q.totalVideoFrames) };
     const before = quality.get(video);
     if (stopped) quality.delete(video);
     else quality.set(video, seen);

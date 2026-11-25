@@ -11,7 +11,7 @@ import { keyringMessage, presentSyncState, SYNC_KEY_NOT_SAVED } from "./syncKeyS
 import { consentToken } from "../../browser/src/state/telemetry/client";
 import { noteSyncOpenFailures } from "../../browser/src/state/telemetry/syncFileCounts";
 import { warnFor } from "../../browser/src/state/telemetry/logs";
-import { noteSyncKeyStore } from "./syncKeyringCounts";
+import { keyringObserver, noteSyncKeyStore } from "./syncKeyringCounts";
 import type { ConsentToken } from "../../browser/src/state/telemetry/choice";
 import {
   claimSyncAuthority,
@@ -54,7 +54,6 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
-let keyringAskConsent: ConsentToken | null = null;
 
 function readKeyStore(host: ArdiaHost, consent: ConsentToken | null): Promise<SyncKeyStoreStatus> {
   return syncKeyStoreStatus(host).then((status) => {
@@ -86,17 +85,15 @@ function stopKeyringWatch() {
 
 function resumeWhenKeyringOpens(host: ArdiaHost) {
   stopKeyringWatch();
+  const observed = keyringObserver(() => syncKeyStoreStatus(host), consentToken);
   const tick = keyringResumer({
     locked: () => {
       const state = engine.useSync.getState();
       return !!authority?.isAuthority() && state.enabled && state.status === "locked";
     },
-    status: () => {
-      keyringAskConsent = consentToken();
-      return syncKeyStoreStatus(host);
-    },
+    status: observed.status,
     seen: (status) => {
-      noteSyncKeyStore(status, keyringAskConsent);
+      observed.note(status);
       const shown = keyringMessage(keyStore, false);
       keyStore = status;
       if (keyringMessage(status, false) !== shown) engine.useSync.setState({});

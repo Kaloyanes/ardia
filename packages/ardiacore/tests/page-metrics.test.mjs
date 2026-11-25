@@ -232,3 +232,34 @@ test("frames a video played before the generation began are never counted", () =
   assert.equal(sent.frames, 300);
   assert.equal(sent.dropped, 2);
 });
+
+test("a video past a million frames keeps counting its new frames, across a new generation too", () => {
+  const p = page();
+  generation(p.receive, 5);
+  const v = p.video();
+  v.paused = false;
+  v.quality = { totalVideoFrames: 999_000, droppedVideoFrames: 10 };
+  p.media("playing", v);
+  v.quality = { totalVideoFrames: 1_200_000, droppedVideoFrames: 30 };
+  p.pagehide();
+  const first = JSON.parse(p.posts.shift().json);
+  assert.equal(first.frames, 201_000);
+  assert.equal(first.dropped, 20);
+  v.quality = { totalVideoFrames: 1_500_000, droppedVideoFrames: 35 };
+  p.pagehide();
+  const second = JSON.parse(p.posts.shift().json);
+  assert.equal(second.frames, 300_000, "a baseline past the cap still yields the real delta");
+  assert.equal(second.dropped, 5);
+  generation(p.receive, 6);
+  v.quality = { totalVideoFrames: 1_800_000, droppedVideoFrames: 36 };
+  p.pagehide();
+  const third = JSON.parse(p.posts.shift().json);
+  assert.equal(third.generation, 6);
+  assert.equal(third.frames, 300_000, "the new generation's baseline is the real cumulative count, not the cap");
+  assert.equal(third.dropped, 1);
+  v.quality = { totalVideoFrames: 4_000_000, droppedVideoFrames: 40 };
+  p.pagehide();
+  const fourth = JSON.parse(p.posts.shift().json);
+  assert.equal(fourth.frames, 1_000_000, "one message still caps the delta it reports");
+  assert.equal(fourth.dropped, 4);
+});

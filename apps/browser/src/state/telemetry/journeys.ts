@@ -80,7 +80,7 @@ function mark(key: string, kind: string, from: number, until = Infinity): number
 type NewTab = { journey: "j2"; key: string; t0: number; heard: number; bar?: number; barSettled?: boolean; keyAt?: number; suggested?: number };
 type Switch = { journey: "j3"; key: string; t0: number; heard: number };
 type Navigate = { journey: "j4"; key: string; t0: number; until?: number };
-type Launch = { journey: "j1"; t0: number; firstWindow?: number; render?: number; commit?: number; usable?: number; keys: string[]; tabs: number; windows: number; consent?: ConsentToken | null };
+type Launch = { journey: "j1"; t0: number; firstWindow?: number; render?: number; commit?: number; usable?: number; keys: string[]; tabs: number; windows: number; consent: ConsentToken };
 type Pending = NewTab | Switch | Navigate | Launch;
 
 const MAX_PENDING = 50;
@@ -198,10 +198,10 @@ type PreviousLaunch = { lastLaunchAt: number | null; lastQuitAt: number | null; 
 let previousLaunch: PreviousLaunch = { lastLaunchAt: null, lastQuitAt: null, firstOfVersion: null };
 let firstRootCommitted = false;
 
-export function launchCommitted(renderedAt?: number, committedAt = Date.now(), contentAt?: number, usableAt?: number, consent?: ConsentToken | null) {
+export function launchCommitted(consent: ConsentToken | null, renderedAt?: number, committedAt = Date.now(), contentAt?: number, usableAt?: number) {
   if (firstRootCommitted) return;
   firstRootCommitted = true;
-  if (launch || launchSent || !on || (consent !== undefined && !stillValid(consent))) return;
+  if (launch || launchSent || !on || !consent || !stillValid(consent)) return;
   const start = appInfo().processStart;
   if (!start) return;
   const s = useBrowser.getState();
@@ -288,7 +288,7 @@ function sendLaunch(l: Launch, content: number | null, paints: number[]) {
     launched_hidden: typeof launchedHidden === "boolean" ? launchedHidden : null,
     launch_source: typeof launchSource === "string" && LAUNCH_SOURCES.has(launchSource) ? launchSource : null,
     since_boot: bootTime ? bucket(l.t0 - bootTime, [[2 * MINUTE, "<2m"], [10 * MINUTE, "<10m"], [HOUR, "<1h"], [DAY, "<1d"]], "1d+") : "unknown",
-  }, l.consent === undefined ? consentNow() : l.consent);
+  }, l.consent);
 }
 
 function watchStore(s: BrowserState, prev: BrowserState) {

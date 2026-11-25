@@ -114,7 +114,7 @@ function FirstWindowCommitted({ typeahead, launch }: { typeahead: boolean; launc
       whenTelemetryLeads(() => {
         if (ardiaHost) probeKeyringAfterLaunch(ardiaHost);
         deliverLaunch({ committedAt, contentAt, usableAt, consent }, Date.now(), stillValid, (sample) => {
-          launchCommitted(renderedAt, sample.committedAt, sample.contentAt, sample.usableAt, sample.consent);
+          launchCommitted(sample.consent, renderedAt, sample.committedAt, sample.contentAt, sample.usableAt);
           markFirstWindow(sample.committedAt);
         });
       }),
