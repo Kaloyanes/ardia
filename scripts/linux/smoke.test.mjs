@@ -157,6 +157,9 @@ test("an .rpm is root-owned with a setuid root helper, the launcher link, the po
     line("-rw-r--r--", "/usr/share/polkit-1/actions/dev.ardia.linux.policy"),
     line("-rw-r--r--", "/usr/share/ardia/apparmor/ardia"),
     line("-rw-r--r--", "/usr/share/applications/ardia.desktop"),
+    line("-rw-r--r--", "/usr/share/applications/ardia-little.desktop"),
+    line("-rw-r--r--", "/usr/share/applications/ardia-settings.desktop"),
+    line("-rw-r--r--", "/usr/share/applications/ardia-import.desktop"),
     line("-rw-r--r--", "/usr/share/licenses/ardia/copyright"),
   ];
   const fields = { name: "ardia", arch: "x86_64", scripts: "postinstall scriptlet (using /bin/sh):\n  install -m 0644 /usr/share/ardia/apparmor/ardia /etc/apparmor.d/ardia\n" };

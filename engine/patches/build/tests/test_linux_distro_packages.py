@@ -167,7 +167,9 @@ class RpmTests(unittest.TestCase):
             self.assertIn(f'Requires: {name}\n', spec)
         self.assertIn('Recommends: /usr/bin/pkexec\n', spec)
         files = spec[spec.index('%files'):spec.index('%changelog')]
-        for owned in ('/usr/lib/ardia\n', '/usr/bin/ardia\n', '%dir /usr/share/polkit-1/actions\n', '/usr/share/licenses/ardia\n'):
+        for owned in ('/usr/lib/ardia\n', '/usr/bin/ardia\n', '%dir /usr/share/polkit-1/actions\n', '/usr/share/licenses/ardia\n',
+                      '/usr/share/applications/ardia.desktop\n', '/usr/share/applications/ardia-little.desktop\n',
+                      '/usr/share/applications/ardia-settings.desktop\n', '/usr/share/applications/ardia-import.desktop\n'):
             self.assertIn(owned, files)
         self.assertIn('%defattr(-,root,root,-)', files)
         self.assertIn('* Mon Nov 23 2026 Ardia <hello@ardia.dev> - 0.2.47~nightly.3-1', spec)
@@ -237,6 +239,9 @@ class FlatpakTests(unittest.TestCase):
         self.assertIn('ln -s ../lib/ardia/ardia-launch /app/bin/ardia', commands)
         self.assertIn('install -Dm644 cobalt.ini /app/etc/cobalt.ini', commands)
         self.assertIn('/app/share/applications/dev.ardia.Ardia.desktop', commands)
+        for window_class, exported in (('ardia-little', 'little'), ('ardia-settings', 'settings'), ('ardia-import', 'import')):
+            self.assertIn(f'share/applications/{window_class}.desktop > dev.ardia.Ardia.{exported}.desktop', commands)
+            self.assertIn(f'/app/share/applications/dev.ardia.Ardia.{exported}.desktop', commands)
         self.assertIn('/app/share/icons/hicolor/256x256/apps/dev.ardia.Ardia.png', commands)
         self.assertEqual(manifest, json.loads(json.dumps(manifest)))
         for bad in ({'url': self.SOURCE['url']}, {'path': '/x', 'sha256': 'SKIP'}, {'url': 'u', 'path': 'p', 'sha256': DIGEST}):

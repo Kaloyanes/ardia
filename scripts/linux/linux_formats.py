@@ -138,6 +138,10 @@ def desktop_entries():
             **{f'{window_class}.desktop': window_desktop_entry(window_class, name) for window_class, name in WINDOW_CLASSES.items()}}
 
 
+def flatpak_desktop_id(window_class):
+    return f'{FLATPAK_ID}.{window_class.removeprefix("ardia-")}.desktop'
+
+
 def desktop_entry(source, command):
     return source.read_text().replace('Exec=ardia ', f'Exec={command} ')
 
@@ -385,7 +389,7 @@ cp -a '{tree}/.' %{{buildroot}}/
 {owned}
 /usr/lib/ardia
 /usr/bin/ardia
-/usr/share/applications/ardia.desktop
+{chr(10).join(f'/usr/share/applications/{name}' for name in desktop_entries())}
 /usr/share/icons/hicolor/256x256/apps/ardia.png
 /usr/share/polkit-1/actions/dev.ardia.linux.policy
 /usr/share/ardia
@@ -465,6 +469,10 @@ def flatpak_manifest(source):
                 'install -Dm644 cobalt.ini /app/etc/cobalt.ini',
                 f'sed -e "s/^Icon=ardia$/Icon={FLATPAK_ID}/" share/applications/ardia.desktop > {FLATPAK_ID}.desktop',
                 f'install -Dm644 {FLATPAK_ID}.desktop /app/share/applications/{FLATPAK_ID}.desktop',
+                *(command for window_class in WINDOW_CLASSES for command in (
+                    f'sed -e "s/^Icon=ardia$/Icon={FLATPAK_ID}/" share/applications/{window_class}.desktop > {flatpak_desktop_id(window_class)}',
+                    f'install -Dm644 {flatpak_desktop_id(window_class)} /app/share/applications/{flatpak_desktop_id(window_class)}',
+                )),
                 f'install -Dm644 share/icons/hicolor/256x256/apps/ardia.png /app/share/icons/hicolor/256x256/apps/{FLATPAK_ID}.png',
                 f'install -Dm644 {FLATPAK_ID}.metainfo.xml /app/share/metainfo/{FLATPAK_ID}.metainfo.xml',
             ],

@@ -145,6 +145,9 @@ echo "ok   libraries resolve"
 echo "ok   chrome-sandbox is setuid root"
 version=$(/usr/bin/ardia --version) || fail "ardia --version exited $?"
 echo "ok   $version"
+for class in ardia-little ardia-settings ardia-import; do
+  grep -q "^StartupWMClass=$class$" "/usr/share/applications/$class.desktop" || fail "no hidden $class.desktop"
+done
 for entry in /usr/share/applications/ardia*.desktop; do
   desktop-file-validate "$entry" || fail "$entry does not validate"
   grep -q "^Exec=/usr/bin/ardia\( \|$\)" "$entry" || fail "$entry does not run /usr/bin/ardia"

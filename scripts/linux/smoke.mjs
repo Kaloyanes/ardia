@@ -184,7 +184,7 @@ export function rpmLayoutProblems(listing, fields) {
   expect("/usr/bin/ardia", (e) => e.target === "../lib/ardia/ardia-launch", "is not a link to ../lib/ardia/ardia-launch");
   expect("/usr/share/polkit-1/actions/dev.ardia.linux.policy", (e) => e.mode === "-rw-r--r--", "is not 0644");
   expect("/usr/share/ardia/apparmor/ardia", (e) => e.mode === "-rw-r--r--", "is not 0644");
-  expect("/usr/share/applications/ardia.desktop", (e) => e.mode === "-rw-r--r--", "is not 0644");
+  for (const name of DESKTOP_ENTRIES) expect(`/usr/share/applications/${name}`, (e) => e.mode === "-rw-r--r--", "is not 0644");
   expect("/usr/share/licenses/ardia/copyright", (e) => e.mode === "-rw-r--r--", "is not 0644");
   if (fields.name !== "ardia") problems.push(`the package is called ${fields.name}, not ardia`);
   if (fields.arch !== "x86_64") problems.push(`the architecture is ${fields.arch}, not x86_64`);
@@ -910,8 +910,10 @@ class Smoke {
     const policy = await readFile(join(this.root, "share/polkit-1/actions/dev.ardia.linux.policy"), "utf8").catch(() => "");
     if (!policy.includes("dev.ardia.linux.reauthenticate")) problems.push("the .rpm's polkit policy has no reauthenticate action");
     if (policy.includes("dev.ardia.linux.update")) problems.push("the .rpm's polkit policy offers the self-update action, which rpm owns");
-    const desktop = await readFile(join(this.root, "share/applications/ardia.desktop"), "utf8").catch(() => "");
-    if (!/^Exec=\/usr\/bin\/ardia /m.test(desktop)) problems.push("the .rpm's desktop entry does not run /usr/bin/ardia");
+    for (const name of DESKTOP_ENTRIES) {
+      const desktop = await readFile(join(this.root, "share/applications", name), "utf8").catch(() => "");
+      if (!/^Exec=\/usr\/bin\/ardia /m.test(desktop)) problems.push(`the .rpm's ${name} does not run /usr/bin/ardia`);
+    }
     if (problems.length) throw new Error(problems.join("; "));
     return { format: "rpm", version };
   }
