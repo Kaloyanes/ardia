@@ -192,6 +192,8 @@ TEST(window_guards) {
     for (double b : Load().numbers) {
       if (const auto lights = ardia_mac::window::LightsFrom(a, b, false, {1280, 800})) {
         CHECK(lights->center.x >= 0 && lights->center.x <= 1280 && lights->center.y >= 0 && lights->center.y <= 800);
+        const auto zoom = ardia_mac::window::ButtonOrigin(*lights, {14, 14}, 800, 2);
+        CHECK(zoom.x + ardia_mac::window::kButtonSide <= 1280);
       }
     }
   }

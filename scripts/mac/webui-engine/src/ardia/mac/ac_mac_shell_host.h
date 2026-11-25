@@ -17,6 +17,7 @@
 #include "base/values.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_shell_policy.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -256,7 +257,7 @@ class ShellHostView : public views::View,
     bool active = false;
   };
   std::map<int, PendingTab> unclaimed_;
-  std::map<int, base::WeakPtr<content::WebContents>> offered_;
+  shell_policy::OfferBook<base::WeakPtr<content::WebContents>> offered_;
   std::optional<uint64_t> unclaimed_listener_;
 
   raw_ptr<ShellBridge> handler_ = nullptr;

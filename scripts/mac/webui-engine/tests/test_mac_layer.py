@@ -356,10 +356,10 @@ class ContractTests(unittest.TestCase):
         host = self.read('ac_mac_shell_host.mm')
         create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(create.index('shell_policy::PlanCreate(request)'), create.index('existing->claim = claim;'))
-        self.assertLess(create.index('NeedToFireBeforeUnloadOrUnloadEvents()'), create.index('shell_policy::PlanCreate(request)'))
-        self.assertLess(create.index('Navigate(&params);'), create.index('CloseWebContentsAt('))
-        after_close = create.split('CloseWebContentsAt(', 1)[1]
-        self.assertIn('NoteUnclaimedTab(closing.get(), false);', after_close)
+        self.assertNotIn('NeedToFireBeforeUnloadOrUnloadEvents', create)
+        self.assertNotIn('CloseWebContentsAt(', create)
+        self.assertLess(create.index('Navigate(&params);'), create.index('DetachAndDeleteWebContentsAt(old_index);'))
+        self.assertLess(create.index('bindings_.erase(existing->id());'), create.index('DetachAndDeleteWebContentsAt(old_index);'))
         self.assertNotIn('bindings_.erase(replaced_id);', create)
         self.assertIn('args.Find("adoptId")', create)
 
@@ -410,6 +410,29 @@ class ContractTests(unittest.TestCase):
             self.assertNotIn('bootstrap.popover', main)
         popover_host = (REPO / 'apps/desktop/src/popoverHost.ts').read_text()
         self.assertIn('POPOVER_CHILD_PANEL_METHODS.every((method) => hostSupports(method, host))', popover_host)
+
+    def test_suppressed_shortcuts_are_consumed(self):
+        host = self.read('ac_mac_shell_host.mm')
+        pressed = host.split('bool ShellHostView::AcceleratorPressed(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(pressed.index('shell_policy::ShortcutAction::kConsume'), pressed.index('FocusShell();'))
+        self.assertLess(pressed.index('shell_policy::ShortcutAction::kConsume'), pressed.index('"onCommand"'))
+        self.assertIn('shell_policy::ShortcutAccepted(', host)
+
+    def test_menu_state_is_not_advertised_while_it_is_a_no_op(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertNotIn('setMenuState', listed)
+        self.assertNotIn('setMenuBookmarks', listed)
+
+    def test_offers_leave_with_their_tab_and_replay_active(self):
+        host = self.read('ac_mac_shell_host.mm')
+        changed = host.split('void ShellHostView::OnTabStripModelChanged(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('TabStripModelChange::kRemoved', changed)
+        self.assertIn('offered_.Forget(id);', changed)
+        listing = host.split('void ShellHostView::ListUnclaimedTabs(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('offer.active', listing)
+        self.assertNotIn('OfferTab(contents, false)', listing)
+        self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

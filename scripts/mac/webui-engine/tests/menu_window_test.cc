@@ -153,7 +153,9 @@ TEST(titlebar_metrics_center_the_lights_where_ardia_puts_them) {
 
 TEST(traffic_lights_clamp_and_refuse_nan) {
   const auto far = window::LightsFrom(5000, -40, false, {1280, 800});
-  CHECK(far && far->center == (window::Point{1266, 7}));
+  CHECK(far && far->center == (window::Point{1233, 7}));
+  const window::Point zoom = window::ButtonOrigin(*far, {14, 14}, 800, 2);
+  CHECK(zoom.x + window::kButtonSide <= 1280);
   CHECK(!window::LightsFrom(std::nan(""), 10, false, {1280, 800}));
   const auto inf = std::numeric_limits<double>::infinity();
   CHECK(!window::LightsFrom(10, inf, false, {1280, 800}));
@@ -252,6 +254,19 @@ TEST(window_drag_refuses_a_released_button_or_another_window) {
   CHECK(window::WindowDragFor(MouseEvent::kLeftDragged, false, true, false) == DragStart{});
   CHECK(window::WindowDragFor(MouseEvent::kLeftDown, false, true, false) == DragStart{});
   CHECK(window::WindowDragFor(MouseEvent::kOther, true, true, false) == DragStart{});
+}
+
+TEST(the_whole_traffic_light_group_stays_inside_the_window) {
+  for (double width : {60.0, 200.0, 1280.0, 3000.0}) {
+    const auto lights = window::LightsFrom(1e9, 20, false, {width, 800});
+    CHECK(lights.has_value());
+    if (!lights) continue;
+    const window::Point zoom = window::ButtonOrigin(*lights, {14, 14}, 800, 2);
+    CHECK(zoom.x + window::kButtonSide <= width || width < 3 * window::kButtonSide + 2 * window::kTrafficLightSpacing);
+    CHECK(lights->center.x >= window::kButtonSide / 2);
+  }
+  const auto defaults = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
+  CHECK(defaults && defaults->center == (window::Point{25, 20}));
 }
 
 int main(int argc, char** argv) {

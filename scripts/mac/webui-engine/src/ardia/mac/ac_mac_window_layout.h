@@ -39,7 +39,7 @@ inline std::optional<Lights> LightsFrom(std::optional<double> x,
   const double cx = x.value_or(lights.center.x);
   const double cy = y.value_or(lights.center.y);
   if (!std::isfinite(cx) || !std::isfinite(cy)) return std::nullopt;
-  const double max_x = std::max(kButtonSide, window.width - kButtonSide);
+  const double max_x = std::max(kButtonSide / 2, window.width - kButtonSide * 2.5 - kTrafficLightSpacing * 2);
   const double max_y = std::max(kButtonSide, window.height - kButtonSide);
   lights.center = Point{std::clamp(cx, kButtonSide / 2, max_x), std::clamp(cy, kButtonSide / 2, max_y)};
   return lights;

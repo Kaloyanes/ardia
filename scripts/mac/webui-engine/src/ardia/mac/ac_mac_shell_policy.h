@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <utility>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string_view>
 
@@ -72,6 +74,41 @@ inline AdoptRefusal CheckAdoption(bool parsed, bool offered, bool same_profile, 
   return AdoptRefusal::kNone;
 }
 
+template <typename Handle>
+class OfferBook {
+ public:
+  struct Offer {
+    Handle handle;
+    bool active = false;
+  };
+
+  void Add(int id, Handle handle, bool active) { offers_[id] = Offer{std::move(handle), active}; }
+  void Forget(int id) { offers_.erase(id); }
+  const Offer* Find(int id) const {
+    const auto found = offers_.find(id);
+    return found == offers_.end() ? nullptr : &found->second;
+  }
+  template <typename Keep>
+  void Prune(Keep keep) {
+    std::erase_if(offers_, [&keep](const auto& entry) { return !keep(entry.first, entry.second); });
+  }
+  const std::map<int, Offer>& offers() const { return offers_; }
+  std::size_t size() const { return offers_.size(); }
+
+ private:
+  std::map<int, Offer> offers_;
+};
+
+enum class ShortcutAction { kDispatch, kConsume };
+
+inline ShortcutAction ShortcutActionFor(bool suppressed) {
+  return suppressed ? ShortcutAction::kConsume : ShortcutAction::kDispatch;
+}
+
+inline bool ShortcutAccepted(int key_code, int modifiers, bool has_command, bool suppressed) {
+  return key_code >= 1 && key_code <= 255 && modifiers >= 0 && (has_command || suppressed);
+}
+
 inline std::string_view OfferedProfile(std::string_view profile_name) {
   return profile_name == "default" ? std::string_view() : profile_name;
 }
@@ -93,7 +130,6 @@ struct CreateRequest {
   bool same_profile = false;
   int bound_id = 0;
   AdoptRefusal adoption = AdoptRefusal::kNone;
-  bool old_tab_needs_unload = false;
 };
 
 inline CreatePlan PlanCreate(const CreateRequest& request) {
@@ -102,7 +138,6 @@ inline CreatePlan PlanCreate(const CreateRequest& request) {
     if (request.adopt == AdoptField::kAbsent || request.adopt_id == request.bound_id) return CreatePlan::kReclaim;
     return CreatePlan::kRefuse;
   }
-  if (request.key_bound && request.old_tab_needs_unload) return CreatePlan::kRefuse;
   if (request.adopt == AdoptField::kId) {
     if (request.adoption != AdoptRefusal::kNone) return CreatePlan::kRefuse;
     return request.key_bound ? CreatePlan::kAdoptReplacing : CreatePlan::kAdopt;

@@ -944,9 +944,8 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   content::WebContents* adoptable = nullptr;
   if (request.adopt == shell_policy::AdoptField::kId) {
     request.adopt_id = *shell_policy::ParseAdoptId(*adopt_text);
-    const auto offer = offered_.find(request.adopt_id);
-    content::WebContents* offered =
-        offer != offered_.end() ? offer->second.get() : nullptr;
+    const auto* offer = offered_.Find(request.adopt_id);
+    content::WebContents* offered = offer ? offer->handle.get() : nullptr;
     content::WebContents* present = MemberTab(request.adopt_id, profile);
     request.adoption = shell_policy::CheckAdoption(
         true, offered != nullptr,
@@ -959,16 +958,11 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   request.same_profile =
       old_contents && old_contents->GetBrowserContext() == profile;
   request.bound_id = existing ? existing->id() : 0;
-  request.old_tab_needs_unload =
-      old_contents && !request.same_profile &&
-      old_contents->NeedToFireBeforeUnloadOrUnloadEvents();
   const shell_policy::CreatePlan plan = shell_policy::PlanCreate(request);
   if (plan == shell_policy::CreatePlan::kRefuse) {
     return std::move(done).Run(
         false, base::Value(request.adopt == shell_policy::AdoptField::kInvalid
                                ? "Invalid tab adoption id"
-                           : request.old_tab_needs_unload
-                               ? "Close the tab before moving it to another profile"
                                : "This tab can't be adopted"));
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
@@ -982,7 +976,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   content::WebContents* contents = nullptr;
   if (plan == shell_policy::CreatePlan::kAdopt ||
       plan == shell_policy::CreatePlan::kAdoptReplacing) {
-    offered_.erase(request.adopt_id);
+    offered_.Forget(request.adopt_id);
     contents = adoptable;
   } else {
     NavigateParams params(member, *url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
@@ -999,15 +993,13 @@ void ShellHostView::CreateTabIn(base::DictValue args,
     TabStripModel* old_model = old_owner ? old_owner->GetTabStripModel() : nullptr;
     const int old_index = old_model ? old_model->GetIndexOfWebContents(old_contents)
                                     : TabStripModel::kNoTab;
-    const int old_id = existing->id();
-    existing->claim.clear();
-    existing->visible = false;
+    bindings_.erase(existing->id());
+    existing = nullptr;
     if (old_index != TabStripModel::kNoTab) {
-      base::WeakPtr<content::WebContents> closing = old_contents->GetWeakPtr();
-      old_model->CloseWebContentsAt(old_index, TabCloseTypes::CLOSE_NONE);
-      if (closing && OwnerOf(closing.get())) {
-        bindings_.erase(old_id);
-        NoteUnclaimedTab(closing.get(), false);
+      base::WeakPtr<ShellHostView> alive = GetWeakPtr();
+      old_model->DetachAndDeleteWebContentsAt(old_index);
+      if (!alive) {
+        return;
       }
     }
   }
@@ -1444,6 +1436,13 @@ void ShellHostView::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
+  if (change.type() == TabStripModelChange::kRemoved) {
+    for (const auto& removed : change.GetRemove()->contents) {
+      const int id = TabId(removed.contents);
+      offered_.Forget(id);
+      unclaimed_.erase(id);
+    }
+  }
   if (change.type() == TabStripModelChange::kInserted && !closing_) {
     for (const auto& inserted : change.GetInsert()->contents) {
       NoteUnclaimedTab(inserted.contents,
@@ -1473,7 +1472,7 @@ void ShellHostView::NoteUnclaimedTab(content::WebContents* contents, bool active
 
 base::DictValue ShellHostView::OfferTab(content::WebContents* contents,
                                         bool active) {
-  offered_[TabId(contents)] = contents->GetWeakPtr();
+  offered_.Add(TabId(contents), contents->GetWeakPtr(), active);
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   return base::DictValue()
       .Set("adoptId", "tab:" + base::NumberToString(TabId(contents)))
@@ -1522,14 +1521,16 @@ void ShellHostView::ListUnclaimedTabs(Done done) {
   }
   unclaimed_listener_ = renderer_generation_;
   base::ListValue tabs;
-  for (auto it = offered_.begin(); it != offered_.end();) {
-    content::WebContents* contents = it->second.get();
-    if (!contents || BindsContents(contents) || !OwnerOf(contents)) {
-      it = offered_.erase(it);
-      continue;
-    }
-    tabs.Append(OfferTab(contents, false));
-    ++it;
+  offered_.Prune([this](int, const auto& offer) {
+    content::WebContents* contents = offer.handle.get();
+    return contents && !BindsContents(contents) && OwnerOf(contents);
+  });
+  std::vector<std::pair<content::WebContents*, bool>> replay;
+  for (const auto& [id, offer] : offered_.offers()) {
+    replay.emplace_back(offer.handle.get(), offer.active);
+  }
+  for (const auto& [contents, active] : replay) {
+    tabs.Append(OfferTab(contents, active));
   }
   for (auto it = unclaimed_.begin(); it != unclaimed_.end();) {
     content::WebContents* contents = it->second.contents.get();
@@ -1572,6 +1573,11 @@ bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {
   if (found == shortcuts_.end()) {
     return false;
   }
+  if (shell_policy::ShortcutActionFor(
+          found->second.FindBool("suppressed").value_or(false)) ==
+      shell_policy::ShortcutAction::kConsume) {
+    return true;
+  }
   const std::string command = Text(found->second, "command");
   if (command == "focusCommandBar" || command == "newTab") {
     FocusShell();
@@ -1608,7 +1614,9 @@ void ShellHostView::SetKeyboardShortcuts(const base::ListValue* values,
     const base::DictValue& binding = value.GetDict();
     const int key = binding.FindInt("keyCode").value_or(0);
     const int flags = binding.FindInt("modifiers").value_or(-1);
-    if (key < 1 || key > 255 || flags < 0 || Text(binding, "command").empty()) {
+    if (!shell_policy::ShortcutAccepted(
+            key, flags, !Text(binding, "command").empty(),
+            binding.FindBool("suppressed").value_or(false))) {
       continue;
     }
     shortcuts.emplace(ui::Accelerator(static_cast<ui::KeyboardCode>(key), flags),

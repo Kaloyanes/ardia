@@ -65,8 +65,6 @@ constexpr std::string_view kCapabilities[] = {
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
-    "ArdiaShell.setMenuState",
-    "ArdiaShell.setMenuBookmarks",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",

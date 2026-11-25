@@ -55,7 +55,7 @@ TEST(create_plans_check_the_adopt_id_before_reclaim_or_create) {
   policy::CreateRequest non_string = fresh;
   non_string.adopt = AdoptField::kInvalid;
   CHECK(policy::PlanCreate(non_string) == CreatePlan::kRefuse);
-  policy::CreateRequest reclaim{AdoptField::kAbsent, 0, true, true, 9, AdoptRefusal::kNone, false};
+  policy::CreateRequest reclaim{AdoptField::kAbsent, 0, true, true, 9, AdoptRefusal::kNone};
   CHECK(policy::PlanCreate(reclaim) == CreatePlan::kReclaim);
   policy::CreateRequest invalid_on_existing = reclaim;
   invalid_on_existing.adopt = AdoptField::kInvalid;
@@ -67,22 +67,48 @@ TEST(create_plans_check_the_adopt_id_before_reclaim_or_create) {
   policy::CreateRequest matching = mismatched;
   matching.adopt_id = 9;
   CHECK(policy::PlanCreate(matching) == CreatePlan::kReclaim);
-  policy::CreateRequest adopt{AdoptField::kId, 4, false, false, 0, AdoptRefusal::kNone, false};
+  policy::CreateRequest adopt{AdoptField::kId, 4, false, false, 0, AdoptRefusal::kNone};
   CHECK(policy::PlanCreate(adopt) == CreatePlan::kAdopt);
   adopt.adoption = AdoptRefusal::kNotOffered;
   CHECK(policy::PlanCreate(adopt) == CreatePlan::kRefuse);
-  policy::CreateRequest move{AdoptField::kAbsent, 0, true, false, 9, AdoptRefusal::kNone, false};
+  policy::CreateRequest move{AdoptField::kAbsent, 0, true, false, 9, AdoptRefusal::kNone};
   CHECK(policy::PlanCreate(move) == CreatePlan::kReplace);
-  policy::CreateRequest adopt_move{AdoptField::kId, 4, true, false, 9, AdoptRefusal::kNone, false};
+  policy::CreateRequest adopt_move{AdoptField::kId, 4, true, false, 9, AdoptRefusal::kNone};
   CHECK(policy::PlanCreate(adopt_move) == CreatePlan::kAdoptReplacing);
 }
 
-TEST(a_cross_profile_move_waits_for_a_tab_with_unload_handlers) {
-  using policy::CreatePlan;
-  policy::CreateRequest guarded{policy::AdoptField::kAbsent, 0, true, false, 9, policy::AdoptRefusal::kNone, true};
-  CHECK(policy::PlanCreate(guarded) == CreatePlan::kRefuse);
-  guarded.same_profile = true;
-  CHECK(policy::PlanCreate(guarded) == CreatePlan::kReclaim);
+TEST(a_cross_profile_move_is_always_replaced) {
+  policy::CreateRequest move{policy::AdoptField::kAbsent, 0, true, false, 9, policy::AdoptRefusal::kNone};
+  CHECK(policy::PlanCreate(move) == policy::CreatePlan::kReplace);
+}
+
+TEST(offers_keep_their_active_disposition_and_leave_with_their_tab) {
+  policy::OfferBook<int> book;
+  book.Add(3, 30, true);
+  book.Add(4, 40, false);
+  CHECK(book.Find(3) && book.Find(3)->active && book.Find(3)->handle == 30);
+  CHECK(book.Find(4) && !book.Find(4)->active);
+  book.Forget(3);
+  CHECK(!book.Find(3) && book.size() == 1);
+  book.Add(5, 0, true);
+  book.Prune([](int, const auto& offer) { return offer.handle != 0; });
+  CHECK(book.size() == 1 && book.Find(4));
+  for (int id = 0; id < 1000; ++id) {
+    book.Add(100 + id, id + 1, id % 2 == 0);
+    book.Forget(100 + id);
+  }
+  CHECK(book.size() == 1);
+}
+
+TEST(suppressed_shortcuts_are_consumed_without_a_command) {
+  CHECK(policy::ShortcutActionFor(true) == policy::ShortcutAction::kConsume);
+  CHECK(policy::ShortcutActionFor(false) == policy::ShortcutAction::kDispatch);
+  CHECK(policy::ShortcutAccepted(84, 0, false, true));
+  CHECK(policy::ShortcutAccepted(84, 4, true, false));
+  CHECK(!policy::ShortcutAccepted(84, 0, false, false));
+  CHECK(!policy::ShortcutAccepted(0, 0, true, false));
+  CHECK(!policy::ShortcutAccepted(300, 0, true, true));
+  CHECK(!policy::ShortcutAccepted(84, -1, true, true));
 }
 
 TEST(adopt_ids_are_tab_and_a_positive_int) {
