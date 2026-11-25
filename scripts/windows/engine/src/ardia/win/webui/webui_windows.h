@@ -119,7 +119,7 @@ class WindowRegistry : public BrowserCollectionObserver {
                         int tries);
   void NotifyWindowClosed(ShellHostView* closed);
   int NextPrivateOrdinal() const;
-  bool AnyHostTakesOpenUrls() const;
+  ShellHostView* FindOpenUrlsRecipient() const;
 
   bool started_ = false;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
@@ -129,6 +129,7 @@ class WindowRegistry : public BrowserCollectionObserver {
   std::map<int, int> companion_owners_;
   std::vector<int> activation_order_;
   base::ListValue pending_urls_;
+  bool pending_bare_relaunch_ = false;
   std::set<int> hidden_private_handovers_;
   bool opening_window_ = false;
   std::optional<webui_window::Placement> saved_placement_;

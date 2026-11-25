@@ -445,15 +445,19 @@ void TestHostileSinks() {
 
 
 void TestStartFocus() {
-  assert(NextStartStep(false, false, false) == StartStep::kOpenMain);
-  assert(NextStartStep(false, true, false) == StartStep::kOpenMain);
-  assert(NextStartStep(false, true, true) == StartStep::kOpenMain);
+  assert(NextStartStep(false, false, false, false) == StartStep::kOpenMain);
+  assert(NextStartStep(false, true, false, false) == StartStep::kOpenMain);
+  assert(NextStartStep(false, false, true, false) == StartStep::kOpenMain);
+  assert(NextStartStep(false, false, true, true) == StartStep::kOpenMain);
 
-  assert(NextStartStep(true, false, true) == StartStep::kFocusFront);
-  assert(NextStartStep(true, false, false) == StartStep::kFocusFront);
+  assert(NextStartStep(true, true, false, true) == StartStep::kFocusFront);
+  assert(NextStartStep(true, true, false, false) == StartStep::kFocusFront);
+  assert(NextStartStep(true, true, true, false) == StartStep::kFocusFront);
+  assert(NextStartStep(true, true, true, true) == StartStep::kFocusFront);
 
-  assert(NextStartStep(true, true, true) == StartStep::kLeaveToLinks);
-  assert(NextStartStep(true, true, false) == StartStep::kFocusFront);
+  assert(NextStartStep(true, false, true, true) == StartStep::kLeaveToLinks);
+  assert(NextStartStep(true, false, true, false) == StartStep::kFocusFront);
+  assert(NextStartStep(true, false, false, true) == StartStep::kFocusFront);
 }
 }
 

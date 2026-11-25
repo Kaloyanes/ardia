@@ -603,12 +603,16 @@ constexpr bool RelaunchUrlAccepted(std::string_view scheme,
 enum class StartStep { kOpenMain, kFocusFront, kLeaveToLinks };
 
 constexpr StartStep NextStartStep(bool windows_open,
+                                  bool bare_relaunch,
                                   bool urls_pending,
-                                  bool a_window_takes_urls) {
+                                  bool a_window_ready_for_urls) {
   if (!windows_open) {
     return StartStep::kOpenMain;
   }
-  if (urls_pending && a_window_takes_urls) {
+  if (bare_relaunch) {
+    return StartStep::kFocusFront;
+  }
+  if (urls_pending && a_window_ready_for_urls) {
     return StartStep::kLeaveToLinks;
   }
   return StartStep::kFocusFront;

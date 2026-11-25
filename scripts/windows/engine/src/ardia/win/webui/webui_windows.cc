@@ -142,12 +142,12 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
       return;
     }
     placement_loading_ = true;
-    FileRunner()->PostTaskAndReplyWithResult(
+    const bool posted = FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(&ReadPlacement, SessionDirectory()),
         base::BindOnce(
             [](base::WeakPtr<WindowRegistry> registry,
                std::optional<webui_window::Placement> saved) {
-              if (!registry) {
+              if (!registry || !registry->started_) {
                 return;
               }
               registry->placement_loading_ = false;
@@ -158,10 +158,16 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
               registry->Start(registry->app_profile(), base::ListValue());
             },
             weak_factory_.GetWeakPtr()));
-    return;
+    if (posted) {
+      return;
+    }
+    placement_loading_ = false;
+    placement_loaded_ = true;
   }
-  switch (webui_window::NextStartStep(!Hosts().empty(), !pending_urls_.empty(),
-                                      AnyHostTakesOpenUrls())) {
+  const bool bare_relaunch = std::exchange(pending_bare_relaunch_, false);
+  switch (webui_window::NextStartStep(!Hosts().empty(), bare_relaunch,
+                                      !pending_urls_.empty(),
+                                      FindOpenUrlsRecipient() != nullptr)) {
     case webui_window::StartStep::kOpenMain: {
       WindowConfig config;
       config.window_id = webui_window::kMainWindowId;
@@ -185,16 +191,25 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
   DeliverOpenUrls();
 }
 
-bool WindowRegistry::AnyHostTakesOpenUrls() const {
-  return std::ranges::any_of(hosts_, [](const auto& entry) {
-    return entry.second->TakesOpenUrls();
-  });
+ShellHostView* WindowRegistry::FindOpenUrlsRecipient() const {
+  for (auto it = activation_order_.rbegin(); it != activation_order_.rend();
+       ++it) {
+    const auto found = hosts_.find(*it);
+    if (found != hosts_.end() && found->second->TakesOpenUrls() &&
+        found->second->OpenUrlsListening()) {
+      return found->second;
+    }
+  }
+  return nullptr;
 }
 
 void WindowRegistry::Stop() {
+  weak_factory_.InvalidateWeakPtrs();
   hidden_private_handovers_.clear();
   browsers_observation_.Reset();
   Watch().reset();
+  placement_loading_ = false;
+  pending_bare_relaunch_ = false;
   started_ = false;
 }
 
@@ -581,6 +596,9 @@ bool WindowRegistry::PreTranslate(const MSG& msg) {
 }
 
 void WindowRegistry::Relaunched(base::ListValue urls) {
+  if (urls.empty()) {
+    pending_bare_relaunch_ = true;
+  }
   if (!app_profile()) {
     for (base::Value& url : urls) {
       pending_urls_.Append(std::move(url));
@@ -594,16 +612,7 @@ void WindowRegistry::DeliverOpenUrls() {
   if (pending_urls_.empty()) {
     return;
   }
-  ShellHostView* chosen = nullptr;
-  for (auto it = activation_order_.rbegin(); it != activation_order_.rend();
-       ++it) {
-    const auto found = hosts_.find(*it);
-    if (found != hosts_.end() && found->second->TakesOpenUrls() &&
-        found->second->OpenUrlsListening()) {
-      chosen = found->second;
-      break;
-    }
-  }
+  ShellHostView* chosen = FindOpenUrlsRecipient();
   if (!chosen) {
     return;
   }
