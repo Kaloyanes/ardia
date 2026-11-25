@@ -34,3 +34,14 @@ test("a WebUI launch on the Mac app's session restores its window instead of ope
   assert.deepEqual(initial.windows["w-mac"].tabIds, ["a", "b", "c", "d"]);
   assert.deepEqual(initial.windows["w-mac"].activeTabIds, { default: "b", "p-two": "c" });
 });
+
+test("shaping is idempotent for the Mac session and for an older list session, so a second pass keeps every tab", () => {
+  const twice = linuxSessionShape(linuxSessionShape(macDiskSession()));
+  assert.deepEqual(twice.windows["w-mac"].tabIds, ["a", "b", "c", "d"]);
+  const older = { ...macDiskSession(), version: 2 };
+  for (const t of older.tabs) delete t.page;
+  const shaped = linuxSessionShape(older);
+  assert.equal(Object.keys(shaped.tabs).length, 4);
+  const again = initialLinuxSession({ bootstrap: { windowId: "w-mac", profileId: "default", startup: true } }, shaped);
+  assert.deepEqual(again.windows["w-mac"].tabIds, ["a", "b", "c", "d"]);
+});

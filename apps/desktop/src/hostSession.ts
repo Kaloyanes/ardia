@@ -135,7 +135,7 @@ function migratedSession(session: HydrateData, from: number): HydrateData {
 }
 
 const macDiskSession = (saved: HydrateData, stamped: number | undefined) =>
-  stamped !== undefined && stamped >= SESSION_VERSION && DISK_LISTS.some((key) => Array.isArray(saved[key]));
+  stamped !== undefined && stamped >= SESSION_VERSION && Array.isArray(saved.tabs) && DISK_LISTS.every((key) => saved[key] === undefined || Array.isArray(saved[key]));
 
 export const linuxSessionShape = (saved: HydrateData): HydrateData => {
   const stamped = linuxSessionVersion(saved);

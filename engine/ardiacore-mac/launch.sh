@@ -6,6 +6,7 @@ if [[ $# -lt 3 || $1 == -h || $1 == --help ]]; then
 fi
 app=$1 data=$2 port=$3
 shift 3
+if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then echo "port $port is already in use" >&2; exit 1; fi
 mkdir -p "$data/Chromium"
 envs=(--env ARDIA_DATA_DIR="$data" --env ARDIA_BACKGROUND=1)
 [[ -n "${MAC_WEBUI_INJECT:-}" ]] && envs+=(--env DYLD_INSERT_LIBRARIES="$MAC_WEBUI_INJECT" --env AC_BENCH_SWIPE=1 --env AC_BENCH_FRAMES=1)
