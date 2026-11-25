@@ -1247,6 +1247,7 @@ class ShellHostView : public views::View,
     if (pinned_) pin_read_ = true;
     return pinned_;
   }
+  void ReleasePinnedSizeWhenTiled();
   bool TakeOpenedFloating() { return std::exchange(opened_floating_, false) && pin_read_; }
   const char* window_class() const { return window_class_; }
   void ReleasePinnedSize() {
@@ -4904,6 +4905,12 @@ desktop_window_state::NativeWindow ShellHostView::NativeWindowFacts() const {
     native.edges = {.left = tiled.left, .right = tiled.right, .top = tiled.top, .bottom = tiled.bottom};
   }
   return native;
+}
+
+void ShellHostView::ReleasePinnedSizeWhenTiled() {
+  if (!pinned_ || !browser_view_ || !browser_view_->browser_widget()) return;
+  const ui::WindowTiledEdges& tiled = browser_view_->browser_widget()->tiled_edges();
+  if (tiled.left || tiled.right || tiled.top || tiled.bottom) ReleasePinnedSize();
 }
 
 desktop_window_state::WindowState ShellHostView::NativeWindowState() const {
@@ -8805,7 +8812,9 @@ void StartLinuxHost() {
   static base::NoDestructor<WindowButtonLayoutWatch> window_button_layout_watch;
   g_ardia_linux_tiled_edges_changed = [](views::Widget* widget) {
     for (const auto& [id, host] : Hosts()) {
-      if (host->GetWidget() == widget) host->ScheduleWindowStateReport();
+      if (host->GetWidget() != widget) continue;
+      host->ReleasePinnedSizeWhenTiled();
+      host->ScheduleWindowStateReport();
     }
   };
   g_ardia_linux_minimum_size = [](const BrowserWindowInterface* browser, gfx::Size* minimum) {
