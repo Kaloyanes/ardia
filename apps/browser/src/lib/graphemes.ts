@@ -109,7 +109,7 @@ function joins(run: Run, now: Break, cp: number): boolean {
 function advance(run: Run, now: Break, cp: number) {
   run.regional = now === "RI" ? run.regional + 1 : 0;
   if (isPictographicPoint(cp)) run.pictographic = 1;
-  else if (run.pictographic && now === "Extend") run.pictographic = 1;
+  else if (run.pictographic === 1 && now === "Extend") run.pictographic = 1;
   else run.pictographic = run.pictographic === 1 && now === "ZWJ" ? 2 : 0;
   if (isLinker(cp)) run.conjunct = 2;
   else if (isConsonant(cp)) run.conjunct = 1;

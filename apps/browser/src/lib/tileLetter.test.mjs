@@ -106,3 +106,11 @@ test("tile letters normalise and upper-case only the basic plane, so Hermes, whi
   assert.equal(cleanTileLetters("𐐨b"), "𐐨B", "an astral letter keeps its case");
   assert.equal(cleanTileLetters("éb"), "ÉB");
 });
+
+test("tile letters made only of characters that draw nothing, Braille Blank, the Hangul fillers and the Mongolian vowel separator, count as blank", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  for (const blank of ["⠀", "ㅤ", "ﾠ", "ᅟ", "ᅠ", "᠎", "⠀ㅤ", " ⠀ "]) assert.equal(cleanTileLetters(blank), null, JSON.stringify(blank));
+  assert.equal(cleanTileLetters("⠀aㅤb"), "AB", "a blank between letters takes no room");
+  assert.equal(cleanTileLetters("⠁"), "⠁", "a Braille pattern with dots still counts");
+  assert.equal(cleanTileLetters("가"), "가", "real jamo still join");
+});

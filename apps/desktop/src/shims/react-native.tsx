@@ -3,6 +3,7 @@ import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
 import { Animated as WebAnimated, TextInput as WebTextInput, UIManager } from "react-native-web";
 import { watchLayout } from "./web/mountLayout";
 import { handsKeyboardOnFocus } from "../pageFocus";
+import { routeFieldKey, type KeyMatch } from "../textInputKeys";
 
 export * from "react-native-web";
 export { MacPressable as Pressable, MacView as View } from "./web/motion/macView";
@@ -41,15 +42,10 @@ export const Animated = {
 
 export const findNodeHandle = (component: unknown) => (component instanceof Element ? component : null) as unknown as number | null;
 
-type KeyMatch = { key: string; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; ctrlKey?: boolean };
 type MacTextInputProps = ComponentProps<typeof WebTextInput> & {
   keyDownEvents?: KeyMatch[];
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
 };
-
-const MODIFIERS = ["metaKey", "shiftKey", "altKey", "ctrlKey"] as const;
-const matches = (e: KeyboardEvent, wanted: KeyMatch) =>
-  e.key === wanted.key && MODIFIERS.every((m) => wanted[m] === undefined || !!e[m] === wanted[m]);
 
 function assignRef<T>(ref: ForwardedRef<T>, value: T | null) {
   if (typeof ref === "function") ref(value);
@@ -59,12 +55,7 @@ function assignRef<T>(ref: ForwardedRef<T>, value: T | null) {
 export const NATIVE_CHANGE = Symbol("ardiaNativeChange");
 
 export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacTextInput({ keyDownEvents, onKeyDown, ...props }, ref) {
-  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (!keyDownEvents) return onKeyDown?.(e);
-    if (!keyDownEvents.some((wanted) => matches(e, wanted))) return;
-    e.preventDefault();
-    onKeyDown?.(e);
-  };
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => routeFieldKey(e, keyDownEvents, onKeyDown);
   const native = useRef({ changeText: props.onChangeText, selectionChange: props.onSelectionChange });
   native.current = { changeText: props.onChangeText, selectionChange: props.onSelectionChange };
   const field = useRef<HTMLInputElement | null>(null);

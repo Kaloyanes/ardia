@@ -37,3 +37,10 @@ test("the reported cases: Khmer and Devanagari conjuncts, a prepend sign, symbol
   assert.deepEqual(graphemeClusters("⌀⌀⌀"), ["⌀", "⌀", "⌀"]);
   assert.deepEqual(graphemeClusters("👩‍💻👨‍👩‍👧"), ["👩‍💻", "👨‍👩‍👧"]);
 });
+
+test("an emoji joins the next only across a ZWJ with nothing but Extend marks before it, so a mark between two ZWJs breaks the sequence", () => {
+  const cases = ["\u{1F600}‍́‍\u{1F600}B", "\u{1F600}́‍\u{1F600}B", "\u{1F600}‍‍\u{1F600}", "\u{1F600}\u{1F3FB}‍\u{1F600}"];
+  for (const text of cases) assert.deepEqual(graphemeClusters(text), icu(text), JSON.stringify(text));
+  assert.equal(graphemeClusters(cases[0]).length, 3);
+  assert.equal(graphemeClusters(cases[1]).length, 2);
+});
