@@ -8,10 +8,13 @@
 #include <utility>
 
 #include "ardia/mac/ac_mac_shell_bridge.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
+#include "ardia/mac/generated/ac_desktop_window_commands.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -71,6 +74,7 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    ardia::desktop_commands::kEditCapability,
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
@@ -180,6 +184,9 @@ std::string ShellHostView::BootstrapJson() const {
   }
   for (const auto& route : ardia::desktop_routes::kRoutes) {
     capabilities.Append(route.name);
+  }
+  for (std::string_view route : page_policy::kZoomRoutes) {
+    capabilities.Append(route);
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
@@ -506,6 +513,18 @@ void ShellHostView::EngineCall(const std::string& name,
         true, base::Value(base::WriteJson(base::DictValue().Set(
                                               "profiles", std::move(loaded)))
                               .value_or("{}")));
+  }
+  if (page_policy::IsZoomRoute(name)) {
+    return WithProfile(profile,
+                       base::BindOnce(
+                           [](std::string name, std::optional<base::Value> args,
+                              Done done, Profile* resolved) {
+                             SiteZoomCall(name, resolved, args ? &*args : nullptr,
+                                          std::move(done));
+                           },
+                           name, args ? std::optional<base::Value>(args->Clone())
+                                      : std::nullopt,
+                           std::move(done)));
   }
   const auto* route = ardia::desktop_routes::FindRoute(name);
   EngineFunction call =

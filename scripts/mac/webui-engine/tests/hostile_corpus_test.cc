@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -10,6 +11,7 @@
 
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
@@ -245,6 +247,64 @@ TEST(launch_environment) {
   }
   CHECK(ardia_mac::webui_policy::Active(
       ardia_mac::webui_policy::Decide(ardia_mac::webui_policy::Build::kDevelopment, "webui", std::nullopt)));
+}
+
+TEST(page_guards) {
+  namespace page = ardia_mac::page_policy;
+  const auto never = [](std::string_view) { return std::string("not-a-digest"); };
+  const std::array<page::Operation, 1> operations = {{{"plain", 5, "0", page::Arguments::kNone, ""}}};
+  for (const std::string& text : Load().strings) {
+    if (page::Handles(text)) {
+      CHECK(Charset(text, ""));
+    }
+    if (page::IsZoomRoute(text)) {
+      CHECK(text == "sites.zoomLevels" || text == "sites.setZoom");
+    }
+    if (const auto id = page::PopupId(text)) {
+      CHECK(*id >= 0 && Charset(text, "") && text == std::to_string(*id));
+    }
+    if (page::PageActionFor(text) != page::PageAction::kUnsupported) {
+      CHECK(text == "savePage" || text == "systemPrint" || text == "viewSource");
+    }
+    if (page::DevToolsPanelFor(text)) {
+      CHECK(text == "toggle" || text == "inspect" || text == "console");
+    }
+    if (page::ZoomHostShape(text)) {
+      CHECK(!text.empty() && text.size() <= 253 && NoControls(text) && text.find('/') == std::string::npos);
+    }
+    CHECK(!page::MatchOperation(text, never, operations).has_value());
+    const std::string quoted = page::JavaScriptString(text);
+    CHECK(quoted.size() >= 2 && quoted.front() == '"' && quoted.back() == '"' && NoControls(quoted));
+    CHECK(quoted.find('<') == std::string::npos && quoted.find('>') == std::string::npos);
+    for (size_t index = 1; index + 1 < quoted.size(); ++index) {
+      if (quoted[index] == '"') CHECK(quoted[index - 1] == '\\');
+    }
+    if (const auto replaced = page::ReplaceArguments(text, text, false)) {
+      CHECK(text.size() <= page::kReplaceTextMax && NoControls(*replaced));
+    }
+    const std::array<std::string_view, 1> fonts = {{"serif"}};
+    if (const auto look = page::LookArgument(true, 0, text, 5, fonts)) CHECK(text == "serif");
+    const std::array<std::string_view, 1> selectors = {{text}};
+    if (const auto picked = page::PickerSelectors(selectors)) {
+      CHECK(!text.empty() && text.size() <= page::kPickerSelectorMax && NoControls(*picked));
+    }
+  }
+  for (double a : Load().numbers) {
+    if (const auto whole = page::WholeNumber(a)) CHECK(static_cast<double>(*whole) == a);
+    if (const auto step = page::ZoomStep(a)) CHECK(*step >= -1 && *step <= 1);
+    if (const auto seconds = page::SleepSeconds(a)) {
+      CHECK(*seconds >= 0 && *seconds <= page::kSleepLongestHiddenSeconds);
+    }
+    if (page::ZoomFactorAllowed(a)) CHECK(a >= page::kZoomFactorMin && a <= page::kZoomFactorMax);
+    if (const auto factor = page::ReportedZoomFactor(a)) CHECK(std::isfinite(*factor) && *factor > 0);
+    for (double b : Load().numbers) {
+      if (const auto point = page::PickerPoint(a, b)) {
+        CHECK(std::isfinite(a) && std::isfinite(b) && NoControls(*point));
+        CHECK(point->find("nan") == std::string::npos && point->find("inf") == std::string::npos);
+      }
+    }
+  }
+  CHECK(page::Handles("find") && page::PopupId("7") == 7);
 }
 
 int main(int argc, char** argv) {

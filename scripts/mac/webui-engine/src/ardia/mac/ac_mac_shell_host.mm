@@ -10,6 +10,8 @@
 
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
+#include "ardia/mac/ac_mac_page_commands.h"
+#include "ardia/mac/ac_mac_page_events.h"
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
@@ -307,9 +309,15 @@ PageBinding::PageBinding(ShellHostView* owner,
       owner_(owner),
       id_(TabId(contents)),
       key_(std::move(key)),
-      profile_(std::move(profile)) {}
+      profile_(std::move(profile)) {
+  events_ = std::make_unique<PageEvents>(
+      contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  commands_ = std::make_unique<PageCommands>(this);
+}
 
 PageBinding::~PageBinding() {
+  commands_.reset();
+  events_.reset();
   if (viewport && owner_) {
     viewport->SetWebContents(nullptr);
     owner_->RemoveChildViewT(viewport.get());
@@ -328,8 +336,9 @@ base::DictValue PageBinding::NavigationEvent() const {
     data.Set("isLoading", contents->IsLoading());
     data.Set("committedUrl", contents->GetLastCommittedURL().spec());
   }
-  data.Set("themeColor", base::Value());
-  data.Set("themeColorSource", base::Value());
+  const std::optional<std::string> theme = PageThemeColor(contents);
+  data.Set("themeColor", theme ? base::Value(*theme) : base::Value());
+  data.Set("themeColorSource", theme ? base::Value("meta") : base::Value());
   return base::DictValue().Set("name", "navigation").Set("data", std::move(data));
 }
 
@@ -349,6 +358,16 @@ void PageBinding::ReportNavigation() {
   }
   base::DictValue delivery = Envelope("pageEvent");
   delivery.Set("event", NavigationEvent());
+  owner_->Emit("ArdiaWebView", base::NumberToString(id_),
+               base::Value(std::move(delivery)));
+}
+
+void PageBinding::Report(std::string_view name, base::Value data) {
+  if (!owner_ || claim.empty() || !web_contents()) {
+    return;
+  }
+  base::DictValue delivery = Envelope("pageEvent");
+  delivery.Set("event", PageEvent(name, std::move(data)));
   owner_->Emit("ArdiaWebView", base::NumberToString(id_),
                base::Value(std::move(delivery)));
 }
@@ -383,8 +402,14 @@ void PageBinding::DidStopLoading() {
   ReportNavigation();
 }
 
+void PageBinding::DidChangeThemeColor() {
+  ReportNavigation();
+}
+
 void PageBinding::WebContentsDestroyed() {
   ReportClosed();
+  commands_->Reset();
+  events_->Reset();
   if (viewport) {
     viewport->SetWebContents(nullptr);
   }
@@ -883,7 +908,11 @@ base::DictValue ShellHostView::Identity(PageBinding* binding) const {
   lease.Set("documentEpoch", "1");
   base::DictValue snapshot;
   snapshot.Set("watermark", static_cast<double>(binding->sequence));
-  snapshot.Set("events", base::ListValue().Append(binding->NavigationEvent()));
+  base::ListValue events = base::ListValue().Append(binding->NavigationEvent());
+  if (binding->events()) {
+    binding->events()->AppendSnapshot(events);
+  }
+  snapshot.Set("events", std::move(events));
   return base::DictValue()
       .Set("browserId", binding->id())
       .Set("chromeTabId", binding->id())
@@ -1074,12 +1103,21 @@ void ShellHostView::SetPresentations(const base::DictValue& args, Done done) {
 
 void ShellHostView::TabCommand(const base::DictValue& args, Done done) {
   PageBinding* binding = ClaimedBinding(args);
+  const std::string command = Text(args, "command");
   if (!binding) {
+    if (PageCommands::Handles(command)) {
+      return std::move(done).Run(
+          false, Failure("ERR_PAGE_STALE_TARGET", "No such live tab"));
+    }
     return std::move(done).Run(false, base::Value("No owned live tab"));
   }
   content::WebContents* contents = binding->contents();
-  const std::string command = Text(args, "command");
   const base::ListValue* values = Arguments(args);
+  if (PageCommands::Handles(command)) {
+    static const base::NoDestructor<base::ListValue> kNoArguments;
+    return binding->commands()->Run(command, values ? *values : *kNoArguments,
+                                    std::move(done));
+  }
   content::NavigationController& controller = contents->GetController();
   if (command == "loadUrl") {
     const std::optional<GURL> url =

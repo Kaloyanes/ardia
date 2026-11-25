@@ -68,6 +68,22 @@ that branch). It is a development tool and never runs in a release. Like Windows
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
+- **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
+  (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
+  - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),
+    `showDevTools`, `zoomStep`, `goToOffset`, `evaluate`, `edit` (advertised as `tab.edit`), `getSecurityInfo`,
+    `discard`, `sleepIfHidden`, `setFrozen`, `downloadFavicon`, `downloadImage`, `openBlockedPopup` and
+    `resolveUnresponsive`.
+  - `evaluate` runs only the page operations on Linux's allowlist (`ac_linux_page_operations.h`, a dev copy),
+    re-encodes their arguments and runs them in an isolated world.
+  - `sites.setZoom` and `sites.zoomLevels` go straight to the profile's `HostZoomMap`.
+- **Page events.** `ac_mac_page_events.mm` sends these `ArdiaWebView` page events in Linux's shapes, and includes
+  them in the `tab.create` snapshot: `favicon`, `media`, `fullscreen`, `status`, `crashed`, `loadError`, `security`,
+  `zoom`, `popupBlocked`, `unresponsive`/`responsive`, `find`, `discarded` and the real `themeColor`.
+  - The hover URL, hangs, context menus, JavaScript and leave-page dialogs, file choosers and permission prompts go
+    through a `BrowserWebContentsDelegate` subclass (`ac_mac_page_delegate.mm`, installed through ArdiaCore's
+    `g_ardia_create_web_contents_delegate`), so `apply.sh` adds no Chrome hook for them.
+  - With `ARDIA_BACKGROUND=1` each of those is logged by kind and answered without UI.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

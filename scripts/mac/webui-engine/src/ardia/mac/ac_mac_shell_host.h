@@ -49,6 +49,8 @@ class WebView;
 namespace ardia_mac {
 
 class GlassRegions;
+class PageCommands;
+class PageEvents;
 class PopoverHost;
 class ShellBridge;
 class ShellHostView;
@@ -88,6 +90,9 @@ class PageBinding : public content::WebContentsObserver {
   const std::string& key() const { return key_; }
   const std::string& profile() const { return profile_; }
   content::WebContents* contents() const { return web_contents(); }
+  ShellHostView* host() const { return owner_; }
+  PageEvents* events() const { return events_.get(); }
+  PageCommands* commands() const { return commands_.get(); }
 
   std::string claim;
   uint64_t renderer_generation = 0;
@@ -100,18 +105,22 @@ class PageBinding : public content::WebContentsObserver {
   base::DictValue Envelope(std::string_view type);
   void ReportNavigation();
   void ReportClosed();
+  void Report(std::string_view name, base::Value data);
 
  private:
   void DidFinishNavigation(content::NavigationHandle* handle) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
+  void DidChangeThemeColor() override;
   void WebContentsDestroyed() override;
 
   raw_ptr<ShellHostView> owner_;
   int id_ = 0;
   std::string key_;
   std::string profile_;
+  std::unique_ptr<PageEvents> events_;
+  std::unique_ptr<PageCommands> commands_;
 };
 
 class ShellHostView : public views::View,
