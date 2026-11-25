@@ -51,6 +51,7 @@ function cleanOnce(text: string): string {
       kept += cluster;
       continue;
     }
+    if (kept) break;
     for (const char of cluster) {
       if (char.length > TILE_LETTERS_MAX_LENGTH - kept.length) break;
       kept += char;

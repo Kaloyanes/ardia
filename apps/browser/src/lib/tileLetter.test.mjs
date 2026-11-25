@@ -136,3 +136,12 @@ test("a letter that is only fillers and invisible marks is blank, and repeated i
   assert.equal(cleanTileLetters("\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}x"), "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}X", "a tag flag keeps its tags");
   assert.equal(cleanTileLetters("\u2764\uFE0F"), "\u2764\uFE0F");
 });
+
+test("a second letter that doesn't fit whole is left off rather than cut, so a subdivision flag never loses its closing tag (#4197)", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+  assert.equal(cleanTileLetters(family + scotland), family);
+  assert.equal(cleanTileLetters(scotland + family), scotland, "the flag first, then a family that would overflow, keeps the flag");
+  assert.equal(cleanTileLetters("A" + scotland), "A" + scotland);
+});
