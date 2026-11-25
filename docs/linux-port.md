@@ -1156,20 +1156,23 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
     `windowFrame` is null and the work area is the whole output, a maximized window beside a panel, a bar or gaps
     keeps the maximize glyph. Clicking toggles correctly either way.
 - **Tiling window managers.** Little Ardia, Settings and Import float over the main window on niri, sway and i3 with
-  no rule (tested; other compositors that float fixed-size windows do the same), as the Mac floats them since #1905.
-  The host opens them with their own window class, the Wayland app id and the X11 `WM_CLASS` instance `ardia-little`,
-  `ardia-settings` and `ardia-import` (`linux_window::WindowClass`, through `g_ardia_linux_window_class` in
-  `chromium-linux-floating-windows.patch`), and maps them with their minimum size equal to their maximum
-  (`g_ardia_linux_pins_window_size`), which those compositors float by default. The host releases the pin 400 ms after
-  the window's first frame (3 s at most), so the window resizes like any other afterwards. A window saved maximized
-  opens unpinned. Main windows keep the `ardia` class and tile. Hidden desktop entries (`NoDisplay=true`,
-  `StartupWMClass` set to the class, `Icon=ardia`) give the three classes Ardia's name and icon in bars and switchers;
-  every package format installs them (`linux_formats.desktop_entries`). A compositor rule can still match the class,
-  for niri `window-rule { match app-id="^ardia-little$" open-floating false }` to tile it again. Settings' app id was
-  `chrome-ArdiaSettings-Default` before, so an existing rule naming it needs the new id. A window that the shell turns
-  into Little Ardia after it opened, or back (`set_small`), keeps the class and the tiling it opened with: Wayland
-  can't change an app id once a window is mapped. `usage_counts.little_ardia_opened_floating` and
-  `utility_windows_opened_floating` count windows opened with the pin, in the window that opened.
+  no rule (tested on the Chromium 157 engine; other compositors that float fixed-size windows do the same), as the Mac
+  floats them since #1905. The host opens them with their own window class, the Wayland app id and the X11 `WM_CLASS`
+  instance `ardia-little`, `ardia-settings` and `ardia-import` (`linux_window::WindowClass`, through
+  `g_ardia_linux_window_class` in `chromium-linux-floating-windows.patch`, at the end of `GetWindowClass()`), and maps
+  them with their minimum size equal to their maximum (`g_ardia_linux_pins_window_size`,
+  `BrowserWidget::GetMinimumSize` and `GetMaximumSize`), which those compositors float by default. The host releases
+  the pin 400 ms after the window's first frame (3 s at most), so the window resizes like any other afterwards. A
+  window saved maximized opens unpinned. Main windows keep the `ardia` class and tile. Hidden desktop entries
+  (`NoDisplay=true`, `StartupWMClass` set to the class, `Icon=ardia`) give the three classes Ardia's name and icon in
+  bars and switchers; `install.sh` (so the tarball and the AUR package) and the `.deb` install them
+  (`linux_formats.desktop_entries`). The AppImage carries them but installs nothing, so there the bars show the bare
+  class. A compositor rule can still match the class, for niri `window-rule { match app-id="^ardia-little$"
+  open-floating false }` to tile it again. Settings' app id was `chrome-ArdiaSettings-Default` before, so an existing
+  rule naming it needs the new id. A window that the shell turns into Little Ardia after it opened, or back
+  (`set_small`), keeps the class and the tiling it opened with: the host answers the class hook with the class the
+  window opened with. `usage_counts.little_ardia_opened_floating` and `utility_windows_opened_floating` count windows
+  opened with the pin, once per window, in the shell's first load.
 - **Header drag and double-click.** Dragging the header moves the window (`DispatchHostWindowDragMovement`).
   Double-clicking it runs the desktop's titlebar action.
 - **Outer frame.** The host overlays Chromium's client view, and what happens to Chromium's frame around it depends on

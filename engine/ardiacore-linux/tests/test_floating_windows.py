@@ -162,7 +162,9 @@ class FloatingWindowHostTests(unittest.TestCase):
 
     def test_the_bootstrap_says_the_window_opened_floating(self):
         bootstrap = self.section('base::DictValue ShellHostView::Bootstrap() const {', 'void ShellHostView::LayoutOverlay()')
-        self.assertIn('if (opened_pinned_) bootstrap.Set("openedFloating", true);', bootstrap)
+        self.assertIn('if (opened_pinned_ && renderer_generation_ == 0) bootstrap.Set("openedFloating", true);', bootstrap)
+        retire = self.section('  void RetireRenderer() {', '    renderer_document_ = content::WeakDocumentPtr();')
+        self.assertIn('++renderer_generation_;', retire)
 
 
 class FloatingWindowPatchTests(unittest.TestCase):

@@ -3548,7 +3548,7 @@ base::DictValue ShellHostView::Bootstrap() const {
   bootstrap.Set("pageProfile", page_profile_);
   if (!private_window_.empty()) bootstrap.Set("privateWindow", private_window_.Clone());
   bootstrap.Set("windowKind", WindowKind());
-  if (opened_pinned_) bootstrap.Set("openedFloating", true);
+  if (opened_pinned_ && renderer_generation_ == 0) bootstrap.Set("openedFloating", true);
   bootstrap.Set("shellZoom", blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell())));
   if (const base::CommandLine* command = base::CommandLine::ForCurrentProcess();
       command->HasSwitch(sandbox::policy::switches::kNoSandbox)) {

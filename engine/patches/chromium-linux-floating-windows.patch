@@ -22,7 +22,7 @@ pin once the window has been presented. Both hooks are null outside the Linux ho
 +         g_ardia_linux_pins_window_size(browser_view->browser());
 +}
 +
-+}  // namespace
++}
 +
  BrowserNativeWidgetAuraLinux::BrowserNativeWidgetAuraLinux(
      BrowserWidget* browser_widget,
