@@ -502,6 +502,7 @@ struct RequestedWindow {
   std::string kind;
   bool small = false;
   bool pinned = false;
+  bool pin_read = false;
   const char* window_class = nullptr;
   std::string title;
   base::DictValue utility;
@@ -1242,7 +1243,11 @@ class ShellHostView : public views::View,
   int id() const { return id_; }
   const std::string& window_id() const { return window_id_; }
   bool is_utility() const { return !kind_.empty(); }
-  bool pins_size() const { return pinned_; }
+  bool ReadPinnedSize() {
+    if (pinned_) pin_read_ = true;
+    return pinned_;
+  }
+  bool TakeOpenedFloating() { return std::exchange(opened_floating_, false) && pin_read_; }
   const char* window_class() const { return window_class_; }
   void ReleasePinnedSize() {
     if (!pinned_) return;
@@ -1277,7 +1282,8 @@ class ShellHostView : public views::View,
     kind_ = std::move(request.kind);
     small_ = request.small;
     pinned_ = request.pinned;
-    opened_pinned_ = request.pinned;
+    pin_read_ = request.pin_read;
+    opened_floating_ = request.pinned;
     window_class_ = request.window_class;
     title_ = std::move(request.title);
     utility_ = std::move(request.utility);
@@ -1651,7 +1657,8 @@ class ShellHostView : public views::View,
   std::set<int> closing_offers_;
   bool small_ = false;
   bool pinned_ = false;
-  bool opened_pinned_ = false;
+  bool pin_read_ = false;
+  bool opened_floating_ = false;
   const char* window_class_ = nullptr;
   bool reports_commits_ = false;
   std::map<int, base::WeakPtr<content::WebContents>> offered_;
@@ -2752,11 +2759,14 @@ class ShellDataSource : public content::URLDataSource {
         url.host() != "ardia") {
       return std::move(callback).Run(nullptr);
     }
-    if (AssetPath(url) == "host-bootstrap.js") host->HandUnclaimedTabsToShell();
+    const bool shell_bootstrap = AssetPath(url) == "host-bootstrap.js";
+    if (shell_bootstrap) host->HandUnclaimedTabsToShell();
+    base::DictValue bootstrap = host->Bootstrap();
+    if (shell_bootstrap && host->TakeOpenedFloating()) bootstrap.Set("openedFloating", true);
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE,
         base::BindOnce(&ReadAsset, AssetDirectory(), AssetPath(url),
-                       DocumentDirectory(host->profile()), host->Bootstrap()),
+                       DocumentDirectory(host->profile()), std::move(bootstrap)),
         base::BindOnce(
             [](GotDataCallback callback, std::optional<std::string> contents) {
               std::move(callback).Run(
@@ -3548,7 +3558,6 @@ base::DictValue ShellHostView::Bootstrap() const {
   bootstrap.Set("pageProfile", page_profile_);
   if (!private_window_.empty()) bootstrap.Set("privateWindow", private_window_.Clone());
   bootstrap.Set("windowKind", WindowKind());
-  if (opened_pinned_ && renderer_generation_ == 0) bootstrap.Set("openedFloating", true);
   bootstrap.Set("shellZoom", blink::ZoomLevelToZoomFactor(zoom::ZoomController::GetZoomLevelForWebContents(shell())));
   if (const base::CommandLine* command = base::CommandLine::ForCurrentProcess();
       command->HasSwitch(sandbox::policy::switches::kNoSandbox)) {
@@ -8814,9 +8823,11 @@ void StartLinuxHost() {
   g_ardia_linux_pins_window_size = [](const BrowserWindowInterface* browser) {
     if (!browser) return false;
     const int session = browser->GetSessionID().id();
-    if (const auto host = Hosts().find(session); host != Hosts().end()) return host->second->pins_size();
+    if (const auto host = Hosts().find(session); host != Hosts().end()) return host->second->ReadPinnedSize();
     const auto requested = RequestedWindows().find(session);
-    return requested != RequestedWindows().end() && requested->second.browser.get() == browser && requested->second.pinned;
+    if (requested == RequestedWindows().end() || requested->second.browser.get() != browser || !requested->second.pinned) return false;
+    requested->second.pin_read = true;
+    return true;
   };
   g_ardia_linux_unhandled_key = [](content::WebContents* contents, const input::NativeWebKeyboardEvent& event) {
     const int modifiers = event.GetModifiers();

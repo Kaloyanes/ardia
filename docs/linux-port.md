@@ -1172,7 +1172,7 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
   rule naming it needs the new id. A window that the shell turns into Little Ardia after it opened, or back
   (`set_small`), keeps the class and the tiling it opened with: the host answers the class hook with the class the
   window opened with. `usage_counts.little_ardia_opened_floating` and `utility_windows_opened_floating` count windows
-  opened with the pin, once per window, in the shell's first load.
+  that opened with Chromium reading the pin, once per window, in the first shell that loads in it.
 - **Header drag and double-click.** Dragging the header moves the window (`DispatchHostWindowDragMovement`).
   Double-clicking it runs the desktop's titlebar action.
 - **Outer frame.** The host overlays Chromium's client view, and what happens to Chromium's frame around it depends on

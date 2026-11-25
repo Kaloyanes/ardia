@@ -1,4 +1,6 @@
+import importlib.util
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,6 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
 LINUX = SOURCE / 'ardia' / 'linux'
 PATCHES = ROOT.parent / 'patches'
+REPO = ROOT.parents[1]
 PATCH = PATCHES / 'chromium-linux-floating-windows.patch'
 WIDGET = 'chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc'
 WIDGET_HEADER = 'chrome/browser/ui/views/frame/browser_widget.h'
@@ -147,9 +150,13 @@ class FloatingWindowHostTests(unittest.TestCase):
     def test_the_pin_is_read_from_the_request_until_the_host_attaches(self):
         self.assertIn('extern bool (*g_ardia_linux_pins_window_size)(const BrowserWindowInterface*);', self.host)
         hook = self.section('g_ardia_linux_pins_window_size = [](', 'g_ardia_linux_unhandled_key = [](')
-        self.assertIn('return host->second->pins_size();', hook)
-        self.assertIn('requested->second.browser.get() == browser && requested->second.pinned', hook)
+        self.assertIn('return host->second->ReadPinnedSize();', hook)
+        self.assertIn('requested->second.browser.get() != browser || !requested->second.pinned) return false;', hook)
+        self.assertLess(hook.index('requested->second.pin_read = true;'), hook.index('return true;'))
         self.assertIn('pinned_ = request.pinned;', self.host)
+        self.assertIn('pin_read_ = request.pin_read;', self.host)
+        read = self.section('bool ReadPinnedSize() {', 'bool TakeOpenedFloating()')
+        self.assertIn('if (pinned_) pin_read_ = true;', read)
 
     def test_the_pin_lets_go_after_the_window_is_presented_or_the_limit(self):
         presented = self.section('void ShellHostView::OnDidPresentCompositorFrame(', 'void ShellHostView::OnWidgetActivationChanged(')
@@ -160,11 +167,27 @@ class FloatingWindowHostTests(unittest.TestCase):
         release = self.section('void ReleasePinnedSize() {', 'void set_small(bool small) {')
         self.assertLess(release.index('pinned_ = false;'), release.index('GetWidget()->OnSizeConstraintsChanged();'))
 
-    def test_the_bootstrap_says_the_window_opened_floating(self):
-        bootstrap = self.section('base::DictValue ShellHostView::Bootstrap() const {', 'void ShellHostView::LayoutOverlay()')
-        self.assertIn('if (opened_pinned_ && renderer_generation_ == 0) bootstrap.Set("openedFloating", true);', bootstrap)
-        retire = self.section('  void RetireRenderer() {', '    renderer_document_ = content::WeakDocumentPtr();')
-        self.assertIn('++renderer_generation_;', retire)
+    def test_only_the_first_shell_bootstrap_says_the_window_opened_floating_and_only_once_chromium_read_the_pin(self):
+        self.assertNotIn('openedFloating', self.section('base::DictValue ShellHostView::Bootstrap() const {', 'void ShellHostView::LayoutOverlay()'))
+        served = self.section('  void StartDataRequest(', 'FileRunner()->PostTaskAndReplyWithResult(')
+        self.assertIn('const bool shell_bootstrap = AssetPath(url) == "host-bootstrap.js";', served)
+        self.assertIn('if (shell_bootstrap && host->TakeOpenedFloating()) bootstrap.Set("openedFloating", true);', served)
+        self.assertIn('bool TakeOpenedFloating() { return std::exchange(opened_floating_, false) && pin_read_; }', self.host)
+        self.assertIn('opened_floating_ = request.pinned;', self.host)
+
+
+class FloatingWindowPackagingTests(unittest.TestCase):
+    def test_the_packaged_window_classes_are_the_engine_s(self):
+        header = (LINUX / 'ac_linux_window_lifecycle.h').read_text()
+        engine = set(re.findall(r'k(?:Little|Settings|Import)WindowClass\[\] = "([^"]+)"', header))
+        self.assertEqual(len(engine), 3)
+        spec = importlib.util.spec_from_file_location('linux_formats', REPO / 'scripts/linux/linux_formats.py')
+        formats = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(formats)
+        self.assertEqual(set(formats.WINDOW_CLASSES), engine)
+        smoke = (REPO / 'scripts/linux/smoke.mjs').read_text()
+        listed = re.search(r'const WINDOW_DESKTOP_ENTRIES = \[([^\]]*)\]', smoke).group(1)
+        self.assertEqual(set(re.findall(r'"([^"]+)\.desktop"', listed)), engine)
 
 
 class FloatingWindowPatchTests(unittest.TestCase):
