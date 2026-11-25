@@ -728,7 +728,7 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   - `Requires` comes from rpm's own generator over the ELF files and scripts, minus every library `lib/ardia`
     bundles (`__requires_exclude`, built from the tree's `*.so*` names) and the Qt shims' libraries
     (`__requires_exclude_from`); it provides none of its bundled libraries. It adds what Chromium loads at run time
-    (GTK 3 and libsecret by soname, Liberation fonts, xdg-utils, ca-certificates), `curl` for the CLI installer and
+    (GTK 3 and libsecret by soname, Liberation fonts, xdg-utils, ca-certificates), `curl` or `curl-minimal` for the CLI installer and
     `openssl`, and recommends polkit and `/usr/bin/pkexec`. No build-id links, debuginfo or brp scripts, so the
     binaries ship as built;
   - the policy leaves out the `dev.ardia.linux.update` action: rpm owns the files, so `ardia-update kind` says
