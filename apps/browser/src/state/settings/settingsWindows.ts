@@ -34,13 +34,17 @@ const shownPlaceKey = (s: SettingsPlace) => settingsPlaceKey({ ...s, profileId: 
 let lastVisit = 0;
 export const newSettingsVisit = () => ++lastVisit;
 
-let shownOffset = { visit: -1, y: 0 };
+let shownOffset: { visit: number; y: number; shownProfile: string | null } = { visit: -1, y: 0, shownProfile: null };
 
 export function rememberSettingsScrollOffset(visit: number, y: number) {
-  if (visit === useSettingsNav.getState().visit) shownOffset = { visit, y };
+  const nav = useSettingsNav.getState();
+  if (visit === nav.visit) shownOffset = { visit, y, shownProfile: shownSettingsProfile(nav) };
 }
 
-const stopOf = (s: SettingsStop): SettingsStop => ({ pane: s.pane, profileId: s.profileId, detail: s.detail, visit: s.visit, shownProfile: s.shownProfile, scroll: shownOffset.visit === s.visit ? shownOffset.y : s.scroll });
+const stopOf = (s: SettingsStop): SettingsStop =>
+  shownOffset.visit === s.visit
+    ? { pane: s.pane, profileId: s.profileId, detail: s.detail, visit: s.visit, shownProfile: shownOffset.shownProfile, scroll: shownOffset.y }
+    : { pane: s.pane, profileId: s.profileId, detail: s.detail, visit: s.visit, shownProfile: s.shownProfile, scroll: s.scroll };
 
 export const useSettingsNav = create<Nav>()(() => ({ pane: "general", profileId: null, detail: null, scroll: 0, visit: newSettingsVisit(), shownProfile: null, back: [], forward: [] }));
 
@@ -60,8 +64,9 @@ function leftPlaceKey(stop: SettingsStop): string | null {
 export function replaceSettingsPlace(profileId: string | null, detail: string | null = null) {
   const current = useSettingsNav.getState();
   const { pane, back } = current;
-  const leaving = leftPlaceKey(current);
-  if (leaving) replacedOffsets.set(leaving, stopOf(current).scroll);
+  const left = stopOf(current);
+  const leaving = leftPlaceKey(left);
+  if (leaving) replacedOffsets.set(leaving, left.scroll);
   const prev = back.at(-1);
   const same = prev?.pane === pane && prev.profileId === profileId && prev.detail === detail;
   const place = { pane, profileId, detail };
@@ -87,7 +92,7 @@ const atTop = (s: SettingsStop): SettingsStop => ({ ...s, scroll: 0 });
 
 export function forgetSettingsScroll() {
   const { back, forward } = useSettingsNav.getState();
-  shownOffset = { visit: -1, y: 0 };
+  shownOffset = { visit: -1, y: 0, shownProfile: null };
   replacedOffsets.clear();
   useSettingsNav.setState({ scroll: 0, back: back.map(atTop), forward: forward.map(atTop) });
 }

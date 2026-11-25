@@ -146,7 +146,7 @@ function window(viewport = 600) {
       const before = reports.length;
       return reported(memory.laidOut(settingsLayoutKey(place), height), before);
     },
-    scrolled: (y, max = 1e9, contentHeight = -1) => memory.scrolled(y, max, contentHeight),
+    scrolled: (y, max = 1e9, contentHeight = -1, place) => memory.scrolled(y, max, contentHeight, place ? settingsLayoutKey(place) : undefined),
   };
 }
 
@@ -521,4 +521,68 @@ test("S6 (round 3): SettingsWindow begins a visit only from a layout effect, nev
     }
     assert.equal(inside, "useLayoutEffect", "begin runs after commit, so an uncommitted render changes no history or telemetry");
   }
+});
+
+test("R4-1: outgoing scroll events (shorter, equal-height, or matching target offset) never settle the destination", () => {
+  fresh();
+  const settings = window(600);
+  goToSettingsPane("tabs");
+  const tabsPlace = nav();
+  settings.show();
+  settings.lay(1400);
+  later();
+  settings.scrolled(800, 800, 1400, tabsPlace);
+  goToSettingsPane("advanced");
+  const advPlace = nav();
+  settings.show();
+  settings.lay(1400);
+  later();
+  settings.scrolled(800, 800, 1400, advPlace);
+  goToSettingsPane("general");
+  const genPlace = nav();
+  settings.show();
+  settings.lay(900);
+  later();
+  settings.scrolled(300, 300, 900, genPlace);
+  settingsBack();
+  assert.equal(nav().scroll, 800);
+  settings.show();
+  assert.deepEqual(settings.lay(1400), { y: 800, restore: null }, "same-offset outgoing pane never pre-confirms applied");
+  settings.scrolled(300, 300, 900, genPlace);
+  settings.scrolled(300, 300, 900);
+  settings.scrolled(300, 800, 1400, tabsPlace);
+  assert.deepEqual(settings.reports, [], "shorter or equal-height outgoing events never settle or clamp the destination");
+  settings.scrolled(800, 800, 1400, advPlace);
+  assert.deepEqual(settings.reports, ["applied"]);
+});
+
+test("R4-2: fallback profile keeps its own scroll offset and default switch never leaks offset to previous default", () => {
+  fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const alt = useBrowser.getState().createProfile({ name: "Alt" });
+  const personal = useBrowser.getState().settings.defaultProfileId;
+  goToSettingsPane("profiles", work);
+  scrollShown(400);
+  goToSettingsPane("general");
+  useBrowser.setState((s) => {
+    const { [work]: _gone, ...profiles } = s.profiles;
+    return { profiles, profileOrder: s.profileOrder.filter((id) => id !== work) };
+  });
+  settingsBack();
+  assert.equal(settingsScrollFor(nav().visit), 0);
+  scrollShown(160);
+  settingsForward();
+  settingsBack();
+  assert.equal(settingsScrollFor(nav().visit), 160, "fallback profile kept its own scroll offset across Forward/Back");
+
+  fresh();
+  goToSettingsPane("profiles", null);
+  scrollShown(120);
+  useBrowser.setState((s) => ({ settings: { ...s.settings, defaultProfileId: alt } }));
+  scrollShown(260);
+  replaceSettingsPlace(personal);
+  assert.equal(nav().scroll, 0, "switching to previous default never restores the new default's 260");
+  replaceSettingsPlace(alt);
+  assert.equal(nav().scroll, 260, "the new default kept its own 260");
 });

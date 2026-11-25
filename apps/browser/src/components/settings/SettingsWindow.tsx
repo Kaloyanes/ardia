@@ -184,11 +184,12 @@ export function SettingsWindow() {
           </Text>
         </PageToolbar>
         <ScrollView
+          key={layout}
           ref={scroller}
           scrollEventThrottle={16}
           onScroll={({ nativeEvent: { contentOffset, layoutMeasurement, contentSize } }) => {
             scrollTop.current = contentOffset.y;
-            scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height, contentSize.height);
+            scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height, contentSize.height, layout);
             noteSettingsScroll(contentOffset.y, layoutMeasurement.height, contentSize.height);
           }}
           onLayout={(e) => {

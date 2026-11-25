@@ -19,6 +19,7 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
   let content = 0;
   let viewport = 0;
   let position = 0;
+  let positionLayout = "";
   let early: { layout: string; height: number } | null = null;
 
   const conclude = (visit: Visit, outcome: RestoreOutcome | null, landed: number | null) => {
@@ -31,9 +32,12 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
     visit.settled = true;
     const reachable = visit.saved > 0 && content - viewport >= visit.saved;
     const y = reachable ? visit.saved : 0;
-    if (visit.saved > 0 && !reachable) report("unreachable", visit.consent);
+    if (visit.saved > 0 && !reachable) {
+      report("unreachable", visit.consent);
+      rememberSettingsScrollOffset(visit.visit, 0);
+    }
     visit.expect = { y, until: now() + SCROLL_SETTLE_MS, owed: reachable };
-    if (Math.abs(position - y) < 1) conclude(visit, "applied", y);
+    if (positionLayout === visit.layout && Math.abs(position - y) < 1) conclude(visit, "applied", y);
     return { y };
   };
 
@@ -52,6 +56,7 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
       }
       early = null;
       if (laidOut === layout) return settle(shown);
+      positionLayout = "";
       if (laidOut.startsWith(`${settingsPageKey(place)}\u0000`)) return null;
       return { y: 0 };
     },
@@ -64,14 +69,17 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
       content = height;
       return shown.settled ? null : settle(shown);
     },
-    scrolled(y: number, max: number, contentHeight: number) {
-      position = y;
+    scrolled(y: number, max: number, contentHeight: number, sourceLayout?: string) {
+      if (sourceLayout !== undefined && sourceLayout !== shown?.layout) return;
       if (!shown?.settled) return;
+      if (sourceLayout === undefined && contentHeight >= 0 && Math.abs(contentHeight - content) >= 1 && shown.expect && now() < shown.expect.until) return;
+      position = y;
+      positionLayout = shown.layout;
       const expect = shown.expect;
       if (!expect) return rememberSettingsScrollOffset(shown.visit, y);
       if (Math.abs(y - expect.y) < 1) return conclude(shown, "applied", y);
       if (expect.y > max + 0.5 && Math.abs(y - max) < 1) return conclude(shown, "clamped", y);
-      if (Math.abs(contentHeight - content) < 1 || now() >= expect.until) conclude(shown, null, y);
+      if ((contentHeight >= 0 && Math.abs(contentHeight - content) < 1) || now() >= expect.until) conclude(shown, null, y);
     },
     moved() {
       if (shown?.settled) conclude(shown, null, null);
