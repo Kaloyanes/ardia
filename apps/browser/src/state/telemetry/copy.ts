@@ -350,6 +350,7 @@ const ADDED_ITEMS = {
     "On Windows, how many times Ardia held the keys you typed right after opening a new tab or the command bar until its field was ready, how many of those keys it then typed into the field, how many times the command bar's completion stayed off for a replay whose end never came, and how many holds it let go and why (a shortcut, a key that isn't a letter, a click, another window, the field going away or taking too long), summed up once an hour. Never which keys or what you typed",
     "On Windows, how many times Ardia asked before quitting right after you confirmed closing a window's tabs, because your other window had closed meanwhile, and how many of those you cancelled, summed up once an hour",
     "On Windows, how many times a page process for tabs in the background was put into efficiency mode (slower and first to give up memory) and how many times it came back to full speed, how many of those changes Windows refused, and how many tabs you left that stayed at full speed because they were in a call, capturing your camera, microphone or screen (or being captured), in picture in picture or playing sound, summed up once an hour. Never which tab or page",
+    "On Linux and Windows, when Ardia opens after a session where its window interface stopped: how many times Ardia reloaded the interface of a window, how many of those windows came back, and how many it gave up on after too many tries. Counts only",
   ],
 };
 
