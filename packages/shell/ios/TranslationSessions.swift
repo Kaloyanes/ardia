@@ -4,6 +4,7 @@ import NaturalLanguage
 import SwiftUI
 @_weakLinked import Translation
 
+@available(macOS 26.0, *)
 @MainActor
 private final class FailureNotes {
   private static let limit = 8
@@ -26,6 +27,7 @@ private final class FailureNotes {
   }
 }
 
+@available(macOS 26.0, *)
 private enum FailureScope {
   @TaskLocal static var notes: FailureNotes?
 }
