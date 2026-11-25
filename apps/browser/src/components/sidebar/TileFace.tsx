@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { Animated, StyleSheet, View } from "react-native";
-import { DockSelection, HoverFill, HoverSwap, radius, Surface, Text, withAlpha } from "../ui";
+import { clippedContinuousCorners, continuousCorners, DockSelection, HoverFill, HoverSwap, radius, Surface, Text, withAlpha } from "../ui";
 import { hex, layout, useTheme } from "../ui/theme";
 import { useTileTheme, type TileTheme } from "../../state/favicons/tileTheme";
 import { useSettings, useTab } from "../../state/browser/hooks";
@@ -46,7 +46,7 @@ function LetterTile({ tabId, badge, logos, width, active, selected, hovered, pre
       style={{
         width,
         height,
-        borderRadius: radius.pinned,
+        ...(selected && !active ? clippedContinuousCorners(radius.pinned) : continuousCorners(radius.pinned)),
         borderWidth: selected && !active ? 1 : 0,
         borderColor: tokens.dragBorder,
         alignItems: "center",
@@ -172,14 +172,16 @@ function PlainSelectedTile({ width, outline, children }: { width: number; outlin
       style={{
         width,
         height: layout.pinnedHeight,
-        borderRadius: radius.pinned,
-        borderWidth: outline ? SELECTION_STROKE : 0,
-        borderColor: theme.pinnedSelectedFill,
+        ...continuousCorners(radius.pinned),
+        padding: outline ? SELECTION_STROKE : 0,
         backgroundColor: outline ? undefined : theme.pinnedSelectedFill,
         alignItems: "center",
         justifyContent: "center",
       }}
     >
+      {outline ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, clippedContinuousCorners(radius.pinned), { borderWidth: SELECTION_STROKE, borderColor: theme.pinnedSelectedFill }]} />
+      ) : null}
       {children}
     </View>
   );
@@ -196,7 +198,7 @@ export function RestingTile({ width, selected, hovered, pressed, bare = false, c
         style={{
           width,
           height: layout.pinnedHeight,
-          borderRadius: radius.pinned,
+          ...clippedContinuousCorners(radius.pinned),
           borderWidth: selected ? 1 : 0,
           borderColor: tokens.dragBorder,
           alignItems: "center",
@@ -219,7 +221,7 @@ export function RestingTile({ width, selected, hovered, pressed, bare = false, c
       style={{
         width,
         height: layout.pinnedHeight,
-        borderRadius: radius.pinned,
+        ...clippedContinuousCorners(radius.pinned),
         borderWidth: selected ? 1 : StyleSheet.hairlineWidth,
         borderColor: selected ? tokens.dragBorder : theme.pinnedRestingStroke,
         alignItems: "center",
@@ -256,7 +258,7 @@ function GlassTile({ width, active, selected, hovered, pressed, tileTheme, topAp
         ) : (
           <>
             <HoverFill shown={hovered || selected || pressed} instant={selected} color={pressed ? theme.tabPressed : theme.tabHover} radius={radius.pinned} />
-            {selected ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: radius.pinned, borderWidth: 1, borderColor: tokens.dragBorder }]} /> : null}
+            {selected ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, clippedContinuousCorners(radius.pinned), { borderWidth: 1, borderColor: tokens.dragBorder }]} /> : null}
           </>
         )}
         {children}
@@ -284,7 +286,7 @@ export function FolderDropRing({ on }: { on: boolean }) {
         right: -RING_OUTSET,
         top: -RING_OUTSET,
         bottom: -RING_OUTSET,
-        borderRadius: radius.pinned + RING_OUTSET,
+        ...clippedContinuousCorners(radius.pinned + RING_OUTSET),
         borderWidth: 2,
         borderColor: sidebarTokens(theme).dropMark,
         backgroundColor: sidebarTokens(theme).folderDropFill,

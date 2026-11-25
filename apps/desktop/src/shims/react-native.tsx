@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useLayoutEffect, useRef, type ComponentProps, 
 import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
 import { Animated as WebAnimated, TextInput as WebTextInput, UIManager } from "react-native-web";
 import { watchLayout } from "./web/mountLayout";
+import { handsKeyboardOnFocus } from "../pageFocus";
 
 export * from "react-native-web";
 export { MacPressable as Pressable, MacView as View } from "./web/motion/macView";
@@ -73,6 +74,7 @@ export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacText
   useLayoutEffect(() => (measured ? watchLayout(field.current, () => layoutHandler.current as never, window) : undefined), [measured]);
   const attach = useCallback((node: HTMLInputElement | null) => {
     field.current = node;
+    if (node) handsKeyboardOnFocus(node);
     if (node)
       Object.assign(node, {
         setSelection: (start: number, end: number) => node.setSelectionRange(start, end),
