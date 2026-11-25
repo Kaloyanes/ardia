@@ -33,6 +33,7 @@ HOOKED_FILES = (
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
     'components/renderer_context_menu/render_view_context_menu_base.cc',
+    'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
 )
 
 
@@ -76,6 +77,15 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_shared_folders_policy(self):
         compile_and_run(self, TESTS / 'shared_folders_policy_test.cc', self.out / 'shared-folders-policy')
+
+    def test_system_policy(self):
+        compile_and_run(self, TESTS / 'system_policy_test.cc', self.out / 'system-policy')
+
+    def test_extension_view_policy(self):
+        compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
+
+    def test_pip_policy(self):
+        compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
     def test_dialog_policy(self):
         compile_and_run(self, TESTS / 'dialog_policy_test.cc', self.out / 'dialog-policy')
@@ -136,7 +146,7 @@ class BuildGraphTests(unittest.TestCase):
         for heavy in ('ac_mac_shell_host.mm', 'ac_mac_glass.mm', 'ac_mac_popover.mm', 'ac_mac_menu.mm',
                       'ac_mac_webui.mm', 'ac_mac_window.mm', 'ac_mac_dialog.mm', 'ac_mac_shell_lifecycle.mm',
                       'ac_mac_window_events.mm', 'ac_mac_page_commands.mm', 'ac_mac_page_events.mm',
-                      'ac_mac_page_delegate.mm'):
+                      'ac_mac_page_delegate.mm', 'ac_mac_system.mm', 'ac_mac_extension_view.mm', 'ac_mac_pip.mm'):
             self.assertNotIn(heavy, official)
 
     def test_only_development_builds_define_the_dev_macro(self):
@@ -147,7 +157,7 @@ class BuildGraphTests(unittest.TestCase):
     def test_every_listed_source_exists(self):
         copied = {line.split('\t')[1] for line in (ROOT / 'dev-copies.tsv').read_text().splitlines() if line}
         for name in re.findall(r'"([A-Za-z0-9_./]+\.(?:h|mm|cc))"', self.gn):
-            if name.startswith('generated/'):
+            if name.startswith('generated/') or name.startswith('shared/'):
                 self.assertIn(f'ardia/mac/{name}', copied, name)
                 continue
             self.assertTrue((MAC / name).is_file(), name)
@@ -190,6 +200,11 @@ class ApplyTests(unittest.TestCase):
                 'RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n}\n\n'
                 'void RenderViewContextMenuBase::Init() {\n  InitMenu();\n  if (toolkit_delegate_)\n'
                 '    toolkit_delegate_->Init(&menu_model_);\n}\n',
+            'chrome/browser/ui/views/overlay/video_overlay_window_views.cc':
+                '#include "build/build_config.h"\n\n'
+                'std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n'
+                '    content::VideoPictureInPictureWindowController* controller) {\n'
+                '  return VideoOverlayWindowViews::Create(controller);\n}\n',
         }
         originals = {}
         for path, text in files.items():
@@ -360,7 +375,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('window::PresentationFor(BackgroundInstance())', entry)
         for call in ('ShowInactive', 'orderBack:', 'orderFront:', 'makeKeyAndOrderFront'):
             self.assertNotIn(call, entry)
-        self.assertRegex(entry, r'if \(presentation\.show\) \{\n\s+browser->GetWindow\(\)->Show\(\);')
+        self.assertRegex(entry, r'if \(presentation\.show && opening\.activate\) \{\n\s+browser->GetWindow\(\)->Show\(\);')
+        self.assertRegex(entry, r'\} else if \(presentation\.show && opening\.show\) \{\n\s+ShowWithoutActivating\(')
+        self.assertIn('if (presentation.show && opening.maximize) {', entry)
 
     def test_presented_is_posted_and_gated_by_clear(self):
         glass = self.read('ac_mac_glass.mm')
@@ -520,7 +537,7 @@ class ContractTests(unittest.TestCase):
         for capability in ('requestWindowClose', 'beginWindowCloseDrain', 'acknowledgeWindowClose', 'rejectWindowClose'):
             self.assertIn(f'"ArdiaShell.{capability}",', lifecycle)
         acknowledge = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(acknowledge.index('close_.Acknowledge('), acknowledge.index('WriteSessionInBackground('))
+        self.assertLess(acknowledge.index('close_.Acknowledge('), acknowledge.index('held_departure_ = HeldDeparture{'))
         self.assertIn('window_policy::ValidDeparture(', acknowledge)
         self.assertNotIn('AttemptExit', self.read('ac_mac_shell_calls.mm'))
         shell = (REPO / 'apps/desktop/src/shims/shell.tsx').read_text()
@@ -591,7 +608,12 @@ class ContractTests(unittest.TestCase):
         calls = self.read('ac_mac_shell_calls.mm')
         self.assertIn('return shell_policy::ValidDocumentName(name);', calls)
         write = calls.split('bool WriteSessionFile(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(write.index('shell_policy::SessionFits(json->size())'), write.index('WriteFileAtomically'))
+        self.assertLess(write.index('shell_policy::SessionFitsOnDisk(json->size())'), write.index('WriteFileAtomically'))
+        self.assertIn('base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION, ardia::kLinuxSessionMaxDepth', write)
+        self.assertIn('static_assert(shell_policy::kMergeableSessionBytes == ardia::kLinuxSessionMaxBytes);', calls)
+        merge = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc').read_text()
+        self.assertIn('base::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION', merge)
+        self.assertIn('json->size() > kLinuxSessionMaxBytes', merge)
 
     def test_cross_profile_replacement_opens_before_it_retires(self):
         host = self.read('ac_mac_shell_host.mm')
@@ -804,6 +826,71 @@ class ContractTests(unittest.TestCase):
         self.assertIn('kShareMoreService', filler)
         app_menu = (REPO / 'apps/desktop/src/appMenu.ts').read_text()
         self.assertIn('shareServices().map(', app_menu)
+
+    def test_download_watch_state_exists_before_its_notifier_calls_back(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        watch = source.split('class DownloadWatch', 1)[1].split('\n};', 1)[0]
+        notifier = watch.index('download::AllDownloadItemNotifier notifier_;')
+        for member in ('std::map<std::string, policy::ProgressMark> marks_;',
+                       'policy::ReadyQueue<base::OnceCallback<void(bool)>> ready_;', 'raw_ptr<SystemServices> owner_;'):
+            self.assertLess(watch.index(member), notifier, member)
+
+    def test_in_window_pip_is_a_native_plane_between_pages_and_the_shell(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('std::make_unique<views::NativeViewHost>()', source)
+        self.assertIn('ui::RecyclableCompositorMac', source)
+        self.assertNotIn('SetPaintToLayer', source)
+        self.assertNotIn('AddChildViewAt(std::make_unique<views::NativeViewHost>', source)
+
+    def test_links_are_captured_from_webui_start(self):
+        start = (MAC / 'ac_mac_webui.mm').read_text().split('void StartWebUIShell() {', 1)[1]
+        self.assertLess(start.index('InstallOpenUrlsHook();'), start.index('WithProfile("", base::BindOnce(&OpenLaunchWindow));'))
+
+    def test_companion_profiles_are_watched(self):
+        host = (MAC / 'ac_mac_shell_host.mm').read_text()
+        member = host.split('BrowserWindowInterface* ShellHostView::EnsureMember(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('system_->SyncWatches();', member)
+
+    def test_install_prompts_wait_for_a_live_bridge(self):
+        source = (MAC / 'ac_mac_extension_view.mm').read_text()
+        live = source.split('bool ExtensionViews::ShellLive() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('handler_->Live()', live)
+        hook = source.split('bool InstallPromptHook(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(hook.index('ShellLive()'), hook.index('PendingInstall{std::move(*done)'))
+
+    def test_download_membership_counts_companion_tabs(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        members = source.split('std::set<Profile*> SystemServices::MemberProfiles() const {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('policy::DownloadMember(member == host_->browser(), tabs)', members)
+
+    def test_queued_links_return_to_chrome_after_the_last_window(self):
+        source = (MAC / 'ac_mac_system.mm').read_text()
+        teardown = source.split('SystemServices::~SystemServices() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('HandOffOpenUrls', teardown)
+
+    def test_pip_plane_follows_display_changes(self):
+        source = (MAC / 'ac_mac_pip.mm').read_text()
+        for needle in ('viewDidChangeBackingProperties', 'NSWindowDidChangeScreenNotification',
+                       'OnDisplayMetricsChanged', 'display.id() != display_id_', 'GetDisplayNearestPoint'):
+            self.assertIn(needle, source)
+
+    def test_round_three_contracts(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        watch_teardown = system.split('~DownloadWatch() override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('Refuse(ready_.Drop())', watch_teardown)
+        going_down = system.split('void OnManagerGoingDown(content::DownloadManager*) override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('Refuse(ready_.Close())', going_down)
+        self.assertNotIn('Run(true)', going_down)
+        handoff = system.split('void SystemServices::HandOffOpenUrls() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('browser_shutdown::IsTryingToQuit()', handoff)
+        self.assertIn('browser_shutdown::HasShutdownStarted()', handoff)
+        pip = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('ContentSettingsType::AUTO_PICTURE_IN_PICTURE', pip)
+        self.assertIn('PresentationFor(intent, presenter != nullptr, permission)', pip)
+        show = pip.split('void PipPlayer::ShowInactive() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(show.index('PermissionOf(contents)'), show.index('KeepsVisibleWindow('))
+        enter = pip.split('void PipPlayer::EnterWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(enter.index('window_->ShowInactive();'), enter.index('window_->GetMinimumSize()'))
 
     def test_page_commands_are_the_shared_handle_names(self):
         policy = self.read('ac_mac_page_policy.h')
@@ -1039,6 +1126,197 @@ class ContractTests(unittest.TestCase):
         linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_page_media.cc').read_text()
         self.assertIn('info->playback_state == media_session::mojom::MediaPlaybackState::kPlaying', linux)
 
+    def test_each_window_boots_as_its_own_kind(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        boot = calls.split('std::string ShellHostView::BootstrapJson() const {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('bootstrap.Set("startup", startup_);', boot)
+        self.assertIn('bootstrap.Set("windowKind", kind_);', boot)
+        self.assertIn('bootstrap.Set("pageProfile", page_profile_);', boot)
+        self.assertIn('bootstrap.Set("utility", utility_.Clone());', boot)
+        desktop = (REPO / 'apps/desktop/src/utilityNavigation.ts').read_text()
+        self.assertIn('"ArdiaShell.utilityReady"', desktop)
+        self.assertIn('event !== "onUtilityNavigation"', desktop)
+
+    def test_native_traffic_lights_replace_drawn_window_buttons(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('.Set("layout", "")', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        lights = host.split('void ShellHostView::SetTrafficLights(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ShellZoom());', lights.split('window::LightsFrom(', 1)[1])
+        chrome = (REPO / 'apps/browser/src/lib/platformChrome.mac.ts').read_text()
+        self.assertIn('export { applyWindowButtonStyle, WINDOW_BUTTON_STYLES, WINDOW_CHROME } from "./platformChrome.ts";', chrome)
+        lights = (REPO / 'apps/desktop/src/nativeTrafficLights.ts').read_text()
+        self.assertIn('export const NATIVE_TRAFFIC_LIGHTS = "shell.trafficLights";', lights)
+
+    def test_open_window_is_served_advertised_and_checked_first(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        for method in ('ArdiaShell.openWindow', 'ArdiaShell.focusWindow', 'ArdiaShell.windowIds'):
+            self.assertIn(f'"{method}"', listed)
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        ready = lifecycle.split('if (method == "ArdiaShell.utilityReady") {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('utility_ready_ = true;', ready)
+        self.assertIn('utility_.Clone()', ready)
+        ends = lifecycle.split('bool ShellHostView::ClosingEndsSession() const {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('host->is_utility()', ends)
+        self.assertLess(ends.index('if (is_utility()) {'), ends.index('for (const ShellHostView* host : Hosts())'))
+        self.assertIn('return OpenWindow(values, std::move(done));', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        opening = host.split('void ShellHostView::OpenWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(opening.index('shell_policy::CheckWindowRequest('), opening.index('HostForWindow(id)'))
+        self.assertLess(opening.index('HostForWindow(id)'), opening.index('OpenShellWindow('))
+        self.assertIn('existing->NavigateUtility(std::move(place));', opening)
+        self.assertIn('existing->ActivateWindow();', opening)
+        self.assertIn('Emit("ArdiaShell", "onUtilityNavigation"', host)
+        entry = self.read('ac_mac_webui.mm')
+        self.assertIn('ShellHostView* OpenShellWindow(Profile* profile,', entry)
+        self.assertIn('OpenShellWindow(profile, std::move(spec), launch.frame);', entry)
+
+    def test_page_glass_sits_between_the_pages_and_the_shell(self):
+        glass = self.read('ac_mac_glass.mm')
+        self.assertNotIn('page_slots', glass)
+        self.assertNotIn('[host addSubview:', glass)
+        mount = glass.split('bool GlassRegions::MountUnderShell(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('under_shell_->layer()', mount)
+        self.assertIn('SetBackgroundBlur(', mount)
+        self.assertIn('SetMasksToBounds(true)', mount)
+        relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('glass::MountsUnderShell(placement.plane)', relayout)
+        self.assertIn('[frame addSubview:views_->behind positioned:NSWindowBelow relativeTo:content];', relayout)
+        host = self.read('ac_mac_shell_host.mm')
+        restack = host.split('void ShellHostView::Restack() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(restack.index('ReorderChildView(under_shell_, children().size());'),
+                        restack.index('ReorderChildView(shell_, children().size());'))
+        self.assertIn('under_shell_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);', host)
+        self.assertIn('browser_view_->GetWidget(), under_shell_.get(),', host)
+
+    def test_recording_hands_key_equivalents_to_the_shell(self):
+        host = self.read('ac_mac_shell_host.mm')
+        record = host.split('void ShellHostView::WatchRecordedKeys(bool recording) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown', record)
+        self.assertIn('shell_policy::RecordingRouteFor(', record)
+        self.assertIn('return nil;', record)
+        self.assertIn('ForwardKeyboardEvent(event)', host)
+        keys = host.split('bool ShellHostView::HandleKeyboardEvent(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(keys.index('shortcut_recording_ && source == shell_contents()'), keys.index('unhandled_keys_'))
+        keyboard = self.read('ac_mac_shell_lifecycle.mm').split('void ShellHostView::KeyboardCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(keyboard.index('focus_manager_->set_shortcut_handling_suspended(on);'), keyboard.index('WatchRecordedKeys(on);'))
+        self.assertIn('recording_keys_.reset();', host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0])
+
+    def test_released_tabs_take_their_glass_with_them(self):
+        host = self.read('ac_mac_shell_host.mm')
+        release = host.split('void ShellHostView::ReleaseTab(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(release.index('binding->viewport->SetVisible(false);'), release.index('UpdateGlassSurface();'))
+        glass = self.read('ac_mac_glass.mm')
+        relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('return !page_rects.contains(entry.first.page);', relayout)
+
+    def test_session_writes_merge_and_reach_every_window(self):
+        host = self.read('ac_mac_shell_host.mm')
+        write = host.split('void ShellHostView::WriteSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(write.index('ardia::ValidLinuxSession(*base)'), write.index('SessionFiles()'))
+        self.assertIn('window_policy::ClosePhase::kAcknowledged', write)
+        self.assertIn('BroadcastSession(merged, window, &source);', write)
+        calls = self.read('ac_mac_shell_calls.mm')
+        merge = calls.split('MergedSession MergeAndWriteSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(merge.index('ReadSessionForMerge()'), merge.index('shell_policy::SessionWritable(read.load)'))
+        self.assertLess(merge.index('result.blocked = true;'), merge.index('ardia::MergeLinuxSession(base, local, result.previous)'))
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        ack = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        commit = lifecycle.split('void ShellHostView::CommitHeldDeparture() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('base::BindOnce(&MergeAndWriteSession, std::move(departure.base), std::move(departure.session))', commit)
+        self.assertIn('BroadcastSession(merged, window, nullptr);', commit)
+        self.assertNotIn('WriteSessionInBackground', lifecycle)
+        broadcast = calls.split('void BroadcastSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('for (ShellHostView* host : Hosts())', broadcast)
+        self.assertIn('host->Emit("ArdiaHost", "session",', broadcast)
+        self.assertIn('return WriteSession(args, std::move(done));', calls)
+        copies = (ROOT / 'dev-copies.tsv').read_text()
+        self.assertIn('engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc\tardia/mac/shared/ac_linux_session.cc', copies)
+        gn = (MAC / 'BUILD.gn').read_text()
+        self.assertIn('public_deps = [ ":session" ]', gn)
+        self.assertIn('"-Wno-range-loop-bind-reference"', gn)
+        desktop = (REPO / 'apps/desktop/src/hostSession.ts').read_text()
+        self.assertIn('module !== "ArdiaHost" || event !== "session"', desktop)
+
+    def test_shortcuts_beat_chromiums_own_table_but_leave_caret_keys_to_text(self):
+        host = self.read('ac_mac_shell_host.mm')
+        table = host.split('void ShellHostView::SetKeyboardShortcuts(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::ShortcutTimingFor(', table)
+        self.assertIn('binding.FindBool("notInText")', table)
+        self.assertIn('ui::AcceleratorManager::kHighPriority', table)
+        self.assertIn('ui::AcceleratorManager::kNormalPriority', table)
+        mac = (REPO / 'apps/desktop/src/platform/shortcutKeys.mac.ts').read_text()
+        self.assertIn('command: 16, control: 4', mac)
+        self.assertIn('export const COMMAND_PRESSED = (event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">) => event.metaKey;', mac)
+        desktop = (REPO / 'apps/desktop/src/platform/shortcutKeys.desktop.ts').read_text()
+        self.assertIn('command: 4, control: 16', desktop)
+
+    def test_the_dev_app_carries_ardias_icon(self):
+        assemble = (ROOT / 'assemble.sh').read_text()
+        self.assertIn('<key>CFBundleIconFile</key><string>AppIcon</string>', assemble)
+        self.assertIn('iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"', assemble)
+        self.assertIn("trap 'rm -rf \"$scratch\"' EXIT", assemble)
+        self.assertLess(assemble.index('trap '), assemble.index('iconutil -c icns'))
+        icons = REPO / 'apps/browser/macos/Ardia-macOS/Assets.xcassets/AppIcon.appiconset'
+        self.assertIn('apps/browser/macos/Ardia-macOS/Assets.xcassets/AppIcon.appiconset', assemble)
+        for size in (16, 32, 128, 256, 512):
+            for scale in (1, 2):
+                self.assertTrue((icons / f'icon_{size}x{size}_{scale}x.png').is_file(), f'{size}@{scale}x')
+
+    def test_session_quarantine_shares_the_session_runner_and_never_clobbers(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        reader = calls.split('SessionRead ReadSessionForMerge() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(reader.index('base::GetFileSize(path)'), reader.index('ReadFileToStringWithMaxSize'))
+        self.assertIn('ardia::ValidLinuxSession(parsed->GetDict())', reader)
+        self.assertIn('shell_policy::SessionLoadFor(file, moved)', reader)
+        aside = calls.split('bool MoveSessionAside(const base::FilePath& path) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(aside.index('base::PathExists(backup)'), aside.index('base::Move(path, backup)'))
+        self.assertIn('shell_policy::SetAsideSessionName(now, attempt)', aside)
+        self.assertIn('return false;', aside)
+        self.assertIn('return SessionFiles();', calls.split('scoped_refptr<base::SequencedTaskRunner> FileRunner() {', 1)[1].split('\n}\n', 1)[0])
+        entry = self.read('ac_mac_webui.mm')
+        request = entry.split('void StartDataRequest(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('webui_policy::ReadsSession(path)', request)
+        self.assertIn('scoped_refptr<base::TaskRunner>(SessionFiles())', request)
+        self.assertIn('constexpr bool ReadsSession(std::string_view asset) {', self.read('ac_mac_webui_policy.h'))
+
+    def test_departures_are_saved_only_after_chromium_closes_the_window(self):
+        lifecycle = self.read('ac_mac_shell_lifecycle.mm')
+        ack = lifecycle.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('MergeAndWriteSession', ack)
+        self.assertNotIn('BroadcastSession', ack)
+        self.assertLess(ack.index('held_departure_ = HeldDeparture{'), ack.rindex('CloseAcknowledgedWindow(*identity);'))
+        cancel = lifecycle.split('void ShellHostView::CancelWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(cancel.index('held_departure_.reset();'), cancel.index('if (!close_.Cancel(identity)) {'))
+        commit = lifecycle.split('void ShellHostView::CommitHeldDeparture() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::DepartureStepFor(held, close_.phase() == window_policy::ClosePhase::kClosing,', commit)
+        self.assertLess(commit.index('base::BindOnce(&MergeAndWriteSession'), commit.index('BroadcastSession(merged, window, nullptr);'))
+        detach = self.read('ac_mac_shell_host.mm').split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(detach.index('CommitHeldDeparture();'), detach.index('RetireRenderer();'))
+
+    def test_new_windows_take_their_frame_focus_behind_and_maximized(self):
+        host = self.read('ac_mac_shell_host.mm')
+        opening = host.split('void ShellHostView::OpenWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('options->FindList("frame")', opening)
+        self.assertIn('window_policy::FrameFrom(', opening)
+        self.assertIn('window::PlacedOnScreens(', opening)
+        self.assertIn('placement.focus = !options || options->FindBool("focus").value_or(true);', opening)
+        self.assertIn('options->FindBool("maximized")', opening)
+        self.assertIn('options->FindString("behind")', opening)
+        self.assertIn('placement)) {', opening)
+        entry = self.read('ac_mac_webui.mm')
+        self.assertIn('window::PresentationForOpen(', entry)
+        window = self.read('ac_mac_window.mm').split('void ShowWithoutActivating(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('widget->ShowInactive();', window)
+        self.assertIn('orderWindow:NSWindowBelow relativeTo:behind_window.windowNumber', window)
+    def test_download_entry_point_refuses_through_one_route(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        call = system.split('void SystemServices::DownloadsCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('policy::RouteDownloadRequest(', call)
+        self.assertIn('RefuseQueued(std::move(done))', call)
+        self.assertNotIn('ERR_PROFILE_UNAVAILABLE', system.split('void SystemServices::EngineCall(', 1)[1].split('\n}\n', 1)[0])
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -1057,12 +1335,18 @@ class BoundaryTests(unittest.TestCase):
                        'session.write', 'ArdiaShell.writeDocument', 'ArdiaApp.share', 'ArdiaApp.shareVia',
                        'ArdiaApp.shareText', 'ArdiaSharedFolders.apply', 'ArdiaSharedFolders.read',
                        'ArdiaSharedFolders.watch', 'ArdiaShell.pickFolder', 'tab.command', 'evaluate',
-                       'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs'):
+                       'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs',
+                       'ArdiaShell.openWindow', 'MergeLinuxSession',
+                       'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
+                       'application:openURLs:', 'ArdiaShell.listenForOpenURLs', 'extensionView.create',
+                       'extensions.resolveInstallPrompt', 'executeExtensionAction', 'pip.command',
+                       'webView.setAutoPictureInPicture'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
-                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'share_policy_test.cc',
-                     'shared_folders_policy_test.cc', 'page_policy_test.cc'):
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc', 'system_policy_test.cc',
+                     'extension_view_policy_test.cc', 'pip_policy_test.cc', 'share_policy_test.cc',
+                     'shared_folders_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

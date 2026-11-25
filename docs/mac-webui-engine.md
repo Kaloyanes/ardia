@@ -90,11 +90,11 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
 - **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
   `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
-  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`, plus `ArdiaShell.pickFolder`
-  for Add Shared Folder…. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`; Add Shared Folder… picks its
+  folder through the host's `ArdiaShell.pickFolder`. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
   `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
   as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
-  its own queue. The folder panel and Finder are never shown in background mode.
+  its own queue. Finder is never shown in background mode.
 - **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
@@ -121,6 +121,34 @@ that branch). It is a development tool and never runs in a release. Like Windows
   These checks are in `ac_mac_window_policy.h`.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
+- **Downloads, Finder and the system** (`ac_mac_system`, rules in `ac_mac_system_policy.h`).
+  - `downloads.list | remove | clear` are served by the host, which watches each window profile's download manager and
+    sends `ArdiaDownloads` `downloads.changed` (throttled to 100 ms while a download runs) and `downloads.removed`.
+    Private profiles are never watched.
+  - `ArdiaSystem.openFile`, `moveToTrash` and `revealFile` (Finder) take only paths of listed downloads; `fileStatus`,
+    `fileIcon` and `runningAppIcon` answer as `packages/shell/ios` does, icons as PNG data URLs.
+  - `isDefaultBrowser`, `setAsDefaultBrowser`, `launchAtLoginStatus`, `setLaunchAtLogin` (`SMAppService`), `hapticTick`
+    and `setThinScrollBars` (overlay scrollers) match the native modules; a background instance changes none of them.
+  - `ArdiaShell.pickFiles` and `pickFolder` open an `NSOpenPanel` sheet, one per window; a background instance logs the
+    request and answers cancelled. `ArdiaApp.openExternalURL` refuses local, script and browser-internal schemes.
+  - Links from other apps: the host replaces `AppController`'s `application:openURLs:` when the shell starts, keeps
+    http, https and file URLs for the shell and passes the rest on, and sends them as `ArdiaShell` `onOpenURLs` to the key
+    window that called `ArdiaShell.listenForOpenURLs`; links from a cold launch wait for the first window.
+  - Download watches follow the window's members: the window's own profile always, a companion profile only while it
+    has a tab in the window. Links still queued when the last WebUI window closes go back to Chrome.
+- **Extension popups and side panels** (`ac_mac_extension_view`, rules in `ac_mac_extension_view_policy.h`).
+  `extensionView.create | viewport | place | command | release` host an extension's `ExtensionViewHost` in the window,
+  a side panel under the shell like a page and a popup above it, with Linux's placement, reveal and `frame` handshake.
+  `extensions.actionStates`, `sidePanelUrl`, `chooseFolder`, `inspectUnpacked` and `resolveInstallPrompt` are served
+  by the host, `tab.command executeExtensionAction` runs an action, and the host answers Chrome's install prompt and
+  side panel hooks with `ArdiaExtensions` `extensions.installPrompt` and `extensions.sidePanel`.
+- **Picture in picture** (`ac_mac_pip`, rules in `ac_mac_pip_policy.h`). `apply.sh` adds `g_ardia_mac_video_overlay` to
+  `CreateVideoOverlayWindow`, so the host makes the player: automatic picture in picture plays inside the window that
+  shows its tab and the site allows it (Ask goes to Chrome's window and its prompt), on a native plane (an `NSView` with its own compositor, hosted by a `NativeViewHost`) ordered above
+  the pages and below the shell (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
+  Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
+  display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
+
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),

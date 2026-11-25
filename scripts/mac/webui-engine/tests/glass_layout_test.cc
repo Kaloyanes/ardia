@@ -469,6 +469,23 @@ TEST(unequal_positive_radii_are_a_layout_change) {
   CHECK(!shape.uniform && shape.radii == (glass::Radii{4, 12, 12, 12}));
 }
 
+TEST(glass_over_a_page_mounts_under_the_shell_in_the_compositor) {
+  CHECK(glass::MountsUnderShell(Plane::kOverPage));
+  CHECK(!glass::MountsUnderShell(Plane::kBehindWindow));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(24, 1), 24));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(24, 2), 48));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(1e9, 1), glass::kMaxBlur));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(-5, 1), 0));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(std::numeric_limits<double>::quiet_NaN(), 1), 0));
+  CHECK(ardia_mac_test::Near(glass::UnderShellBlur(24, std::numeric_limits<double>::infinity()), 24));
+  CHECK(glass::kUnderShellFill > 0 && glass::kUnderShellFill < 0.05f);
+  const std::vector<Page> pages{{7, {300, 60, 900, 700}}};
+  const auto layout = glass::Lay({Make("sidebar", {280, 40, 260, 600}, Layer::kAuto, 12)}, pages, kWindow, 1);
+  const Placement* over = Find(layout, "sidebar", 7);
+  CHECK(over && glass::MountsUnderShell(over->plane));
+  CHECK(over && ardia_mac_test::Near(over->frame.x, -20) && ardia_mac_test::Near(over->frame.y, -20));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

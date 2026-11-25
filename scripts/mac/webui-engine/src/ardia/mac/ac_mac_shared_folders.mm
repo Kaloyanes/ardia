@@ -51,7 +51,6 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaSharedFolders.create",
     "ArdiaSharedFolders.watch",
     "ArdiaSharedFolders.revealFolder",
-    "ArdiaShell.pickFolder",
 };
 
 constexpr char kOutside[] = "A folder change pointed outside the shared folder.";
@@ -1152,40 +1151,6 @@ void RevealFolder(ShellHostView& host, const base::ListValue* values, Done done)
   std::move(done).Run(true, base::Value());
 }
 
-void PickFolder(ShellHostView& host, const base::ListValue* values, Done done) {
-  const std::string current = StringAt(values, 0);
-  const std::string prompt = StringAt(values, 1);
-  if ((!current.empty() && !policy::ValidAbsolutePath(current)) || prompt.size() > 200 ||
-      !policy::NoControls(prompt)) {
-    return std::move(done).Run(false, Failure("ERR_DIALOG_REQUEST", "The folder panel request isn’t valid"));
-  }
-  if (BackgroundInstance()) {
-    host.Note("folder panel (not shown): current=" + current + " prompt=\"" + prompt + "\"");
-    return std::move(done).Run(true, base::Value());
-  }
-  NSOpenPanel* panel = [NSOpenPanel openPanel];
-  panel.canChooseFiles = NO;
-  panel.canChooseDirectories = YES;
-  panel.canCreateDirectories = YES;
-  panel.allowsMultipleSelection = NO;
-  if (!prompt.empty()) {
-    panel.prompt = base::SysUTF8ToNSString(prompt);
-  }
-  if (!current.empty()) {
-    panel.directoryURL = UrlFor(current, true);
-  }
-  auto pending = std::make_shared<std::optional<Done>>(std::move(done));
-  [panel beginWithCompletionHandler:^(NSModalResponse response) {
-    if (!pending->has_value()) {
-      return;
-    }
-    Done finish = std::move(**pending);
-    pending->reset();
-    NSString* picked = response == NSModalResponseOK ? panel.URL.path : nil;
-    std::move(finish).Run(true, picked ? base::Value(base::SysNSStringToUTF8(picked)) : base::Value());
-  }];
-}
-
 }
 
 struct Watcher::Core {
@@ -1335,9 +1300,6 @@ void Invoke(ShellHostView& host,
   const auto refuse = [&done](std::string_view message) {
     std::move(done).Run(false, Failure("ERR_SHARED_FOLDER_REQUEST", message));
   };
-  if (method == "ArdiaShell.pickFolder") {
-    return PickFolder(host, values, std::move(done));
-  }
   if (method == "ArdiaSharedFolders.watch") {
     return Watch(host, values, std::move(done));
   }

@@ -78,6 +78,18 @@ HOOKS = [
      "RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n",
      MAC_DEV + "  if (g_ardia_mac_page_menu_destroyed) {\n    g_ardia_mac_page_menu_destroyed(this);\n  }\n#endif\n",
      "after"),
+    ("chrome/browser/ui/views/overlay/video_overlay_window_views.cc",
+     "std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n"
+     "    content::VideoPictureInPictureWindowController* controller) {\n",
+     MAC_DEV + "std::unique_ptr<content::VideoOverlayWindow> (*g_ardia_mac_video_overlay)(\n"
+     "    content::VideoPictureInPictureWindowController* controller) = nullptr;\n#endif\n\n",
+     "before"),
+    ("chrome/browser/ui/views/overlay/video_overlay_window_views.cc",
+     "std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n"
+     "    content::VideoPictureInPictureWindowController* controller) {\n",
+     MAC_DEV + "  if (g_ardia_mac_video_overlay) {\n    if (auto overlay = g_ardia_mac_video_overlay(controller)) {\n"
+     "      return overlay;\n    }\n  }\n#endif\n",
+     "after"),
 ]
 failed = False
 pending = {}
@@ -148,7 +160,8 @@ case "$mode" in
       content/app_shim_remote_cocoa/web_contents_view_cocoa.mm \
       chrome/browser/ui/window_feature_controller/window_feature_controller.cc \
       chrome/browser/ui/views/frame/browser_frame_view_mac.mm \
-      components/renderer_context_menu/render_view_context_menu_base.cc
+      components/renderer_context_menu/render_view_context_menu_base.cc \
+      chrome/browser/ui/views/overlay/video_overlay_window_views.cc
     ;;
   --check)
     excludes=()

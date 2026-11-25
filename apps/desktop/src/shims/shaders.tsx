@@ -64,13 +64,14 @@ export function WindowBackdrop({
   usePageHoleLayer(layer);
   const [glassAvailable] = useState(behindWindowGlassAvailable);
   const [switchGlass] = useState(() => behindWindowGlassSwitch({ watch: watchBehindWindowGlass }));
-  const behindGlass = wantsBehindWindowGlass(vibrancy, !!themed, glassAvailable);
+  const behindGlass = wantsBehindWindowGlass(vibrancy, glassAvailable);
   useLayoutEffect(() => switchGlass(layer.current, behindGlass));
   useEffect(() => () => switchGlass(null, false), [switchGlass]);
   if (behindGlass) {
-    const tint = glassTint(tintColor, tintAlpha);
+    const tint = themed ? null : glassTint(tintColor, tintAlpha);
     return (
       <View ref={layer} pointerEvents="none" style={style}>
+        {themed ? <ThemedVibrancy colors={themeColors!} opacity={themeOpacity ?? 1} underlayAlpha={themeBaseAlpha ?? 0} grain={themeGrain} texture={themeTexture} angle={themeAngle} dark={dark} /> : null}
         {tint ? <div data-ardia-glass-tint="" style={{ ...UNDERLAY_FILL, background: tint }} /> : null}
       </View>
     );

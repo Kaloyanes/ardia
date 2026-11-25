@@ -385,7 +385,7 @@ const MAC_TWINS = [
   ["lib/platformFeatures", ""],
   ["state/commands/keyText", ""],
   ["state/telemetry/copyWords", ""],
-  ["lib/platformChrome", ".desktop"],
+  ["lib/platformChrome", ".mac"],
   ["state/commands/comboWords", ".desktop"],
   ["state/tabs/engineKeptCodes", ".desktop"],
 ];

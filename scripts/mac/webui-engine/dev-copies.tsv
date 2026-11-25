@@ -4,3 +4,5 @@ engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h	ardia/m
 engine/ardiacore-linux/src/ardia/linux/ac_linux_page_operations.h	ardia/mac/generated/ac_linux_page_operations.h
 engine/ardiacore-desktop/src/ardia/desktop/ac_desktop_window_commands.h	ardia/mac/generated/ac_desktop_window_commands.h
 engine/ardiacore-desktop/src/ardia/desktop/ac_desktop_favicon_policy.h	ardia/mac/generated/ac_desktop_favicon_policy.h
+engine/ardiacore-linux/src/ardia/linux/ac_linux_session.h	ardia/mac/shared/ardia/linux/ac_linux_session.h
+engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc	ardia/mac/shared/ac_linux_session.cc
