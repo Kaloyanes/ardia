@@ -23,6 +23,8 @@ const { syncedHome } = await import("./state/sync/pinRecords.ts");
 const { sendableUrl } = await import("./state/sync/sentTabsAdapter.ts");
 const { filterListAddress } = await import("./state/site/contentBlocking.ts");
 const { CLEAN_UP_KEY, LEGACY_CLEAN_UP_KEY } = await import("./state/settings/cleanUpAfter.ts");
+const { checkedInput, isKeyName, MAX_TEXT_LENGTH } = await import("./state/automation/tabInput.ts");
+const { MAX_MESSAGE_LENGTH } = await import("./state/automation/tabDiagnostics.ts");
 const { updateWithin } = await import("./state/plugins/officialUpdate.ts");
 const { readManifest } = await import("./lib/pluginManifest.ts");
 const { parseIntent, INTENT_SPECS } = await import("./state/plugins/stateIntents.ts");
@@ -676,4 +678,198 @@ test("windows update manifest and verified update parser refuse every hostile in
   }
   assert.equal({}.ardiaPolluted, undefined);
   assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("windows webui native update policy keeps every hostile input and call argument away from the installer download, launch and claim gates while passing valid controls", (t) => {
+  const { spawnSync } = process.getBuiltinModule("node:child_process");
+  const { mkdtempSync, rmSync, writeFileSync } = process.getBuiltinModule("node:fs");
+  const { tmpdir } = process.getBuiltinModule("node:os");
+  const { join } = process.getBuiltinModule("node:path");
+  const { fileURLToPath } = process.getBuiltinModule("node:url");
+  const repo = fileURLToPath(new URL("../../../", import.meta.url));
+  const compiler = ["c++", "clang++", "g++"].find((name) => spawnSync(name, ["--version"], { stdio: "ignore" }).status === 0);
+  if (!compiler) {
+    if (process.env.CI) assert.fail("no C++ compiler to build scripts/windows/engine/tests/webui_update_policy_test.cc");
+    return t.skip("no C++ compiler");
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "ardia-update-policy-"));
+  try {
+    const binary = join(scratch, "webui_update_policy_test");
+    const build = spawnSync(compiler, ["-std=c++20", "-I", join(repo, "scripts/windows/engine/src"), join(repo, "scripts/windows/engine/tests/webui_update_policy_test.cc"), "-o", binary], { encoding: "utf8" });
+    assert.equal(build.status, 0, build.stderr);
+    const describe = (value) => {
+      if (value === null || value === undefined) return "z:";
+      if (typeof value === "boolean") return "b:";
+      if (typeof value === "number") return Number.isInteger(value) && Math.abs(value) <= 2 ** 31 - 1 ? `i:${value}` : `d:${value}`;
+      if (typeof value === "string") return `s:${Buffer.from(value, "utf8").toString("hex")}`;
+      return Array.isArray(value) ? "a:" : "o:";
+    };
+    const wire = (value) => JSON.parse(JSON.stringify({ args: value }) ?? "{}").args;
+    const lines = HOSTILE_VALUES.map(({ value }) => {
+      const single = JSON.parse(JSON.stringify([value]))[0];
+      const args = wire(value);
+      const whole = args === undefined ? "O" : Array.isArray(args) ? `L${args.map(describe).join(",")}` : "N";
+      return `${describe(single)}|${whole}`;
+    });
+    const strings = HOSTILE_VALUES.filter(({ value }) => typeof JSON.parse(JSON.stringify([value]))[0] === "string").length;
+    assert.ok(strings >= HOSTILE_STRINGS.length);
+    const corpus = join(scratch, "hostile.txt");
+    writeFileSync(corpus, lines.join("\n") + "\n");
+    const run = spawnSync(binary, ["--hostile", corpus], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.match(run.stdout, new RegExp(`hostile: ${HOSTILE_VALUES.length} values, ${strings} strings, ${strings * 33} answers, \\d+ reached the download gate with a valid offer, ${HOSTILE_VALUES.length * 18} calls, \\d+ reached a call sink with a valid request, controls reached them`));
+    const unit = spawnSync(binary, [], { encoding: "utf8" });
+    assert.equal(unit.status, 0, unit.stderr || unit.stdout);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("socket tabs.input: every hostile value reaches the engine only as a checked action, point, key or text", () => {
+  for (const value of HOSTILE_VALUES.map((h) => h.value)) {
+    for (const params of [{ action: value, x: 1, y: 1 }, { action: "click", x: value, y: 1 }, { action: "key", key: value }, { action: "key", key: "a", code: value }, { action: "text", text: value }, { action: "click", x: 1, y: 1, modifiers: [value] }]) {
+      let out;
+      try {
+        out = checkedInput(params);
+      } catch (error) {
+        assert.equal(error.code, "bad_request", show(params));
+        continue;
+      }
+      if (out.key !== undefined) assert.ok(isKeyName(out.key), show(params));
+      if (out.text !== undefined) assert.ok(typeof out.text === "string" && out.text.length <= MAX_TEXT_LENGTH && !out.text.includes("\0"), show(params));
+      if (out.x !== undefined) assert.ok(Number.isFinite(out.x) && Number.isFinite(out.y), show(params));
+    }
+  }
+});
+
+const { startAutomation } = await import("./state/automation/controlSocket.ts");
+
+test("socket tabs.diagnostics: a hostile page's console text and addresses leave the socket sink redacted and bounded", async () => {
+  S().hydrate({});
+  S().updateSettings({ cliControl: true });
+  startAutomation();
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 5 && !stub.controlSocket.running; i++) await tick();
+  await tick();
+  const w = S().createWindow({ url: "https://a.example/" });
+  const tab = activeTabId(S(), w);
+  let nextId = 700;
+  const conn = 88;
+  const socketCall = async (method, params) => {
+    const id = ++nextId;
+    const before = stub.controlSocket.replies.length;
+    stub.emitControlRequest({ connection: conn, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method, params }) });
+    for (let i = 0; i < 50 && !stub.controlSocket.replies.slice(before).some((r) => r.connection === conn); i++) await tick();
+    const replies = stub.controlSocket.replies.slice(before).filter((r) => r.connection === conn);
+    assert.equal(replies.length, 1);
+    return JSON.parse(replies[0].line);
+  };
+  let nextReply = null;
+  globalThis.acTestTabDiagnostics = () => nextReply;
+  try {
+    nextReply = {
+      ok: true,
+      console: [{ seq: 1, time: 10, level: "error", message: 'plain token=supersecret123 {"authToken":"abc"}', source: "https://user:pw@a.example/app.js?k=1#h", line: 4, frame: "main" }],
+      network: [{ seq: 2, time: 11, method: "GET", url: "https://user:pw@a.example/api?q=secret#f", status: 404, type: "fetch", frame: "main", failed: true }],
+      nextSeq: 3,
+      clearedBefore: 1,
+      capacity: { console: 200, network: 250 },
+    };
+    const control = await socketCall("tabs.diagnostics", { tab });
+    assert.equal(control.error, undefined, "positive control reaches the socket sink");
+    assert.equal(control.result.console[0].message, 'plain token=[redacted] {"authToken":"[redacted]"}');
+    assert.equal(control.result.console[0].source, "https://a.example/app.js");
+    assert.equal(control.result.network[0].url, "https://a.example/api");
+
+    for (const value of strings) {
+      const part = value.isWellFormed() ? encodeURIComponent(value) : value;
+      nextReply = {
+        ok: true,
+        console: [{ seq: 1, time: 10, level: "error", message: `token=${value} ${value}`, source: `https://user:pw@a.example/${part}?q=${part}#${part}`, line: 1, frame: "main" }],
+        network: [{ seq: 2, time: 11, method: value, url: `https://user:pw@a.example/${part}?q=${part}#${part}`, status: 200, type: value, error: value, frame: "main", failed: false }],
+        nextSeq: 3,
+        clearedBefore: 1,
+        capacity: { console: 200, network: 250 },
+      };
+      const reply = await socketCall("tabs.diagnostics", { tab });
+      assert.equal(reply.error, undefined, show(value));
+      const row = reply.result.console[0];
+      const net = reply.result.network[0];
+      assert.equal(typeof row.message, "string", show(value));
+      assert.ok(row.message.length <= MAX_MESSAGE_LENGTH, show(value));
+      if (/^[\w.~+/-]+$/.test(value) && value !== "redacted") assert.ok(row.message.startsWith("token=[redacted]"), show(value));
+      for (const addr of [row.source, net.url]) assert.ok(addr.startsWith("https://a.example/") && !addr.includes("?") && !addr.includes("#") && !addr.includes("pw@"), show(value));
+      assert.ok(net.method.length <= 16 && net.type.length <= 32 && net.error.length <= 64, show(value));
+    }
+
+    for (const { id, value } of HOSTILE_VALUES) {
+      nextReply = {
+        ok: true,
+        console: [{ seq: 1, time: value, level: value, message: value, source: value, line: value, frame: value }],
+        network: [{ seq: 2, time: value, method: value, url: value, status: value, type: value, durationMs: value, error: value, frame: value, failed: value }],
+        nextSeq: 3,
+        clearedBefore: 1,
+        capacity: { console: 200, network: 250 },
+      };
+      const reply = await socketCall("tabs.diagnostics", { tab });
+      assert.equal(reply.error, undefined, id);
+      const row = reply.result.console[0];
+      const net = reply.result.network[0];
+      assert.ok(["debug", "info", "warning", "error"].includes(row.level), id);
+      assert.ok(typeof row.message === "string" && row.message.length <= MAX_MESSAGE_LENGTH, id);
+      assert.ok(typeof row.source === "string" && typeof net.url === "string", id);
+      assert.ok(Number.isFinite(row.time) && Number.isFinite(row.line) && Number.isFinite(net.status), id);
+      for (const field of ["since", "kind", "onlyErrors", "limit", "clear"]) {
+        const bad = await socketCall("tabs.diagnostics", { tab, [field]: value });
+        if (bad.error) assert.equal(bad.error.code, "bad_request", `${id} ${field}`);
+      }
+    }
+    assert.equal({}.ardiaPolluted, undefined);
+    assert.equal(Object.prototype.ardiaPolluted, undefined);
+  } finally {
+    delete globalThis.acTestTabDiagnostics;
+  }
+});
+
+test("a tab a page opened moves engines only when its page answers the opener check with false, whatever else it returns", async () => {
+  const { followSiteChoice } = await import("./state/engines/siteMoves.ts");
+  const { notePageMadeTab, openerAnswer } = await import("./state/engines/openedPages.ts");
+  const { tabEngine } = await import("./state/engines/engines.ts");
+  const { dropSwap } = await import("./state/engines/engineSwap.ts");
+  S().hydrate({});
+  S().updateSettings({ protectedVideoInWebKit: true, engineMode: "automatic", websiteEngines: {} });
+  const w = S().createWindow({ url: "https://blog.example/" });
+  const opener = activeTabId(S(), w);
+  S().updateTab(opener, { engine: "chromium", url: "https://blog.example/" });
+  const asked = new Map();
+  const probes = new Set();
+  const plant = (value) => {
+    const tab = S().newTab(w, { url: "https://www.netflix.com/", adoptId: "ardiacore:9", openerId: opener, background: true });
+    webviews.set(tab, {
+      evaluate: async (script) => {
+        if (script.includes("window.opener")) probes.add(script);
+        asked.set(tab, { count: (asked.get(tab)?.count ?? 0) + 1, at: Date.now() });
+        return value;
+      },
+      pageCookies: async () => [],
+    });
+    S().updateTab(tab, { url: "https://www.netflix.com/" });
+    notePageMadeTab(tab);
+    followSiteChoice(tab, "chromium", "https://www.netflix.com/", "");
+    return tab;
+  };
+  const planted = HOSTILE_VALUES.filter(({ value }) => value !== false).map(({ id, value }) => ({ id, tab: plant(value) }));
+  const control = plant(false);
+  const settled = (tab) => (asked.get(tab)?.count ?? 0) > 0 && Date.now() - asked.get(tab).at > 800;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline && !(tabEngine(S(), control) === "webkit" && planted.every(({ tab }) => settled(tab)))) await wait(50);
+  for (const { id, tab } of planted) assert.ok(settled(tab), `${id} stopped asking`);
+  for (const { id, tab } of planted) assert.equal(S().tabs[tab].engine === "webkit", false, id);
+  assert.equal(tabEngine(S(), control), "webkit", "positive control: a page that answers false moves");
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(openerAnswer(value), value === true ? "live" : value === false ? "none" : "unknown", id);
+  assert.equal(probes.size, 1);
+  const [probe] = probes;
+  assert.doesNotMatch(probe, /JSON|String|toString|valueOf|Object|Reflect|\.call|\.apply|Symbol/, "the probe calls nothing a page can replace");
+  dropSwap(control);
+  webviews.clear();
 });
