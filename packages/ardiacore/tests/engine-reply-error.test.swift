@@ -1,12 +1,6 @@
 import Foundation
 import Testing
 
-@main struct EngineReplyErrorTestRunner {
-  static func main() async {
-    await Testing.__swiftPMEntryPoint() as Never
-  }
-}
-
 struct EngineReplyErrorTests {
   @Test func compactEnvelopeIsAnError() {
     #expect(EngineReplyError.message(#"{"error":"x"}"#) == "x")
@@ -26,6 +20,11 @@ struct EngineReplyErrorTests {
     let started = Date()
     #expect(EngineReplyError.message(reply) == nil)
     #expect(Date().timeIntervalSince(started) < 0.05)
+  }
+
+  @Test func brokenReplyWithANestedErrorIsNotAnError() {
+    #expect(EngineReplyError.message(#"{"items":[{"error":"x"}]"#) == nil)
+    #expect(EngineReplyError.message(#"[{"error":"x"}"#) == nil)
   }
 
   @Test func otherShapesAreNotErrors() {
