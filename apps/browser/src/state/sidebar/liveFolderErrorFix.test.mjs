@@ -4,6 +4,9 @@ const { useBrowser } = await import("../browser/store.ts");
 const { applyFetch, createFolder, live, removeFolder, setStatus, updateFolder } = await import("../live/store.ts");
 const { liveFolderMenuItems, openLiveFolderMenu } = await import("./liveMenus.ts");
 const { shellNativeModules } = await import("../../test-native/shell.ts");
+const { takeLiveHideCounts } = await import("../telemetry/liveHides.ts");
+const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
+setConsentPeriod(true, "live-folder-error-fix-test");
 
 const S = () => useBrowser.getState();
 const PERSONAL = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
@@ -20,10 +23,13 @@ function erroredFolder({ collapsed }) {
   return { w, id };
 }
 
-async function pickFix(w, id) {
+async function pickFix(w, id, whileOpen = () => {}) {
   const shell = shellNativeModules.ArdiaMenus;
   const real = shell.showMenu;
-  shell.showMenu = (shown) => Promise.resolve(shown.find((it) => it.title === "Resolve Warning…")?.id ?? null);
+  shell.showMenu = (shown) => {
+    whileOpen();
+    return Promise.resolve(shown.find((it) => it.title === "Resolve Warning…")?.id ?? null);
+  };
   try {
     await openLiveFolderMenu(w, id);
   } finally {
@@ -38,7 +44,9 @@ for (const collapsed of [false, true]) {
     const items = liveFolderMenuItems(id);
     assert.equal(items[0].title, "Resolve Warning…");
     assert.ok(items[1].separator);
+    takeLiveHideCounts();
     await pickFix(w, id);
+    assert.equal(takeLiveHideCounts().live_folder_warning_resolves, 1, "the pick is counted");
     assert.ok(S().windows[w].tabIds.some((tab) => S().tabs[tab].url === LINK), "the fix opens GitHub's page for the warning");
     removeFolder(id);
   });
@@ -48,5 +56,18 @@ test("a live folder without a warning offers no fix", () => {
   const { id } = erroredFolder({ collapsed: false });
   setStatus(id, { state: "idle", error: null });
   assert.ok(!liveFolderMenuItems(id).some((it) => it.title === "Resolve Warning…"));
+  removeFolder(id);
+});
+
+test("a Resolve Warning… picked after a refresh cleared the warning does nothing and isn't counted", async () => {
+  const { w, id } = erroredFolder({ collapsed: false });
+  const tabsBefore = S().windows[w].tabIds.length;
+  const { useSettingsNav } = await import("../settings/settingsWindows.ts");
+  useSettingsNav.setState({ pane: "general" });
+  takeLiveHideCounts();
+  await pickFix(w, id, () => setStatus(id, { state: "idle", error: null }));
+  assert.equal(S().windows[w].tabIds.length, tabsBefore, "no tab opens");
+  assert.equal(takeLiveHideCounts().live_folder_warning_resolves, 0);
+  assert.equal(useSettingsNav.getState().pane, "general", "Settings doesn't open on Automations");
   removeFolder(id);
 });

@@ -9,8 +9,9 @@ import { ALERT_LEADS, nowBadgeEvent } from "../live/meetings";
 import { SOURCES } from "../live/sources";
 import { dismissNowBadge, live, markRead, markUnread, setRepoHidden, updateCalendarSettings, updateFolder } from "../live/store";
 import { folderRepos, setShowNewRepos, showAllRepos } from "../live/repoFilter";
-import { noteLiveFolderColorPick, noteLiveRepoMenuPick } from "../telemetry/liveHides";
+import { noteLiveFolderColorPick, noteLiveFolderWarningResolve, noteLiveRepoMenuPick } from "../telemetry/liveHides";
 import { consentToken } from "../telemetry/client";
+import type { ConsentToken } from "../telemetry/choice";
 import type { FolderStatus, LiveItem, LiveSourceId } from "../live/types";
 import { blockedLink } from "../live/github";
 import { newTab } from "../tabs/actions";
@@ -172,6 +173,13 @@ export function fixLiveFolderError(windowId: string, error: FolderStatus["error"
   else openSettings("automations");
 }
 
+function resolveWarning(windowId: string, folderId: string, consent: ConsentToken | null) {
+  const error = live().status[folderId]?.error;
+  if (!error) return;
+  noteLiveFolderWarningResolve(consent);
+  fixLiveFolderError(windowId, error);
+}
+
 export async function openLiveFolderMenu(windowId: string, folderId: string) {
   const folder = live().folders[folderId];
   if (!folder) return;
@@ -186,7 +194,7 @@ export async function openLiveFolderMenu(windowId: string, folderId: string) {
   if (showedRepo) queueMicrotask(() => void refreshFolder(folderId));
   if (!choice) return;
   const option = FOLDER_OPTIONS.find((key) => choice === `option:${key}`);
-  if (choice === FIX_ERROR_CHOICE) fixLiveFolderError(windowId, live().status[folderId]?.error ?? null);
+  if (choice === FIX_ERROR_CHOICE) resolveWarning(windowId, folderId, consent);
   else if (choice === "refresh") void manualRefresh(folderId);
   else if (option) updateFolder(folderId, { [option]: !folder[option] });
   else if (choice.startsWith("filter:")) {
