@@ -270,6 +270,47 @@ struct TimeDelta {
   double seconds;
   double InSecondsF() const { return seconds; }
 };
+inline TimeDelta Milliseconds(int milliseconds) { return {milliseconds / 1000.0}; }
+using RepeatingClosure = RepeatingCallback<void()>;
+inline std::vector<std::shared_ptr<OnceClosure>>& Timers() {
+  static std::vector<std::shared_ptr<OnceClosure>> timers;
+  return timers;
+}
+class OneShotTimer {
+ public:
+  ~OneShotTimer() { Stop(); }
+  void Start(int, TimeDelta delay, OnceClosure task) {
+    assert(delay.seconds > 0 && delay.seconds <= 1);
+    Stop();
+    pending_ = std::make_shared<OnceClosure>(std::move(task));
+    Timers().push_back(pending_);
+  }
+  void Stop() {
+    if (pending_) *pending_ = nullptr;
+    pending_.reset();
+  }
+  bool IsRunning() const { return pending_ && *pending_; }
+ private:
+  std::shared_ptr<OnceClosure> pending_;
+};
+inline size_t LiveTimers() {
+  size_t live = 0;
+  for (const auto& timer : Timers()) live += *timer ? 1 : 0;
+  return live;
+}
+inline size_t FireTimers() {
+  auto timers = std::move(Timers());
+  Timers().clear();
+  size_t fired = 0;
+  for (auto& timer : timers) {
+    if (!*timer) continue;
+    auto task = std::move(*timer);
+    *timer = nullptr;
+    task();
+    ++fired;
+  }
+  return fired;
+}
 struct TimeTicks {
   double seconds = 0;
   static double& Clock() {
@@ -407,7 +448,12 @@ struct Shell {
   content::NavigationEntry committed;
   content::WebContents contents;
   WindowState window = WindowState::kOpen;
-  ardia::ShellRecovery recovery{&contents, base::RepeatingCallback<WindowState()>([this] { return window; })};
+  std::vector<int> navigations_at_recovery;
+  ardia::ShellRecovery recovery{&contents, base::RepeatingCallback<WindowState()>([this] { return window; }),
+                                base::RepeatingClosure([this] {
+                                  navigations_at_recovery.push_back(
+                                      contents.controller.reloads + static_cast<int>(contents.controller.loads.size()));
+                                })};
   Shell() { contents.controller.last = &committed; }
   void Crash(base::TerminationStatus status = base::TERMINATION_STATUS_PROCESS_CRASHED) {
     recovery.PrimaryMainFrameRenderProcessGone(status);
@@ -503,10 +549,12 @@ void TestACancelledQuitResumesEveryWaitingShell() {
   chrome::OnClosingAllBrowsers(true);
   RunTasks();
   assert(first.reloads() == 0 && second.reloads() == 0);
+  assert(base::LiveTimers() == 2);
   browser_shutdown::Quitting() = false;
   chrome::OnClosingAllBrowsers(false);
   RunTasks();
   assert(first.reloads() == 1 && second.reloads() == 1);
+  assert(base::LiveTimers() == 0);
   chrome::OnClosingAllBrowsers(false);
   RunTasks();
   assert(first.reloads() == 1 && second.reloads() == 1);
@@ -569,15 +617,89 @@ void TestOnlyAFailedPrimaryRecoveryNavigationRetries() {
   shell.recovery.DidFinishNavigation(&committed);
   RunTasks();
   assert(shell.reloads() == 1);
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 2);
+}
+
+void TestARecoveryWithAnEarlySwappedLiveFrameThatNeverCommitsRetries() {
+  Shell shell;
+  shell.Crash();
+  assert(shell.reloads() == 1);
   shell.contents.frame.live = true;
   content::NavigationHandle aborted;
   shell.recovery.DidFinishNavigation(&aborted);
   RunTasks();
-  assert(shell.reloads() == 1);
-  shell.contents.frame.live = false;
+  assert(shell.reloads() == 2);
   shell.recovery.DidFinishNavigation(&aborted);
   RunTasks();
-  assert(shell.reloads() == 1);
+  assert(shell.reloads() == 3);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 3);
+}
+
+void TestAQuitClearedWithoutTheCallbackIsFoundByPolling() {
+  Shell first;
+  Shell second;
+  browser_shutdown::Quitting() = true;
+  first.Crash();
+  second.Crash();
+  assert(first.reloads() == 0 && second.reloads() == 0);
+  assert(base::LiveTimers() == 2);
+  assert(base::FireTimers() == 2);
+  RunTasks();
+  assert(first.reloads() == 0 && second.reloads() == 0);
+  assert(base::LiveTimers() == 2);
+  browser_shutdown::Quitting() = false;
+  assert(base::FireTimers() == 2);
+  RunTasks();
+  assert(first.reloads() == 1 && second.reloads() == 1);
+  assert(base::FireTimers() == 0);
+}
+
+void TestPollingStopsWhenShutdownStartsOrTheShellCloses() {
+  Shell shell;
+  browser_shutdown::Quitting() = true;
+  shell.Crash();
+  assert(base::LiveTimers() == 1);
+  browser_shutdown::ShutdownStarted() = true;
+  base::FireTimers();
+  RunTasks();
+  assert(base::FireTimers() == 0);
+  browser_shutdown::ShutdownStarted() = false;
+  browser_shutdown::Quitting() = false;
+  assert(shell.reloads() == 0);
+
+  auto closing = std::make_unique<Shell>();
+  browser_shutdown::Quitting() = true;
+  closing->Crash();
+  browser_shutdown::Quitting() = false;
+  closing.reset();
+  assert(base::FireTimers() == 0);
+  RunTasks();
+}
+
+void TestAReversibleCloseIsNotPolled() {
+  Shell shell;
+  shell.window = WindowState::kPaused;
+  shell.Crash();
+  assert(base::LiveTimers() == 0);
+}
+
+void TestTheLaunchBootstrapIsDisarmedBeforeEveryRecoveryNavigation() {
+  Shell reload;
+  reload.Crash();
+  assert(reload.navigations_at_recovery == std::vector<int>{0});
+  Shell early;
+  early.contents.controller.last = nullptr;
+  early.Crash();
+  assert(early.navigations_at_recovery == std::vector<int>{0});
+  assert(early.contents.controller.loads.size() == 1);
+  Shell untouched;
+  untouched.Crash(base::TERMINATION_STATUS_NORMAL_TERMINATION);
+  assert(untouched.navigations_at_recovery.empty());
 }
 
 void TestACommittedRecoveryEndsIt() {
@@ -626,6 +748,11 @@ int main() {
   TestARecoveryNavigationThatDiesBeforeCommitIsRetried();
   TestOnlyAFailedPrimaryRecoveryNavigationRetries();
   TestACommittedRecoveryEndsIt();
+  TestARecoveryWithAnEarlySwappedLiveFrameThatNeverCommitsRetries();
+  TestAQuitClearedWithoutTheCallbackIsFoundByPolling();
+  TestPollingStopsWhenShutdownStartsOrTheShellCloses();
+  TestAReversibleCloseIsNotPolled();
+  TestTheLaunchBootstrapIsDisarmedBeforeEveryRecoveryNavigation();
   TestACrashLoopStops();
   TestAPostedRecoveryOutlivesItsWindowSafely();
   return 0;
@@ -692,13 +819,25 @@ class WebUIProcessPolicyTests(unittest.TestCase):
         self.assertIn('void NoteAssetServed(std::string_view asset) { launch_bootstrap_.Served(asset); }',
                       (LINUX / 'ac_linux_host.cc').read_text())
 
+    def test_each_host_disarms_the_launch_bootstrap_before_a_recovery(self):
+        for host in HOSTS:
+            text = host.read_text()
+            with self.subTest(host=host.name):
+                made = text.index('std::make_unique<ShellRecovery>(')
+                self.assertRegex(text[made:made + 900], r'host->launch_bootstrap_\.NoteRecovery\(\);')
+
     def test_each_host_waits_out_a_quit_and_resumes_when_it_is_cancelled(self):
         for host in HOSTS:
             text = host_recovery_source(host)
             with self.subTest(host=host.name):
                 self.assertIn('chrome::AddClosingAllBrowsersCallback(', text)
-                self.assertRegex(text, r'ShellWindowState\(\s*browser_shutdown::HasShutdownStarted\(\),\s*'
-                                       r'browser_shutdown::IsTryingToQuit\(\),\s*window_state_\.Run\(\)\)')
+                for pattern in (r'const bool shutdown_started = browser_shutdown::HasShutdownStarted\(\);',
+                                r'const bool trying_to_quit = browser_shutdown::IsTryingToQuit\(\);',
+                                r'ShellWindowState\(\s*shutdown_started, trying_to_quit,\s*window_state_\.Run\(\)\)',
+                                r'QuitMayStillBeCancelled\(\s*shutdown_started, trying_to_quit\)',
+                                r'quit_poll_\.Start\(',
+                                r'void Step\(\) \{\n\s*quit_poll_\.Stop\(\);'):
+                    self.assertTrue(re.search(pattern, text), pattern)
                 self.assertIn('#include "chrome/browser/lifetime/application_lifetime_desktop.h"', host.read_text())
 
     @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')

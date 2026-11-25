@@ -421,8 +421,11 @@ std::unique_ptr<content::WebContents> CreateShellContents(Profile* profile, bool
 class ShellRecovery : public content::WebContentsObserver {
  public:
   ShellRecovery(content::WebContents* shell,
-                base::RepeatingCallback<desktop_webui_process::WindowState()> window_state)
-      : content::WebContentsObserver(shell), window_state_(std::move(window_state)) {
+                base::RepeatingCallback<desktop_webui_process::WindowState()> window_state,
+                base::RepeatingClosure before_recovery)
+      : content::WebContentsObserver(shell),
+        window_state_(std::move(window_state)),
+        before_recovery_(std::move(before_recovery)) {
     quit_cancelled_ = chrome::AddClosingAllBrowsersCallback(base::BindRepeating(
         [](base::WeakPtr<ShellRecovery> recovery, bool closing) {
           if (recovery && !closing) recovery->Resume();
@@ -438,8 +441,7 @@ class ShellRecovery : public content::WebContentsObserver {
   void PrimaryPageChanged(content::Page&) override { state_.DocumentCommitted(); }
   void DidFinishNavigation(content::NavigationHandle* handle) override {
     if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument() || handle->HasCommitted()) return;
-    content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
-    state_.NavigationEndedWithoutCommit(frame && frame->IsRenderFrameLive());
+    state_.NavigationEndedWithoutCommit();
     Resume();
   }
 
@@ -451,30 +453,41 @@ class ShellRecovery : public content::WebContentsObserver {
 
  private:
   void Step() {
+    quit_poll_.Stop();
     if (!web_contents()) return;
     content::NavigationController& controller = web_contents()->GetController();
     const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
+    const bool shutdown_started = browser_shutdown::HasShutdownStarted();
+    const bool trying_to_quit = browser_shutdown::IsTryingToQuit();
     switch (state_.Next((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
-                        desktop_webui_process::ShellWindowState(browser_shutdown::HasShutdownStarted(),
-                                                                browser_shutdown::IsTryingToQuit(),
+                        desktop_webui_process::ShellWindowState(shutdown_started, trying_to_quit,
                                                                 window_state_.Run()),
                         entry && !entry->IsInitialEntry())) {
       case desktop_webui_process::RecoveryStep::kReloadDocument:
+        before_recovery_.Run();
         controller.Reload(content::ReloadType::NORMAL, false);
         break;
       case desktop_webui_process::RecoveryStep::kLoadShellUrl:
+        before_recovery_.Run();
         controller.LoadURL(GURL(desktop_webui_process::kShellUrl), content::Referrer(),
                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
         break;
-      case desktop_webui_process::RecoveryStep::kNothing:
       case desktop_webui_process::RecoveryStep::kWaitForResume:
+        if (desktop_webui_process::QuitMayStillBeCancelled(shutdown_started, trying_to_quit)) {
+          quit_poll_.Start(FROM_HERE, base::Milliseconds(desktop_webui_process::kQuitPollMilliseconds),
+                           base::BindOnce(&ShellRecovery::Resume, weak_factory_.GetWeakPtr()));
+        }
+        break;
+      case desktop_webui_process::RecoveryStep::kNothing:
         break;
     }
   }
 
   base::RepeatingCallback<desktop_webui_process::WindowState()> window_state_;
+  base::RepeatingClosure before_recovery_;
   desktop_webui_process::ShellRecoveryState state_;
   base::CallbackListSubscription quit_cancelled_;
+  base::OneShotTimer quit_poll_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -3024,7 +3037,12 @@ void ShellHostView::Initialize() {
                      return host->closing() ? desktop_webui_process::WindowState::kPaused
                                             : desktop_webui_process::WindowState::kOpen;
                    },
-                   GetWeakPtr()));
+                   GetWeakPtr()),
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host) {
+            if (host) host->launch_bootstrap_.NoteRecovery();
+          },
+          GetWeakPtr()));
   curtain_timer_.Start(FROM_HERE, kShellCurtainLimit,
                        base::BindOnce(&ShellHostView::LiftCurtain, base::Unretained(this)));
   ApplyShellInput();

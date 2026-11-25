@@ -51,6 +51,12 @@ inline constexpr WindowState ShellWindowState(bool shutdown_started, bool trying
   return window;
 }
 
+inline constexpr int kQuitPollMilliseconds = 250;
+
+inline constexpr bool QuitMayStillBeCancelled(bool shutdown_started, bool trying_to_quit) {
+  return trying_to_quit && !shutdown_started;
+}
+
 enum class RecoveryStep { kNothing, kWaitForResume, kReloadDocument, kLoadShellUrl };
 
 class ShellRecoveryState {
@@ -64,10 +70,10 @@ class ShellRecoveryState {
     in_flight_ = false;
   }
 
-  void NavigationEndedWithoutCommit(bool shell_live) {
+  void NavigationEndedWithoutCommit() {
     if (!in_flight_) return;
     in_flight_ = false;
-    if (!shell_live) owed_ = true;
+    owed_ = true;
   }
 
   RecoveryStep Next(double now_seconds, WindowState window, bool committed_shell_document) {
@@ -100,6 +106,8 @@ class LaunchBootstrap {
   void Served(std::string_view asset) {
     if (asset == kShellBootstrapAsset) pending_ = false;
   }
+
+  void NoteRecovery() { pending_ = false; }
 
  private:
   bool pending_;

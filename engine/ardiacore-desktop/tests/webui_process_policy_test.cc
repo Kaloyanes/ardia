@@ -137,12 +137,12 @@ void TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget() {
   state.RendererGone(false);
   assert(state.Next(1, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
   assert(state.in_flight() && !state.owed());
-  state.NavigationEndedWithoutCommit(false);
+  state.NavigationEndedWithoutCommit();
   assert(!state.in_flight() && state.owed());
   assert(state.Next(2, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
-  state.NavigationEndedWithoutCommit(false);
+  state.NavigationEndedWithoutCommit();
   assert(state.Next(3, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
-  state.NavigationEndedWithoutCommit(false);
+  state.NavigationEndedWithoutCommit();
   assert(state.owed());
   assert(state.Next(4, WindowState::kOpen, true) == RecoveryStep::kNothing);
   assert(!state.owed() && !state.in_flight());
@@ -150,22 +150,48 @@ void TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget() {
 
 void TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight() {
   policy::ShellRecoveryState idle;
-  idle.NavigationEndedWithoutCommit(false);
+  idle.NavigationEndedWithoutCommit();
   assert(!idle.owed());
 
   policy::ShellRecoveryState live;
   live.RendererGone(false);
   assert(live.Next(1, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
-  live.NavigationEndedWithoutCommit(true);
-  assert(!live.owed() && !live.in_flight());
+  live.NavigationEndedWithoutCommit();
+  assert(live.owed() && !live.in_flight());
+  assert(live.Next(2, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
 
   policy::ShellRecoveryState committed;
   committed.RendererGone(false);
   assert(committed.Next(1, WindowState::kOpen, false) == RecoveryStep::kLoadShellUrl);
   committed.DocumentCommitted();
   assert(!committed.in_flight());
-  committed.NavigationEndedWithoutCommit(false);
+  committed.NavigationEndedWithoutCommit();
   assert(!committed.owed());
+}
+
+void TestAQuitIsPolledOnlyWhileItCanStillBeCancelled() {
+  static_assert(policy::kQuitPollMilliseconds == 250);
+  static_assert(policy::QuitMayStillBeCancelled(false, true));
+  static_assert(!policy::QuitMayStillBeCancelled(true, true));
+  static_assert(!policy::QuitMayStillBeCancelled(false, false));
+  static_assert(!policy::QuitMayStillBeCancelled(true, false));
+}
+
+void TestARecoveryBeforeTheFirstBootstrapIsNotAStartup() {
+  policy::LaunchBootstrap launch(true);
+  launch.Served("index.html");
+  launch.NoteRecovery();
+  assert(!launch.startup());
+  launch.Served(policy::kShellBootstrapAsset);
+  assert(!launch.startup());
+
+  policy::LaunchBootstrap cold(true);
+  launch.NoteRecovery();
+  assert(cold.startup());
+  cold.Served(policy::kShellBootstrapAsset);
+  assert(!cold.startup());
+  cold.NoteRecovery();
+  assert(!cold.startup());
 }
 
 void TestOnlyTheLaunchWindowsFirstBootstrapSaysStartup() {
@@ -194,6 +220,8 @@ int main() {
   TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget();
   TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight();
   TestOnlyTheLaunchWindowsFirstBootstrapSaysStartup();
+  TestAQuitIsPolledOnlyWhileItCanStillBeCancelled();
+  TestARecoveryBeforeTheFirstBootstrapIsNotAStartup();
   TestTheShellSite();
   TestOnlyRegularWindowsShareTheRenderer();
   TestReloadBudget();

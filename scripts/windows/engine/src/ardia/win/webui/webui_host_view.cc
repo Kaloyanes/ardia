@@ -36,6 +36,7 @@
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
@@ -180,9 +181,11 @@ class ShellRecovery : public content::WebContentsObserver {
   ShellRecovery(
       content::WebContents* shell,
       base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
-          window_state)
+          window_state,
+      base::RepeatingClosure before_recovery)
       : content::WebContentsObserver(shell),
-        window_state_(std::move(window_state)) {
+        window_state_(std::move(window_state)),
+        before_recovery_(std::move(before_recovery)) {
     quit_cancelled_ = chrome::AddClosingAllBrowsersCallback(base::BindRepeating(
         [](base::WeakPtr<ShellRecovery> recovery, bool closing) {
           if (recovery && !closing) {
@@ -208,8 +211,7 @@ class ShellRecovery : public content::WebContentsObserver {
         handle->HasCommitted()) {
       return;
     }
-    content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
-    state_.NavigationEndedWithoutCommit(frame && frame->IsRenderFrameLive());
+    state_.NavigationEndedWithoutCommit();
     Resume();
   }
 
@@ -224,35 +226,51 @@ class ShellRecovery : public content::WebContentsObserver {
 
  private:
   void Step() {
+    quit_poll_.Stop();
     if (!web_contents()) {
       return;
     }
     content::NavigationController& controller = web_contents()->GetController();
     const content::NavigationEntry* entry = controller.GetLastCommittedEntry();
+    const bool shutdown_started = browser_shutdown::HasShutdownStarted();
+    const bool trying_to_quit = browser_shutdown::IsTryingToQuit();
     switch (state_.Next(
         (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
         ardia::desktop_webui_process::ShellWindowState(
-            browser_shutdown::HasShutdownStarted(),
-            browser_shutdown::IsTryingToQuit(), window_state_.Run()),
+            shutdown_started, trying_to_quit, window_state_.Run()),
         entry && !entry->IsInitialEntry())) {
       case ardia::desktop_webui_process::RecoveryStep::kReloadDocument:
+        before_recovery_.Run();
         controller.Reload(content::ReloadType::NORMAL, false);
         break;
       case ardia::desktop_webui_process::RecoveryStep::kLoadShellUrl:
+        before_recovery_.Run();
         controller.LoadURL(GURL(ardia::desktop_webui_process::kShellUrl),
                            content::Referrer(),
                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
         break;
-      case ardia::desktop_webui_process::RecoveryStep::kNothing:
       case ardia::desktop_webui_process::RecoveryStep::kWaitForResume:
+        if (ardia::desktop_webui_process::QuitMayStillBeCancelled(
+                shutdown_started, trying_to_quit)) {
+          quit_poll_.Start(
+              FROM_HERE,
+              base::Milliseconds(
+                  ardia::desktop_webui_process::kQuitPollMilliseconds),
+              base::BindOnce(&ShellRecovery::Resume,
+                             weak_factory_.GetWeakPtr()));
+        }
+        break;
+      case ardia::desktop_webui_process::RecoveryStep::kNothing:
         break;
     }
   }
 
   base::RepeatingCallback<ardia::desktop_webui_process::WindowState()>
       window_state_;
+  base::RepeatingClosure before_recovery_;
   ardia::desktop_webui_process::ShellRecoveryState state_;
   base::CallbackListSubscription quit_cancelled_;
+  base::OneShotTimer quit_poll_;
   base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
@@ -521,6 +539,13 @@ void ShellHostView::Initialize() {
             return host && host->browser_ && !host->closing()
                        ? ardia::desktop_webui_process::WindowState::kOpen
                        : ardia::desktop_webui_process::WindowState::kGone;
+          },
+          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host) {
+            if (host) {
+              host->launch_bootstrap_.NoteRecovery();
+            }
           },
           weak_factory_.GetWeakPtr()));
   ObserveMember(browser_);

@@ -113,6 +113,37 @@ void TestAStartedShutdownDropsRecovery() {
   assert(!state.owed());
 }
 
+void TestAQuitClearedWithoutACallbackIsFoundByPolling() {
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  bool trying_to_quit = true;
+  int polls = 0;
+  for (; polls < 8; ++polls) {
+    const RecoveryStep step = state.Next(
+        polls, policy::ShellWindowState(false, trying_to_quit, WindowState::kOpen),
+        true);
+    if (step != RecoveryStep::kWaitForResume) {
+      break;
+    }
+    assert(policy::QuitMayStillBeCancelled(false, trying_to_quit));
+    if (polls == 3) {
+      trying_to_quit = false;
+    }
+  }
+  assert(polls == 4);
+  assert(state.recent_reloads() == 1);
+}
+
+void TestARecoveryNavigationWithALiveSwappedFrameStillRetries() {
+  policy::ShellRecoveryState state;
+  state.RendererGone(false);
+  assert(state.Next(1, WindowState::kOpen, true) ==
+         RecoveryStep::kReloadDocument);
+  state.NavigationEndedWithoutCommit();
+  assert(state.Next(2, WindowState::kOpen, true) ==
+         RecoveryStep::kReloadDocument);
+}
+
 void TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup() {
   policy::LaunchBootstrap launch(true);
   launch.Served("index.html");
@@ -121,6 +152,10 @@ void TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup() {
   assert(!launch.startup());
   policy::LaunchBootstrap second(false);
   assert(!second.startup());
+  policy::LaunchBootstrap crashed_early(true);
+  crashed_early.NoteRecovery();
+  crashed_early.Served("host-bootstrap.js");
+  assert(!crashed_early.startup());
 }
 
 }
@@ -129,6 +164,8 @@ int main() {
   TestACancelledQuitResumesRecovery();
   TestAStartedShutdownDropsRecovery();
   TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup();
+  TestAQuitClearedWithoutACallbackIsFoundByPolling();
+  TestARecoveryNavigationWithALiveSwappedFrameStillRetries();
   TestPrivateWindowShellsGetTheirOwnRenderer();
   TestAWindowsCloseIsFinal();
   TestADetachedWindowNeverReloads();
