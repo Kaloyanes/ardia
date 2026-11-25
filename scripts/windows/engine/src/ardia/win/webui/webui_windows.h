@@ -119,6 +119,7 @@ class WindowRegistry : public BrowserCollectionObserver {
                         int tries);
   void NotifyWindowClosed(ShellHostView* closed);
   int NextPrivateOrdinal() const;
+  bool AnyHostTakesOpenUrls() const;
 
   bool started_ = false;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
@@ -132,6 +133,7 @@ class WindowRegistry : public BrowserCollectionObserver {
   bool opening_window_ = false;
   std::optional<webui_window::Placement> saved_placement_;
   bool placement_loaded_ = false;
+  bool placement_loading_ = false;
   int next_window_ = 1;
   base::WeakPtrFactory<WindowRegistry> weak_factory_{this};
 };

@@ -138,6 +138,10 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
     Watch() = std::make_unique<ProfileWatch>();
   }
   if (!placement_loaded_) {
+    if (placement_loading_) {
+      return;
+    }
+    placement_loading_ = true;
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE, base::BindOnce(&ReadPlacement, SessionDirectory()),
         base::BindOnce(
@@ -146,6 +150,7 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
               if (!registry) {
                 return;
               }
+              registry->placement_loading_ = false;
               registry->placement_loaded_ = true;
               if (!registry->saved_placement_) {
                 registry->saved_placement_ = saved;
@@ -155,20 +160,35 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
             weak_factory_.GetWeakPtr()));
     return;
   }
-  if (Hosts().empty()) {
-    WindowConfig config;
-    config.window_id = webui_window::kMainWindowId;
-    config.startup = true;
-    config.page_profile = kAppProfileName;
-    if (!Open(app_profile, std::move(config), std::nullopt)) {
-      LOG(ERROR) << "Ardia WebUI shell: the main window did not open";
-      QuitApp();
-      return;
+  switch (webui_window::NextStartStep(!Hosts().empty(), !pending_urls_.empty(),
+                                      AnyHostTakesOpenUrls())) {
+    case webui_window::StartStep::kOpenMain: {
+      WindowConfig config;
+      config.window_id = webui_window::kMainWindowId;
+      config.startup = true;
+      config.page_profile = kAppProfileName;
+      if (!Open(app_profile, std::move(config), std::nullopt)) {
+        LOG(ERROR) << "Ardia WebUI shell: the main window did not open";
+        QuitApp();
+        return;
+      }
+      break;
     }
-  } else if (ShellHostView* front = FrontHost()) {
-    front->FocusWindow();
+    case webui_window::StartStep::kFocusFront:
+      if (ShellHostView* front = FrontHost()) {
+        front->FocusWindow();
+      }
+      break;
+    case webui_window::StartStep::kLeaveToLinks:
+      break;
   }
   DeliverOpenUrls();
+}
+
+bool WindowRegistry::AnyHostTakesOpenUrls() const {
+  return std::ranges::any_of(hosts_, [](const auto& entry) {
+    return entry.second->TakesOpenUrls();
+  });
 }
 
 void WindowRegistry::Stop() {

@@ -600,6 +600,20 @@ constexpr bool RelaunchUrlAccepted(std::string_view scheme,
          spec_bytes <= kRelaunchUrlBytes && already_taken < kRelaunchUrlLimit;
 }
 
+enum class StartStep { kOpenMain, kFocusFront, kLeaveToLinks };
+
+constexpr StartStep NextStartStep(bool windows_open,
+                                  bool urls_pending,
+                                  bool a_window_takes_urls) {
+  if (!windows_open) {
+    return StartStep::kOpenMain;
+  }
+  if (urls_pending && a_window_takes_urls) {
+    return StartStep::kLeaveToLinks;
+  }
+  return StartStep::kFocusFront;
+}
+
 constexpr bool DocumentEngineRequestAllowed(std::string_view profile,
                                             size_t json_bytes) {
   return profile == kAppProfileName && json_bytes <= kDocumentEngineRequestLimit;
