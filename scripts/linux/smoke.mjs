@@ -32,7 +32,8 @@ ARDIA_BACKGROUND=1, a throwaway profile and HOME, the sandbox on) without
                     and lib/ardia/VERSION and lib/ardia/cli when the package has them; for a .deb its
                     control file, maintainer scripts, setuid chrome-sandbox, policy and AppArmor profile;
                     for an .rpm its header, root-owned files, setuid chrome-sandbox, scriptlets, AppArmor
-                    profile and a policy without the self-update action, since the package manager updates it;
+                    profile, a policy without the self-update action, since the package manager updates it,
+                    and no requirement on a library it bundles or on the Qt its shims load only where installed;
                     for an AppImage its type 2 header, AppRun and no setuid helper
   app-version       systemInfo.appVersion is lib/ardia/VERSION (skip: a package without VERSION)
   cli-install       the bundled installer installs the bundled CLI into a scratch home, ardia --version
@@ -186,6 +187,11 @@ export function rpmLayoutProblems(listing, fields) {
   if (fields.name !== "ardia") problems.push(`the package is called ${fields.name}, not ardia`);
   if (fields.arch !== "x86_64") problems.push(`the architecture is ${fields.arch}, not x86_64`);
   if (!/\/etc\/apparmor\.d\/ardia/.test(fields.scripts ?? "")) problems.push("the scriptlets never install the AppArmor profile");
+  const bundled = new Set(fields.bundled ?? []);
+  for (const requirement of (fields.requires ?? "").split("\n").map((line) => line.trim()).filter(Boolean)) {
+    const soname = requirement.split("(")[0];
+    if (/^libQt\d/.test(soname) || bundled.has(soname)) problems.push(`the .rpm requires ${requirement}, which Ardia bundles or loads only where it is installed`);
+  }
   return problems;
 }
 
@@ -890,7 +896,10 @@ class Smoke {
     const header = await run("rpm", ["-qp", "--qf", "%{NAME}\\n%{ARCH}\\n%{VERSION}\\n", this.packagePath], { timeout: 60000 });
     const [name, arch, version] = header.stdout.split("\n");
     const scripts = await run("rpm", ["-qp", "--scripts", this.packagePath], { timeout: 60000 });
-    const problems = rpmLayoutProblems(listing.stdout, { name, arch, scripts: scripts.stdout });
+    const requires = await run("rpm", ["-qpR", this.packagePath], { timeout: 60000 });
+    if (requires.code !== 0) throw new Error(`rpm -qpR exited ${requires.code}: ${requires.stderr.slice(-400)}`);
+    const bundled = (await readdir(join(this.root, "lib/ardia"))).filter((file) => /\.so(\.\d+)*$/.test(file));
+    const problems = rpmLayoutProblems(listing.stdout, { name, arch, scripts: scripts.stdout, requires: requires.stdout, bundled });
     if (this.version && version !== this.version.replace("-", "~")) problems.push(`the .rpm version is ${version}, not ${this.version.replace("-", "~")}`);
     const policy = await readFile(join(this.root, "share/polkit-1/actions/dev.ardia.linux.policy"), "utf8").catch(() => "");
     if (!policy.includes("dev.ardia.linux.reauthenticate")) problems.push("the .rpm's polkit policy has no reauthenticate action");

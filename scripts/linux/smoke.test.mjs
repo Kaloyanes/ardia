@@ -168,6 +168,12 @@ test("an .rpm is root-owned with a setuid root helper, the launcher link, the po
   assert.ok(problems.some((p) => p.includes("AppArmor profile")));
 });
 
+test("an .rpm that requires a library Ardia bundles, or the Qt its shims load only where installed, fails the layout check", () => {
+  const requires = ["libc.so.6()(64bit)", "libvulkan.so.1()(64bit)", "libQt6Core.so.6()(64bit)", "libQt5Widgets.so.5(Qt_5)(64bit)", "/usr/bin/curl", "libgtk-3.so.0()(64bit)"].join("\n");
+  const problems = rpmLayoutProblems("", { name: "ardia", arch: "x86_64", scripts: "/etc/apparmor.d/ardia", requires, bundled: ["libvulkan.so.1", "libEGL.so", "libqt6_shim.so"] }).filter((p) => p.startsWith("the .rpm requires"));
+  assert.deepEqual(problems.map((p) => p.split(" ")[3].replace(/,$/, "")), ["libvulkan.so.1()(64bit)", "libQt6Core.so.6()(64bit)", "libQt5Widgets.so.5(Qt_5)(64bit)"]);
+});
+
 test("profile folders stay private under a login umask that lets the group write, so the engine opens its control socket there", async () => {
   const work = await mkdtemp(join(tmpdir(), "smoke-private-"));
   const before = process.umask(0o002);
