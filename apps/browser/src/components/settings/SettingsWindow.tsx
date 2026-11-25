@@ -113,22 +113,11 @@ export function SettingsWindow() {
   const visit = shown?.visit ?? 0;
   const layout = shown ? settingsLayoutKey(shown) : "";
   const [scrollMemory] = useState(() => settingsScroller(noteSettingsScrollRestore));
-  const begun = useRef<number | null>(null);
-  const pendingMove = useRef<ScrollMove | null>(null);
   const move = (to: ScrollMove | null) => {
-    if (!to) return;
-    pendingMove.current = null;
-    if (scroller.current) scroller.current.scrollTo({ y: to.y, animated: false });
-    else pendingMove.current = to;
+    if (to) scroller.current?.scrollTo({ y: to.y, animated: false });
   };
-  if (shown && begun.current !== visit) {
-    begun.current = visit;
-    pendingMove.current = scrollMemory.begin(visit, settingsScrollFor(visit), shown, consentToken());
-  }
   useLayoutEffect(() => {
-    const due = pendingMove.current;
-    pendingMove.current = null;
-    move(due);
+    if (shown) move(scrollMemory.begin(visit, settingsScrollFor(visit), shown, consentToken()));
   }, [visit]);
   useEffect(() => forgetSettingsScroll, []);
   useEffect(() => closeProfileIconPickerIn(SETTINGS_WINDOW_ID), [key]);
@@ -199,7 +188,7 @@ export function SettingsWindow() {
           scrollEventThrottle={16}
           onScroll={({ nativeEvent: { contentOffset, layoutMeasurement, contentSize } }) => {
             scrollTop.current = contentOffset.y;
-            scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height);
+            scrollMemory.scrolled(contentOffset.y, contentSize.height - layoutMeasurement.height, contentSize.height);
             noteSettingsScroll(contentOffset.y, layoutMeasurement.height, contentSize.height);
           }}
           onLayout={(e) => {

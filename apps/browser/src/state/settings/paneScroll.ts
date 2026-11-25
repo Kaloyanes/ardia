@@ -21,19 +21,19 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
   let position = 0;
   let early: { layout: string; height: number } | null = null;
 
-  const conclude = (visit: Visit, outcome: RestoreOutcome) => {
-    if (visit.expect?.owed) report(outcome, visit.consent);
+  const conclude = (visit: Visit, outcome: RestoreOutcome | null, landed: number | null) => {
+    if (outcome && visit.expect?.owed) report(outcome, visit.consent);
     visit.expect = null;
+    if (landed !== null) rememberSettingsScrollOffset(visit.visit, landed);
   };
 
   const settle = (visit: Visit): ScrollMove => {
     visit.settled = true;
     const reachable = visit.saved > 0 && content - viewport >= visit.saved;
     const y = reachable ? visit.saved : 0;
-    rememberSettingsScrollOffset(visit.visit, y);
     if (visit.saved > 0 && !reachable) report("unreachable", visit.consent);
     visit.expect = { y, until: now() + SCROLL_SETTLE_MS, owed: reachable };
-    if (Math.abs(position - y) < 1) conclude(visit, "applied");
+    if (Math.abs(position - y) < 1) conclude(visit, "applied", y);
     return { y };
   };
 
@@ -42,10 +42,10 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
       viewport = height;
     },
     begin(visit: number, saved: number, place: SettingsPlace, consent: ConsentToken | null): ScrollMove | null {
-      if (shown) conclude(shown, "applied");
+      if (shown) conclude(shown, null, null);
       const layout = settingsLayoutKey(place);
       shown = { visit, saved, layout, consent, settled: false, expect: null };
-      rememberSettingsScrollOffset(visit, 0);
+      if (saved <= 0) rememberSettingsScrollOffset(visit, 0);
       if (early?.layout === layout) {
         laidOut = layout;
         content = early.height;
@@ -64,20 +64,17 @@ export function settingsScroller(report: (outcome: RestoreOutcome, consent: Cons
       content = height;
       return shown.settled ? null : settle(shown);
     },
-    scrolled(y: number, max: number) {
+    scrolled(y: number, max: number, contentHeight: number) {
       position = y;
       if (!shown?.settled) return;
       const expect = shown.expect;
-      if (expect) {
-        if (Math.abs(y - expect.y) < 1) conclude(shown, "applied");
-        else if (expect.y > max + 0.5 && Math.abs(y - max) < 1) conclude(shown, "clamped");
-        else if (now() < expect.until) return;
-        else conclude(shown, "applied");
-      }
-      rememberSettingsScrollOffset(shown.visit, y);
+      if (!expect) return rememberSettingsScrollOffset(shown.visit, y);
+      if (Math.abs(y - expect.y) < 1) return conclude(shown, "applied", y);
+      if (expect.y > max + 0.5 && Math.abs(y - max) < 1) return conclude(shown, "clamped", y);
+      if (Math.abs(contentHeight - content) < 1 || now() >= expect.until) conclude(shown, null, y);
     },
     moved() {
-      if (shown?.settled) conclude(shown, "applied");
+      if (shown?.settled) conclude(shown, null, null);
     },
   };
 }

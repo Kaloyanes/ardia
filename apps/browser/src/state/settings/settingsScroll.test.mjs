@@ -9,6 +9,7 @@ const nav = () => useSettingsNav.getState();
 const scrollShown = (y) => rememberSettingsScrollOffset(nav().visit, y);
 
 function fresh() {
+  forgetSettingsScroll();
   useSettingsNav.setState({ pane: "general", profileId: null, detail: null, scroll: 0, visit: 0, back: [], forward: [] });
   rememberSettingsScrollOffset(-1, 0);
 }
@@ -145,7 +146,7 @@ function window(viewport = 600) {
       const before = reports.length;
       return reported(memory.laidOut(settingsLayoutKey(place), height), before);
     },
-    scrolled: (y, max = 1e9) => memory.scrolled(y, max),
+    scrolled: (y, max = 1e9, contentHeight = -1) => memory.scrolled(y, max, contentHeight),
   };
 }
 
@@ -405,7 +406,7 @@ test("S2 (round 2): a search reveal right after a restore is recorded", () => {
   settingsForward();
   settingsBack();
   assert.equal(nav().scroll, 700);
-  assert.deepEqual(settings.reports, ["applied"]);
+  assert.deepEqual(settings.reports, [], "the restore was never confirmed, so it isn't counted as applied");
 });
 
 test("S2 (round 2): a restore the scroll view clamps keeps the offset it landed on and is counted as clamped", () => {
@@ -452,4 +453,72 @@ test("S5 (round 2): Back to a deleted profile, now shown as another one, doesn't
   assert.equal(nav().profileId, work);
   assert.equal(nav().scroll, 400);
   assert.equal(settingsScrollFor(nav().visit), 0, "the page shows the default profile, so 400 isn't restored on it");
+});
+
+test("S2 (round 3): a restore seen landing short on the page itself keeps the observed offset, and a search reveal doesn't count it as applied", () => {
+  returnToSaved(500);
+  const settings = window();
+  settings.show();
+  assert.deepEqual(settings.lay(1400), { y: 500, restore: null });
+  settings.scrolled(350, 1e9, 9999);
+  assert.deepEqual(settings.reports, [], "an event from another page's content is ignored");
+  settings.scrolled(350, 1e9, 1400);
+  settings.memory.moved();
+  assert.deepEqual(settings.reports, []);
+  settingsForward();
+  settingsBack();
+  assert.equal(nav().scroll, 350, "history holds what was observed, not the unconfirmed 500");
+});
+
+test("S2 (round 3): an unconfirmed restore left by navigation isn't counted, and nothing observed keeps the position it came back to", () => {
+  returnToSaved(500);
+  const settings = window();
+  settings.show();
+  settings.lay(1400);
+  settingsForward();
+  settings.show();
+  assert.deepEqual(settings.reports, []);
+  settingsBack();
+  assert.equal(nav().scroll, 500);
+});
+
+test("S5 (round 3): deleting the profile on screen and falling back to the default doesn't hand the deleted profile's offset to it", () => {
+  fresh();
+  const { useBrowser } = globalThis.__browserStore;
+  const work = useBrowser.getState().createProfile({ name: "Work" });
+  const personal = useBrowser.getState().settings.defaultProfileId;
+  goToSettingsPane("profiles", work);
+  scrollShown(400);
+  useBrowser.setState((s) => {
+    const { [work]: _gone, ...profiles } = s.profiles;
+    return { profiles, profileOrder: s.profileOrder.filter((id) => id !== work) };
+  });
+  replaceSettingsPlace(null);
+  assert.equal(nav().scroll, 0);
+  replaceSettingsPlace(personal);
+  assert.equal(nav().scroll, 0, "Personal never took Work's 400");
+});
+
+test("S6 (round 3): SettingsWindow begins a visit only from a layout effect, never while rendering", async () => {
+  const { readFileSync } = await import("node:fs");
+  const ts = (await import("typescript")).default;
+  const path = new URL("../../components/settings/SettingsWindow.tsx", import.meta.url);
+  const file = ts.createSourceFile("SettingsWindow.tsx", readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const begins = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(file) === "scrollMemory.begin") begins.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.ok(begins.length > 0);
+  for (const call of begins) {
+    let inside = null;
+    for (let node = call.parent; node; node = node.parent) {
+      if (ts.isCallExpression(node) && /^use\w*Effect$/.test(node.expression.getText(file))) {
+        inside = node.expression.getText(file);
+        break;
+      }
+    }
+    assert.equal(inside, "useLayoutEffect", "begin runs after commit, so an uncommitted render changes no history or telemetry");
+  }
 });

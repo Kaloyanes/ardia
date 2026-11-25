@@ -52,10 +52,16 @@ export function goToSettingsPane(pane: SettingsPane, profileId: string | null = 
 
 const replacedOffsets = new Map<string, number>();
 
+function leftPlaceKey(stop: SettingsStop): string | null {
+  if (stop.pane !== "profiles") return settingsPlaceKey(stop);
+  return stop.shownProfile && useBrowser.getState().profiles[stop.shownProfile] ? settingsPlaceKey({ ...stop, profileId: stop.shownProfile }) : null;
+}
+
 export function replaceSettingsPlace(profileId: string | null, detail: string | null = null) {
   const current = useSettingsNav.getState();
   const { pane, back } = current;
-  replacedOffsets.set(shownPlaceKey(current), stopOf(current).scroll);
+  const leaving = leftPlaceKey(current);
+  if (leaving) replacedOffsets.set(leaving, stopOf(current).scroll);
   const prev = back.at(-1);
   const same = prev?.pane === pane && prev.profileId === profileId && prev.detail === detail;
   const place = { pane, profileId, detail };
