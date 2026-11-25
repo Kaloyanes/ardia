@@ -128,7 +128,7 @@ const relayedConsent = (consent: unknown) => (typeof consent === "string" && con
 export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolean; locks?: LeaderLocks; channel?: LeaderChannel | null }) {
   const { host, candidate } = options;
   setTelemetrySettle({ settle: settleHostTelemetry, reopen: reopenHostTelemetry });
-  setTelemetryHost({ os: PLATFORM_TERMS.os, osType: PLATFORM_IDS.otel, send: hostSupports(TELEMETRY_POST, host) ? hostTelemetrySend(host) : null });
+  setTelemetryHost({ os: PLATFORM_TERMS.os, osType: PLATFORM_IDS.otel, send: import.meta.env?.MODE === "mac" ? async () => 204 : hostSupports(TELEMETRY_POST, host) ? hostTelemetrySend(host) : null });
   loadChoice();
   installErrorReporting();
   watchUncaughtErrors(globalThis);

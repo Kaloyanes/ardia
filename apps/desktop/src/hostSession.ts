@@ -16,6 +16,7 @@ import { splitTabIds } from "../../browser/src/state/splits/splits";
 import { withPinChoiceStamps, withPinChoicesOnDisk } from "./hostPinChoices.ts";
 import { upgraded, type SavedObject } from "../../browser/src/lib/savedDocument";
 import { SESSION_MIGRATIONS, SESSION_VERSION } from "../../browser/src/state/session/persist";
+import { sessionFromSaved } from "../../browser/src/state/session/savedSession";
 import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
 import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
@@ -133,8 +134,12 @@ function migratedSession(session: HydrateData, from: number): HydrateData {
   return withoutAbsent({ ...next, ...Object.fromEntries(tables.map((key) => [key, keyedById(next[key]) ?? {}])) } as unknown as HydrateData);
 }
 
+const macDiskSession = (saved: HydrateData, stamped: number | undefined) =>
+  stamped !== undefined && stamped >= SESSION_VERSION && DISK_LISTS.some((key) => Array.isArray(saved[key]));
+
 export const linuxSessionShape = (saved: HydrateData): HydrateData => {
   const stamped = linuxSessionVersion(saved);
+  if (macDiskSession(saved, stamped)) return sniffedSessionShape(withoutAbsent(sessionFromSaved(saved as unknown as SavedObject) as unknown as HydrateData));
   if (stamped !== undefined && stamped >= SESSION_VERSION) return sniffedSessionShape(saved);
   return migratedSession(sniffedSessionShape(saved), Math.max(stamped ?? SNIFFED_SESSION_VERSION, SNIFFED_SESSION_VERSION));
 };
