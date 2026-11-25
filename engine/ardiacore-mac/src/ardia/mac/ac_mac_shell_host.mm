@@ -65,10 +65,6 @@ constexpr char kShellUrl[] = "chrome://ardia/";
 constexpr size_t kUnhandledLimit = 400;
 constexpr char kDirectoryPrefix[] = "Profile ";
 
-bool KeptAsIs(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
-}
-
 class ShellTransparency : public content::WebContentsObserver {
  public:
   explicit ShellTransparency(content::WebContents* shell)
