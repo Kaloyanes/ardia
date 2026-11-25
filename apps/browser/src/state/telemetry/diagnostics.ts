@@ -23,6 +23,8 @@ const MAX_PAGE_PROCESS_EVENTS = 30;
 const MAX_HOVER_LOST_EVENTS = 20;
 const MAX_WINDOW_UNPAINTED_EVENTS = 20;
 const MAX_WINDOW_VIEWS = 1_000;
+const MAX_HOLD_MS = 600_000;
+const UNPAINTED_REASON_BITS = (1 << 9) - 1;
 const MINUTE_MS = 60_000;
 const MIN_SAMPLES = 12;
 const MAX_SAMPLES = 600;
@@ -297,6 +299,9 @@ const UNPAINTED_OCCLUSIONS = new Set(["visible", "occluded"]);
 
 const cappedCount = (value: unknown) => (Number.isFinite(value) ? Math.min(Math.max(0, Math.round(value as number)), MAX_WINDOW_VIEWS) : null);
 const hasBit = (bits: unknown, bit: number) => typeof bits === "number" && Number.isSafeInteger(bits) && (bits & (1 << bit)) !== 0;
+const reasonBits = (bits: unknown) => (typeof bits === "number" && Number.isSafeInteger(bits) && bits >= 0 ? bits & UNPAINTED_REASON_BITS : null);
+const holdMilliseconds = (value: unknown) => (Number.isFinite(value) ? Math.min(Math.max(0, Math.round(value as number)), MAX_HOLD_MS) : null);
+const flag = (value: unknown) => (typeof value === "boolean" ? value : null);
 
 function windowUnpaintedProperties(r: WindowUnpaintedRecord) {
   return {
@@ -318,6 +323,12 @@ function windowUnpaintedProperties(r: WindowUnpaintedRecord) {
     stand_in_lent: hasBit(r.reasons, 5),
     stand_in_leaving: hasBit(r.reasons, 6),
     veil_up: hasBit(r.reasons, 7),
+    stand_in_showing: hasBit(r.reasons, 8),
+    held_ms: holdMilliseconds(r.heldMs),
+    webkit_views: cappedCount(r.webkitViews),
+    webkit_on_top: flag(r.webkitOnTop),
+    still_unpainted: cappedCount(r.stillUnpainted),
+    still_reasons: reasonBits(r.stillReasons),
     session_min: sessionMinutes(),
   };
 }
