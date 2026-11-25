@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { View } from "react-native";
 import { DownloadsPopover as BrowserDownloadsPopover } from "../../browser/src/components/downloads/Downloads";
-import { DOWNLOADS_BUTTON_TEST_ID } from "../../browser/src/components/downloads/DownloadsButton";
+import { pressOpensDownloadsMenu } from "./downloadsButtonPress";
 import { useWindowId } from "../../browser/src/state/browser/hooks";
 import { noteLinuxDownloadsPanelInsidePress } from "../../browser/src/state/telemetry/downloadsPanelCounts";
 import { setDownloadsOpen } from "../../browser/src/state/windows/actions";
@@ -12,11 +12,6 @@ import { PageOverlayRegion } from "./PageOverlayRegion";
 import { watchPageFocus } from "./pageFocus";
 
 export * from "../../browser/src/components/downloads/Downloads";
-
-const SECONDARY_BUTTON = 2;
-
-const pressOpensButtonMenu = (event: Event) =>
-  (event as PointerEvent).button === SECONDARY_BUTTON && event.target instanceof Element && !!event.target.closest(`[data-testid="${DOWNLOADS_BUTTON_TEST_ID}"]`);
 
 export function DownloadsPopover() {
   const windowId = useWindowId();
@@ -30,7 +25,7 @@ export function DownloadsPopover() {
       onInsidePress: noteLinuxDownloadsPanelInsidePress,
       close: () => setDownloadsOpen(windowId, false),
       menuShown,
-      opensItsOwnMenu: pressOpensButtonMenu,
+      opensItsOwnMenu: pressOpensDownloadsMenu,
       watchPageFocus,
       activeElement: () => document.activeElement,
     });

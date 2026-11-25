@@ -167,11 +167,11 @@ test("a right-click on the Downloads button reaches its own menu and leaves the 
   h.stop();
 });
 
-test("the Downloads button carries the test id the panel's dismissal looks for", async () => {
+test("the Downloads button carries the test id both outside-press listeners look for", async () => {
   const { readFileSync } = await import("node:fs");
-  const popover = readFileSync(new URL("./DownloadsPopover.tsx", import.meta.url), "utf8");
-  const button = readFileSync(new URL("../../browser/src/components/downloads/DownloadsButton.tsx", import.meta.url), "utf8");
-  assert.match(popover, /opensItsOwnMenu: pressOpensButtonMenu/);
-  assert.match(popover, /data-testid="\$\{DOWNLOADS_BUTTON_TEST_ID\}"/);
-  assert.match(button, /<ContextMenuArea testID=\{DOWNLOADS_BUTTON_TEST_ID\} onContextMenu=/);
+  const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+  assert.match(read("./DownloadsPopover.tsx"), /opensItsOwnMenu: pressOpensDownloadsMenu/);
+  assert.match(read("./shims/web/chrome.tsx"), /watchOutsidePresses\(/);
+  assert.match(read("./downloadsButtonPress.ts"), /data-testid="\$\{DOWNLOADS_BUTTON_TEST_ID\}"/);
+  assert.match(read("../../browser/src/components/downloads/DownloadsButton.tsx"), /<ContextMenuArea testID=\{DOWNLOADS_BUTTON_TEST_ID\} onContextMenu=/);
 });

@@ -10,8 +10,7 @@ import { anchorInside, type Rect } from "./downloadsPlacement";
 import { DOWNLOADS_BUTTON } from "./tokens";
 import { noteDownloadsPanelToggle } from "../../state/telemetry/downloadsPanelCauses";
 import { openDownloadsMenu } from "../../state/downloads/downloadsMenu";
-
-export const DOWNLOADS_BUTTON_TEST_ID = "ardia-downloads-button";
+import { DOWNLOADS_BUTTON_TEST_ID } from "./downloadsButtonId";
 
 const downloadsButtons = new Map<string, Set<View>>();
 

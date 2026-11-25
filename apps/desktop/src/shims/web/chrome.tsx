@@ -7,6 +7,7 @@ import { shellOverPages, useInputRegion } from "../../shellAbove";
 import { GlassInside, GlassOptIn, useGlassSurface, useVisualEffectMark } from "../../shellGlass";
 import { watchPageFocus } from "../../pageFocus";
 import { menuShown } from "../../menus";
+import { watchOutsidePresses } from "../../outsidePress";
 import { WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import type { MiddleClickEvent } from "./MouseArea";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, SHADE_OUTSET, shadeMask, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
@@ -291,14 +292,15 @@ export function OutsidePressArea({ onOutsidePress, ...props }: ViewProps & { onO
   latest.current = onOutsidePress;
   useInputRegion(frame, "box", false);
   useEffect(() => {
-    const down = (e: PointerEvent) => {
-      if (menuShown()) return;
-      if (node.current && e.target instanceof Node && !node.current.contains(e.target)) latest.current?.({ nativeEvent: { timestamp: e.timeStamp } });
-    };
-    document.addEventListener("pointerdown", down, true);
+    const stopPresses = watchOutsidePresses({
+      target: document,
+      inside: (target) => !node.current || !(target instanceof Node) || node.current.contains(target),
+      menuShown,
+      onOutsidePress: (timestamp) => latest.current?.({ nativeEvent: { timestamp } }),
+    });
     const stopPage = watchPageFocus(() => latest.current?.({ nativeEvent: { timestamp: performance.now() } }));
     return () => {
-      document.removeEventListener("pointerdown", down, true);
+      stopPresses();
       stopPage();
     };
   }, []);
