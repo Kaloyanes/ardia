@@ -24,6 +24,7 @@ final class PeekStage: ExpoView {
   private var backup: Timer?
   private var lastLinkTick = 0.0
   private var announced = ""
+  private var published: [String: Bool] = [:]
   private var meshFailure: String?
   private var meshShown = false
   var pressInPage = false
@@ -54,6 +55,7 @@ final class PeekStage: ExpoView {
     addSubview(scrim)
     addSubview(card)
     chrome.hitsOnlyWhenShown = true
+    scrim.hitsOnlyWhenShown = true
     card.addSubview(chrome)
     card.addSubview(page)
     page.layer?.mask = pageMask
@@ -237,6 +239,7 @@ final class PeekStage: ExpoView {
   }
 
   private func render(at now: Double) {
+    defer { announce() }
     let f = motion.frame(at: now)
     lastFrame = f
     guard bounds.width > 0, bounds.height > 0 else { return }
@@ -353,6 +356,7 @@ final class PeekStage: ExpoView {
     let key = "\(motion.generation):\(motion.phase.rawValue):\(motion.entrance.rawValue):\(chromeShown):\(scrimShown)"
     guard key != announced else { return }
     announced = key
+    published = ["chromeShown": chromeShown, "scrimShown": scrimShown]
     note("state", ["entrance": motion.entrance.rawValue, "canWarp": motion.canWarp, "valid": motion.geometry.valid, "interrupted": motion.interrupted])
     var payload: [String: Any] = [
       "generation": motion.generation, "phase": motion.phase.rawValue, "entrance": motion.entrance.rawValue,
@@ -440,7 +444,7 @@ final class PeekStage: ExpoView {
       "topDown": page.topDown, "geometry": ["page": rect(g.page), "rest": rect(g.rest), "card": rect(g.card), "source": rect(g.source)],
       "stageInWindow": rect(topLeft(convert(bounds, to: nil))),
       "pageInWindow": rect(topLeft(page.subviews.first.map { $0.convert($0.bounds, to: nil) } ?? .zero)),
-      "trace": trace, "events": events, "freezes": freezes, "layers": devLayers(), "chromeTargets": devChromeTargets(),
+      "trace": trace, "events": events, "freezes": freezes, "layers": devLayers(), "chromeTargets": devChromeTargets(), "published": published,
     ]
   }
 
@@ -448,16 +452,16 @@ final class PeekStage: ExpoView {
     guard let window, let root = window.contentView?.superview else { return [] }
     let height = window.contentView?.frame.height ?? 0
     var out: [[String: Any]] = []
-    var queue: [NSView] = [chrome]
+    var queue: [(NSView, Bool)] = [(chrome, true), (scrim, false)]
     while !queue.isEmpty {
-      let view = queue.removeFirst()
-      queue.append(contentsOf: view.subviews)
+      let (view, onCard) = queue.removeFirst()
+      queue.append(contentsOf: view.subviews.map { ($0, onCard) })
       guard let label = view.accessibilityLabel(), !label.isEmpty else { continue }
       let rest = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: self)
-      let shown = convert(lastFrame.card.apply(rest), to: nil)
+      let shown = convert(onCard ? lastFrame.card.apply(rest) : rest, to: nil)
       let hit = root.hitTest(shown)
       let reaches = hit.map { $0 === view || $0.isDescendant(of: view) } ?? false
-      out.append(["label": label, "x": shown.x, "y": height - shown.y, "reaches": reaches])
+      out.append(["label": label, "x": shown.x, "y": height - shown.y, "reaches": reaches, "surface": onCard ? "bar" : "side"])
     }
     return out
   }

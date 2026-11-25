@@ -61,7 +61,7 @@ const open = (n) => st().openPeek("a", "${base}/page.html?n=" + n, { x: 240, y: 
 const magnify = (s, phase, magnification) => { const c = s.geometry.card, o = s.stageInWindow;
   return globalThis.expo.modules.ArdiaMagnifyArea.devMagnify("w1", o.x + c.x + c.width / 2, o.y + c.y + c.height / 2, [{ phase, magnification }]); };
 const steps = (s, list) => { let total = 0; return list.reduce((p, [phase, m]) => p.then(() => { const delta = phase === "began" ? m : m - total; total = phase === "began" ? m : m; return magnify(s, phase, delta); }).then(() => settle(16)), Promise.resolve()); };
-const summary = (s) => s && ({ layerHasMesh: s.layerHasMesh, meshInspected: s.meshInspected, windowNumber: s.windowNumber, phase: s.phase, entrance: s.entrance, generation: s.generation, meshFailure: s.meshFailure, topDown: s.topDown, events: s.events, freezes: s.freezes, chromeTargets: s.chromeTargets, geometry: s.geometry, stageInWindow: s.stageInWindow, pageInWindow: s.pageInWindow, trace: s.trace });
+const summary = (s) => s && ({ layerHasMesh: s.layerHasMesh, meshInspected: s.meshInspected, windowNumber: s.windowNumber, phase: s.phase, entrance: s.entrance, generation: s.generation, meshFailure: s.meshFailure, topDown: s.topDown, events: s.events, freezes: s.freezes, chromeTargets: s.chromeTargets, published: s.published, geometry: s.geometry, stageInWindow: s.stageInWindow, pageInWindow: s.pageInWindow, trace: s.trace });
 const active = () => { const w = st().windows.w1; return w.activeTabIds[w.profileId] ?? null; };
 const post = (s, phase, m) => { const c = s.geometry.card, o = s.stageInWindow; return globalThis.expo.modules.ArdiaPeekStage.devPostMagnify("w1", o.x + c.x + c.width / 2, o.y + c.y + c.height / 2, phase, m); };
 const realSteps = (s, list) => list.reduce((p, [phase, m]) => p.then(() => post(s, phase, m)).then(() => settle(16)), Promise.resolve());
@@ -447,10 +447,12 @@ try {
     const full = await waitFor((s) => s.trace.at(-1)?.chrome === 0 && s.trace.at(-1)?.page[0] === 1, 4000);
     const inner = await page.eval(`({ w: innerWidth, h: innerHeight, full: !!document.fullscreenElement })`);
     await page.eval(`document.exitFullscreen().then(() => true, (e) => String(e))`);
-    const back = await waitFor((s) => s.phase === "open" && s.trace.at(-1)?.chrome === 1, 4000);
+    const back = await waitFor((s) => s.phase === "open" && s.trace.at(-1)?.chrome === 1 && s.published?.chromeShown === true, 4000);
     page.close();
     const last = full.trace.at(-1);
-    Object.assign(record, { last, inner, peekAfter: !!(await store(`st().peeks.a`)), backLast: back?.trace.at(-1) });
+    Object.assign(record, { last, inner, peekAfter: !!(await store(`st().peeks.a`)), backLast: back?.trace.at(-1), fullPublished: full.published, backPublished: back?.published });
+    assert.deepEqual(full.published, { chromeShown: false, scrimShown: false }, "full screen publishes the bar and the dim as hidden");
+    assert.deepEqual(back?.published, { chromeShown: true, scrimShown: true }, "leaving full screen publishes them as shown again, with no gesture in between");
     assert.equal(inner.full, true, "the page went full screen");
     assert.deepEqual([last.page[0], last.page[1], last.page[2]], [1, 0, 0], "identity transform");
     assert.equal(last.chrome, 0);
@@ -551,10 +553,10 @@ try {
       assert.equal(seen.clicks, 1, "the page got one click");
     });
   }
-  if (wanted("chrome-press-mid-pinch") || wanted("chrome-hidden-mid-spread") || wanted("chrome-press-held-into-spread") || wanted("chrome-press-held-into-pinch-in")) {
+  if (wanted("chrome-press-mid-pinch") || wanted("chrome-hidden-mid-spread") || wanted("chrome-press-held-into-spread") || wanted("chrome-press-held-into-pinch-in") || wanted("side-press-on-invisible-dim")) {
     await start({ peekMesh: "unavailable" });
-    const closeOf = (s) => s.chromeTargets?.find((t) => t.label.startsWith("Close"));
-    const reachableAtRest = (s) => (s.chromeTargets ?? []).filter((t) => t.reaches);
+    const closeOf = (s) => s.chromeTargets?.find((t) => t.surface === "bar" && t.label.startsWith("Close"));
+    const reachableAtRest = (s) => (s.chromeTargets ?? []).filter((t) => t.surface === "bar" && t.reaches);
     const pressAt = (t) => run(`return ac.shell.devClick("w1", { x: ${t.x}, y: ${t.y}, queued: true, wait: 60 });`);
     await check("chrome-press-mid-pinch", async (record) => {
       await closeAll();
@@ -562,7 +564,7 @@ try {
       const rest = await waitFor((x) => x.phase === "open");
       const pinched = await run(`return stage().then((s) => realSteps(s, [["began", 0], ["changed", -0.1], ["changed", -0.2]])).then(() => until((x) => x.phase === "gesture" && x.trace.at(-1).card[0] < 0.95)).then(summary);`);
       const atRest = closeOf(rest), mid = closeOf(pinched);
-      const pairs = reachableAtRest(rest).map((r) => ({ label: r.label, rest: r, mid: pinched.chromeTargets?.find((t) => t.label === r.label) ?? null }));
+      const pairs = reachableAtRest(rest).map((r) => ({ label: r.label, rest: r, mid: pinched.chromeTargets?.find((t) => t.surface === "bar" && t.label === r.label) ?? null }));
       Object.assign(record, { atRest, mid, pairs, card: pinched.trace.at(-1).card, phase: pinched.phase });
       assert.ok(atRest && mid, `the card's Close button is in its chrome: ${JSON.stringify(rest.chromeTargets)}`);
       assert.equal(pinched.phase, "gesture", "real magnify events are pinching the card");
@@ -610,6 +612,30 @@ try {
       assert.equal(record.alpha, 0, "the card had faded out before the release");
       assert.equal(record.after.peek, true, "a Close pressed before the card vanished and released while it was invisible doesn't close the Peek");
     });
+    await check("side-press-on-invisible-dim", async (record) => {
+      await closeAll();
+      await run(`st().updateSettings({ peekButtons: "left" }); return settle(200);`);
+      await run(`open("sd"); return 0;`);
+      const rest = await waitFor((x) => x.phase === "open");
+      const side = rest.chromeTargets?.find((t) => t.surface === "side" && t.label === "Close (Esc)");
+      try {
+        assert.ok(side?.reaches, `the side Close takes a press at rest: ${JSON.stringify(rest.chromeTargets)}`);
+        const pinched = await run(`return stage().then((s) => realSteps(s, [["began", 0], ["changed", -0.3], ["changed", -0.55]])).then(() => until((x) => x.phase === "gesture" && x.trace.at(-1).scrim <= 0)).then(summary);`);
+        const hidden = pinched.chromeTargets.find((t) => t.surface === "side" && t.label === side.label);
+        Object.assign(record, { scrim: pinched.trace.at(-1).scrim, hidden, published: pinched.published });
+        assert.equal(record.scrim, 0, "the dim has faded out");
+        assert.equal(hidden?.reaches, false, "no press reaches a side button on an invisible dim");
+        assert.equal(pinched.published?.scrimShown, false);
+        record.down = await run(`return ac.shell.devClick("w1", { x: ${side.x}, y: ${side.y}, queued: true, only: "down", wait: 60 });`);
+        await run(`return stage().then((s) => post(s, "cancelled", 0)).then(() => until((x) => x.phase === "open" && x.trace.at(-1).scrim > 0.5));`);
+        record.up = await run(`return ac.shell.devClick("w1", { x: ${side.x}, y: ${side.y}, queued: true, only: "up", wait: 60 });`);
+        await sleep(600);
+        record.peek = await store(`!!st().peeks.a`);
+        assert.equal(record.peek, true, "a press that started on the invisible dim doesn't close the Peek once the dim is back");
+      } finally {
+        await run(`st().updateSettings({ peekButtons: "top" }); return settle(200);`).catch(() => {});
+      }
+    });
     await check("chrome-hidden-mid-spread", async (record) => {
       await closeAll();
       await run(`open("cs"); return 0;`);
@@ -620,7 +646,7 @@ try {
       assert.equal(spread.phase, "gesture", "the spread is still held");
       assert.equal(spread.trace.at(-1).chrome, 0, "the bar has faded out");
       assert.ok(close, "the Close button is still laid out");
-      assert.deepEqual(spread.chromeTargets.filter((t) => t.reaches).map((t) => t.label), [], "no invisible bar button takes a press");
+      assert.deepEqual(spread.chromeTargets.filter((t) => t.surface === "bar" && t.reaches).map((t) => t.label), [], "no invisible bar button takes a press");
       record.click = await pressAt(close);
       await sleep(600);
       record.after = { peek: await store(`!!st().peeks.a`), phase: (await stateOf())?.phase };
