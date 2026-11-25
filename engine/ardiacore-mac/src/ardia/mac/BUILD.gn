@@ -1,0 +1,48 @@
+assert(is_mac)
+
+action("bootstrap") {
+  script = "generate_bootstrap.py"
+  sources = [ "bootstrap.js" ]
+  outputs = [ "$target_gen_dir/host_bootstrap.h" ]
+  args = [
+    "--input",
+    rebase_path(sources[0], root_build_dir),
+    "--output",
+    rebase_path(outputs[0], root_build_dir),
+  ]
+}
+
+source_set("mac") {
+  sources = [
+    "ac_mac_glass.h",
+    "ac_mac_glass.mm",
+    "ac_mac_shell_bridge.cc",
+    "ac_mac_shell_bridge.h",
+    "ac_mac_shell_calls.mm",
+    "ac_mac_shell_host.h",
+    "ac_mac_shell_host.mm",
+    "ac_mac_webui.h",
+    "ac_mac_webui.mm",
+    "generated/ac_desktop_routes.h",
+  ]
+  sources += get_target_outputs(":bootstrap")
+  deps = [
+    ":bootstrap",
+    "//base",
+    "//chrome/browser",
+    "//chrome/browser/profiles:profile",
+    "//components/sessions",
+    "//components/version_info",
+    "//content/public/browser",
+    "//services/network/public/mojom",
+    "//skia",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+  frameworks = [
+    "AppKit.framework",
+    "QuartzCore.framework",
+  ]
+}
