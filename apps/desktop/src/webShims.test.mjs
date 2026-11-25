@@ -24,6 +24,8 @@ const { subscribeFrames } = await import("./shims/web/gl/clock.ts");
 const { paletteColors, PALETTES } = await import("./shims/web/gl/colors.ts");
 const { trackHover } = await import("./shims/web/motion/hover.ts");
 const { isSoftwareRenderer, MEADOW_POSTERS, MEADOW_POSTER_URLS, meadowToneOf, nearestMeadowPoster } = await import("./shims/web/gl/meadow.ts");
+const { backdropFragment, haloFragment, powerUpFragment } = await import("./shims/web/gl/sources.ts");
+const { measuredSize, MIN_FRAME_INTERVAL, stepAnimation } = await import("./shims/web/gl/viewClock.ts");
 
 function runFrame(now) {
   const pending = [...frames];
@@ -119,4 +121,46 @@ test("a software renderer keeps the meadow on its still poster instead of drawin
   assert.equal(isSoftwareRenderer("llvmpipe (LLVM 19.1.7, 256 bits)"), true);
   assert.equal(isSoftwareRenderer("ANGLE (AMD, AMD Radeon Graphics (radeonsi renoir ACO), OpenGL ES 3.2)"), false);
   assert.equal(isSoftwareRenderer("Mesa Intel(R) UHD Graphics 620 (KBL GT2)"), false);
+});
+
+test("the PowerUp and Halo shaders never call pow where ANGLE's D3D11 backend returns NaN for a zero or negative base", () => {
+  const halo = haloFragment;
+  const power = powerUpFragment;
+  assert.doesNotMatch(halo, /pow\(w,/);
+  assert.match(halo, /vec4 w2 = w \* w;\s*w = w2 \* w2;/);
+  assert.doesNotMatch(power, /pow\(lms,/);
+  assert.match(power, /lms = lms \* lms \* lms;/);
+  assert.doesNotMatch(power, /pow\(-2\.0 \* t \+ 2\.0,/);
+  assert.match(power, /float u2 = u \* u;\s*return 1\.0 - u2 \* u2 \* 0\.5;/);
+  assert.doesNotMatch(power, /pow\(abs\(crossPos/);
+  assert.match(power, /float bend = \(1\.0 - b2 \* b2 \* b\) \* -0\.0500000007;/);
+  for (const division of power.matchAll(/[^\n]*\/ edge[^\n]*/g)) assert.match(division[0], /edge > 0\.0 \?/);
+  assert.match(power, /\/ edge/);
+  for (const source of [halo, power, backdropFragment]) {
+    for (const call of source.matchAll(/pow\(([^,]+),/g)) assert.match(call[1], /^(2\.0|a|ac|abs\([^)]*\))$/, `pow(${call[1]}, …) may see a base of zero or below`);
+  }
+});
+
+test("a GL view sizes its canvas from the first layout instead of waiting at 300 by 150 for the resize observer", () => {
+  assert.deepEqual(measuredSize(200, 100, 2), { css: [200, 100], pixels: [400, 200] });
+  assert.deepEqual(measuredSize(100.4, 50.2, 1.5), { css: [100.4, 50.2], pixels: [151, 75] });
+  assert.deepEqual(measuredSize(80, 40, 0), { css: [80, 40], pixels: [80, 40] });
+  assert.equal(measuredSize(0, 100, 2), null);
+  assert.equal(measuredSize(100, 0, 2), null);
+});
+
+test("an animated GL view holds its clock at zero until it has a size, then plays every frame and stops on the last one", () => {
+  const clock = { css: [0, 0], time: 0, started: false, pending: 0 };
+  assert.equal(stepAnimation(clock, 0.5, 1), "unmeasured");
+  assert.equal(stepAnimation(clock, 0.5, 1), "unmeasured");
+  assert.deepEqual([clock.time, clock.started, clock.pending], [0, false, 0]);
+  clock.css = [120, 60];
+  assert.equal(stepAnimation(clock, 0.5, 1), "draw");
+  assert.deepEqual([clock.time, clock.started], [0, true]);
+  assert.equal(stepAnimation(clock, 0.001, 1), "skip");
+  assert.equal(clock.time, 0);
+  assert.equal(stepAnimation(clock, MIN_FRAME_INTERVAL, 1), "draw");
+  assert.ok(Math.abs(clock.time - (0.001 + MIN_FRAME_INTERVAL)) < 1e-9);
+  assert.equal(stepAnimation(clock, 5, 1), "finish");
+  assert.equal(clock.time, 1);
 });
