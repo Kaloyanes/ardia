@@ -438,9 +438,9 @@ class ShellRecovery : public content::WebContentsObserver {
                         status == base::TERMINATION_STATUS_STILL_RUNNING);
     Resume();
   }
-  void PrimaryPageChanged(content::Page&) override { state_.DocumentCommitted(); }
   void DidFinishNavigation(content::NavigationHandle* handle) override {
-    if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument() || handle->HasCommitted()) return;
+    if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument()) return;
+    if (handle->HasCommitted()) return state_.DocumentCommitted();
     state_.NavigationEndedWithoutCommit();
     Resume();
   }

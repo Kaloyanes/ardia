@@ -514,8 +514,8 @@ void TestANewDocumentSettlesAWaitingRecovery() {
   Shell shell;
   shell.window = WindowState::kPaused;
   shell.Crash();
-  content::Page page;
-  shell.recovery.PrimaryPageChanged(page);
+  content::NavigationHandle committed{true, false, true};
+  shell.recovery.DidFinishNavigation(&committed);
   shell.window = WindowState::kOpen;
   shell.recovery.Resume();
   RunTasks();
@@ -611,10 +611,8 @@ void TestOnlyAFailedPrimaryRecoveryNavigationRetries() {
   assert(shell.reloads() == 1);
   content::NavigationHandle subframe{false};
   content::NavigationHandle same_document{true, true};
-  content::NavigationHandle committed{true, false, true};
   shell.recovery.DidFinishNavigation(&subframe);
   shell.recovery.DidFinishNavigation(&same_document);
-  shell.recovery.DidFinishNavigation(&committed);
   RunTasks();
   assert(shell.reloads() == 1);
   content::NavigationHandle aborted;
@@ -705,13 +703,51 @@ void TestTheLaunchBootstrapIsDisarmedBeforeEveryRecoveryNavigation() {
 void TestACommittedRecoveryEndsIt() {
   Shell shell;
   shell.Crash();
-  content::Page page;
-  shell.recovery.PrimaryPageChanged(page);
+  content::NavigationHandle committed{true, false, true};
+  shell.recovery.DidFinishNavigation(&committed);
   shell.contents.frame.live = false;
   content::NavigationHandle aborted;
   shell.recovery.DidFinishNavigation(&aborted);
   RunTasks();
   assert(shell.reloads() == 1);
+}
+
+void TestAPageChangeWithoutACommitKeepsTheRecoveryInFlight() {
+  Shell shell;
+  shell.Crash();
+  assert(shell.reloads() == 1);
+  content::Page reinitialized;
+  shell.recovery.PrimaryPageChanged(reinitialized);
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 2);
+  shell.recovery.PrimaryPageChanged(reinitialized);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 3);
+  shell.recovery.PrimaryPageChanged(reinitialized);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 3);
+}
+
+void TestOnlyACommittedCrossDocumentMainFrameNavigationSettlesARecovery() {
+  Shell shell;
+  shell.Crash();
+  content::NavigationHandle subframe{false, false, true};
+  content::NavigationHandle same_document{true, true, true};
+  shell.recovery.DidFinishNavigation(&subframe);
+  shell.recovery.DidFinishNavigation(&same_document);
+  content::NavigationHandle aborted;
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 2);
+  content::NavigationHandle committed{true, false, true};
+  shell.recovery.DidFinishNavigation(&committed);
+  shell.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(shell.reloads() == 2);
 }
 
 void TestACrashLoopStops() {
@@ -748,6 +784,8 @@ int main() {
   TestARecoveryNavigationThatDiesBeforeCommitIsRetried();
   TestOnlyAFailedPrimaryRecoveryNavigationRetries();
   TestACommittedRecoveryEndsIt();
+  TestAPageChangeWithoutACommitKeepsTheRecoveryInFlight();
+  TestOnlyACommittedCrossDocumentMainFrameNavigationSettlesARecovery();
   TestARecoveryWithAnEarlySwappedLiveFrameThatNeverCommitsRetries();
   TestAQuitClearedWithoutTheCallbackIsFoundByPolling();
   TestPollingStopsWhenShutdownStartsOrTheShellCloses();
@@ -818,6 +856,14 @@ class WebUIProcessPolicyTests(unittest.TestCase):
         self.assertIn('launch_bootstrap_.Served(asset);', header)
         self.assertIn('void NoteAssetServed(std::string_view asset) { launch_bootstrap_.Served(asset); }',
                       (LINUX / 'ac_linux_host.cc').read_text())
+
+    def test_each_host_settles_a_recovery_only_on_a_committed_navigation(self):
+        for host in HOSTS:
+            text = host_recovery_source(host)
+            with self.subTest(host=host.name):
+                self.assertNotIn('PrimaryPageChanged', text)
+                self.assertEqual(text.count('state_.DocumentCommitted();'), 1)
+                self.assertRegex(text, r'if \(handle->HasCommitted\(\)\)[^;]*state_\.DocumentCommitted\(\);')
 
     def test_each_host_disarms_the_launch_bootstrap_before_a_recovery(self):
         for host in HOSTS:
