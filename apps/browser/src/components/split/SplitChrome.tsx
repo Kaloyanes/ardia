@@ -235,20 +235,11 @@ const LANDING_COPY: Record<PaneDropSide, { symbol: string; label: string; shortL
 
 type Landing = { rect: Rect; side: PaneDropSide; stacked: boolean };
 
-const LABEL_PLACEMENT: Record<PaneDropSide, { alignItems: "center" | "flex-start" | "flex-end"; justifyContent: "center" | "flex-start" | "flex-end" }> = {
-  left: { alignItems: "center", justifyContent: "flex-end" },
-  right: { alignItems: "center", justifyContent: "flex-start" },
-  top: { alignItems: "flex-end", justifyContent: "center" },
-  bottom: { alignItems: "flex-start", justifyContent: "center" },
-  center: { alignItems: "flex-start", justifyContent: "center" },
-};
-
 function DropPreview({ landing }: { landing: Landing | null }) {
   const { shown, appear } = usePresence(landing, SPLIT_MOTION.dropPreview, true);
   if (!shown) return null;
   const { rect, side, stacked } = shown;
   const copy = LANDING_COPY[side];
-  const label = LABEL_PLACEMENT[side];
   const symbol = side === "center" && stacked ? STACKED_SWAP_SYMBOL : copy.symbol;
   const text = rect.width < 160 ? copy.shortLabel : copy.label;
   return (
@@ -259,7 +250,7 @@ function DropPreview({ landing }: { landing: Landing | null }) {
         border={DROP_PREVIEW.border}
         borderWidth={DROP_PREVIEW.borderWidth}
         shadow={DROP_PREVIEW.shadow}
-        style={[StyleSheet.absoluteFill, { flexDirection: "row", alignItems: label.alignItems, justifyContent: label.justifyContent, padding: DROP_PREVIEW.labelInset }]}
+        style={[StyleSheet.absoluteFill, { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingHorizontal: space.l }]}
       >
         <Symbol name={symbol} size={16} color={DROP_PREVIEW.label} style={{ width: 22, height: 18 }} />
         {rect.width >= 96 && rect.height >= 40 ? (

@@ -72,3 +72,30 @@ test("a pane dropped on another pane's swap zone trades places with it and never
   assert.deepEqual(panesOf(a), [b, a]);
   assert.equal(splitOf(S(), a).id, splitId);
 });
+
+test("the dragged page card hides while a split landing preview is showing and comes back once the pointer leaves it", async () => {
+  const { shellNativeModules } = await import("../../test-native/shell.ts");
+  const { a, b } = splitWindow();
+  const shapes = [];
+  const windows = shellNativeModules.ArdiaAppWindows;
+  const original = windows.dragPreviewUpdate;
+  windows.dragPreviewUpdate = (shape) => {
+    shapes.push(shape);
+    return Promise.resolve();
+  };
+  try {
+    beginTabDrag(b, undefined, { staysOnPage: true });
+    updateTabDrag(600, 400, true);
+    setOnPage(true);
+    assert.equal(shapes.at(-1), "card");
+    setDropTarget({ tabId: a, side: "left" });
+    assert.equal(shapes.at(-1), "hidden");
+    setDropTarget({ tabId: a, side: "center" });
+    assert.equal(shapes.at(-1), "hidden");
+    setDropTarget(null);
+    assert.equal(shapes.at(-1), "card");
+  } finally {
+    endTabDrag();
+    windows.dragPreviewUpdate = original;
+  }
+});

@@ -23,7 +23,6 @@ export const DROP_PREVIEW = {
   border: "rgba(255,255,255,0.85)",
   borderWidth: 1.5,
   label: "#FFFFFF",
-  labelInset: 24,
   shadow: { color: "#000000", opacity: 0.3, radius: 12, offset: [0, 2] as [number, number] },
 } as const;
 

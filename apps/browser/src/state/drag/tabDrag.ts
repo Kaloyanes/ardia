@@ -128,6 +128,7 @@ export function setInsert(windowId: string, beforeId: string | null | undefined)
 
 function previewShape(d: TabDragging): DragPreviewShape {
   if (d.outside) return d.overWindow && d.insert?.windowId === d.overWindow ? "pill" : "card";
+  if (d.target) return "hidden";
   return (d.lifted ?? d.onPage) ? "card" : "hidden";
 }
 
@@ -177,6 +178,7 @@ export function setDropTarget(offered: DropTarget | null) {
   const d = tabDragState();
   if (!d || (d.target?.tabId === target?.tabId && d.target?.side === target?.side)) return;
   useTabDrag.setState({ target });
+  syncPreview();
 }
 
 let resolveTarget: ((x: number, y: number, current: DropTarget | null, outside: boolean) => DropTarget | null) | null = null;
