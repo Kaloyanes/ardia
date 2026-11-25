@@ -110,6 +110,42 @@ that branch). It is a development tool and never runs in a release. Like Windows
     those menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Share** (`ac_mac_share.mm`, rules in `ac_mac_share_policy.h`), as `packages/shell/ios/SharePicker.swift` does.
+  - `ArdiaApp.share` and `ArdiaApp.shareText` open `NSSharingServicePicker` beside their anchor (CSS pixels in the
+    shell, scaled by its zoom), or centred under the toolbar without one. They settle when the picker closes.
+  - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
+    `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
+    `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
+  - The menu bar's File › Share lists the same services, then Copy Link, Email Link and More… (the `shareServices`
+    role, filled each time the submenu opens). The in-window app menu adds them once the host lists them.
+  - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
+    and a shell reload or window close closes that window's pickers.
+  - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
+    binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
+    deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
+    into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
+    delete finishes), or that have no lock and whose process is gone, never anything else. An image reserves its slot
+    before its bytes are copied; a write for a retired window or a released, closed or rebound tab, or before
+    the instance folder is claimed, is skipped, and the write's reply alone cleans it up. A removed image stops
+    being shareable at once but keeps its slot until the unlink is done: at most five tries (four retries,
+    500 ms doubling), then the slot is given back. A share whose service the user already
+    chose keeps its file through a window close until the service finishes. The Share… items use command
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, which opens System Settings › Sharing directly on any page, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
+    button cancels an older open, and a services request that stalls for 5 s is replaced.
+  - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
+    places them, through a dev-only `RenderViewContextMenuObserver` hook in
+    `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
+    share ends, or when the window's shell reloads or closes.
+  - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
+- **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
+  `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`; Add Shared Folder… picks its
+  folder through the host's `ArdiaShell.pickFolder`. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
+  as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
+  its own queue. Finder is never shown in background mode.
 - **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
@@ -192,14 +228,16 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Settings › Tabs shows its Peek and Little Ardia rows and Advanced shows ⌘-scroll zoom.
   - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions: a renderer
     `kNewWindow` (⇧-click, ⌥⇧-click) and `kNewSplitView` (⌥⌘-click) in the page delegate's `OpenURLFromTab`, and
-    ⌥-click's download in `RenderFrameHostImpl::DownloadURL`, which `apply.sh` hooks with `g_ardia_mac_download_url`.
+    ⌥-click's download in `RenderFrameHostImpl::DownloadURL`, which `apply.sh` hooks; the host registers through
+    `content::SetArdiaMacDownloadUrlHook`, exported with `CONTENT_EXPORT` so component builds link.
     Each must match the last left mouse-up that page's `RenderWidgetHost` saw, with Linux's gate (on that page, unused,
     no press since, at most 10 s old, exactly the configured keys), carry a user gesture, and go to the link the
     pointer was over at that release (`UpdateTargetURL`). It is then sent as `ArdiaWebView` `openWindow` with `peek`
     (and the click's `point`), `split`, `window` or `background`, as Linux does.
   - The ⌥-click download hook sees the requesting frame, so it only takes a request from that tab with no suggested
-    file name that follows redirects (Blink's plain-link ⌥-click; `<a download>` names its file and doesn't follow
-    redirects), within 1 s of the release. `Content-Disposition: attachment` responses are navigations and never
+    file name that follows redirects, within 1 s of the release. Blink drops `<a download>`'s attribute on a ⌥-click,
+    so `apply.sh` also adds a dev-only hook to `HTMLAnchorElementBase::HandleClick` that keeps the attribute as the
+    suggested name; an ⌥-clicked `<a download>` then always downloads. `Content-Disposition: attachment` responses are navigations and never
     reach it.
   - A renderer `kNewWindow` that matches no gesture opens as a foreground tab through Chromium's own path, so its popup
     blocker still decides.
@@ -209,13 +247,16 @@ that branch). It is a development tool and never runs in a release. Like Windows
     in `WillStartRequest`, before any request goes out, when it is `WasInitiatedByLinkClick`, started by the primary
     main frame (an iframe's `_top` anchor follows), carries a user gesture, isn't a POST, goes to the URL released
     over, and its `NavigationInputStart` is that release's own timestamp (a script's `anchor.click()` carries the time
-    it was made). The peek is sent once that navigation finishes uncommitted, and not at all if the tab closes first.
+    it was made). The peek is sent once that navigation finishes uncommitted, and not at all if the tab is being
+    destroyed (frame teardown finishes the navigation before `WebContentsDestroyed`).
     A script's `location.href` from a click handler is not a link click and follows.
   - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
     (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a link that would open a new tab
-    opens in place (`openWindow` `current`) when it has no opener and no POST body, whether Chromium routes it through `OpenURLFromTab` or, for
-    `target="_blank"` and `rel="noopener"`, through `AddNewContents`, whose new contents is then dropped before it
-    loads. `window.open` with an opener and POST forms keep their own contents.
+    opens in place (`openWindow` `current`) when it has no opener and isn't a form submission. Chromium routes it
+    through `OpenURLFromTab` or, for `target="_blank"` and `rel="noopener"`, through `CreateNewWindow`'s
+    opener-suppressed branch, where `apply.sh`'s hook (`content::SetArdiaMacNewWindowInPlaceHook`) still sees
+    `is_form_submission` and the POST body, before `AddNewContents` and before the new contents loads.
+    `window.open` with an opener and POST forms keep their own contents.
   - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll, routed by the native hit test at
     the event's own location; the count restarts when the page changes or the setting is turned off, and precise
     (trackpad, Magic Mouse) scrolling never zooms.

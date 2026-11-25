@@ -32,9 +32,12 @@ HOOKED_FILES = (
     'content/app_shim_remote_cocoa/web_contents_view_cocoa.mm',
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
+    'components/renderer_context_menu/render_view_context_menu_base.cc',
     'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
     'chrome/browser/chrome_content_browser_client_navigation_throttles.cc',
     'content/browser/renderer_host/render_frame_host_impl.cc',
+    'content/browser/web_contents/web_contents_impl.cc',
+    'third_party/blink/renderer/core/html/html_anchor_element.cc',
 )
 
 
@@ -72,6 +75,12 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_shell_policy(self):
         compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
+
+    def test_share_policy(self):
+        compile_and_run(self, TESTS / 'share_policy_test.cc', self.out / 'share-policy')
+
+    def test_shared_folders_policy(self):
+        compile_and_run(self, TESTS / 'shared_folders_policy_test.cc', self.out / 'shared-folders-policy')
 
     def test_system_policy(self):
         compile_and_run(self, TESTS / 'system_policy_test.cc', self.out / 'system-policy')
@@ -200,12 +209,31 @@ class ApplyTests(unittest.TestCase):
                 '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n'
                 '      CreateDownloadUrlParameters(blink_parameters->url, traffic_annotation);\n'
                 '  StartDownload(std::move(parameters), nullptr);\n}\n\n}\n',
+            'content/browser/web_contents/web_contents_impl.cc':
+                '#include "build/build_config.h"\n\nnamespace content {\n\n'
+                'FrameTree* WebContentsImpl::CreateNewWindow(\n'
+                '    RenderFrameHostImpl* opener, const mojom::CreateNewWindowParams& params) {\n'
+                '  if (!params.opener_suppressed) {\n    return nullptr;\n  }\n\n'
+                '  bool was_blocked = false;\n'
+                '  base::WeakPtr<WebContentsImpl> weak_new_contents =\n'
+                '      new_contents_impl->weak_factory_.GetWeakPtr();\n  return nullptr;\n}\n\n}\n',
+            'third_party/blink/renderer/core/html/html_anchor_element.cc':
+                '#include "third_party/blink/renderer/core/html/html_anchor_element.h"\n\n'
+                'void HTMLAnchorElementBase::HandleClick(MouseEvent& event) {\n'
+                '  ResourceRequest request(completed_url);\n'
+                '  NavigationPolicy navigation_policy = NavigationPolicyFromEvent(&event);\n\n'
+                '  if (FastHasAttribute(html_names::kDownloadAttr)) {\n  }\n}\n',
             'chrome/browser/chrome_content_browser_client_navigation_throttles.cc':
                 '#include "build/build_config.h"\n\n}\n\n'
                 'void CreateAndAddChromeThrottlesForNavigation(\n'
                 '    content::NavigationThrottleRegistry& registry) {\n'
                 '  if (handle.IsInMainFrame()) {\n'
                 '    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);\n  }\n}\n',
+            'components/renderer_context_menu/render_view_context_menu_base.cc':
+                '#include "build/build_config.h"\n#include "url/origin.h"\n\n'
+                'RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n}\n\n'
+                'void RenderViewContextMenuBase::Init() {\n  InitMenu();\n  if (toolkit_delegate_)\n'
+                '    toolkit_delegate_->Init(&menu_model_);\n}\n',
             'chrome/browser/ui/views/overlay/video_overlay_window_views.cc':
                 '#include "build/build_config.h"\n\n'
                 'std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n'
@@ -241,33 +269,48 @@ class ApplyTests(unittest.TestCase):
             self.assertTrue((root / 'ardia/mac/generated/ac_desktop_routes.h').is_file())
             checked = self.run_apply(root, '--check')
             self.assertEqual(checked.returncode, 0, checked.stderr)
+            hooked = {path: (root / path).read_text() for path in HOOKED_FILES}
             again = self.run_apply(root)
             self.assertEqual(again.returncode, 0, again.stderr)
             for path in HOOKED_FILES:
                 text = (root / path).read_text()
-                self.assertLessEqual(text.count('g_ardia_mac_'), 4, path)
+                self.assertEqual(text, hooked[path], path)
+                self.assertLessEqual(text.count('g_ardia_mac_'), 8, path)
             reverted = self.run_apply(root, '--revert')
             self.assertEqual(reverted.returncode, 0, reverted.stderr)
             for path in HOOKED_FILES:
                 self.assertEqual((root / path).read_text(), originals[path], path)
             self.assertFalse((root / 'ardia/mac').exists())
 
-    def test_apply_migrates_reformatted_link_hooks_and_refuses_copies(self):
+    def test_apply_migrates_reformatted_link_hooks_and_collapses_copies(self):
         throttles = 'chrome/browser/chrome_content_browser_client_navigation_throttles.cc'
         download = 'content/browser/renderer_host/render_frame_host_impl.cc'
+        windows = 'content/browser/web_contents/web_contents_impl.cc'
+        anchor_file = 'third_party/blink/renderer/core/html/html_anchor_element.cc'
+        linked = (throttles, download, windows, anchor_file)
+        guard = '#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
         with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
             root = pathlib.Path(scratch)
             originals = self.fake_tree(root)
             self.assertEqual(self.run_apply(root).returncode, 0)
-            hooked = {path: (root / path).read_text() for path in (throttles, download)}
+            hooked = {path: (root / path).read_text() for path in linked}
+            self.assertIn('CONTENT_EXPORT void SetArdiaMacDownloadUrlHook(', hooked[download])
+            self.assertIn('CONTENT_EXPORT void SetArdiaMacNewWindowInPlaceHook(', hooked[windows])
+            self.assertIn('namespace {\nbool (*g_ardia_mac_download_url)(', hooked[download])
+            self.assertIn('request.SetSuggestedFilename(', hooked[anchor_file])
             reformatted = {
                 throttles: hooked[throttles]
                 .replace('    if (g_ardia_mac_add_navigation_throttles) {\n',
                          '    if ( g_ardia_mac_add_navigation_throttles ) {\n')
-                .replace('void (*g_ardia_mac_add_navigation_throttles)(\n',
-                         'void (* g_ardia_mac_add_navigation_throttles)(\n'),
-                download: hooked[download].replace('  if (g_ardia_mac_download_url &&\n',
+                .replace(guard + 'void (*g_ardia_mac_add_navigation_throttles)(\n',
+                         '#if  BUILDFLAG(IS_MAC)  &&  !defined(OFFICIAL_BUILD)\nvoid (* g_ardia_mac_add_navigation_throttles)(\n'),
+                download: hooked[download].replace(guard + '  if (g_ardia_mac_download_url &&\n',
+                                                   '# if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
                                                    '  if (g_ardia_mac_download_url  &&\n'),
+                windows: hooked[windows].replace('    return nullptr;\n  }\n#endif\n',
+                                                 '    return nullptr;\n  }\n#endif  \n'),
+                anchor_file: hooked[anchor_file].replace('#if !defined(OFFICIAL_BUILD)\n',
+                                                         '#if   !defined( OFFICIAL_BUILD )\n'),
             }
             for path, text in reformatted.items():
                 self.assertNotEqual(text, hooked[path], path)
@@ -275,30 +318,95 @@ class ApplyTests(unittest.TestCase):
             self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
             migrated = self.run_apply(root)
             self.assertEqual(migrated.returncode, 0, migrated.stderr)
-            for path in (throttles, download):
+            for path in linked:
                 self.assertEqual((root / path).read_text(), hooked[path], path)
             self.assertEqual(self.run_apply(root, '--check').returncode, 0)
             for path, text in reformatted.items():
                 (root / path).write_text(text)
             reverted = self.run_apply(root, '--revert')
             self.assertEqual(reverted.returncode, 0, reverted.stderr)
-            for path in (throttles, download):
+            for path in linked:
                 self.assertEqual((root / path).read_text(), originals[path], path)
+            earlier = (guard + 'bool (*g_ardia_mac_download_url)(RenderFrameHost* frame,\n'
+                       '                                 const GURL& url,\n'
+                       '                                 bool follows_redirects,\n'
+                       '                                 bool names_file,\n'
+                       '                                 bool user_gesture) = nullptr;\n#endif\n\n')
+            function = 'void RenderFrameHostImpl::DownloadURL(\n'
+            (root / download).write_text(originals[download].replace(function, earlier + function, 1))
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
             self.assertEqual(self.run_apply(root).returncode, 0)
-            call = reformatted[download].split('blink_parameters) {\n', 1)[1].split('  std::unique_ptr', 1)[0]
+            upgraded = (root / download).read_text()
+            self.assertEqual(upgraded.count('g_ardia_mac_download_url)('), 1)
+            self.assertIn('SetArdiaMacDownloadUrlHook', upgraded)
+            self.assertEqual(self.run_apply(root, '--check').returncode, 0)
+            call = hooked[download].split('blink_parameters) {\n', 1)[1].split('  std::unique_ptr', 1)[0]
             self.assertTrue(call.startswith('#if ') and call.endswith('#endif\n'), call)
+            spaced = call.replace(guard, '#if BUILDFLAG(IS_MAC)  && !defined(OFFICIAL_BUILD)\n')
             doubled = hooked[download].replace(
                 '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n',
-                call + '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n', 1)
-            self.assertEqual(doubled.count('g_ardia_mac_download_url &&') + doubled.count('g_ardia_mac_download_url  &&'), 2)
+                spaced + '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n', 1)
+            self.assertEqual(doubled.count('if (g_ardia_mac_download_url &&'), 2)
             (root / download).write_text(doubled)
             self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
-            refused = self.run_apply(root)
-            self.assertNotEqual(refused.returncode, 0)
-            self.assertIn('copies of a hook', refused.stderr)
-            self.assertEqual((root / download).read_text(), doubled)
+            collapsed = self.run_apply(root)
+            self.assertEqual(collapsed.returncode, 0, collapsed.stderr)
+            self.assertEqual((root / download).read_text(), hooked[download])
+            (root / download).write_text(doubled)
             self.assertEqual(self.run_apply(root, '--revert').returncode, 0)
             self.assertEqual((root / download).read_text(), originals[download])
+
+    def test_apply_upgrades_an_earlier_page_menu_hook_and_reverts_it(self):
+        target = 'components/renderer_context_menu/render_view_context_menu_base.cc'
+        earlier = ('\n#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
+                   '#include "ardia/mac/ac_mac_hooks.h"  // nogncheck\n\n'
+                   'RenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n'
+                   '    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n#endif\n')
+        with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as fresh_dir, \
+                tempfile.TemporaryDirectory(prefix='ardia-mac-upgrade-') as old_dir:
+            fresh, old = pathlib.Path(fresh_dir), pathlib.Path(old_dir)
+            originals = self.fake_tree(fresh)
+            self.fake_tree(old)
+            self.assertEqual(self.run_apply(fresh).returncode, 0)
+            expected = (fresh / target).read_text()
+            anchor = '#include "url/origin.h"\n'
+            (old / target).write_text(originals[target].replace(anchor, anchor + earlier, 1))
+            stale = self.run_apply(old, '--check')
+            self.assertNotEqual(stale.returncode, 0)
+            upgraded = self.run_apply(old)
+            self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+            text = (old / target).read_text()
+            self.assertEqual(text, expected)
+            self.assertEqual(text.count('(*g_ardia_mac_page_menu_observer)('), 1)
+            self.assertEqual(self.run_apply(old, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            doubled = expected.replace(anchor, anchor + earlier, 1)
+            (old / target).write_text(doubled)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            duplicated = expected.replace('  InitMenu();\n', '  InitMenu();\n' + expected.split('  InitMenu();\n', 1)[1].split('  if (toolkit_delegate_)', 1)[0], 1)
+            (old / target).write_text(duplicated)
+            self.assertNotEqual(self.run_apply(old, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            twice_earlier = originals[target].replace(anchor, anchor + earlier + earlier, 1)
+            (old / target).write_text(twice_earlier)
+            self.assertNotEqual(self.run_apply(old, '--check').returncode, 0)
+            upgraded_twice = self.run_apply(old)
+            self.assertEqual(upgraded_twice.returncode, 0, upgraded_twice.stderr)
+            self.assertEqual((old / target).read_text(), expected)
+            self.assertEqual(self.run_apply(old, '--check').returncode, 0)
+            (old / target).write_text(expected.replace(anchor, anchor + earlier, 1) + earlier)
+            self.assertEqual(self.run_apply(old).returncode, 0)
+            self.assertEqual((old / target).read_text(), expected)
+            (old / target).write_text(twice_earlier)
+            self.assertEqual(self.run_apply(old, '--revert').returncode, 0)
+            self.assertEqual((old / target).read_text(), originals[target])
+            (old / target).write_text(doubled)
+            reverted = self.run_apply(old, '--revert')
+            self.assertEqual(reverted.returncode, 0, reverted.stderr)
+            self.assertEqual((old / target).read_text(), originals[target])
 
     def test_apply_refuses_a_missing_anchor(self):
         with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
@@ -794,6 +902,187 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_share_is_advertised_served_and_never_shown_in_background(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('share::AppendCapabilities(capabilities);', calls)
+        self.assertIn('return share::Invoke(*this, method, values, std::move(done));', calls)
+        share = self.read('ac_mac_share.mm')
+        for method in ('ArdiaApp.share', 'ArdiaApp.shareText', 'ArdiaApp.shareVia', 'ArdiaApp.shareServices',
+                       'ArdiaApp.openSharingSettings'):
+            self.assertIn(f'"{method}",', share)
+        show = share.split('void ShowPicker(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(show.index('BackgroundInstance()'), show.index('showRelativeToRect'))
+        via = share.split('void ShareVia(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(via.index('BackgroundInstance()'), via.index('performWithItems'))
+        self.assertIn('share_policy::ClassifyUrl(url)', share)
+        desktop = (REPO / 'apps/desktop/src/hostShare.ts').read_text()
+        self.assertIn('isLinkShareService(service)', desktop)
+        self.assertIn('"ArdiaApp.openSharingSettings"', desktop)
+
+    def test_page_menus_share_through_the_shell(self):
+        self.assertIn('share::InstallPageMenu();', self.read('ac_mac_webui.mm'))
+        self.assertIn('g_ardia_mac_page_menu_observer', self.read('ac_mac_hooks.h'))
+        apply = (ROOT / 'apply.sh').read_text()
+        self.assertIn('observers_.AddObserver(observer);', apply)
+        share = self.read('ac_mac_share.mm')
+        self.assertIn('g_ardia_mac_page_menu_observer = &PageMenuObserver;', share)
+        self.assertIn('g_ardia_mac_page_menu_destroyed = &PageMenuDestroyed;', share)
+        self.assertIn('g_ardia_mac_page_menu_destroyed(this);', apply)
+        self.assertIn('return MenuObservers().Attach(', share)
+        self.assertIn('MenuObservers().Release(menu);', share)
+        self.assertNotIn('CurrentObserver', share)
+        observer = share.split('class PageShareObserver', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('content::GlobalRenderFrameHostId frame_;', observer)
+        self.assertNotIn('RenderViewContextMenuBase*', observer)
+        self.assertIn('.Set("name", "command")', share)
+        self.assertIn('Emit("ArdiaWebView"', share)
+
+    def test_shared_folders_are_advertised_located_and_watched_per_window(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('shared_folders::AppendCapabilities(capabilities);', calls)
+        self.assertIn('->Set("location", shared_folders::Location());', calls)
+        script = calls.split('std::optional<std::string> BootstrapScript(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shared_folders::Location()', script)
+        host = self.read('ac_mac_shell_host.mm')
+        detach = host.split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shared_folder_watcher_.reset();', detach)
+        folders = self.read('ac_mac_shared_folders.mm')
+        self.assertIn('Emit("ArdiaSharedFolders", "onChange"', folders)
+        self.assertNotIn('dispatch_sync', folders)
+        teardown = folders.split('Watcher::~Watcher() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('dispatch_async(core->queue', teardown)
+        self.assertIn('delete core;', teardown)
+        self.assertIn('base::BindOnce(&Watcher::Deliver, watcher,', folders)
+        retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(retire.index('shared_folder_watcher_.reset();'), retire.index('if (!had_document)'))
+        self.assertLess(retire.index('share::Retire(window_id_);'), retire.index('if (!had_document)'))
+        modules = (REPO / 'apps/desktop/src/hostModules.ts').read_text()
+        self.assertIn('host.bootstrap.nativeModules?.ArdiaSharedFolders?.location', modules)
+        self.assertIn('"ArdiaSharedFolders.location",', folders)
+
+    def test_shared_folder_writes_match_the_swift_directory(self):
+        folders = self.read('ac_mac_shared_folders.mm')
+        moving = folders.split('Coordinated CoordinateMoving(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('const bool renamed = (*run)();', moving)
+        self.assertIn('didMoveToURL:policy::MovedTo(renamed) ? replacing : moving', moving)
+        self.assertLess(moving.index('willMoveToURL:replacing'), moving.index('const bool renamed = (*run)();'))
+        write = folders.split('Step Write(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('RENAME_EXCL', write)
+        self.assertIn('NSFileCoordinatorWritingForReplacing', write)
+        self.assertIn('LinkUrl(folder, name) != expect', write)
+        self.assertIn('O_NOFOLLOW', folders.split('Opened OpenDirectoryIn(', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('policy::RelativeParts(*path)', folders)
+        self.assertIn('policy::RefusedFolder(*real, HomeDirectory())', folders)
+        self.assertNotIn('DeletePathRecursively', folders)
+        run = folders.split('Coordinated RunCoordinated(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('policy::kCoordinationTimeoutSeconds', run)
+        self.assertIn('[coordinator cancel];', run)
+        self.assertIn('gate->Expire()', run)
+        self.assertIn('gate->Begin()', run)
+        self.assertIn('dispatch_block_cancel(expire);', run)
+        for helper in ('CoordinateReading', 'CoordinateWriting', 'CoordinateMoving'):
+            body = folders.split(f'Coordinated {helper}(', 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('begin()', body)
+
+    def test_each_share_owns_its_picker_window_and_file(self):
+        share = self.read('ac_mac_share.mm')
+        self.assertNotIn('PickerState', share)
+        chose = share.split('void PickerChose(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('found->second.picker != picker', chose)
+        self.assertIn('[[ArdiaMacShareRequest alloc] initWithRequest:id]', share)
+        self.assertIn('__weak NSWindow* window', share)
+        retire = share.split('void Retire(const std::string& owner) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('[picker close];', retire)
+        self.assertIn('RevokeImages(', retire)
+        revoke = share.split('void RevokeImages(Match match) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('Issued().RevokeUnheld(', revoke)
+        self.assertIn('image.cancelled->store(true);', revoke)
+        self.assertIn('for (const std::string& path : revoked.written) {', revoke)
+        self.assertNotIn('revoked.writing', revoke)
+        binding = share.split('void RetireBinding(const std::string& owner, int binding) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('origin.binding == binding', binding)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('share::RetireBinding(owner_->window_id(), id_);', host.split('PageBinding::~PageBinding() {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('share::RetireBinding(window_id_, old_id);', host.split('void ShellHostView::ReplaceBinding(', 1)[1].split('\n}\n', 1)[0])
+        self.assertEqual(host.count('share::RetireBinding('), 4)
+        services = share.split('std::vector<Service> LinkServices() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('!seen', services)
+        self.assertLess(retire.index('share_policy::KeepsServiceAfterRetire(found->second.service != nil)'), retire.index('[picker close];'))
+        self.assertIn('found->second.chosen ? nil : found->second.picker', retire)
+        shareable = share.split('std::optional<SharedFile> ShareableFile(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('lstat(', shareable)
+        self.assertIn('S_ISREG(info.st_mode)', shareable)
+        self.assertIn('Issued().Take(path, issued_here)', shareable)
+        self.assertIn('owner.origin.window_id == host->window_id() && StillCurrent(owner)', shareable)
+        self.assertIn('InInstanceDirectory(path)', shareable)
+        self.assertIn('share_policy::InstanceDirectoryName(', share)
+        sweep = share.split('void ClaimAndSweep(', 1)[1].split('\n}\n', 1)[0]
+        claim = share.split('bool ClaimInstance(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('".staging"', share)
+        self.assertLess(claim.index('flock(fd.get(), LOCK_EX | LOCK_NB)'), claim.index('rename(staging.value().c_str(), own.value().c_str())'))
+        self.assertIn('InstanceLock() = std::move(fd);', claim)
+        self.assertEqual(claim.count('base::DeletePathRecursively(staging);'), 1)
+        self.assertIn('InstanceClaimed() = ClaimInstance(root, own);', sweep)
+        self.assertIn('share_policy::StagingPid(', sweep)
+        self.assertIn('share_policy::SweepsStaging(', sweep)
+        self.assertIn('InstanceLockState lock = LockOf(entry);', sweep)
+        self.assertLess(sweep.index('InstanceLockState lock = LockOf(entry);'), sweep.index('base::DeletePathRecursively(entry);'))
+        self.assertIn('share_policy::SweepsInstance(', sweep)
+        self.assertIn('base::FileEnumerator::DIRECTORIES)', sweep)
+        self.assertNotIn('DeleteFile(entry)', sweep)
+        lock = share.split('InstanceLockState LockOf(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('LOCK_EX | LOCK_NB', lock)
+        self.assertIn('O_NOFOLLOW', lock)
+        for callback in ('bool PickerOwns(std::uint64_t id,', 'void ServiceFinished(std::uint64_t id,',
+                         'NSWindow* SourceWindow(std::uint64_t id,'):
+            body = share.split(callback, 1)[1].split('\n}\n', 1)[0]
+            self.assertIn('service', body)
+        self.assertIn('return ardia_mac::share::PickerOwns(_request, picker, service) ? self : nil;', share)
+        remove = share.split('void RemoveTemporary(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(remove.index('Issued().Revoke(standard);'), remove.index('ScheduleUnlink('))
+        unlinked = share.split('void Unlinked(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('share_policy::NextUnlinkStep(attempt, gone)', unlinked)
+        self.assertIn('share_policy::UnlinkRetryDelayMs(attempt)', unlinked)
+        self.assertIn('base::DeleteFile(path)', share.split('void ScheduleUnlink(base::FilePath path, std::string standard, int attempt, base::TimeDelta delay) {', 1)[1].split('\n}\n', 1)[0])
+        image = share.split('void DeliverImage(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(image.index('StillBound(origin, contents.get(), &binding)'), image.index('Issued().Reserve('))
+        self.assertLess(image.index('Issued().Reserve('), image.index('std::vector<uint8_t>(image)'))
+        self.assertIn('if (cancelled->load() || !InstanceClaimed()) {', image)
+        self.assertIn('Issued().Publish(standard)', image)
+        self.assertNotIn('CreateDirectory', image)
+        self.assertNotIn('Issued().Issue(', share)
+        self.assertIn('constexpr int kShareFirst = share_policy::kShareCommandFirst;', share)
+        self.assertNotIn('IDC_CONTENT_CONTEXT_CUSTOM_FIRST +', share)
+        owns = share.split('bool PickerOwns(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('share_policy::SameChoice(', owns)
+        chose = share.split('void PickerChose(std::uint64_t id,', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('picker = nil', chose)
+        deliver = share.split('void Deliver(const PageOrigin& origin,', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('StillBound(origin, contents, &binding)', deliver)
+        bound = share.split('ShellHostView* StillBound(const PageOrigin& origin, content::WebContents* contents, PageBinding** binding) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('found->renderer_generation == origin.generation', bound)
+        self.assertIn('found->claim == origin.claim', bound)
+        self.assertIn('base::BindOnce(&DeliverImage, std::move(*origin),', share)
+        link = share.split('void ShareLink(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('host == &caller ? ShareableFile(link, host)', link)
+
+    def test_file_share_lists_the_system_services(self):
+        model = self.read('ac_mac_menu_model.h')
+        self.assertIn('Role::kShareServices)}),', model)
+        menu = self.read('ac_mac_menu.mm')
+        self.assertIn('submenu.delegate = ShareMenuFiller();', menu)
+        self.assertIn('ardia_mac::share::LinkServices()', menu)
+        self.assertIn('menu::FillsShareServices(item.role, app_menus)', menu)
+        filler = menu.split('- (void)menuNeedsUpdate:(NSMenu*)menu {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('action:@selector(openSharingSettings:)', filler)
+        self.assertIn('ardia_mac::share::OpenSharingSettingsFromMenu();', menu)
+        actions = (REPO / 'apps/desktop/src/appMenuActions.ts').read_text()
+        self.assertIn('isMoreShareChoice(choice.command, choice.arg)', actions)
+        self.assertNotIn('return;', filler)
+        self.assertIn('More', filler)
+        app_menu = (REPO / 'apps/desktop/src/appMenu.ts').read_text()
+        self.assertIn('shareServices().map(', app_menu)
+
     def test_download_watch_state_exists_before_its_notifier_calls_back(self):
         source = (MAC / 'ac_mac_system.mm').read_text()
         watch = source.split('class DownloadWatch', 1)[1].split('\n};', 1)[0]
@@ -946,6 +1235,48 @@ class ContractTests(unittest.TestCase):
                         '"DevTools window (background run, not shown)"'):
             self.assertIn(refused, commands)
 
+    def test_dictation_is_advertised_and_never_starts_in_background_mode(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertIn('"ArdiaShell.startDictation",', listed)
+        call = calls.split('if (method == "ArdiaShell.startDictation") {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertLess(call.index('if (BackgroundInstance()) {'), call.index('sendAction:@selector(startDictation:)'))
+        self.assertIn('Trace("dictation (background run, not started)");', call)
+        self.assertIn('dispatch_async(dispatch_get_main_queue()', call)
+        self.assertIn('Reply(std::move(done), base::Value(true));', call)
+
+    def test_window_backdrop_uses_the_treatment_vibrancy_without_a_glass_rim(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertIn('"shell.backdropRegions.windowTreatment",', listed)
+        layout = self.read('ac_mac_glass_layout.h')
+        self.assertIn('if (name == "windowTreatment") return Material::kWindowTreatment;', layout)
+        self.assertIn('return dark ? kTreatmentMaterialDark : kTreatmentMaterialLight;', layout)
+        self.assertIn('constexpr int kTreatmentMaterialDark = 29;', layout)
+        self.assertIn('constexpr int kTreatmentMaterialLight = 13;', layout)
+        glass = self.read('ac_mac_glass.mm')
+        treatment = glass.split('- (void)applyTreatment {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('self.emphasized = self.windowTreatment;', treatment)
+        self.assertIn('ardia_mac::glass::TreatmentMaterial(dark)', treatment)
+        self.assertIn('[self applyTreatment];', glass.split('- (void)viewDidChangeEffectiveAppearance {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('placement.material == glass::Material::kWindowTreatment;', glass)
+        swift = (REPO / 'packages/shaders/ios/WindowTreatmentView.swift').read_text()
+        self.assertIn('blur.isEmphasized = true', swift)
+        self.assertIn('NSVisualEffectView.Material(rawValue: dark ? 29 : 13)', swift)
+
+    def test_asset_paths_keep_the_allowlist_every_host_shares(self):
+        webui = self.read('ac_mac_webui.mm')
+        valid = webui.split('bool ValidAssetPath(std::string_view path) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn("'@'", valid)
+        self.assertIn("c == '_' || c == '-' || c == '/')) {", valid)
+        self.assertIn('path.find("..") != std::string_view::npos', valid)
+        self.assertIn('hostSafeFileName', (REPO / 'apps/desktop/vite.shared.ts').read_text())
+
+    def test_help_menu_offers_show_onboarding_like_the_mac_app(self):
+        model = self.read('ac_mac_menu_model.h')
+        self.assertIn('submenu("Help", {command("Show Onboarding", "showOnboarding", "", 0)}, Role::kHelpMenu)', model)
+        self.assertIn('CommandItem(.showOnboarding)', (REPO / 'packages/shell/ios/MainMenu.swift').read_text())
+
     def test_page_capabilities_and_zoom_routes_are_served(self):
         calls = self.read('ac_mac_shell_calls.mm')
         listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
@@ -975,8 +1306,7 @@ class ContractTests(unittest.TestCase):
             self.assertIn(f'"webView.{route}"', page_options)
         delegate = self.read('ac_mac_page_delegate.mm')
         for wired in ('InterceptLinkOpen(source, params)', 'OpeningDisposition(source, params)',
-                      'PopupDisposition(source, disposition)', 'NoteLinkTarget(source, url);',
-                      'OpensNewContentsInPlace(source, new_contents.get(), target_url, disposition, user_gesture)'):
+                      'PopupDisposition(source, disposition)', 'NoteLinkTarget(source, url);'):
             self.assertIn(wired, delegate)
         self.assertNotIn('CanDownload', delegate)
         add = delegate.split('content::WebContents* AddNewContents(', 1)[1].split('\n  }\n', 1)[0]
@@ -1006,12 +1336,16 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('PostTask(', gesture)
         finish = gesture.split('void PageLinks::DidFinishNavigation(', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('handle->GetNavigationId() != peek_navigation_', finish)
-        self.assertLess(finish.index('if (handle->HasCommitted()) return;'), finish.index('EmitDecision('))
+        self.assertLess(finish.index('lp::AnnouncesSitePeek(true, handle->HasCommitted(), !contents || contents->IsBeingDestroyed())'),
+                        finish.index('EmitDecision('))
         self.assertIn('kInputMatchMicros = 0;', self.read('ac_mac_link_policy.h'))
-        self.assertIn('content::g_ardia_mac_download_url = &OptionClickDownloadIntercepted;', gesture)
+        self.assertIn('content::SetArdiaMacDownloadUrlHook(&OptionClickDownloadIntercepted);', gesture)
+        self.assertIn('content::SetArdiaMacNewWindowInPlaceHook(&NoOpenerWindowOpensInPlace);', gesture)
+        self.assertNotIn('g_ardia_mac_download_url', gesture)
         in_place = gesture.split('bool PageLinks::OpensInPlace(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('opened->HasOpener()', in_place)
-        self.assertIn('GetHasPostData()', in_place)
+        self.assertIn('link.post = form_submission;', in_place)
+        self.assertIn("contents->IsBeingDestroyed()", finish)
+        self.assertIn("lp::AnnouncesSitePeek(", finish)
         self.assertIn('g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;', gesture)
         zoom = gesture.split('void InstallCommandScrollZoom() {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('event.hasPreciseScrollingDeltas', zoom)
@@ -1022,6 +1356,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('g_ardia_mac_add_navigation_throttles(registry);', apply)
         self.assertIn('network::mojom::RedirectMode::kFollow', apply)
         self.assertIn('blink_parameters->suggested_name.has_value()', apply)
+        self.assertIn('params.is_form_submission || params.form_submission_post_data', apply)
+        self.assertIn('FastHasAttribute(html_names::kDownloadAttr)', apply)
 
     def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
         delegate = self.read('ac_mac_page_delegate.mm')
@@ -1365,7 +1701,9 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaShell.setMenuState', 'ArdiaShell.setMenuBookmarks', 'shell.popover.props',
                        'ArdiaShell.setShortcutRecording',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
-                       'session.write', 'ArdiaShell.writeDocument', 'tab.command', 'evaluate',
+                       'session.write', 'ArdiaShell.writeDocument', 'ArdiaApp.share', 'ArdiaApp.shareVia',
+                       'ArdiaApp.shareText', 'ArdiaSharedFolders.apply', 'ArdiaSharedFolders.read',
+                       'ArdiaSharedFolders.watch', 'ArdiaShell.pickFolder', 'tab.command', 'evaluate',
                        'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs',
                        'ArdiaShell.openWindow', 'MergeLinuxSession',
                        'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
@@ -1376,7 +1714,8 @@ class BoundaryTests(unittest.TestCase):
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
                      'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc', 'system_policy_test.cc',
-                     'extension_view_policy_test.cc', 'pip_policy_test.cc'):
+                     'extension_view_policy_test.cc', 'pip_policy_test.cc', 'share_policy_test.cc',
+                     'shared_folders_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

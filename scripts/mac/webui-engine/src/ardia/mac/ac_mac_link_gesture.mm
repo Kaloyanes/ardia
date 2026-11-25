@@ -17,8 +17,6 @@
 #include "base/time/time.h"
 #include "components/zoom/page_zoom.h"
 #include "content/public/browser/global_routing_id.h"
-#include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -38,11 +36,8 @@
 extern void (*g_ardia_mac_add_navigation_throttles)(content::NavigationThrottleRegistry& registry);
 
 namespace content {
-extern bool (*g_ardia_mac_download_url)(RenderFrameHost* frame,
-                                        const GURL& url,
-                                        bool follows_redirects,
-                                        bool names_file,
-                                        bool user_gesture);
+void SetArdiaMacDownloadUrlHook(bool (*hook)(RenderFrameHost*, const GURL&, bool, bool, bool));
+void SetArdiaMacNewWindowInPlaceHook(bool (*hook)(WebContents*, const GURL&, WindowOpenDisposition, bool, bool));
 }
 
 namespace ardia_mac {
@@ -217,6 +212,16 @@ bool OptionClickDownloadIntercepted(content::RenderFrameHost* frame,
   return EmitDecision(binding, url, Decide(binding, "alt", url));
 }
 
+bool NoOpenerWindowOpensInPlace(content::WebContents* source,
+                                const GURL& url,
+                                WindowOpenDisposition disposition,
+                                bool form_submission,
+                                bool user_gesture) {
+  PageBinding* binding = BindingFor(source);
+  PageLinks* links = binding ? binding->links() : nullptr;
+  return links && links->OpensInPlace(url, disposition, form_submission, user_gesture);
+}
+
 PageBinding* BindingUnder(NSEvent* event) {
   NSWindow* window = event.window;
   NSView* content = window.contentView;
@@ -386,16 +391,16 @@ void PageLinks::DidFinishNavigation(content::NavigationHandle* handle) {
   peek_navigation_ = 0;
   peek_url_ = GURL();
   peek_point_.reset();
-  if (handle->HasCommitted()) return;
+  content::WebContents* contents = web_contents();
+  if (!lp::AnnouncesSitePeek(true, handle->HasCommitted(), !contents || contents->IsBeingDestroyed())) return;
   EmitDecision(binding_, url, decision);
 }
 
-bool PageLinks::OpensInPlace(content::WebContents* opened, const GURL& url, WindowOpenDisposition disposition,
+bool PageLinks::OpensInPlace(const GURL& url, WindowOpenDisposition disposition, bool form_submission,
                              bool user_gesture) {
   content::WebContents* contents = web_contents();
-  if (!contents || !binding_ || !opened) return false;
+  if (!contents || !binding_ || contents->IsBeingDestroyed()) return false;
   const lp::GestureGate::Release release = State().gate.FreshRelease(surface_, Now());
-  const content::NavigationEntry* pending = opened->GetController().GetPendingEntry();
   lp::InPlaceLink link;
   link.enabled = State().new_tab_links_in_place;
   link.small_window = SmallWindow(binding_);
@@ -403,8 +408,8 @@ bool PageLinks::OpensInPlace(content::WebContents* opened, const GURL& url, Wind
   link.renderer_initiated = true;
   link.user_gesture = user_gesture;
   link.http = Http(url);
-  link.post = pending && pending->GetHasPostData();
-  link.opener = opened->HasOpener();
+  link.post = form_submission;
+  link.opener = false;
   link.target_matches = lp::TargetMatches(release.target, url.spec());
   link.up_flags = release.flags;
   if (!lp::OpensInPlace(link)) return false;
@@ -509,23 +514,12 @@ WindowOpenDisposition PopupDisposition(content::WebContents* source,
              : disposition;
 }
 
-bool OpensNewContentsInPlace(content::WebContents* source,
-                             content::WebContents* opened,
-                             const GURL& url,
-                             WindowOpenDisposition disposition,
-                             bool user_gesture) {
-  PageBinding* binding = BindingFor(source);
-  PageLinks* links = binding ? binding->links() : nullptr;
-  return links && links->OpensInPlace(opened, url, disposition, user_gesture);
-}
-
 void InstallLinkHooks() {
   if (g_ardia_mac_add_navigation_throttles != &AddLinkNavigationThrottles) {
     g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;
   }
-  if (content::g_ardia_mac_download_url != &OptionClickDownloadIntercepted) {
-    content::g_ardia_mac_download_url = &OptionClickDownloadIntercepted;
-  }
+  content::SetArdiaMacDownloadUrlHook(&OptionClickDownloadIntercepted);
+  content::SetArdiaMacNewWindowInPlaceHook(&NoOpenerWindowOpensInPlace);
   InstallCommandScrollZoom();
 }
 

@@ -391,6 +391,13 @@ TEST(other_site_peeks_tell_a_real_anchor_click_from_scripted_navigations) {
   CHECK(!lp::SameInput(-1, -1));
 }
 
+TEST(a_cancelled_peek_is_announced_only_while_the_source_tab_lives) {
+  CHECK(lp::AnnouncesSitePeek(true, false, false));
+  CHECK(!lp::AnnouncesSitePeek(true, false, true));
+  CHECK(!lp::AnnouncesSitePeek(true, true, false));
+  CHECK(!lp::AnnouncesSitePeek(false, false, false));
+}
+
 TEST(a_same_process_iframe_anchor_targeting_top_never_peeks) {
   lp::SitePeekNavigation navigation;
   navigation.primary_main_frame = true;

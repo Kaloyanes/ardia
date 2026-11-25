@@ -40,6 +40,35 @@
 
 @end
 
+@interface ArdiaMacVibrancyView : NSVisualEffectView
+@property(nonatomic) BOOL windowTreatment;
+- (void)applyTreatment;
+@end
+
+@implementation ArdiaMacVibrancyView
+
+@synthesize windowTreatment = _windowTreatment;
+
+- (void)applyTreatment {
+  self.emphasized = self.windowTreatment;
+  if (!self.windowTreatment) {
+    return;
+  }
+  const bool dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[
+    NSAppearanceNameDarkAqua, NSAppearanceNameAqua
+  ]] isEqualToString:NSAppearanceNameDarkAqua];
+  self.material = static_cast<NSVisualEffectMaterial>(
+      ardia_mac::glass::TreatmentMaterial(dark));
+  self.state = NSVisualEffectStateFollowsWindowActiveState;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
+  [self applyTreatment];
+}
+
+@end
+
 namespace ardia_mac {
 
 namespace {
@@ -106,6 +135,7 @@ NSVisualEffectMaterial VibrancyMaterial(glass::Material material) {
     case glass::Material::kLiquidClear:
       return NSVisualEffectMaterialPopover;
     case glass::Material::kHud:
+    case glass::Material::kWindowTreatment:
       return NSVisualEffectMaterialHUDWindow;
     case glass::Material::kWindow:
       return NSVisualEffectMaterialWindowBackground;
@@ -122,8 +152,8 @@ NSView* MakeEffect(const glass::Placement& placement, glass::Plane plane) {
       glass::Effect::kLiquidGlass) {
     return [[GlassEffectClass() alloc] initWithFrame:NSZeroRect];
   }
-  NSVisualEffectView* view =
-      [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+  ArdiaMacVibrancyView* view =
+      [[ArdiaMacVibrancyView alloc] initWithFrame:NSZeroRect];
   view.blendingMode = plane == glass::Plane::kBehindWindow
                           ? NSVisualEffectBlendingModeBehindWindow
                           : NSVisualEffectBlendingModeWithinWindow;
@@ -212,6 +242,13 @@ void Style(NSView* view, const glass::Placement& placement) {
   } else if ([view isKindOfClass:NSVisualEffectView.class]) {
     NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
     vibrancy.material = VibrancyMaterial(placement.material);
+    vibrancy.state = NSVisualEffectStateActive;
+    if ([view isKindOfClass:ArdiaMacVibrancyView.class]) {
+      ArdiaMacVibrancyView* treated = static_cast<ArdiaMacVibrancyView*>(view);
+      treated.windowTreatment =
+          placement.material == glass::Material::kWindowTreatment;
+      [treated applyTreatment];
+    }
     view.layer.cornerRadius = native;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.masksToBounds = native > 0;

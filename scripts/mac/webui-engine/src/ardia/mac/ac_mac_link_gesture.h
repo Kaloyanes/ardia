@@ -40,8 +40,7 @@ class PageLinks : public content::WebContentsObserver,
   std::uintptr_t surface() const;
   void NoteTarget(const GURL& url);
   bool PeeksInsteadOf(content::NavigationHandle& handle);
-  bool OpensInPlace(content::WebContents* opened, const GURL& url, WindowOpenDisposition disposition,
-                    bool user_gesture);
+  bool OpensInPlace(const GURL& url, WindowOpenDisposition disposition, bool form_submission, bool user_gesture);
 
  private:
   void Watch(content::RenderWidgetHost* widget);
@@ -77,11 +76,6 @@ bool InterceptLinkOpen(content::WebContents* source, const content::OpenURLParam
 WindowOpenDisposition OpeningDisposition(content::WebContents* source, const content::OpenURLParams& params);
 WindowOpenDisposition PopupDisposition(content::WebContents* source,
                                        WindowOpenDisposition disposition);
-bool OpensNewContentsInPlace(content::WebContents* source,
-                             content::WebContents* opened,
-                             const GURL& url,
-                             WindowOpenDisposition disposition,
-                             bool user_gesture);
 void InstallLinkHooks();
 
 }

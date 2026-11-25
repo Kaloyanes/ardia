@@ -138,9 +138,6 @@ class PageDelegate : public BrowserWebContentsDelegate {
                                        const blink::mojom::WindowFeatures& window_features,
                                        bool user_gesture,
                                        bool* was_blocked) override {
-    if (OpensNewContentsInPlace(source, new_contents.get(), target_url, disposition, user_gesture)) {
-      return nullptr;
-    }
     return BrowserWebContentsDelegate::AddNewContents(
         source, std::move(new_contents), target_url, PopupDisposition(source, disposition),
         window_features, user_gesture, was_blocked);

@@ -34,7 +34,7 @@ export async function bundledImages(root, config = {}) {
     const bytes = readFileSync(file);
     return emitted.some((item) => item.bytes.equals(bytes)) || code.includes(bytes.toString("base64"));
   };
-  return { emitted, holds };
+  return { emitted, holds, fileNames: outputs.map((item) => item.fileName) };
 }
 
 const CHANNELS = { 0: 1, 2: 3, 4: 2, 6: 4 };

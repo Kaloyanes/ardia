@@ -338,6 +338,10 @@ struct SitePeekNavigation {
   int up_flags = -1;
 };
 
+inline bool AnnouncesSitePeek(bool cancelled_navigation, bool committed, bool source_closing) {
+  return cancelled_navigation && !committed && !source_closing;
+}
+
 inline bool SitePeekCandidate(const SitePeekNavigation& navigation) {
   return navigation.primary_main_frame && navigation.renderer_initiated && navigation.user_gesture &&
          navigation.link && navigation.link_click && navigation.main_frame_initiated && navigation.input_matches && !navigation.post &&

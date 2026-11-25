@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { scaledAsset, scaledAssetModule, scaledAssets } from "../scaledAssets.ts";
+import { HOST_COMPONENT_LIMIT, HOST_PATH_LIMIT, hostSafeFileName, hostServesPath, SANITIZED_NAME_LIMIT, SANITIZED_PATH_LIMIT } from "../desktopPaths.ts";
 import { normalizePath } from "vite";
 import { alphaDrift, BROWSER_ASSETS, bundledImages, hiDpiBrowserPngs, PIXEL_SCALES, pngSize, scaledBrowserAssets } from "./scaledAssetsBundle.mjs";
 
@@ -95,9 +96,41 @@ test("in dev, a Retina sibling added or removed later reloads the image that alr
   assert.equal(await plugin.resolveId.call(context, base, "/src/App.tsx", {}), null);
 });
 
+test("emitted names follow the strictest WebUI host rules, so mark@2x ships as mark-2x and nothing can 404", () => {
+  assert.equal(hostSafeFileName("assets/ntp-mark-front@2x"), "assets/ntp-mark-front-2x");
+  assert.equal(hostSafeFileName("assets/a b+c~d"), "assets/a-b-c-d");
+  assert.equal(hostSafeFileName("assets/..evil..name"), "assets/.evil.name");
+  assert.equal(hostSafeFileName("assets/../x"), "assets/-/x");
+  assert.equal(hostSafeFileName("a//b"), "a/-/b");
+  const long = hostSafeFileName(`assets/${"n".repeat(300)}.png`);
+  assert.equal(long.split("/")[1].length, SANITIZED_NAME_LIMIT);
+  assert.ok(long.endsWith(".png"));
+  assert.ok(SANITIZED_NAME_LIMIT + 32 <= HOST_COMPONENT_LIMIT, "a hash and extension still fit after truncation");
+  for (const name of ["assets/ntp-mark-front@3x-Ab_9.png", "assets/../x.png", "../x.png", "assets/./x.png", ".", `assets/${"n".repeat(129)}.png`, "assets//x.png"]) {
+    assert.equal(hostServesPath(name), false, name);
+    assert.ok(hostServesPath(hostSafeFileName(name)), `${name} sanitizes to a served path`);
+  }
+  assert.equal(hostServesPath("/assets/x.png"), false);
+  assert.equal(hostServesPath(`${"a/".repeat(300)}x`), false, "the whole path stays within the Mac host's 512 bytes");
+  assert.ok(hostServesPath("assets/ntp-mark-front-2x-Ab_9.png"));
+  assert.equal(hostSafeFileName("a./b../c.png"), "a/b/c.png", "no part ends in a dot");
+  assert.equal(hostSafeFileName("assets/CON.png"), "assets/-CON.png");
+  assert.equal(hostSafeFileName("nul/com1/LPT9.txt/aux"), "-nul/-com1/-LPT9.txt/-aux");
+  assert.equal(hostSafeFileName("console/com10/comma.png"), "console/com10/comma.png", "only the exact device names are reserved");
+  const dotted = hostSafeFileName(`${"n".repeat(91)}.${"n".repeat(20)}.png`);
+  assert.equal(dotted, `${"n".repeat(91)}.png`, "a cut that ends on a dot never meets the extension as '..'");
+  assert.ok(hostServesPath(dotted));
+  const nested = hostSafeFileName(Array.from({ length: 6 }, (_, i) => `${i}${"d".repeat(95)}`).concat("mark.png").join("/"));
+  assert.ok(nested.length <= SANITIZED_PATH_LIMIT, "deep names keep room for the prefix and hash");
+  assert.ok(nested.endsWith("/mark.png"));
+  assert.ok(hostServesPath(`assets/${nested}-Ab_9xyz1.png`) && `assets/${nested}-Ab_9xyz1.png`.length <= HOST_PATH_LIMIT);
+});
 for (const mode of ["mac", "linux", "win"]) {
   test(`the ${mode} build bundles the Retina siblings instead of the 1x PNGs`, { timeout: 120_000 }, async () => {
-    const { holds } = await bundledImages(root, { mode });
+    const { holds, fileNames } = await bundledImages(root, { mode });
+    const refused = fileNames.filter((name) => !hostServesPath(name));
+    assert.deepEqual(refused, [], `chrome://ardia/ refuses these ${mode} files, so they would 404`);
+    assert.ok(fileNames.some((name) => /-2x-/.test(name)), `a Retina sibling ships in the ${mode} build under a host-safe name`);
     for (const entry of scaledBrowserAssets()) {
       assert.ok(holds(entry.file), `${entry.file} is missing from the ${mode} build`);
       assert.ok(!holds(entry.base), `${entry.base} still ships in the ${mode} build`);
