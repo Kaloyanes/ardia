@@ -74,6 +74,7 @@ class PaintHold : public content::WebContentsObserver,
 
   int held() const { return held_; }
   bool transitioning() const { return transitioning_; }
+  bool has_binding_room() const { return bindings_.size() < kMaxBindings; }
   uint64_t page_generation() const { return page_generation_; }
   void BeginTransition() { transitioning_ = true; }
 
@@ -383,23 +384,24 @@ AC_ARGS_CALL(ac_tab_input) {
   if (contents->GetBrowserContext()->IsOffTheRecord()) {
     return out.Send(ardiacore::tab_input_internal::Refusal("private", "Private tabs take no input from programs."));
   }
-  const std::string* action = args.FindString("action");
-  if (!action) {
-    return out.Send(ardiacore::tab_input_internal::Refusal("bad_request", "action is required."));
-  }
   const base::Value* prime_value = args.Find("prime");
   const base::Value* token_value = args.Find("token");
+  const std::string* action = args.FindString("action");
+  const bool priming = prime_value && prime_value->is_bool() && prime_value->GetBool();
+  const bool keyboard = action && (*action == "key" || *action == "text");
+  ardiacore::PaintHold::CreateForWebContents(contents);
+  ardiacore::PaintHold* hold = ardiacore::PaintHold::FromWebContents(contents);
+  const bool bound = !priming && token_value && token_value->is_int() &&
+                     hold->TakeBinding(token_value->GetInt(), keyboard);
   if ((prime_value && !prime_value->is_bool()) || (token_value && !token_value->is_int())) {
     return out.Send(ardiacore::tab_input_internal::Refusal("bad_request", "prime must be a boolean and token a whole number."));
   }
-  const bool priming = prime_value && prime_value->GetBool();
   if (priming && token_value) {
     return out.Send(ardiacore::tab_input_internal::Refusal("bad_request", "A prime takes no token."));
   }
-  const bool keyboard = *action == "key" || *action == "text";
-  ardiacore::PaintHold::CreateForWebContents(contents);
-  ardiacore::PaintHold* hold = ardiacore::PaintHold::FromWebContents(contents);
-  const bool bound = !priming && token_value && hold->TakeBinding(token_value->GetInt(), keyboard);
+  if (!action) {
+    return out.Send(ardiacore::tab_input_internal::Refusal("bad_request", "action is required."));
+  }
   const bool button_transition = *action == "down" || *action == "up" || *action == "click" || *action == "dblclick";
   if (button_transition && hold->transitioning()) {
     return out.Send(ardiacore::tab_input_internal::Refusal("busy", "A press or release is still reaching this tab; wait for its answer and send this again."));
@@ -410,6 +412,9 @@ AC_ARGS_CALL(ac_tab_input) {
     return out.Send(std::move(built.error()));
   }
   if (priming) {
+    if (!hold->has_binding_room()) {
+      return out.Send(ardiacore::tab_input_internal::Refusal("busy", "Too many inputs are waiting for this tab; try again."));
+    }
     return hold->WhenPainted(base::BindOnce(&ardiacore::Primed, contents->GetWeakPtr(), keyboard, std::move(out)));
   }
   const ardiacore::tab_input_internal::Prepared& prepared = built.value();

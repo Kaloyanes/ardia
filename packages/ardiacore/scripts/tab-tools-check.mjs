@@ -67,10 +67,24 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 
 let appPid = 0;
 let frontWatch = null;
+let cleaning = false;
 const frontSeen = new Set();
 const frontReads = { samples: 0, failures: 0 };
+function instancePid() {
+  try {
+    const holders = execFileSync("lsof", ["-t", "--", join(data, "app.out.log")], { encoding: "utf8", timeout: 5000 }).split("\n").map(Number).filter((pid) => pid > 0);
+    for (const pid of holders) {
+      const command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
+      if (command.startsWith(join(app, "Contents", "MacOS") + "/")) return pid;
+    }
+  } catch {}
+  return 0;
+}
 function cleanup(code) {
+  if (cleaning) return;
+  cleaning = true;
   if (frontWatch) clearInterval(frontWatch);
+  if (!appPid) appPid = instancePid();
   if (appPid) {
     try { process.kill(appPid, "SIGTERM"); } catch {}
     for (let i = 0; i < 50; i++) {
@@ -84,6 +98,8 @@ function cleanup(code) {
   else console.log(`INFO  kept ${work}`);
   process.exit(code);
 }
+process.on("SIGINT", () => cleanup(130));
+process.on("SIGTERM", () => cleanup(143));
 setTimeout(() => {
   console.log("FAIL  the check ran past its 4 minute deadline");
   cleanup(2);
@@ -145,16 +161,6 @@ function controlSocket() {
 }
 
 execFileSync("open", ["-g", "-n", "--env", "ARDIA_BACKGROUND=1", "--env", `ARDIA_DATA_DIR=${data}`, "--stdout", join(data, "app.out.log"), "--stderr", join(data, "app.out.log"), app]);
-function instancePid() {
-  try {
-    const holders = execFileSync("lsof", ["-t", "--", join(data, "app.out.log")], { encoding: "utf8", timeout: 5000 }).split("\n").map(Number).filter((pid) => pid > 0);
-    for (const pid of holders) {
-      const command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
-      if (command.startsWith(join(app, "Contents", "MacOS") + "/")) return pid;
-    }
-  } catch {}
-  return 0;
-}
 let control = null;
 for (let i = 0; i < 400 && !control; i++) {
   if (!appPid) appPid = instancePid();
@@ -226,8 +232,9 @@ try {
   const activationLines = () => {
     try {
       return fs.readFileSync(join(data, "activation.log"), "utf8").split("\n");
-    } catch {
-      return [];
+    } catch (error) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
     }
   };
   const activationBefore = activationLines().length;

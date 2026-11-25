@@ -18,9 +18,11 @@ export type DiagnosticsQuery = { since: number; kind: DiagnosticKind; onlyErrors
 
 export type DiagnosticsReply = { nextSeq: number; console: ConsoleRow[]; network: NetworkRow[]; dropped: number; more: boolean; capacity: { console: number; network: number } };
 
-const SECRET_NAMES = "pass(?:word|wd|phrase)?|pwd|secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|access[_-]?key|auth(?:orization)?|session(?:[_-]?id)?|sid|cookie|set-cookie|credentials?|client[_-]?secret|private[_-]?key|otp|code[_-]?verifier|signature|sig";
-const NAMED_SECRET = new RegExp(String.raw`((?:["'])?\b(?:` + SECRET_NAMES + String.raw`)\b(?:["'])?\s*[:=]\s*)(?:"((?:[^"\\]|\\[\s\S]?)*)(?:"|$)|'((?:[^'\\]|\\[\s\S]?)*)(?:'|$)|([^\s"',;&}\]]+))`, "gi");
+const SECRET_NAMES = "pass(?:word|wd|phrase)?|pwd|secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|api[_-]?key|apikey|access[_-]?key|auth(?:orization)?|session(?:[_-]?id)?|sid|cookie|set-cookie|credentials?|client[_-]?secret|private[_-]?key|otp|code[_-]?verifier|signature|sig";
+const NAMED_SECRET = new RegExp(String.raw`((?:["'])?\b(?:` + SECRET_NAMES + String.raw`)\b(?:["'])?\s*[:=]\s*)(?:"((?:[^"\\]|\\[\s\S]?)*)(?:"|$)|'((?:[^'\\]|\\[\s\S]?)*)(?:'|$)|((?:[^\s"',;&}\[\]]|\[[^\s"',;&}\[\]]*\]|\[)+))`, "gi");
 const AUTH_SCHEMES = /^(?:Bearer|Basic|Token|Digest)$/i;
+const ALREADY_REDACTED_QUOTED = /^(?:\[redacted\]|(?:Bearer|Basic|Token|Digest)\s+\[redacted\])$/i;
+const COOKIE_PAIR_REDACTED = /^[^=;,\s]+=\[redacted\]$/i;
 const SCHEME_TOKEN = /\b(Bearer|Basic|Token|Digest)\s+([A-Za-z0-9._~+/=-]+)/gi;
 const AUTH_HEADER = new RegExp(String.raw`\b((?:Proxy-)?Authorization["']?\s*[:=]\s*)(?:"((?:[^"\\]|\\[\s\S]?)*)(?:"|$)|'((?:[^'\\]|\\[\s\S]?)*)(?:'|$)|([^\r\n]*))`, "gi");
 const COOKIE_HEADER = /\b(Set-Cookie|Cookie)(\s*:\s*)([^\r\n]*)/gi;
@@ -29,8 +31,10 @@ const BASE64_DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 const JWT = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g;
 const JWT_PART = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\./;
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
-const URL_START = /\b[a-z][a-z0-9+.-]*:\/\//gi;
-const URL_STOPS = new Set([" ", "\t", "\n", "\r", "\f", "\v", '"', "'", "<", ">", "`", ",", ";"]);
+const SCHEME_CHAR = /[A-Za-z0-9+.-]/;
+const SCHEME_LEAD = /[A-Za-z]/;
+const WORD_CHAR = /[A-Za-z0-9_]/;
+const URL_STOPS = new Set([" ", "\t", "\n", "\r", "\f", "\v", '"', "'", "<", ">", "`"]);
 const TRAILING_PROSE = /[.,;:!?]/;
 const OPAQUE = /[A-Za-z0-9_+/=-]{24,}/g;
 const USER_INFO = /^([a-z][a-z0-9+.-]*:\/\/)[^/?#\s]*@/i;
@@ -69,16 +73,21 @@ function stopsUrl(char: string): boolean {
 }
 
 function userInfoEnd(text: string, from: number): number {
+  let round = 0;
   let square = 0;
   let at = -1;
   for (let i = from; i < text.length; i++) {
     const char = text[i]!;
     if (stopsUrl(char) || char === "/" || char === "?" || char === "#") break;
-    if (char === "[") square++;
+    if (char === "(") round++;
+    else if (char === ")") {
+      if (round === 0) break;
+      round--;
+    } else if (char === "[") square++;
     else if (char === "]") {
       if (square === 0) break;
       square--;
-    } else if (char === "@" && square === 0) at = i;
+    } else if (char === "@" && round === 0 && square === 0) at = i;
   }
   return at < 0 ? from : at + 1;
 }
@@ -104,16 +113,34 @@ function urlEnd(text: string, from: number): number {
   return i;
 }
 
-function redactUrlsIn(text: string): string {
+function schemeStart(text: string, sep: number, floor: number): number {
+  let i = sep;
+  while (i > floor && SCHEME_CHAR.test(text[i - 1]!)) i--;
+  while (i < sep && !SCHEME_LEAD.test(text[i]!)) i++;
+  if (i === sep) return -1;
+  if (i > 0 && WORD_CHAR.test(text[i - 1]!)) return -1;
+  return i;
+}
+
+function redactUrlsIn(text: string, clipped = false): string {
   let out = "";
   let last = 0;
-  for (const found of text.matchAll(URL_START)) {
-    const start = found.index;
+  let cursor = 0;
+  let floor = 0;
+  while (cursor < text.length) {
+    const sep = text.indexOf("://", cursor);
+    if (sep < 0) break;
+    const start = schemeStart(text, sep, floor);
+    const afterSep = sep + 3;
+    floor = afterSep;
+    cursor = afterSep;
     if (start < last) continue;
-    const end = urlEnd(text, start + found[0].length);
-    if (end <= start + found[0].length) continue;
-    out += text.slice(last, start) + redactUrl(text.slice(start, end));
+    const end = urlEnd(text, afterSep);
+    if (end <= afterSep) continue;
+    out += text.slice(last, start) + redactUrl(text.slice(start, end), clipped && end === text.length);
     last = end;
+    cursor = end;
+    floor = end;
   }
   return out + text.slice(last);
 }
@@ -135,11 +162,27 @@ function secretSegment(segment: string): boolean {
   return JWT_PART.test(decoded) || decoded.split(/[-_.~]/).some(looksSecret) || looksSecret(decoded);
 }
 
-export function redactUrl(url: string): string {
+function validPort(port: string): boolean {
+  return /^\d{1,5}$/.test(port) && Number(port) <= 65535;
+}
+
+export function redactUrl(url: string, clipped = false): string {
   if (typeof url !== "string" || !url) return "";
   const bare = minimizedUrl(url).replace(USER_INFO, "$1");
-  const origin = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i.exec(bare)?.[0] ?? "";
+  const originMatch = /^([a-z][a-z0-9+.-]*:\/\/)([^/]*)/i.exec(bare);
+  const origin = originMatch?.[0] ?? "";
   const path = bare.slice(origin.length);
+  if (originMatch) {
+    const scheme = originMatch[1]!;
+    const authority = originMatch[2]!;
+    if (!authority.startsWith("[")) {
+      const colon = authority.indexOf(":");
+      if (colon >= 0) {
+        const afterColon = authority.slice(colon + 1);
+        if (!validPort(afterColon) || (clipped && path === "")) return `${scheme}${REDACTED}`;
+      }
+    }
+  }
   const shown = path
     .split("/")
     .map((segment) => (segment && secretSegment(segment) ? REDACTED : segment))
@@ -147,10 +190,10 @@ export function redactUrl(url: string): string {
   return origin + shown;
 }
 
-export function redactText(text: string): string {
+export function redactText(text: string, clipped = false): string {
   if (typeof text !== "string" || !text) return "";
   let out = text.replace(PRIVATE_KEY, REDACTED);
-  out = redactUrlsIn(out);
+  out = redactUrlsIn(out, clipped);
   out = out.replace(AUTH_HEADER, (found, lead: string, double?: string, single?: string, bare?: string) => {
     if (double !== undefined) return `${lead}"${hiddenCredential(double)}"`;
     if (single !== undefined) return `${lead}'${hiddenCredential(single)}'`;
@@ -160,10 +203,13 @@ export function redactText(text: string): string {
   out = out.replace(SCHEME_TOKEN, (found, scheme: string, value: string) => (schemeCredential(scheme, value) ? `${scheme} ${REDACTED}` : found));
   out = out.replace(JWT, REDACTED);
   out = out.replace(NAMED_SECRET, (found, lead: string, double?: string, single?: string, bare?: string) => {
-    if ((double ?? single)?.includes(REDACTED.slice(0, -1))) return found;
-    if (double !== undefined) return `${lead}"${REDACTED}"`;
-    if (single !== undefined) return `${lead}'${REDACTED}'`;
-    return bare === undefined || AUTH_SCHEMES.test(bare) || bare.includes(REDACTED.slice(0, -1)) ? found : `${lead}${REDACTED}`;
+    const quoted = double ?? single;
+    if (quoted !== undefined) {
+      if (ALREADY_REDACTED_QUOTED.test(quoted.trim())) return found;
+      return double !== undefined ? `${lead}"${REDACTED}"` : `${lead}'${REDACTED}'`;
+    }
+    if (bare === undefined || AUTH_SCHEMES.test(bare) || bare === REDACTED || (/cookie/i.test(lead) && COOKIE_PAIR_REDACTED.test(bare))) return found;
+    return `${lead}${REDACTED}`;
   });
   out = out.replace(OPAQUE, (found) => (found.includes(REDACTED) || !looksSecret(found.replace(/[+/=]/g, "")) ? found : REDACTED));
   return out.length > MAX_MESSAGE_LENGTH ? `${out.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : out;
@@ -186,7 +232,7 @@ function consoleRow(entry: TabConsoleEntry): ConsoleRow {
     time: finite(entry.time),
     level,
     kind: consoleKind({ level, message }),
-    message: redactText(message),
+    message: redactText(message, entry.clipped === true),
     source: redactUrl(entry.source),
     line: finite(entry.line),
     frame: entry.frame === "sub" ? "sub" : "main",

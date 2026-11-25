@@ -533,7 +533,7 @@ DevTools session, raises the debugger infobar, shows the tab, focuses its window
   prime token is spent; a field that is present must be valid (no wrong type is read as left out); only an acknowledged `down` or `up` changes
   the held buttons, never `key`, `text`, `move` or `wheel`; the engine takes the same fields per action as the socket), `wheel` (`x`, `y`, `deltaX`, `deltaY` in CSS pixels, positive scrolls
   right and down), `key` (`key`, a character or a key value such as `Enter`; `code`, such as `KeyA`; `modifiers`) and
-  `text` (inserted at the caret as typing does, at most 4096 characters) to the tab's `RenderWidgetHost`
+  `text` (inserted at the caret as typing does, at most 4096 UTF-16 code units) to the tab's `RenderWidgetHost`
   (`ForwardMouseEvent`, `ForwardWheelEvent`, `ForwardKeyboardEvent`, `WebContents::InsertText`), so the page gets
   `isTrusted: true` events. `x` and `y` are CSS pixels from the viewport's top left at the tab's zoom and must fall
   inside it. The page gets page focus (as a click gives it) but the window and the app don't, and a background tab

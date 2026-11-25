@@ -120,7 +120,7 @@ const NUMBER = (description: string, minimum: number, maximum: number): JsonSche
 const TAB_TOOLS: MethodSpec[] = [
   {
     name: "tabs.diagnostics",
-    mutates: false,
+    mutates: true,
     description: `A tab's console messages (every level, with uncaught exceptions and unhandled promise rejections marked by kind) and its network requests (method, address without its query, status, type, error and time taken), kept by the engine from the moment the tab was created, without DevTools attached. Entries share one sequence: pass the reply's nextSeq as since on the next call to get only what came after. dropped counts entries in that range the tab's fixed ring had already overwritten. Addresses lose their user name, password, query and fragment, and tokens, keys and passwords in messages read [redacted]. Private tabs keep none`,
     params: obj(
       {
@@ -154,7 +154,7 @@ const TAB_TOOLS: MethodSpec[] = [
         deltaY: NUMBER("Wheel: CSS pixels to scroll down (negative scrolls up)", -MAX_WHEEL_DELTA, MAX_WHEEL_DELTA),
         key: { type: "string", description: `Key: a key value, at most ${MAX_KEY_LENGTH} characters` },
         code: { type: "string", description: "Key: a key code such as KeyA" },
-        text: { type: "string", description: `Text: at most ${MAX_TEXT_LENGTH} characters` },
+        text: { type: "string", description: `Text: at most ${MAX_TEXT_LENGTH} UTF-16 code units` },
       },
       ["tab", "action"],
     ),

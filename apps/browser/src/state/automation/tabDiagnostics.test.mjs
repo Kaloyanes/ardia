@@ -33,6 +33,17 @@ test("credentials in an address are stripped through the last @ of its authority
   assert.equal(redactText("request failed at https://alice:pa(ss)word@example.com/path"), "request failed at https://example.com/path");
   assert.equal(redactText("open https://example.com/a?token=x, then retry."), "open https://example.com/a, then retry.");
   assert.equal(redactText("see https://example.com/path."), "see https://example.com/path.");
+  assert.equal(redactText("fetch https://alice:pa,ss@example.org/path failed"), "fetch https://example.org/path failed");
+  assert.equal(redactText("fetch https://alice:pa;ss@example.org/path?a=1;b=2 failed"), "fetch https://example.org/path failed");
+  assert.equal(redactText("GET https://example.org/x?email=alice,bob@example.org 200"), "GET https://example.org/x 200");
+  assert.equal(redactText(`${"x".repeat(980)} https://alice:passw`), `${"x".repeat(980)} https://${REDACTED}`);
+  assert.equal(redactText("http://localhost:8080/ok"), "http://localhost:8080/ok");
+  const clippedNumeric = shapeDiagnostics(read([log(1, "error", `${"x".repeat(980)} https://alice:1234`, { clipped: true })], []), all);
+  assert.equal(clippedNumeric.console[0].message, `${"x".repeat(980)} https://${REDACTED}`);
+  const started = performance.now();
+  const repeated = "a.".repeat(16384);
+  assert.equal(redactText(repeated).length, MAX_MESSAGE_LENGTH);
+  assert.ok(performance.now() - started < 500, "URL scanning stays linear on repeated dotted text");
 });
 
 test("path segments that look like tokens are redacted, ordinary slugs are kept", () => {
@@ -56,6 +67,11 @@ test("credentials in console text are redacted, the rest of the message stays re
     ['log password="cut off by the engine cap', `log password="${REDACTED}"`],
     ['log password="abc\\', `log password="${REDACTED}"`],
     ['{"token":"ab\\\nc"} after', `{"token":"${REDACTED}"} after`],
+    ['{"authToken":"abc","ok":1}', `{"authToken":"${REDACTED}","ok":1}`],
+    ["auth_token=xyz123 auth-token: 999", `auth_token=${REDACTED} auth-token: ${REDACTED}`],
+    ['{"password":"[redacted]realSecret"}', `{"password":"${REDACTED}"}`],
+    ["password=[redacted]secret ok", `password=${REDACTED} ok`],
+    ["password=secret=[redacted] ok", `password=${REDACTED} ok`],
     ["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl here", `jwt ${REDACTED} here`],
     ["GET https://a.example/cb?code=secret#x 404", "GET https://a.example/cb 404"],
     ["key -----BEGIN PRIVATE KEY-----\nMIIEv\n-----END PRIVATE KEY----- end", `key ${REDACTED} end`],
@@ -168,10 +184,10 @@ test("dropped counts entries the ring overwrote after the watermark, not ones th
 });
 
 test("rows carry only the fields the reply documents, with addresses and messages redacted", () => {
-  const r = read([log(1, "error", "token=abc123", { source: "https://a.example/app.js?v=secret", extra: "leak" })], [req(2, { url: "https://u:p@a.example/x?y=1", headers: { cookie: "c" } })]);
+  const r = read([log(1, "error", 'token=abc123 {"authToken":"short"}', { source: "https://a.example/app.js?v=secret", extra: "leak" })], [req(2, { url: "https://u:p@a.example/x?y=1", headers: { cookie: "c" } })]);
   const shaped = shapeDiagnostics(r, all);
   assert.deepEqual(Object.keys(shaped.console[0]).sort(), ["frame", "kind", "level", "line", "message", "seq", "source", "time"]);
-  assert.equal(shaped.console[0].message, `token=${REDACTED}`);
+  assert.equal(shaped.console[0].message, `token=${REDACTED} {"authToken":"${REDACTED}"}`);
   assert.equal(shaped.console[0].source, "https://a.example/app.js");
   assert.deepEqual(Object.keys(shaped.network[0]).sort(), ["durationMs", "failed", "frame", "method", "seq", "status", "time", "type", "url"]);
   assert.equal(shaped.network[0].url, "https://a.example/x");

@@ -64,7 +64,7 @@ async function setup(t) {
 test("methods lists both on macOS, each with a closed params schema", async (t) => {
   await setup(t);
   const listed = (await ok("methods")).filter((m) => m.name === "tabs.diagnostics" || m.name === "tabs.input");
-  assert.deepEqual(listed.map((m) => [m.name, m.mutates]).sort(), [["tabs.diagnostics", false], ["tabs.input", true]]);
+  assert.deepEqual(listed.map((m) => [m.name, m.mutates]).sort(), [["tabs.diagnostics", true], ["tabs.input", true]]);
   for (const m of listed) assert.equal(m.params.additionalProperties, false);
 });
 
