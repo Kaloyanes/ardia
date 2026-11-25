@@ -390,9 +390,11 @@ struct NavigationHandle {
   bool primary = true;
   bool same_document = false;
   bool committed = false;
+  bool error_page = false;
   bool IsInPrimaryMainFrame() const { return primary; }
   bool IsSameDocument() const { return same_document; }
   bool HasCommitted() const { return committed; }
+  bool IsErrorPage() const { return error_page; }
 };
 struct WebContents {
   struct PrivilegedParams {
@@ -449,12 +451,22 @@ struct Shell {
   content::WebContents contents;
   WindowState window = WindowState::kOpen;
   std::vector<int> navigations_at_recovery;
+  std::vector<ardia::desktop_webui_process::RecoveryOutcome> outcomes;
   ardia::ShellRecovery recovery{&contents, base::RepeatingCallback<WindowState()>([this] { return window; }),
                                 base::RepeatingClosure([this] {
                                   navigations_at_recovery.push_back(
                                       contents.controller.reloads + static_cast<int>(contents.controller.loads.size()));
-                                })};
-  Shell() { contents.controller.last = &committed; }
+                                }),
+                                base::RepeatingCallback<void(ardia::desktop_webui_process::RecoveryOutcome)>(
+                                    [this](ardia::desktop_webui_process::RecoveryOutcome outcome) {
+                                      outcomes.push_back(outcome);
+                                    })};
+  explicit Shell(bool booted = true) {
+    contents.controller.last = &committed;
+    if (!booted) return;
+    content::NavigationHandle initial{true, false, true};
+    recovery.DidFinishNavigation(&initial);
+  }
   void Crash(base::TerminationStatus status = base::TERMINATION_STATUS_PROCESS_CRASHED) {
     recovery.PrimaryMainFrameRenderProcessGone(status);
     RunTasks();
@@ -750,6 +762,79 @@ void TestOnlyACommittedCrossDocumentMainFrameNavigationSettlesARecovery() {
   assert(shell.reloads() == 2);
 }
 
+using Outcome = ardia::desktop_webui_process::RecoveryOutcome;
+
+void TestAnInitialShellLoadThatNeverCommitsIsRecovered() {
+  Shell fresh(false);
+  fresh.contents.controller.last = nullptr;
+  content::NavigationHandle aborted;
+  fresh.recovery.DidFinishNavigation(&aborted);
+  RunTasks();
+  assert(fresh.contents.controller.loads == std::vector<std::string>{"chrome://ardia/"});
+  assert(fresh.outcomes == std::vector<Outcome>{Outcome::kAttempted});
+  content::NavigationHandle committed{true, false, true};
+  fresh.recovery.DidFinishNavigation(&committed);
+  assert((fresh.outcomes == std::vector<Outcome>{Outcome::kAttempted, Outcome::kRecovered}));
+}
+
+void TestAnInitialShellLoadThatCommitsAnErrorPageIsRecovered() {
+  Shell fresh(false);
+  content::NavigationHandle error_page{true, false, true, true};
+  fresh.recovery.DidFinishNavigation(&error_page);
+  RunTasks();
+  assert(fresh.reloads() == 1);
+  assert(fresh.outcomes == std::vector<Outcome>{Outcome::kAttempted});
+}
+
+void TestANormalBootIsNotARecovery() {
+  Shell booted;
+  assert(booted.outcomes.empty());
+  content::NavigationHandle aborted;
+  content::NavigationHandle error_page{true, false, true, true};
+  booted.recovery.DidFinishNavigation(&aborted);
+  booted.recovery.DidFinishNavigation(&error_page);
+  RunTasks();
+  assert(booted.reloads() == 0 && booted.contents.controller.loads.empty());
+  assert(booted.outcomes.empty());
+}
+
+void TestAnErrorPageDuringARecoveryRetriesAndIsNotRecovered() {
+  Shell shell;
+  shell.Crash();
+  assert(shell.reloads() == 1);
+  content::NavigationHandle error_page{true, false, true, true};
+  shell.recovery.DidFinishNavigation(&error_page);
+  RunTasks();
+  assert(shell.reloads() == 2);
+  assert((shell.outcomes == std::vector<Outcome>{Outcome::kAttempted, Outcome::kAttempted}));
+  content::NavigationHandle committed{true, false, true};
+  shell.recovery.DidFinishNavigation(&committed);
+  assert((shell.outcomes == std::vector<Outcome>{Outcome::kAttempted, Outcome::kAttempted, Outcome::kRecovered}));
+}
+
+void TestEachOutcomeIsReported() {
+  Shell shell;
+  for (int crash = 0; crash < 4; ++crash) {
+    base::TimeTicks::Clock() += 0.25;
+    shell.Crash();
+  }
+  assert((shell.outcomes == std::vector<Outcome>{Outcome::kAttempted, Outcome::kAttempted, Outcome::kAttempted,
+                                                 Outcome::kExhausted}));
+  Shell gone;
+  gone.window = WindowState::kGone;
+  gone.Crash();
+  assert(gone.outcomes.empty());
+  Shell paused;
+  paused.window = WindowState::kPaused;
+  paused.Crash();
+  assert(paused.outcomes.empty());
+  Shell recovered;
+  recovered.Crash();
+  content::NavigationHandle committed{true, false, true};
+  recovered.recovery.DidFinishNavigation(&committed);
+  assert((recovered.outcomes == std::vector<Outcome>{Outcome::kAttempted, Outcome::kRecovered}));
+}
+
 void TestACrashLoopStops() {
   Shell shell;
   for (int crash = 0; crash < 20; ++crash) {
@@ -784,6 +869,11 @@ int main() {
   TestARecoveryNavigationThatDiesBeforeCommitIsRetried();
   TestOnlyAFailedPrimaryRecoveryNavigationRetries();
   TestACommittedRecoveryEndsIt();
+  TestAnInitialShellLoadThatNeverCommitsIsRecovered();
+  TestAnInitialShellLoadThatCommitsAnErrorPageIsRecovered();
+  TestANormalBootIsNotARecovery();
+  TestAnErrorPageDuringARecoveryRetriesAndIsNotRecovered();
+  TestEachOutcomeIsReported();
   TestAPageChangeWithoutACommitKeepsTheRecoveryInFlight();
   TestOnlyACommittedCrossDocumentMainFrameNavigationSettlesARecovery();
   TestARecoveryWithAnEarlySwappedLiveFrameThatNeverCommitsRetries();
@@ -832,8 +922,10 @@ class WebUIProcessPolicyTests(unittest.TestCase):
         text = (LINUX / 'ac_linux_host.cc').read_text()
         self.assertRegex(text, r'if \(!host->close_\.Cancelled\(identity\)\) return;\n\s*'
                                r'if \(host->shell_recovery_\) host->shell_recovery_->Resume\(\);')
-        self.assertRegex(text, r'host->close_\.Irreversible\(\)\)\s*return desktop_webui_process::WindowState::kGone;')
-        self.assertRegex(text, r'host->closing\(\) \? desktop_webui_process::WindowState::kPaused')
+        window_state = text[text.index('desktop_webui_process::WindowState ShellHostView::RecoveryWindowState() const {'):]
+        window_state = window_state[:window_state.index('\n}\n')]
+        self.assertRegex(window_state, r'close_\.Irreversible\(\)\)\s*return desktop_webui_process::WindowState::kGone;')
+        self.assertRegex(window_state, r'return closing\(\) \? desktop_webui_process::WindowState::kPaused')
 
     def test_a_windows_close_is_final(self):
         text = (WIN / 'webui/webui_host_view.cc').read_text()
@@ -862,8 +954,41 @@ class WebUIProcessPolicyTests(unittest.TestCase):
             text = host_recovery_source(host)
             with self.subTest(host=host.name):
                 self.assertNotIn('PrimaryPageChanged', text)
-                self.assertEqual(text.count('state_.DocumentCommitted();'), 1)
-                self.assertRegex(text, r'if \(handle->HasCommitted\(\)\)[^;]*state_\.DocumentCommitted\(\);')
+                self.assertEqual(text.count('state_.DocumentCommitted()'), 1)
+                self.assertRegex(text, r'if \(handle->HasCommitted\(\) && !handle->IsErrorPage\(\)\) \{\s*'
+                                       r'if \(state_\.DocumentCommitted\(\)\)')
+                self.assertRegex(text, r'\{\s*state_\.InitialLoadStarted\(\);\s*quit_cancelled_ =')
+
+    def test_each_host_keeps_a_recovery_tally_for_the_next_launch(self):
+        hosts = ((LINUX / 'ac_linux_host.cc', 'RotateShellRecoveryDocuments(DocumentDirectory(app_profile));',
+                  'base::BindRepeating(&NoteShellRecovery, DocumentDirectory(app_profile))'),
+                 (WIN / 'webui/webui_host_view.cc', 'RotateShellRecoveryDocuments();',
+                  'base::BindRepeating(&NoteShellRecovery)'))
+        for host, rotate, note in hosts:
+            text = host.read_text()
+            with self.subTest(host=host.name):
+                initialize = text[text.index('void ShellHostView::Initialize() {'):]
+                initialize = initialize[:initialize.index('\n}\n')]
+                self.assertEqual(initialize.count(rotate), 1)
+                self.assertLess(initialize.index(rotate), initialize.index('LoadInitialURL('))
+                self.assertEqual(text.count(note), 1)
+                rotation = text[text.index('void RotateShellRecoveryDocuments('):]
+                rotation = rotation[:rotation.index('\n}\n')]
+                self.assertIn('static bool rotated = false;', rotation)
+                self.assertLess(rotation.index('kPreviousShellRecoveryDocument'), rotation.rindex('kShellRecoveryDocument'))
+                noted = text[text.index('void NoteShellRecovery('):]
+                noted = noted[:noted.index('\n}\n')]
+                self.assertIn('RecoveryTally().Record(outcome);', noted)
+                self.assertIn('kShellRecoveryDocument', noted)
+                self.assertIn('RecoveryTally().Json()', noted)
+        linux = (LINUX / 'ac_linux_host.cc').read_text()
+        guard = linux[linux.index('if (method == "ArdiaShell.writeDocument" || method == "ArdiaShell.saveDocument" ||'):]
+        self.assertIn('desktop_webui_process::ShellRecoveryDocument(name)', guard[:guard.index('return std::move(done)')])
+        policy = (WIN / 'webui/webui_policy.h').read_text()
+        owned = policy[policy.index('kEngineOwnedWindowsDocumentNames[] = {'):]
+        owned = owned[:owned.index('};')]
+        for name in ('"shell-recovery.json"', '"shell-recovery-previous.json"', '"launch-guard.json"'):
+            self.assertIn(name, owned)
 
     def test_each_host_disarms_the_launch_bootstrap_before_a_recovery(self):
         for host in HOSTS:
@@ -904,6 +1029,10 @@ class WebUIProcessPolicyTests(unittest.TestCase):
             binary = pathlib.Path(scratch, 'program')
             built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', *flags, '-I', str(SOURCE),
                                     str(unit), '-o', str(binary)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
 
 @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
 class LayoutSyncTests(unittest.TestCase):

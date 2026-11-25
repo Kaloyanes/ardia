@@ -52,12 +52,21 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   is pending spends nothing and waits: a cancelled close resumes it, and so does a cancelled quit, seen at once when
   `chrome::AddClosingAllBrowsersCallback` reports `false` and otherwise within 250 ms by polling
   `IsTryingToQuit()` (Chromium can cancel a quit without that callback when no tab has a `beforeunload` handler); a
-  finished close or a started shutdown drops it. A recovery navigation that ends without committing is retried within
-  the same budget, whether or not an early-swapped frame looks live; only a commit ends a recovery. The first reload
-  starts the new renderer and the rest join it. Only the launch window's first `host-bootstrap.js` says
+  finished close or a started shutdown drops it. A recovery navigation, or the shell's initial load, that ends without
+  committing or commits an error page is retried within the same budget, whether or not an early-swapped frame looks
+  live; only a real document commit ends a recovery. The first reload starts the new renderer and the rest join it. Only the launch window's first `host-bootstrap.js` says
   `startup: true` (`LaunchBootstrap`), and a recovery disarms it first, so a recovered or reloaded launch window,
   even one that crashed before it ever fetched its bootstrap, never boots as a fresh launch and never replaces the
   saved session.
+- **Recovery telemetry.** The host counts, for the whole run, how many recovery reloads it started (`attempts`), how
+  many windows came back with a committed shell (`recovered`) and how many it gave up on once the budget ran out
+  (`exhausted`), and writes them to `shell-recovery.json` in the profile's `Ardia` documents folder
+  (`ShellRecoveryTally`). At the next start, before any shell reads its bootstrap, it moves that file to
+  `shell-recovery-previous.json` (`RotateShellRecoveryDocuments`), and `app_launched` reports it as
+  `prev_shell_recovery_attempts`, `prev_shell_recovery_recovered` and `prev_shell_recovery_exhausted`, counts only and
+  only while sharing is on. Pages can read both files but not write or remove them. Exhaustion is reported at the next
+  launch because by then no shell is left to report it. On the dashboard, a session with `exhausted` above 0 is one
+  that left windows blank.
 - **What the tests cover.** `engine/ardiacore-desktop/tests/test_desktop_layer.py` runs the policy test
   (`webui_process_policy_test.cc`) and compiles each host's real `CreateShellContents` and `ShellRecovery` against
   stubbed content and base types to drive crashes, close and quit waits, cancellations, uncommitted recovery

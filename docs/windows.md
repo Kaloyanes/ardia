@@ -917,8 +917,13 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   commits is retried within that budget. A crash during an app quit waits and resumes if the quit is cancelled (the
   closing-all-browsers callback, or a 250 ms poll of `IsTryingToQuit()` for a downloads-warning cancel that skips
   it); a Windows window close is final, so a crash while closing is dropped. Only the launch window's first
-  `host-bootstrap.js` says `startup: true` (`LaunchBootstrap`), and a recovery disarms it first. `tests/webui_process_policy_test.cc` and `test_desktop_layer.py` (which compiles this
-  host's recovery code against stubs) cover the rules; sharing and recovery themselves need a built engine.
+  `host-bootstrap.js` says `startup: true` (`LaunchBootstrap`), and a recovery disarms it first. The shell's initial
+  load and any recovery that commits an error page are retried too. The run's recovery tally goes to
+  `shell-recovery.json` beside `launch-guard.json` and is reported by the next launch's `app_launched` as
+  `prev_shell_recovery_attempts`, `prev_shell_recovery_recovered` and `prev_shell_recovery_exhausted`; both
+  `shell-recovery.json` and `shell-recovery-previous.json` are engine-owned names pages can read but not write.
+  `tests/webui_process_policy_test.cc` and `test_desktop_layer.py` (which compiles this host's recovery code against
+  stubs) cover the rules; sharing and recovery themselves need a built engine.
 - `ShellHostView` (`webui_host_view.cc`) is a child view over the `BrowserView`: the `chrome://ardia/` shell
   `WebView` on top and one viewport `WebView` per shown tab under it. Tabs are real `TabStripModel` tabs created with
   `Navigate` (`kNewBackgroundTab`), so popups, `beforeunload`, session tab ids and tab helpers are Chromium's own. A

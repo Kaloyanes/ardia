@@ -4,7 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace ardia::desktop_webui_process {
@@ -57,7 +59,7 @@ inline constexpr bool QuitMayStillBeCancelled(bool shutdown_started, bool trying
   return trying_to_quit && !shutdown_started;
 }
 
-enum class RecoveryStep { kNothing, kWaitForResume, kReloadDocument, kLoadShellUrl };
+enum class RecoveryStep { kNothing, kWaitForResume, kReloadDocument, kLoadShellUrl, kGaveUp };
 
 class ShellRecoveryState {
  public:
@@ -65,9 +67,14 @@ class ShellRecoveryState {
     if (!normal_exit) owed_ = true;
   }
 
-  void DocumentCommitted() {
+  void InitialLoadStarted() { in_flight_ = true; }
+
+  bool DocumentCommitted() {
+    const bool recovered = recovering_;
     owed_ = false;
     in_flight_ = false;
+    recovering_ = false;
+    return recovered;
   }
 
   void NavigationEndedWithoutCommit() {
@@ -80,19 +87,57 @@ class ShellRecoveryState {
     if (!owed_) return RecoveryStep::kNothing;
     if (window == WindowState::kPaused) return RecoveryStep::kWaitForResume;
     owed_ = false;
-    if (window == WindowState::kGone || !budget_.Allow(now_seconds)) return RecoveryStep::kNothing;
+    if (window == WindowState::kGone) {
+      recovering_ = false;
+      return RecoveryStep::kNothing;
+    }
+    if (!budget_.Allow(now_seconds)) {
+      recovering_ = false;
+      return RecoveryStep::kGaveUp;
+    }
     in_flight_ = true;
+    recovering_ = true;
     return committed_shell_document ? RecoveryStep::kReloadDocument : RecoveryStep::kLoadShellUrl;
   }
 
   bool owed() const { return owed_; }
   bool in_flight() const { return in_flight_; }
+  bool recovering() const { return recovering_; }
   size_t recent_reloads() const { return budget_.recent(); }
 
  private:
   bool owed_ = false;
   bool in_flight_ = false;
+  bool recovering_ = false;
   ShellReloadBudget budget_;
+};
+
+enum class RecoveryOutcome { kAttempted, kRecovered, kExhausted };
+
+inline constexpr char kShellRecoveryDocument[] = "shell-recovery.json";
+inline constexpr char kPreviousShellRecoveryDocument[] = "shell-recovery-previous.json";
+inline constexpr char kNoShellRecoveries[] = "{}\n";
+
+inline constexpr bool ShellRecoveryDocument(std::string_view name) {
+  return name == kShellRecoveryDocument || name == kPreviousShellRecoveryDocument;
+}
+
+struct ShellRecoveryTally {
+  uint32_t attempts = 0;
+  uint32_t recovered = 0;
+  uint32_t exhausted = 0;
+
+  void Record(RecoveryOutcome outcome) {
+    uint32_t& count = outcome == RecoveryOutcome::kAttempted   ? attempts
+                      : outcome == RecoveryOutcome::kRecovered ? recovered
+                                                               : exhausted;
+    if (count < std::numeric_limits<uint32_t>::max()) ++count;
+  }
+
+  std::string Json() const {
+    return "{\"attempts\":" + std::to_string(attempts) + ",\"recovered\":" + std::to_string(recovered) +
+           ",\"exhausted\":" + std::to_string(exhausted) + "}\n";
+  }
 };
 
 inline constexpr std::string_view kShellBootstrapAsset = "host-bootstrap.js";

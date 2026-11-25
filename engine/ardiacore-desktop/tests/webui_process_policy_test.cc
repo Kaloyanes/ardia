@@ -144,8 +144,8 @@ void TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget() {
   assert(state.Next(3, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
   state.NavigationEndedWithoutCommit();
   assert(state.owed());
-  assert(state.Next(4, WindowState::kOpen, true) == RecoveryStep::kNothing);
-  assert(!state.owed() && !state.in_flight());
+  assert(state.Next(4, WindowState::kOpen, true) == RecoveryStep::kGaveUp);
+  assert(!state.owed() && !state.in_flight() && !state.recovering());
 }
 
 void TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight() {
@@ -213,9 +213,83 @@ void TestOnlyTheLaunchWindowsFirstBootstrapSaysStartup() {
   assert(!other.startup());
 }
 
+void TestAnInitialLoadThatNeverCommitsIsRecovered() {
+  policy::ShellRecoveryState state;
+  state.InitialLoadStarted();
+  assert(state.in_flight() && !state.owed() && !state.recovering());
+  state.NavigationEndedWithoutCommit();
+  assert(state.owed() && !state.in_flight());
+  assert(state.Next(1, WindowState::kOpen, false) == RecoveryStep::kLoadShellUrl);
+  assert(state.recovering());
+  assert(state.DocumentCommitted());
+  assert(!state.recovering() && !state.in_flight() && !state.owed());
+}
+
+void TestAnInitialLoadThatCommitsIsNotARecovery() {
+  policy::ShellRecoveryState state;
+  state.InitialLoadStarted();
+  assert(!state.DocumentCommitted());
+  assert(!state.in_flight());
+  state.NavigationEndedWithoutCommit();
+  assert(!state.owed());
+}
+
+void TestOnlyARecoveryThatCommitsCountsAsRecovered() {
+  policy::ShellRecoveryState state;
+  assert(!state.DocumentCommitted());
+  state.RendererGone(false);
+  assert(state.Next(1, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  state.NavigationEndedWithoutCommit();
+  assert(state.recovering());
+  assert(state.Next(2, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  assert(state.DocumentCommitted());
+  assert(!state.DocumentCommitted());
+}
+
+void TestTheTallyCountsAndSerializesOutcomes() {
+  policy::ShellRecoveryTally tally;
+  assert(tally.Json() == "{\"attempts\":0,\"recovered\":0,\"exhausted\":0}\n");
+  tally.Record(policy::RecoveryOutcome::kAttempted);
+  tally.Record(policy::RecoveryOutcome::kAttempted);
+  tally.Record(policy::RecoveryOutcome::kRecovered);
+  tally.Record(policy::RecoveryOutcome::kExhausted);
+  assert(tally.attempts == 2 && tally.recovered == 1 && tally.exhausted == 1);
+  assert(tally.Json() == "{\"attempts\":2,\"recovered\":1,\"exhausted\":1}\n");
+  tally.attempts = 4294967295u;
+  tally.Record(policy::RecoveryOutcome::kAttempted);
+  assert(tally.attempts == 4294967295u);
+  static_assert(std::string_view(policy::kShellRecoveryDocument) == "shell-recovery.json");
+  static_assert(std::string_view(policy::kPreviousShellRecoveryDocument) == "shell-recovery-previous.json");
+  static_assert(std::string_view(policy::kNoShellRecoveries) == "{}\n");
+  static_assert(policy::ShellRecoveryDocument("shell-recovery.json"));
+  static_assert(policy::ShellRecoveryDocument("shell-recovery-previous.json"));
+  static_assert(!policy::ShellRecoveryDocument("Shell-Recovery.json"));
+  static_assert(!policy::ShellRecoveryDocument("shell-recovery.json.tmp"));
+  static_assert(!policy::ShellRecoveryDocument("launch-guard.json"));
+}
+
+void TestGivingUpIsReportedOnlyWhenTheBudgetRefuses() {
+  policy::ShellRecoveryState gone;
+  gone.RendererGone(false);
+  assert(gone.Next(1, WindowState::kGone, true) == RecoveryStep::kNothing);
+  policy::ShellRecoveryState spent;
+  for (int crash = 0; crash < 3; ++crash) {
+    spent.RendererGone(false);
+    assert(spent.Next(crash, WindowState::kOpen, true) == RecoveryStep::kReloadDocument);
+  }
+  spent.RendererGone(false);
+  assert(spent.Next(4, WindowState::kOpen, true) == RecoveryStep::kGaveUp);
+  assert(spent.Next(5, WindowState::kOpen, true) == RecoveryStep::kNothing);
+}
+
 }
 
 int main() {
+  TestAnInitialLoadThatNeverCommitsIsRecovered();
+  TestAnInitialLoadThatCommitsIsNotARecovery();
+  TestOnlyARecoveryThatCommitsCountsAsRecovered();
+  TestTheTallyCountsAndSerializesOutcomes();
+  TestGivingUpIsReportedOnlyWhenTheBudgetRefuses();
   TestAQuitInProgressPausesAndShutdownEnds();
   TestARecoveryThatNeverCommitsIsRetriedWithinTheBudget();
   TestAnUncommittedNavigationOnlyRearmsARecoveryInFlight();

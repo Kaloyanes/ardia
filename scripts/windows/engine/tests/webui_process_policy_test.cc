@@ -81,8 +81,8 @@ void TestACrashLoopStopsReloading() {
   int reloads = 0;
   for (int crash = 0; crash < 50; ++crash) {
     state.RendererGone(false);
-    if (state.Next(crash * 0.5, WindowState::kOpen, true) !=
-        RecoveryStep::kNothing) {
+    if (state.Next(crash * 0.5, WindowState::kOpen, true) ==
+        RecoveryStep::kReloadDocument) {
       ++reloads;
     }
   }
@@ -158,9 +158,25 @@ void TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup() {
   assert(!crashed_early.startup());
 }
 
+void TestAnErrorPageInitialLoadIsRetriedAsAFailure() {
+  policy::ShellRecoveryState state;
+  state.InitialLoadStarted();
+  state.NavigationEndedWithoutCommit();
+  assert(state.Next(1, WindowState::kOpen, false) ==
+         RecoveryStep::kLoadShellUrl);
+  policy::ShellRecoveryTally tally;
+  tally.Record(policy::RecoveryOutcome::kAttempted);
+  if (state.DocumentCommitted()) {
+    tally.Record(policy::RecoveryOutcome::kRecovered);
+  }
+  assert(tally.Json() ==
+         "{\"attempts\":1,\"recovered\":1,\"exhausted\":0}\n");
+}
+
 }
 
 int main() {
+  TestAnErrorPageInitialLoadIsRetriedAsAFailure();
   TestACancelledQuitResumesRecovery();
   TestAStartedShutdownDropsRecovery();
   TestOnlyTheFirstBootstrapOfTheLaunchWindowIsAStartup();
