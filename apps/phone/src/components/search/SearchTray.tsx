@@ -42,6 +42,7 @@ import { plateMaterial, SEARCH_PANEL_FACE, useSolidChrome, usesGlass, type Plate
 import { actionWords } from "../../lib/sharedWords";
 import { panelRowLayout, panelTitleLines, SuggestionRow } from "./SuggestionRow";
 import { MaterialSearchTray } from "./MaterialSearchView";
+import { NewTabPins } from "./NewTabPins";
 import { TrayInput, type TrayInputHandle } from "./TrayInput";
 import { canSearchByVoice } from "../../state/voice/store";
 import { presentVoiceSearchFrom } from "./VoiceSearchView";
@@ -599,6 +600,11 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       </Animated.View>
       {panel ? (
         <MotionView style={StyleSheet.absoluteFill} pointerEvents="box-none" to={departed ? PANEL_DEPARTED : PANEL_HOME} motion={PANEL_DEPART}>
+        {arcPanel && furnished && !standby && !closing ? (
+          <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, trayStyle]}>
+            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} />
+          </Animated.View>
+        ) : null}
         <Animated.View
           testID="trayPanel"
           style={[
@@ -1029,6 +1035,12 @@ function StagedTray() {
                 </View>
               </View>
             </View>
+          ) : null}
+          {mounted !== null && presented && !closing && arcPanel && command === null ? (
+            <NewTabPins
+              style={[styles.pinsAbovePanel, { paddingLeft: insets.left, paddingRight: insets.right }]}
+              maxHeight={window.height - insets.top - lift.lift - trayHeight - place.cardGap - space.m * 2}
+            />
           ) : null}
         </Animated.View>
       </SearchStagePanel>
@@ -1603,6 +1615,8 @@ const styles = StyleSheet.create({
   leavingText: { textAlignVertical: "center" },
   rows: { flex: 1 },
   stagePanel: { position: "absolute", left: 0, right: 0 },
+  pinsAbovePanel: { position: "absolute", left: 0, right: 0, bottom: "100%", paddingBottom: space.m },
+  pinsOverPanel: { position: "absolute", left: 0, right: 0, paddingBottom: space.m },
   incognitoNote: { alignItems: "center", justifyContent: "center", paddingHorizontal: space.l },
   semibold: { fontWeight: "600" },
   centered: { textAlign: "center" },

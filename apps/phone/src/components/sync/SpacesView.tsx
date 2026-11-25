@@ -4,16 +4,15 @@ import { FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWin
 import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { PinnedTile, SyncedProfile } from "../../state/sync/store";
-import { SPACES_LARGE_TEXT, Switcher, Tiles, Unavailable } from "./SpacesParts";
+import { pinnedFolderMenu, pinnedLinkMenu, SPACES_LARGE_TEXT, Switcher, Tiles, Unavailable } from "./SpacesParts";
 import { CrossfadeText } from "../settings/SettingsKit";
 import { haptics } from "../../state/app/haptics";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { closeArchive, openArchive } from "../../state/browse/store";
-import { copyLink, menuOpenedHaptic, shareUrl } from "../../state/browse/tabMenus";
 import { openSettings } from "../../state/settings/nav";
 import { openRemote, selectProfile, syncNow } from "../../state/sync/actions";
 import { useSelectedProfile, useSyncStatus, useSyncView } from "../../state/sync/hooks";
-import { remoteTitle, spaceGroupColor, spaceRows, type SpaceRow } from "../../state/sync/spaces";
+import { spaceGroupColor, spaceRows, type SpaceRow } from "../../state/sync/spaces";
 import { showAllDeviceTabs, toggleSpaceRow, useSpaceOpenFor } from "../../state/sync/spaceOpen";
 import { spaceTone } from "../../lib/profileLook";
 import { sfSymbol } from "../../lib/sfSymbols";
@@ -29,7 +28,6 @@ import {
   toastMotion,
   useIncreasedContrast,
   useSheetFrame,
-  iconRoles,
   isSymbolName,
   PROFILE_PRESETS,
   space,
@@ -49,7 +47,7 @@ import {
   Tappable,
 } from "../ui";
 import type { Point } from "../../lib/menuPlace";
-import { actionWords, destinationWords, dismissWords } from "../../lib/sharedWords";
+import { destinationWords, dismissWords } from "../../lib/sharedWords";
 
 const BANNER_ICONS: Record<BannerIcon, SymbolName> = { folder: "folderFill", lock: "lockFill", reset: "arrowClockwise", warning: "exclamationmarkTriangle", offline: "wifiSlash" };
 const IPHONE_BANNER_ICONS: Record<BannerIcon, SymbolName> = { folder: "folderBadgeQuestionmark", lock: "lockFill", reset: "exclamationmarkArrowTriangle2Circlepath", warning: "exclamationmarkIcloud", offline: "wifiSlash" };
@@ -205,16 +203,7 @@ function SpacePage({ profile, isShown, onMenu, bottom }: { profile: SyncedProfil
     return before ? new Set([...now].filter((key) => !before.has(key))) : new Set<string>();
   }, [rows]);
   const toggle = (key: string) => toggleSpaceRow(profile.syncId, key);
-  const linkMenu = (url: string, title: string, at: Point | null) => {
-    menuOpenedHaptic();
-    const sharing: MenuItem[] = /^https?:\/\//i.test(url)
-      ? [
-          { label: actionWords.copyLink, icon: iconRoles.copyLink, onPress: () => copyLink(url) },
-          { label: actionWords.share, icon: iconRoles.share, onPress: () => shareUrl(url, title) },
-        ]
-      : [];
-    onMenu({ items: [{ label: actionWords.open, icon: "arrowUpForward", onPress: () => openRemote(url, title, profile.syncId) }, ...sharing], at });
-  };
+  const linkMenu = (url: string, title: string, at: Point | null) => onMenu({ items: pinnedLinkMenu(url, title, profile.syncId), at });
   return (
     <FlatList
       data={rows}
@@ -242,7 +231,7 @@ function SpacePage({ profile, isShown, onMenu, bottom }: { profile: SyncedProfil
             onToggle={toggle}
             onShowAll={(id) => showAllDeviceTabs(profile.syncId, id)}
             onLongPress={linkMenu}
-            onFolder={(tile, anchor) => onMenu({ items: (tile.folder ?? []).map((tab) => ({ label: remoteTitle(tab.title, tab.url), onPress: () => openRemote(tab.url, tab.title, profile.syncId, tab.key) })), at: null, anchor })}
+            onFolder={(tile, anchor) => onMenu({ items: pinnedFolderMenu(tile, profile.syncId), at: null, anchor })}
             tint={theme.secondaryLabel}
           />
         </Appearing>

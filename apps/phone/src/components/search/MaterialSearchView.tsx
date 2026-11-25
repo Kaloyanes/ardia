@@ -28,6 +28,7 @@ import { MaterialSheet, materialSheetMs, type MaterialSheetSearch } from "../ui/
 import { useMaterialTheme } from "../ui/materialTheme";
 import { MATERIAL_SEGMENT_GAP, materialBottomBar, materialDuration, materialSegmentCorners, materialShape, materialSize, materialType } from "../ui/materialTokens";
 import { SuggestionRow } from "./SuggestionRow";
+import { NewTabPins } from "./NewTabPins";
 
 const SHEET_ABOVE_KEYBOARD = 340;
 const FOCUS_AFTER_ENTER_MS = 32;
@@ -216,6 +217,7 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
   return (
     <View testID="materialSearchResults" style={styles.results}>
       <Animated.ScrollView bounces={false} overScrollMode="never" testID="materialSearchRows" onScroll={onScroll} scrollEventThrottle={16} keyboardShouldPersistTaps="handled" keyboardDismissMode="none">
+        <NewTabPins />
         {rows.length ? (
           <View testID="materialSearchGroup" style={[styles.group, styles.segments]}>
             {rows.map((row, index) => (
