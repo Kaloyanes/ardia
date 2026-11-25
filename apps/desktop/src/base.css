@@ -211,6 +211,7 @@ textarea:focus,
   .ardia-menu-swatch.empty {
     background: transparent;
     opacity: 1;
+    box-shadow: none;
   }
 }
 

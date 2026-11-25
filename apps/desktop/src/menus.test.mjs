@@ -140,4 +140,5 @@ test("in a forced-colours (high contrast) theme every swatch keeps a solid Canva
   assert.match(rule(".ardia-menu-swatch"), /border:\s*1px solid CanvasText/);
   assert.match(rule(".ardia-menu-swatch"), /forced-color-adjust:\s*none/, "the colour discs keep their colours");
   assert.match(rule(".ardia-menu-swatch.empty"), /opacity:\s*1/, "None's ring is drawn at full strength");
+  assert.match(rule(".ardia-menu-swatch.empty"), /box-shadow:\s*none/, "None drops its inset shadow so forced-colors draws a single ring");
 });
