@@ -100,7 +100,18 @@ content::JavaScriptDialogManager* Dialogs() {
 
 class PageDelegate : public BrowserWebContentsDelegate {
  public:
-  using BrowserWebContentsDelegate::BrowserWebContentsDelegate;
+  PageDelegate(BrowserWindowInterface* browser,
+               ExclusiveAccessManager& exclusive_access_manager,
+               chrome::BrowserCommandController& command_controller,
+               UnloadController& unload_controller,
+               web_app::AppBrowserController* app_browser_controller,
+               BrowserWindow& window,
+               DesktopBrowserWindowCapabilities& capabilities,
+               BrowserUiController& browser_ui_controller)
+      : BrowserWebContentsDelegate(browser, exclusive_access_manager, command_controller,
+                                   unload_controller, app_browser_controller, window, capabilities,
+                                   browser_ui_controller),
+        browser_(browser) {}
 
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
@@ -109,7 +120,14 @@ class PageDelegate : public BrowserWebContentsDelegate {
     if (source && InterceptLinkOpen(source, params)) {
       return nullptr;
     }
-    return BrowserWebContentsDelegate::OpenURLFromTab(source, params,
+    const WindowOpenDisposition disposition = OpeningDisposition(source, params);
+    if (disposition == params.disposition) {
+      return BrowserWebContentsDelegate::OpenURLFromTab(source, params,
+                                                        std::move(navigation_handle_callback));
+    }
+    content::OpenURLParams as_tab = params;
+    as_tab.disposition = disposition;
+    return BrowserWebContentsDelegate::OpenURLFromTab(source, as_tab,
                                                       std::move(navigation_handle_callback));
   }
 
@@ -120,9 +138,6 @@ class PageDelegate : public BrowserWebContentsDelegate {
                                        const blink::mojom::WindowFeatures& window_features,
                                        bool user_gesture,
                                        bool* was_blocked) override {
-    if (OpensNewTabLinkInPlace(source, target_url, disposition, user_gesture)) {
-      return nullptr;
-    }
     return BrowserWebContentsDelegate::AddNewContents(
         source, std::move(new_contents), target_url, PopupDisposition(source, disposition),
         window_features, user_gesture, was_blocked);
@@ -131,13 +146,14 @@ class PageDelegate : public BrowserWebContentsDelegate {
   void CanDownload(const GURL& url,
                    const std::string& request_method,
                    base::OnceCallback<void(bool)> callback) override {
-    if (InterceptLinkDownload(url)) {
+    if (InterceptLinkDownload(browser_, url, request_method)) {
       return std::move(callback).Run(false);
     }
     BrowserWebContentsDelegate::CanDownload(url, request_method, std::move(callback));
   }
 
   void UpdateTargetURL(content::WebContents* source, const GURL& url) override {
+    NoteLinkTarget(source, url);
     if (PageEvents* events = EventsFor(source); events && events->TargetURL(url)) {
       return;
     }
@@ -197,6 +213,9 @@ class PageDelegate : public BrowserWebContentsDelegate {
           base::NumberToString(params.x) + "," + base::NumberToString(params.y));
     return true;
   }
+
+ private:
+  raw_ptr<BrowserWindowInterface> browser_;
 };
 
 std::unique_ptr<BrowserWebContentsDelegate> CreatePageDelegate(
@@ -284,7 +303,7 @@ void AssertPageHooks() {
 
 void InstallPageDelegate() {
   AssertPageHooks();
-  InstallCommandScrollZoom();
+  InstallLinkHooks();
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([] {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

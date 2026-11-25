@@ -69,6 +69,16 @@ HOOKS = [
      MAC_DEV + "  if (g_ardia_mac_video_overlay) {\n    if (auto overlay = g_ardia_mac_video_overlay(controller)) {\n"
      "      return overlay;\n    }\n  }\n#endif\n",
      "after"),
+    ("chrome/browser/chrome_content_browser_client_navigation_throttles.cc",
+     "void CreateAndAddChromeThrottlesForNavigation(\n",
+     MAC_DEV + "void (*g_ardia_mac_add_navigation_throttles)(\n"
+     "    content::NavigationThrottleRegistry& registry) = nullptr;\n#endif\n\n",
+     "before"),
+    ("chrome/browser/chrome_content_browser_client_navigation_throttles.cc",
+     "    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);\n",
+     MAC_DEV + "    if (g_ardia_mac_add_navigation_throttles) {\n"
+     "      g_ardia_mac_add_navigation_throttles(registry);\n    }\n#endif\n",
+     "after"),
 ]
 failed = False
 pending = {}
@@ -131,7 +141,8 @@ case "$mode" in
       content/app_shim_remote_cocoa/web_contents_view_cocoa.mm \
       chrome/browser/ui/window_feature_controller/window_feature_controller.cc \
       chrome/browser/ui/views/frame/browser_frame_view_mac.mm \
-      chrome/browser/ui/views/overlay/video_overlay_window_views.cc
+      chrome/browser/ui/views/overlay/video_overlay_window_views.cc \
+      chrome/browser/chrome_content_browser_client_navigation_throttles.cc
     ;;
   --check)
     excludes=()

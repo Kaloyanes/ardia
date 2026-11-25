@@ -201,7 +201,7 @@ class ShellHostView : public views::View,
   bool is_utility() const { return shell_policy::UtilityKind(kind_); }
   bool is_small() const { return kind_ == shell_policy::kSmallWindowKind; }
   std::optional<gfx::PointF> ShellPointFor(const PageBinding* binding, gfx::PointF page_point) const;
-  PageBinding* BindingAtScreenPoint(const gfx::Point& screen, gfx::NativeWindow window) const;
+  PageBinding* BindingHit(gfx::NativeView hit) const;
   void NavigateUtility(base::DictValue utility);
   void ActivateWindow();
   void ForwardRecordedKey(const input::NativeWebKeyboardEvent& event);

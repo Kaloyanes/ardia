@@ -33,6 +33,7 @@ HOOKED_FILES = (
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
     'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
+    'chrome/browser/chrome_content_browser_client_navigation_throttles.cc',
 )
 
 
@@ -191,6 +192,12 @@ class ApplyTests(unittest.TestCase):
                 'void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {\n'
                 '  if (!GetBrowserView()->GetIsNormalType() &&\n'
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
+            'chrome/browser/chrome_content_browser_client_navigation_throttles.cc':
+                '#include "build/build_config.h"\n\n}\n\n'
+                'void CreateAndAddChromeThrottlesForNavigation(\n'
+                '    content::NavigationThrottleRegistry& registry) {\n'
+                '  if (handle.IsInMainFrame()) {\n'
+                '    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);\n  }\n}\n',
             'chrome/browser/ui/views/overlay/video_overlay_window_views.cc':
                 '#include "build/build_config.h"\n\n'
                 'std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n'
@@ -911,11 +918,15 @@ class ContractTests(unittest.TestCase):
             self.assertIn(f'"webView.{route}"', policy)
             self.assertIn(f'"webView.{route}"', page_options)
         delegate = self.read('ac_mac_page_delegate.mm')
-        for wired in ('InterceptLinkOpen(source, params)', 'OpensNewTabLinkInPlace(source, target_url, disposition, user_gesture)',
-                      'PopupDisposition(source, disposition)', 'InterceptLinkDownload(url)'):
+        for wired in ('InterceptLinkOpen(source, params)', 'OpeningDisposition(source, params)',
+                      'PopupDisposition(source, disposition)', 'InterceptLinkDownload(browser_, url, request_method)',
+                      'NoteLinkTarget(source, url);'):
             self.assertIn(wired, delegate)
+        add = delegate.split('content::WebContents* AddNewContents(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('std::move(new_contents)', add)
+        self.assertNotIn('return nullptr;', add)
         install = delegate.split('void InstallPageDelegate() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('InstallCommandScrollZoom();', install)
+        self.assertIn('InstallLinkHooks();', install)
         host = self.read('ac_mac_shell_host.mm')
         rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(rebind.index('links_.reset();'), rebind.index('Observe(contents);'))
@@ -925,11 +936,24 @@ class ContractTests(unittest.TestCase):
         gesture = self.read('ac_mac_link_gesture.mm')
         self.assertIn('"openWindow"', gesture)
         self.assertNotIn('ExecuteJavaScript', gesture)
-        peek = gesture.split('void PageLinks::PeekInsteadOf(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(peek.index('navigation != site_navigation_'), peek.index('contents->Stop();'))
-        start = gesture.split('void PageLinks::DidStartNavigation(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('PostTask(', start)
-        self.assertNotIn('->Stop()', start)
+        self.assertNotIn('->Stop()', gesture)
+        self.assertNotIn('DidStartNavigation', gesture)
+        throttle = gesture.split('class SitePeekThrottle', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('ThrottleCheckResult WillStartRequest() override', throttle)
+        self.assertIn('CANCEL_AND_IGNORE : PROCEED', throttle)
+        peek = gesture.split('bool PageLinks::PeeksInsteadOf(', 1)[1].split('\n}\n', 1)[0]
+        for required in ('handle.WasInitiatedByLinkClick()', 'handle.NavigationInputStart()', 'handle.IsPost()',
+                         'lp::TargetMatches(release.target, url.spec())'):
+            self.assertIn(required, peek)
+        self.assertLess(peek.index('SitePeekCandidate'), peek.index('PostTask('))
+        self.assertIn('g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;', gesture)
+        zoom = gesture.split('void InstallCommandScrollZoom() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('event.hasPreciseScrollingDeltas', zoom)
+        self.assertIn('BindingUnder(event)', zoom)
+        self.assertNotIn('mouseLocation', gesture)
+        apply = (ROOT / 'apply.sh').read_text()
+        self.assertIn('MetricsNavigationThrottle::CreateAndAdd(registry);', apply)
+        self.assertIn('g_ardia_mac_add_navigation_throttles(registry);', apply)
 
     def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
         delegate = self.read('ac_mac_page_delegate.mm')

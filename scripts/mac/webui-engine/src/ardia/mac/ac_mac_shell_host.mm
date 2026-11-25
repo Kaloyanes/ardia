@@ -753,25 +753,16 @@ std::optional<gfx::PointF> ShellHostView::ShellPointFor(const PageBinding* bindi
   return gfx::PointF(static_cast<float>(x / zoom), static_cast<float>(y / zoom));
 }
 
-PageBinding* ShellHostView::BindingAtScreenPoint(const gfx::Point& screen,
-                                                 gfx::NativeWindow window) const {
-  const views::Widget* widget = GetWidget();
-  if (!widget || closing_ || widget->GetNativeWindow() != window) {
-    return nullptr;
-  }
-  gfx::Point local = screen;
-  views::View::ConvertPointFromScreen(this, &local);
-  if (!PassesShellPoint(local.x(), local.y())) {
+PageBinding* ShellHostView::BindingHit(gfx::NativeView hit) const {
+  NSView* view = hit.GetNativeNSView();
+  if (!view || closing_) {
     return nullptr;
   }
   for (const auto& [id, binding] : bindings_) {
-    views::WebView* viewport = binding->viewport;
-    if (!viewport || !binding->visible || !viewport->GetVisible() || !binding->contents()) {
-      continue;
-    }
-    gfx::Point inside = screen;
-    views::View::ConvertPointFromScreen(viewport, &inside);
-    if (viewport->GetLocalBounds().Contains(inside)) {
+    content::WebContents* contents = binding->contents();
+    NSView* page = contents ? contents->GetNativeView().GetNativeNSView() : nil;
+    if (page && binding->visible && binding->viewport && binding->viewport->GetVisible() &&
+        [view isDescendantOf:page]) {
       return binding.get();
     }
   }

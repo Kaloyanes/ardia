@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -9,13 +10,16 @@
 
 #include "ardia/mac/ac_mac_link_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
-#include "base/json/json_reader.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/zoom/page_zoom.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -24,10 +28,11 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_f.h"
-#include "ui/gfx/mac/coordinate_conversion.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/origin.h"
+
+extern void (*g_ardia_mac_add_navigation_throttles)(content::NavigationThrottleRegistry& registry);
 
 namespace ardia_mac {
 
@@ -54,6 +59,10 @@ double Now() {
   return (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF();
 }
 
+std::int64_t Micros(base::TimeTicks ticks) {
+  return ticks.is_null() ? 0 : (ticks - base::TimeTicks()).InMicroseconds();
+}
+
 int LinkFlags(int modifiers) {
   int flags = 0;
   if (modifiers & blink::WebInputEvent::kAltKey) flags |= lp::kAlt;
@@ -63,21 +72,14 @@ int LinkFlags(int modifiers) {
   return flags;
 }
 
+std::uintptr_t SurfaceOf(const content::WebContents* contents) {
+  return reinterpret_cast<std::uintptr_t>(contents);
+}
+
 PageBinding* BindingFor(const content::WebContents* contents) {
   if (!contents) return nullptr;
   for (ShellHostView* host : Hosts()) {
     if (PageBinding* binding = host->BindingForContents(contents)) return binding;
-  }
-  return nullptr;
-}
-
-PageBinding* BindingForSurface(std::uintptr_t surface) {
-  if (!surface) return nullptr;
-  for (ShellHostView* host : Hosts()) {
-    if (PageBinding* binding =
-            host->BindingForContents(reinterpret_cast<const content::WebContents*>(surface))) {
-      return binding;
-    }
   }
   return nullptr;
 }
@@ -123,7 +125,7 @@ bool Emit(PageBinding* binding, base::DictValue open) {
 
 lp::Decision Decide(PageBinding* binding, std::string key, const GURL& url) {
   lp::Request request;
-  request.surface = binding ? reinterpret_cast<std::uintptr_t>(binding->contents()) : 0;
+  request.surface = binding ? SurfaceOf(binding->contents()) : 0;
   request.key = std::move(key);
   request.http = Http(url);
   request.visible = Shown(binding);
@@ -161,12 +163,77 @@ base::Value RouteError(std::string_view message) {
   return base::Value(base::DictValue().Set("code", "ERR_ENGINE").Set("message", message));
 }
 
+class SitePeekThrottle : public content::NavigationThrottle {
+ public:
+  explicit SitePeekThrottle(content::NavigationThrottleRegistry& registry)
+      : content::NavigationThrottle(registry) {}
+
+  ThrottleCheckResult WillStartRequest() override {
+    content::NavigationHandle* handle = navigation_handle();
+    PageBinding* binding = handle ? BindingFor(handle->GetWebContents()) : nullptr;
+    PageLinks* links = binding ? binding->links() : nullptr;
+    return links && links->PeeksInsteadOf(*handle) ? CANCEL_AND_IGNORE : PROCEED;
+  }
+
+  const char* GetNameForLogging() override { return "ArdiaMacSitePeekThrottle"; }
+};
+
+void AddLinkNavigationThrottles(content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  if (!handle.IsInPrimaryMainFrame() || State().site_tabs.empty() || !BindingFor(handle.GetWebContents())) {
+    return;
+  }
+  registry.AddThrottle(std::make_unique<SitePeekThrottle>(registry));
+}
+
+PageBinding* BindingUnder(NSEvent* event) {
+  NSWindow* window = event.window;
+  NSView* content = window.contentView;
+  if (!content) return nullptr;
+  NSView* root = content.superview ?: content;
+  NSView* hit = [root hitTest:[root.superview ?: root convertPoint:event.locationInWindow fromView:nil]];
+  if (!hit) return nullptr;
+  for (ShellHostView* host : Hosts()) {
+    if (PageBinding* binding = host->BindingHit(gfx::NativeView(hit))) return binding;
+  }
+  return nullptr;
+}
+
+void InstallCommandScrollZoom() {
+  static id monitor;
+  if (monitor) return;
+  monitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     LinkState& state = State();
+                                     const bool command = event.modifierFlags & NSEventModifierFlagCommand;
+                                     if (!lp::CommandScrollZooms(state.command_scroll_zoom, command,
+                                                                 event.hasPreciseScrollingDeltas,
+                                                                 event.phase != NSEventPhaseNone,
+                                                                 event.momentumPhase != NSEventPhaseNone)) {
+                                       state.scroll_zoom.Reset();
+                                       return event;
+                                     }
+                                     PageBinding* binding = BindingUnder(event);
+                                     content::WebContents* contents = binding ? binding->contents() : nullptr;
+                                     if (!contents || !binding->visible) {
+                                       state.scroll_zoom.Reset();
+                                       return event;
+                                     }
+                                     const int step = state.scroll_zoom.Add(event.scrollingDeltaY * lp::kWheelLineDelta,
+                                                                            SurfaceOf(contents));
+                                     if (step) {
+                                       zoom::PageZoom::Zoom(contents, step > 0 ? content::PAGE_ZOOM_IN
+                                                                               : content::PAGE_ZOOM_OUT);
+                                     }
+                                     return nil;
+                                   }];
+}
+
 }
 
 PageLinks::PageLinks(PageBinding* binding, content::WebContents* contents)
-    : content::WebContentsObserver(contents),
-      binding_(binding),
-      surface_(reinterpret_cast<std::uintptr_t>(contents)) {
+    : content::WebContentsObserver(contents), binding_(binding), surface_(SurfaceOf(contents)) {
   if (contents) {
     contents->ForEachRenderFrameHost(
         [this](content::RenderFrameHost* frame) { Watch(frame->GetRenderWidgetHost()); });
@@ -180,6 +247,10 @@ PageLinks::~PageLinks() {
 
 std::uintptr_t PageLinks::surface() const {
   return surface_;
+}
+
+void PageLinks::NoteTarget(const GURL& url) {
+  target_ = url.is_valid() && url.spec().size() <= lp::kUrlMax ? url.spec() : std::string();
 }
 
 void PageLinks::Watch(content::RenderWidgetHost* widget) {
@@ -203,6 +274,10 @@ void PageLinks::RenderFrameCreated(content::RenderFrameHost* frame) {
 void PageLinks::RenderFrameHostChanged(content::RenderFrameHost* old_host,
                                        content::RenderFrameHost* new_host) {
   if (new_host) Watch(new_host->GetRenderWidgetHost());
+}
+
+void PageLinks::PrimaryPageChanged(content::Page& page) {
+  target_.clear();
 }
 
 void PageLinks::RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) {
@@ -230,59 +305,45 @@ void PageLinks::OnInputEvent(const content::RenderWidgetHost& widget,
   if (main && main->GetRenderWidgetHost() == &widget) {
     point = lp::Point{mouse.PositionInWidget().x(), mouse.PositionInWidget().y()};
   }
-  State().gate.NoteRelease(surface_, LinkFlags(mouse.GetModifiers()), Now(), point);
+  State().gate.NoteRelease(surface_, LinkFlags(mouse.GetModifiers()), Now(), point, target_,
+                           Micros(mouse.TimeStamp()));
 }
 
-void PageLinks::DidStartNavigation(content::NavigationHandle* handle) {
-  if (!handle->IsInPrimaryMainFrame() || handle->IsSameDocument()) return;
-  site_navigation_ = 0;
-  site_url_ = GURL();
-  site_point_.reset();
+bool PageLinks::PeeksInsteadOf(content::NavigationHandle& handle) {
   content::WebContents* contents = web_contents();
-  if (!contents || !binding_ || State().site_tabs.empty()) return;
-  const GURL& url = handle->GetURL();
+  if (!contents || !binding_ || handle.GetWebContents() != contents) return false;
+  const GURL& url = handle.GetURL();
   const GURL& current = contents->GetLastCommittedURL();
+  const lp::GestureGate::Release release = State().gate.FreshRelease(surface_, Now());
   lp::SitePeekNavigation navigation;
-  navigation.primary_main_frame = true;
-  navigation.renderer_initiated = handle->IsRendererInitiated();
-  navigation.user_gesture = handle->HasUserGesture();
-  navigation.link = ui::PageTransitionCoreTypeIs(handle->GetPageTransition(), ui::PAGE_TRANSITION_LINK);
-  navigation.same_document = handle->IsSameDocument();
-  navigation.history = handle->IsHistory() || handle->IsPrerenderedPageActivation();
+  navigation.primary_main_frame = handle.IsInPrimaryMainFrame();
+  navigation.renderer_initiated = handle.IsRendererInitiated();
+  navigation.user_gesture = handle.HasUserGesture();
+  navigation.link = ui::PageTransitionCoreTypeIs(handle.GetPageTransition(), ui::PAGE_TRANSITION_LINK);
+  navigation.link_click = handle.WasInitiatedByLinkClick();
+  navigation.input_matches = lp::SameInput(Micros(handle.NavigationInputStart()), release.input_us) &&
+                             lp::TargetMatches(release.target, url.spec());
+  navigation.post = handle.IsPost();
+  navigation.same_document = handle.IsSameDocument();
+  navigation.history = handle.IsHistory() || handle.IsPrerenderedPageActivation();
   navigation.http = Http(url) && current.SchemeIsHTTPOrHTTPS();
   navigation.cross_site = !net::registry_controlled_domains::SameDomainOrHost(
       url, current, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
   navigation.tab_listed = State().site_tabs.contains(binding_->key());
-  navigation.up_flags = State().gate.FreshFlags(surface_, Now());
-  if (!lp::SitePeekCandidate(navigation)) return;
+  navigation.up_flags = release.flags;
+  if (!lp::SitePeekCandidate(navigation)) return false;
   const lp::Decision decision = Decide(binding_, std::string(lp::kOtherSiteKey), url);
-  if (decision.outcome != lp::Outcome::kPeek) return;
-  site_navigation_ = handle->GetNavigationId();
-  site_url_ = url;
-  site_point_ = decision.point;
+  if (decision.outcome != lp::Outcome::kPeek) return false;
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&PageLinks::PeekInsteadOf, weak_factory_.GetWeakPtr(), site_navigation_));
+      FROM_HERE, base::BindOnce(&PageLinks::EmitSitePeek, weak_factory_.GetWeakPtr(), url, decision.point));
+  return true;
 }
 
-void PageLinks::DidFinishNavigation(content::NavigationHandle* handle) {
-  if (handle->GetNavigationId() != site_navigation_) return;
-  site_navigation_ = 0;
-  site_url_ = GURL();
-  site_point_.reset();
-}
-
-void PageLinks::PeekInsteadOf(int64_t navigation) {
-  content::WebContents* contents = web_contents();
-  if (!contents || !binding_ || !navigation || navigation != site_navigation_) return;
+void PageLinks::EmitSitePeek(GURL url, std::optional<lp::Point> point) {
   lp::Decision decision;
   decision.outcome = lp::Outcome::kPeek;
   decision.site = true;
-  decision.point = site_point_;
-  const GURL url = site_url_;
-  site_navigation_ = 0;
-  site_url_ = GURL();
-  site_point_.reset();
-  contents->Stop();
+  decision.point = point;
   EmitDecision(binding_, url, decision);
 }
 
@@ -317,7 +378,8 @@ void LinkRouteCall(std::string_view name,
         keys.push_back(id.is_string() ? std::optional<std::string>(id.GetString()) : std::nullopt);
       }
     }
-    std::optional<lp::TabKeys> parsed = ids ? lp::SiteTabKeys(keys) : std::nullopt;
+    std::optional<lp::TabKeys> parsed =
+        ids && ids->size() <= lp::kSiteTabsMax ? lp::SiteTabKeys(keys) : std::nullopt;
     if (!parsed) {
       return std::move(done).Run(
           false, RouteError("webView.setPeekOtherSiteTabs requires {tabIds} as a list of tab ids"));
@@ -327,46 +389,70 @@ void LinkRouteCall(std::string_view name,
   }
   const std::optional<bool> enabled = input->FindBool("enabled");
   if (!enabled) return std::move(done).Run(false, RouteError("A boolean enabled is required"));
-  if (name == lp::kNewTabLinksRoute) state.new_tab_links_in_place = *enabled;
-  else if (name == lp::kPopupsAsTabsRoute) state.popups_as_tabs = *enabled;
-  else if (name == lp::kCommandScrollZoomRoute) state.command_scroll_zoom = *enabled;
-  else return std::move(done).Run(false, RouteError("Unknown page option"));
+  if (name == lp::kNewTabLinksRoute) {
+    state.new_tab_links_in_place = *enabled;
+  } else if (name == lp::kPopupsAsTabsRoute) {
+    state.popups_as_tabs = *enabled;
+  } else if (name == lp::kCommandScrollZoomRoute) {
+    state.command_scroll_zoom = *enabled;
+    state.scroll_zoom.Reset();
+  } else {
+    return std::move(done).Run(false, RouteError("Unknown page option"));
+  }
   std::move(done).Run(true, base::Value("null"));
+}
+
+void NoteLinkTarget(content::WebContents* source, const GURL& url) {
+  PageBinding* binding = BindingFor(source);
+  if (PageLinks* links = binding ? binding->links() : nullptr) links->NoteTarget(url);
 }
 
 bool InterceptLinkOpen(content::WebContents* source, const content::OpenURLParams& params) {
   PageBinding* binding = BindingFor(source);
   if (!binding) return false;
-  const std::uintptr_t surface = reinterpret_cast<std::uintptr_t>(source);
-  const int flags = State().gate.FreshFlags(surface, Now());
+  const lp::GestureGate::Release release = State().gate.FreshRelease(SurfaceOf(source), Now());
+  const bool target_matches = lp::TargetMatches(release.target, params.url.spec());
   const lp::Opening opening = OpeningFor(params.disposition);
-  if (params.is_renderer_initiated &&
-      lp::OpensInPlace(State().new_tab_links_in_place, SmallWindow(binding), opening,
-                       params.user_gesture, Http(params.url), flags)) {
-    return Emit(binding, OpenEvent(params.url, "current"));
-  }
-  const lp::OpenRoute route = lp::RouteForOpening(opening, flags, params.is_renderer_initiated);
-  if (!route.ours) {
-    if (opening == lp::Opening::kWindow && params.is_renderer_initiated && Http(params.url)) {
-      return Emit(binding, OpenEvent(params.url, "window").Set("userGesture", params.user_gesture));
-    }
-    return false;
-  }
-  const lp::Decision decision = Decide(binding, route.key, params.url);
-  if (EmitDecision(binding, params.url, decision)) return true;
-  if (opening == lp::Opening::kWindow && Http(params.url)) return Emit(binding, OpenEvent(params.url, "window"));
-  return false;
+  lp::InPlaceLink in_place;
+  in_place.enabled = State().new_tab_links_in_place;
+  in_place.small_window = SmallWindow(binding);
+  in_place.opening = opening;
+  in_place.renderer_initiated = params.is_renderer_initiated;
+  in_place.user_gesture = params.user_gesture;
+  in_place.http = Http(params.url);
+  in_place.post = params.post_data != nullptr;
+  in_place.target_matches = target_matches;
+  in_place.up_flags = release.flags;
+  if (lp::OpensInPlace(in_place)) return Emit(binding, OpenEvent(params.url, "current"));
+  const lp::OpenRoute route =
+      lp::RouteForOpening(opening, release.flags, params.is_renderer_initiated, params.user_gesture, target_matches);
+  if (!route.ours) return false;
+  return EmitDecision(binding, params.url, Decide(binding, route.key, params.url));
 }
 
-bool InterceptLinkDownload(const GURL& url) {
+WindowOpenDisposition OpeningDisposition(content::WebContents* source, const content::OpenURLParams& params) {
+  return BindingFor(source) && lp::WindowOpensAsTab(OpeningFor(params.disposition), params.is_renderer_initiated)
+             ? WindowOpenDisposition::kNewForegroundTab
+             : params.disposition;
+}
+
+bool InterceptLinkDownload(const BrowserWindowInterface* browser,
+                           const GURL& url,
+                           std::string_view request_method) {
   const double now = Now();
   const std::uintptr_t surface = State().gate.FreshSurface(now);
-  PageBinding* binding = BindingForSurface(surface);
-  if (!binding || !Http(url)) return false;
-  const lp::OpenRoute route =
-      lp::RouteForOpening(lp::Opening::kDownload, State().gate.FreshFlags(surface, now), true);
-  if (!route.ours) return false;
-  return EmitDecision(binding, url, Decide(binding, route.key, url));
+  const content::WebContents* source = reinterpret_cast<const content::WebContents*>(surface);
+  PageBinding* binding = BindingFor(source);
+  if (!binding || !binding->host() || !Http(url)) return false;
+  const lp::GestureGate::Release release = State().gate.FreshRelease(surface, now);
+  lp::DownloadClick click;
+  click.get = request_method == "GET";
+  click.same_browser = browser && binding->host()->OwnerOf(source) == browser;
+  click.target_matches = lp::TargetMatches(release.target, url.spec());
+  click.up_flags = release.flags;
+  click.since = release.since;
+  if (!lp::OptionClickDownload(click)) return false;
+  return EmitDecision(binding, url, Decide(binding, "alt", url));
 }
 
 WindowOpenDisposition PopupDisposition(content::WebContents* source,
@@ -378,51 +464,11 @@ WindowOpenDisposition PopupDisposition(content::WebContents* source,
              : disposition;
 }
 
-bool OpensNewTabLinkInPlace(content::WebContents* source,
-                            const GURL& url,
-                            WindowOpenDisposition disposition,
-                            bool user_gesture) {
-  PageBinding* binding = BindingFor(source);
-  if (!binding) return false;
-  const int flags = State().gate.FreshFlags(reinterpret_cast<std::uintptr_t>(source), Now());
-  if (!lp::OpensInPlace(State().new_tab_links_in_place, SmallWindow(binding), OpeningFor(disposition),
-                        user_gesture, Http(url), flags)) {
-    return false;
+void InstallLinkHooks() {
+  if (g_ardia_mac_add_navigation_throttles != &AddLinkNavigationThrottles) {
+    g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;
   }
-  return Emit(binding, OpenEvent(url, "current"));
-}
-
-void InstallCommandScrollZoom() {
-  static id monitor;
-  if (monitor) return;
-  monitor = [NSEvent
-      addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel
-                                   handler:^NSEvent*(NSEvent* event) {
-                                     LinkState& state = State();
-                                     const bool command = event.modifierFlags & NSEventModifierFlagCommand;
-                                     if (!lp::CommandScrollZooms(state.command_scroll_zoom, command,
-                                                                 event.phase != NSEventPhaseNone,
-                                                                 event.momentumPhase != NSEventPhaseNone)) {
-                                       if (!command) state.scroll_zoom.Reset();
-                                       return event;
-                                     }
-                                     const gfx::Point screen = gfx::ScreenPointFromNSPoint(NSEvent.mouseLocation);
-                                     PageBinding* binding = nullptr;
-                                     for (ShellHostView* host : Hosts()) {
-                                       if ((binding = host->BindingAtScreenPoint(screen, gfx::NativeWindow(event.window)))) break;
-                                     }
-                                     content::WebContents* contents = binding ? binding->contents() : nullptr;
-                                     if (!contents) return event;
-                                     const double delta = event.hasPreciseScrollingDeltas
-                                                              ? event.scrollingDeltaY
-                                                              : event.scrollingDeltaY * lp::kWheelLineDelta;
-                                     const int step = state.scroll_zoom.Add(delta, false);
-                                     if (step) {
-                                       zoom::PageZoom::Zoom(contents, step > 0 ? content::PAGE_ZOOM_IN
-                                                                               : content::PAGE_ZOOM_OUT);
-                                     }
-                                     return nil;
-                                   }];
+  InstallCommandScrollZoom();
 }
 
 }

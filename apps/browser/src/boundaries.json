@@ -2570,17 +2570,23 @@
   {
    "id": "mac-webui-links:gestures",
    "source": "page",
-   "guard": "Mac WebUI host: a page's link clicks reach the shell only through Chromium's own browser-side hooks (OpenURLFromTab, AddNewContents, CanDownload and the primary main frame's DidStartNavigation), never through a page message. Each is matched against the last real left mouse-up the page's RenderWidgetHost saw (GestureGate): the release must be on that page, unused, not followed by another press, at most 10 s old and carry exactly the configured keys, and the page must be shown, so a page cannot open a peek, split, window or background tab by itself (RouteForOpening maps only renderer-initiated kNewWindow, kSaveToDisk and kNewSplitView to Shift, Option+Shift, Option and Option+Command). Only http(s) URLs of at most 32 KB go to the shell as openWindow, other-site peeks need a plain cross-site link click with a user gesture in a tab the shell listed (SitePeekCandidate), and the navigation is stopped only while it is still pending. The shell's webView.setPeekModifier and setSplitLinkModifier take a string of at most 16 bytes that collapses to alt, shift or off and alt or altShift, setPeekOtherSiteTabs takes at most 4096 non-empty string ids of at most 256 bytes (SiteTabKeys), and the boolean options take only a boolean enabled. The shared corpus runs through these guards in tests/hostile_corpus_test.cc.",
+   "guard": "Mac WebUI host: a page's link clicks reach the shell only through Chromium's own browser-side hooks (OpenURLFromTab, AddNewContents, CanDownload and a NavigationThrottle that apply.sh's g_ardia_mac_add_navigation_throttles adds), never through a page message. Each is matched against the last real left mouse-up the page's RenderWidgetHost saw (GestureGate): the release must be on that page, unused, not followed by another press, at most 10 s old and carry exactly the configured keys, the request must carry a user gesture and go to the URL the pointer was over at that release (TargetMatches), and the page must be shown, so a page cannot open a peek, split, window or background tab by itself (RouteForOpening). An Option-click download is taken only as a GET of that link asked by the same window within 1 s (OptionClickDownload); other downloads go ahead. An unmatched renderer kNewWindow becomes a tab through Chromium's own path, so its popup blocker decides (WindowOpensAsTab). An other-site peek needs WasInitiatedByLinkClick, a user gesture, no POST, a NavigationInputStart within 1 ms of the release and the released-over URL (SitePeekCandidate, SameInput), and is cancelled in WillStartRequest before any request. Little Ardia opens in place only a no-opener GET anchor (OpensInPlace). Only http(s) URLs of at most 32 KB go to the shell. The shell's webView.setPeekModifier and setSplitLinkModifier take a string of at most 16 bytes that collapses to alt, shift or off and alt or altShift, setPeekOtherSiteTabs takes at most 4096 non-empty string ids of at most 256 bytes (SiteTabKeys), and the boolean options take only a boolean enabled. The shared corpus runs through these guards in tests/hostile_corpus_test.cc.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#GestureGate",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#RouteForOpening",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#TargetMatches",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#OptionClickDownload",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SitePeekCandidate",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#OpensInPlace",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SiteTabKeys",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#InterceptLinkOpen",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#InterceptLinkDownload",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#SitePeekThrottle",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#LinkRouteCall",
     "scripts/mac/webui-engine/tests/link_policy_test.cc#stale_pressed_foreign_or_hidden_releases_never_peek",
     "scripts/mac/webui-engine/tests/link_policy_test.cc#chrome_dispositions_map_to_link_keys_only_for_renderer_clicks",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#option_click_downloads_need_the_same_tab_browser_link_and_a_fresh_get",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#other_site_peeks_tell_a_real_anchor_click_from_scripted_navigations",
     "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#link_option_guards"
    ],
    "detected": false

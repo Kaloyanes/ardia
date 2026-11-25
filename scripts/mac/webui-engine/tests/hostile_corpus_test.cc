@@ -569,7 +569,10 @@ TEST(link_option_guards) {
     }
     keys.push_back(text);
     link::GestureGate gate;
-    gate.NoteRelease(1, link::KeyFlags(text), 1, link::Point{0, 0});
+    gate.NoteRelease(1, link::KeyFlags(text), 1, link::Point{0, 0}, text, 1);
+    const auto release = gate.FreshRelease(1, 1);
+    CHECK(release.target.size() <= link::kUrlMax);
+    if (link::TargetMatches(release.target, text)) CHECK(!text.empty() && text.size() <= link::kUrlMax);
     link::Request request;
     request.surface = 1;
     request.key = text;
@@ -587,7 +590,7 @@ TEST(link_option_guards) {
   }
   link::ScrollZoom zoom;
   for (double delta : Load().numbers) {
-    const int step = zoom.Add(delta, false);
+    const int step = zoom.Add(delta, 1);
     CHECK(step >= -1 && step <= 1);
     if (!std::isfinite(delta)) CHECK(step == 0);
   }

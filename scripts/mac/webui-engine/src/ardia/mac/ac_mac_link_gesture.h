@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <string>
 #include <string_view>
 
 #include "ardia/mac/ac_mac_link_policy.h"
@@ -17,7 +18,11 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
+class BrowserWindowInterface;
+
 namespace content {
+class NavigationHandle;
+class NavigationThrottleRegistry;
 struct OpenURLParams;
 }
 
@@ -35,28 +40,27 @@ class PageLinks : public content::WebContentsObserver,
   ~PageLinks() override;
 
   std::uintptr_t surface() const;
+  void NoteTarget(const GURL& url);
+  bool PeeksInsteadOf(content::NavigationHandle& handle);
 
  private:
   void Watch(content::RenderWidgetHost* widget);
   void Unwatch();
+  void EmitSitePeek(GURL url, std::optional<link_policy::Point> point);
   void RenderFrameCreated(content::RenderFrameHost* frame) override;
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
                               content::RenderFrameHost* new_host) override;
-  void DidStartNavigation(content::NavigationHandle* handle) override;
-  void DidFinishNavigation(content::NavigationHandle* handle) override;
+  void PrimaryPageChanged(content::Page& page) override;
   void WebContentsDestroyed() override;
   void OnInputEvent(const content::RenderWidgetHost& widget,
                     const blink::WebInputEvent& event,
                     input::InputEventSource source) override;
   void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) override;
-  void PeekInsteadOf(int64_t navigation);
 
   raw_ptr<PageBinding> binding_;
   std::uintptr_t surface_ = 0;
   std::set<content::RenderWidgetHost*> widgets_;
-  int64_t site_navigation_ = 0;
-  GURL site_url_;
-  std::optional<link_policy::Point> site_point_;
+  std::string target_;
   base::WeakPtrFactory<PageLinks> weak_factory_{this};
 };
 
@@ -65,15 +69,15 @@ void LinkRouteCall(std::string_view name,
                    const base::Value* args,
                    base::OnceCallback<void(bool, base::Value)> done);
 void AppendLinkCapabilities(base::ListValue& capabilities);
+void NoteLinkTarget(content::WebContents* source, const GURL& url);
 bool InterceptLinkOpen(content::WebContents* source, const content::OpenURLParams& params);
-bool InterceptLinkDownload(const GURL& url);
+WindowOpenDisposition OpeningDisposition(content::WebContents* source, const content::OpenURLParams& params);
+bool InterceptLinkDownload(const BrowserWindowInterface* browser,
+                           const GURL& url,
+                           std::string_view request_method);
 WindowOpenDisposition PopupDisposition(content::WebContents* source,
                                        WindowOpenDisposition disposition);
-bool OpensNewTabLinkInPlace(content::WebContents* source,
-                            const GURL& url,
-                            WindowOpenDisposition disposition,
-                            bool user_gesture);
-void InstallCommandScrollZoom();
+void InstallLinkHooks();
 
 }
 

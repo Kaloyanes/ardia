@@ -136,12 +136,15 @@ class GestureGate {
     pressed_since_up_ = true;
   }
 
-  void NoteRelease(std::uintptr_t surface, int flags, double now, std::optional<Point> point) {
+  void NoteRelease(std::uintptr_t surface, int flags, double now, std::optional<Point> point,
+                   std::string target = {}, std::int64_t input_us = 0) {
     if (!surface) return;
     up_surface_ = surface;
     up_flags_ = flags & kAllKeys;
     up_at_ = now;
     up_point_ = point;
+    up_target_ = target.size() <= kUrlMax ? std::move(target) : std::string();
+    up_input_us_ = input_us;
     pressed_since_up_ = false;
     ++up_sequence_;
   }
@@ -150,6 +153,25 @@ class GestureGate {
     if (!surface || surface != up_surface_) return;
     up_surface_ = 0;
     up_point_.reset();
+    up_target_.clear();
+    up_input_us_ = 0;
+  }
+
+  struct Release {
+    int flags = -1;
+    double since = -1;
+    std::string_view target;
+    std::int64_t input_us = 0;
+  };
+
+  Release FreshRelease(std::uintptr_t surface, double now) const {
+    Release release;
+    if (!surface || FreshSurface(now) != surface) return release;
+    release.flags = up_flags_;
+    release.since = now - up_at_;
+    release.target = up_target_;
+    release.input_us = up_input_us_;
+    return release;
   }
 
   std::uintptr_t FreshSurface(double now) const {
@@ -219,7 +241,21 @@ class GestureGate {
   std::uint64_t used_sequence_ = 0;
   bool pressed_since_up_ = false;
   std::optional<Point> up_point_;
+  std::string up_target_;
+  std::int64_t up_input_us_ = 0;
 };
+
+inline bool TargetMatches(std::string_view released_over, std::string_view url) {
+  return !released_over.empty() && released_over == url;
+}
+
+inline constexpr std::int64_t kInputMatchMicros = 1000;
+
+inline bool SameInput(std::int64_t navigation_input_us, std::int64_t release_input_us) {
+  if (navigation_input_us <= 0 || release_input_us <= 0) return false;
+  const std::int64_t gap = navigation_input_us - release_input_us;
+  return gap >= -kInputMatchMicros && gap <= kInputMatchMicros;
+}
 
 enum class Opening { kForeground, kBackground, kWindow, kPopup, kSplit, kDownload, kOther };
 
@@ -228,9 +264,10 @@ struct OpenRoute {
   std::string key;
 };
 
-inline OpenRoute RouteForOpening(Opening opening, int up_flags, bool renderer_initiated) {
+inline OpenRoute RouteForOpening(Opening opening, int up_flags, bool renderer_initiated, bool user_gesture,
+                                 bool target_matches) {
   OpenRoute route;
-  if (!renderer_initiated || up_flags < 0) return route;
+  if (!renderer_initiated || !user_gesture || !target_matches || up_flags < 0) return route;
   const int flags = up_flags & kAllKeys;
   const bool matches = (opening == Opening::kWindow && (flags == kShift || flags == (kAlt | kShift))) ||
                        (opening == Opening::kDownload && flags == kAlt) ||
@@ -245,10 +282,41 @@ inline bool PopupOpensAsTab(bool popups_as_tabs, bool small_window, Opening open
   return popups_as_tabs && !small_window && opening == Opening::kPopup;
 }
 
-inline bool OpensInPlace(bool new_tab_links_in_place, bool small_window, Opening opening, bool user_gesture,
-                         bool http, int up_flags) {
-  return new_tab_links_in_place && small_window && user_gesture && http && up_flags == 0 &&
-         (opening == Opening::kForeground || opening == Opening::kBackground);
+inline bool WindowOpensAsTab(Opening opening, bool renderer_initiated) {
+  return renderer_initiated && opening == Opening::kWindow;
+}
+
+struct InPlaceLink {
+  bool enabled = false;
+  bool small_window = false;
+  Opening opening = Opening::kOther;
+  bool renderer_initiated = false;
+  bool user_gesture = false;
+  bool http = false;
+  bool post = false;
+  bool target_matches = false;
+  int up_flags = -1;
+};
+
+inline bool OpensInPlace(const InPlaceLink& link) {
+  return link.enabled && link.small_window && link.renderer_initiated && link.user_gesture && link.http &&
+         !link.post && link.target_matches && link.up_flags == 0 &&
+         (link.opening == Opening::kForeground || link.opening == Opening::kBackground);
+}
+
+inline constexpr double kDownloadLifetime = 1;
+
+struct DownloadClick {
+  bool get = false;
+  bool same_browser = false;
+  bool target_matches = false;
+  int up_flags = -1;
+  double since = -1;
+};
+
+inline bool OptionClickDownload(const DownloadClick& click) {
+  return click.get && click.same_browser && click.target_matches && click.up_flags == kAlt && click.since >= 0 &&
+         click.since <= kDownloadLifetime;
 }
 
 struct SitePeekNavigation {
@@ -256,6 +324,9 @@ struct SitePeekNavigation {
   bool renderer_initiated = false;
   bool user_gesture = false;
   bool link = false;
+  bool link_click = false;
+  bool input_matches = false;
+  bool post = false;
   bool same_document = false;
   bool history = false;
   bool http = false;
@@ -266,7 +337,8 @@ struct SitePeekNavigation {
 
 inline bool SitePeekCandidate(const SitePeekNavigation& navigation) {
   return navigation.primary_main_frame && navigation.renderer_initiated && navigation.user_gesture &&
-         navigation.link && !navigation.same_document && !navigation.history && navigation.http &&
+         navigation.link && navigation.link_click && navigation.input_matches && !navigation.post &&
+         !navigation.same_document && !navigation.history && navigation.http &&
          navigation.cross_site && navigation.tab_listed && navigation.up_flags == 0;
 }
 
@@ -298,23 +370,30 @@ inline constexpr double kZoomStepDelta = 30;
 
 class ScrollZoom {
  public:
-  int Add(double delta, bool begins) {
-    if (!std::isfinite(delta)) return 0;
-    if (begins) accumulated_ = 0;
+  int Add(double delta, std::uintptr_t target) {
+    if (!std::isfinite(delta) || !target) return 0;
+    if (target != target_) {
+      target_ = target;
+      accumulated_ = 0;
+    }
     accumulated_ += delta;
     if (std::fabs(accumulated_) < kZoomStepDelta) return 0;
     const int step = accumulated_ > 0 ? 1 : -1;
     accumulated_ = 0;
     return step;
   }
-  void Reset() { accumulated_ = 0; }
+  void Reset() {
+    accumulated_ = 0;
+    target_ = 0;
+  }
 
  private:
   double accumulated_ = 0;
+  std::uintptr_t target_ = 0;
 };
 
-inline bool CommandScrollZooms(bool enabled, bool command, bool gesture_phase, bool momentum_phase) {
-  return enabled && command && !gesture_phase && !momentum_phase;
+inline bool CommandScrollZooms(bool enabled, bool command, bool precise, bool gesture_phase, bool momentum_phase) {
+  return enabled && command && !precise && !gesture_phase && !momentum_phase;
 }
 
 }
