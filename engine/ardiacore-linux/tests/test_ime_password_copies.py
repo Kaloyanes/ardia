@@ -169,6 +169,15 @@ int main() {
     ui::WipeText(wide);
   }
   {
+    std::u16string target;
+    std::u16string short_text(u"QQQQQQQQ");
+    target = std::move(short_text);
+    ui::WipeText(short_text);
+    const char16_t* units = short_text.data();
+    for (size_t i = 0; i < short_text.capacity(); ++i) assert(units[i] == 0);
+    ui::WipeText(target);
+  }
+  {
     std::optional<std::u16string> moved(std::u16string(40, u'Q'));
     std::optional<std::u16string> taken = std::move(moved);
     moved = std::nullopt;
@@ -285,6 +294,17 @@ class ImePasswordCopiesTests(unittest.TestCase):
                      '+    WipeText(self->pending_input_events_.preedit->text);', '+  WipeText(commit);', '+    WipeText(preedit->text);'):
             self.assertIn(wipe, v3)
         self.assertIn('-ZwpTextInputV3Impl::InputEvents::~InputEvents() = default;', v3)
+        for assign in ('+  preedit->text.assign(text ? text : "");', '+  self->pending_input_events_.commit.assign(text ? text : "");',
+                       '   if (!self->client_) {\n+    self->pending_input_events_.Reset();\n     return;'):
+            self.assertIn(assign, v3)
+
+    def test_short_strings_are_wiped_after_they_are_moved_from(self):
+        aura = patched_hunks(self.patch, 'ui/base/ime/linux/input_method_auralinux.cc')
+        self.assertIn('+      result_text_ = std::move(joined);\n+      WipeText(joined);', aura)
+        wayland = patched_hunks(self.patch, 'ui/ozone/platform/wayland/host/wayland_input_method_context.cc')
+        self.assertIn('+  composition_text.text = std::move(converted_text);\n+  WipeText(converted_text);', wayland)
+        pango = patched_hunks(self.patch, 'ui/base/ime/linux/composition_text_util_pango.cc')
+        self.assertIn('+  composition->text = std::move(converted);\n+  WipeText(converted);', pango)
 
     def test_input_method_aura_linux_wipes_every_composition_and_commit_it_drops(self):
         aura = patched_hunks(self.patch, 'ui/base/ime/linux/input_method_auralinux.cc')

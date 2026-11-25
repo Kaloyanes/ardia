@@ -333,7 +333,7 @@ async function main() {
     const cancelErased = randomSecret(12);
     const imeCommitted = mixedSecret(28);
     const imeComposed = mixedSecret(28);
-    const imeAbandoned = randomSecret(28);
+    const imeAbandoned = mixedSecret(28);
     await unlock("__heapCancel");
     await dialog();
     await capture("1-empty");
