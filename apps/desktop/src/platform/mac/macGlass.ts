@@ -1,5 +1,6 @@
 export const BACKDROP_METHOD = "shell.backdropRegions";
-export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow"] as const;
+export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow", "windowTreatment"] as const;
+export const WINDOW_TREATMENT_CAPABILITY = "shell.backdropRegions.windowTreatment";
 export const BACKDROP_RETRY_MS = 250;
 export const BACKDROP_RETRY_MAX_MS = 4000;
 export type BackdropMaterial = (typeof BACKDROP_MATERIALS)[number];
@@ -34,6 +35,8 @@ export function measureBackdrop(element: Element, style: (element: Element) => {
   if (r.width < 1 || r.height < 1) return null;
   return { x: r.x, y: r.y, width: r.width, height: r.height };
 }
+
+export const windowBackdropMaterial = (supports: (method: string) => boolean): BackdropMaterial => (supports(WINDOW_TREATMENT_CAPABILITY) ? "windowTreatment" : "liquid");
 
 export function createMacBackdrops(deps: BackdropDeps) {
   const layers = new Map<Element, { material: BackdropMaterial; stop: () => void }>();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { animationMovesBackdrop, BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops, measureBackdrop } from "./macGlass.ts";
+import { animationMovesBackdrop, BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops, measureBackdrop, WINDOW_TREATMENT_CAPABILITY, windowBackdropMaterial } from "./macGlass.ts";
 
 function harness({ fail = () => false } = {}) {
   const sent = [];
@@ -201,4 +201,17 @@ test("the frame loop passes the registered backdrops, so an unrelated animation 
   frames.splice(0).forEach((run) => run());
   assert.deepEqual(seen, [[sidebar]]);
   assert.equal(frames.length, 0);
+});
+
+test("the window backdrop asks for the Mac app's vibrancy treatment, never Liquid Glass with its rim, where the host can draw it", async () => {
+  assert.equal(windowBackdropMaterial((method) => method === WINDOW_TREATMENT_CAPABILITY), "windowTreatment");
+  assert.equal(windowBackdropMaterial(() => false), "liquid", "an older engine keeps the glass it knows");
+  const source = (await import("node:fs")).readFileSync(new URL("../windowGlass.mac.ts", import.meta.url), "utf8");
+  assert.match(source, /return backdrops\.add\(element, windowBackdropMaterial\(\(method\) => hostSupports\(method\)\)\);/);
+  const { sent, rects, backdrops, runFrames } = harness();
+  const window = {};
+  rects.set(window, { x: 0, y: 0, width: 1280, height: 800 });
+  backdrops.add(window, "windowTreatment");
+  await runFrames();
+  assert.deepEqual(sent, [[{ rect: { x: 0, y: 0, width: 1280, height: 800 }, material: "windowTreatment" }]]);
 });

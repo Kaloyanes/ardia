@@ -248,6 +248,11 @@ TEST(names_parse) {
   CHECK(glass::MaterialNamed("clear") == Material::kLiquidClear);
   CHECK(glass::MaterialNamed("hud") == Material::kHud);
   CHECK(glass::MaterialNamed("underWindow") == Material::kUnderWindow);
+  CHECK(glass::MaterialNamed("windowTreatment") == Material::kWindowTreatment);
+  CHECK(glass::EffectFor(Material::kWindowTreatment, true) == glass::Effect::kVibrancy);
+  CHECK(glass::EffectFor(Material::kWindowTreatment, false) == glass::Effect::kVibrancy);
+  CHECK(glass::TreatmentMaterial(true) == 29);
+  CHECK(glass::TreatmentMaterial(false) == 13);
   CHECK(!glass::MaterialNamed("glitter"));
 }
 

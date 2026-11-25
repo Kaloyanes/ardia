@@ -107,7 +107,7 @@ test("the Ardia, File, View and Help menus carry the Mac menu bar's entries in i
     "moveSplitPaneDown",
   ]);
   assert.equal(find(items, "setTabLayout:sidebarRight").title, "Sidebar on Right");
-  assert.deepEqual(rows(items, "Help"), ["Report a Problem…", "Keyboard Shortcuts", "Tool Tour", "Video Tour", "Release Notes", "-", "Copy Diagnostics"]);
+  assert.deepEqual(rows(items, "Help"), ["Report a Problem…", "Keyboard Shortcuts", "Tool Tour", "Video Tour", "Release Notes", "-", "Copy Diagnostics", "-", "Show Onboarding"]);
 });
 
 test("sharing is disabled where the page can't be shared, tab layout shows its check, and disabled pinned fold hides", () => {
@@ -121,8 +121,10 @@ test("sharing is disabled where the page can't be shared, tab layout shows its c
 });
 
 test("leaving entries out never leaves a doubled or dangling separator", () => {
-  const items = appMenuItems(state(), new Map(), new Set(["videoTour", "releaseNotes", "copyDiagnostics"]));
+  const items = appMenuItems(state(), new Map(), new Set(["videoTour", "releaseNotes", "copyDiagnostics", "showOnboarding"]));
   assert.deepEqual(rows(items, "Help"), ["Report a Problem…", "Keyboard Shortcuts", "Tool Tour"]);
+  const kept = appMenuItems(state(), new Map(), new Set(["videoTour", "releaseNotes", "copyDiagnostics"]));
+  assert.deepEqual(rows(kept, "Help"), ["Report a Problem…", "Keyboard Shortcuts", "Tool Tour", "-", "Show Onboarding"]);
 });
 
 test("a command the host can't carry out is left out of the menu instead of doing nothing", () => {

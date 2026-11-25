@@ -711,6 +711,40 @@ class ContractTests(unittest.TestCase):
                         '"DevTools window (background run, not shown)"'):
             self.assertIn(refused, commands)
 
+    def test_dictation_is_advertised_and_never_starts_in_background_mode(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertIn('"ArdiaShell.startDictation",', listed)
+        call = calls.split('if (method == "ArdiaShell.startDictation") {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertLess(call.index('if (BackgroundInstance()) {'), call.index('sendAction:@selector(startDictation:)'))
+        self.assertIn('Trace("dictation (background run, not started)");', call)
+        self.assertIn('dispatch_async(dispatch_get_main_queue()', call)
+        self.assertIn('Reply(std::move(done), base::Value(true));', call)
+
+    def test_window_backdrop_uses_the_treatment_vibrancy_without_a_glass_rim(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertIn('"shell.backdropRegions.windowTreatment",', listed)
+        layout = self.read('ac_mac_glass_layout.h')
+        self.assertIn('if (name == "windowTreatment") return Material::kWindowTreatment;', layout)
+        self.assertIn('return dark ? kTreatmentMaterialDark : kTreatmentMaterialLight;', layout)
+        self.assertIn('constexpr int kTreatmentMaterialDark = 29;', layout)
+        self.assertIn('constexpr int kTreatmentMaterialLight = 13;', layout)
+        glass = self.read('ac_mac_glass.mm')
+        treatment = glass.split('- (void)applyTreatment {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('self.emphasized = self.windowTreatment;', treatment)
+        self.assertIn('ardia_mac::glass::TreatmentMaterial(dark)', treatment)
+        self.assertIn('[self applyTreatment];', glass.split('- (void)viewDidChangeEffectiveAppearance {', 1)[1].split('\n}\n', 1)[0])
+        self.assertIn('placement.material == glass::Material::kWindowTreatment;', glass)
+        swift = (REPO / 'packages/shaders/ios/WindowTreatmentView.swift').read_text()
+        self.assertIn('blur.isEmphasized = true', swift)
+        self.assertIn('NSVisualEffectView.Material(rawValue: dark ? 29 : 13)', swift)
+
+    def test_help_menu_offers_show_onboarding_like_the_mac_app(self):
+        model = self.read('ac_mac_menu_model.h')
+        self.assertIn('submenu("Help", {command("Show Onboarding", "showOnboarding", "", 0)}, Role::kHelpMenu)', model)
+        self.assertIn('CommandItem(.showOnboarding)', (REPO / 'packages/shell/ios/MainMenu.swift').read_text())
+
     def test_page_capabilities_and_zoom_routes_are_served(self):
         calls = self.read('ac_mac_shell_calls.mm')
         listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]

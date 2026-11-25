@@ -58,7 +58,7 @@ export function appMenuItems(state: MenuState, shortcuts: AppMenuShortcuts = new
     item.action,
     { id: item.id, title: item.title, enabled: !context.edit!.disabled.has(item.id), key: item.key, modifiers: [...item.modifiers] },
   ])) as Record<EditAction, MenuItem> : null;
-  const tidy = (items: MenuItem[]) => items.filter((item, i) => !("separator" in item) || (i > 0 && i < items.length - 1 && !("separator" in items[i - 1]!)));
+  const tidy = (items: MenuItem[]) => items.filter((item, i) => !("separator" in item) || (items.slice(0, i).some((before) => !("separator" in before)) && !("separator" in items[i - 1]!) && items.slice(i + 1).some((after) => !("separator" in after))));
   const sub = (title: string, children: MenuItem[]): MenuItem => ({ id: `menu:${title}`, title, children: tidy(children.filter((child) => !("id" in child && unavailable.has(child.id)))) });
   const header = (title: string): MenuItem => ({ id: `header:${title}`, title, enabled: false });
   const empty: MenuItem = { id: "empty", title: "Empty", enabled: false };
@@ -261,6 +261,8 @@ export function appMenuItems(state: MenuState, shortcuts: AppMenuShortcuts = new
       cmd("releaseNotes"),
       separator,
       cmd("copyDiagnostics"),
+      separator,
+      cmd("showOnboarding"),
     ]),
   ];
 }

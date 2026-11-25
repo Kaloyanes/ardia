@@ -1,5 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { View, type ViewProps, type ViewStyle } from "react-native";
+import { StyleSheet, View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../browser/src/state/browser/store";
 import { useScopedTheme } from "../../../../browser/src/components/ui/theme";
 import { materialFill } from "./materials";
@@ -13,6 +13,7 @@ import { OutsidePressIgnoreContext } from "../../outsidePressScope";
 import { markWindowDrag, WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import type { MiddleClickEvent } from "./MouseArea";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
+import { specularLook, withBlur } from "./glassSpecular";
 
 type Style = ViewStyle & Record<string, unknown>;
 
@@ -239,7 +240,7 @@ function scrolledGlassSurface(theme: "light" | "dark", clear: boolean, cornerRad
   };
 }
 
-export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", dark, style, ...props }: GlassEffectProps) {
+export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", dark, style, children, ...props }: GlassEffectProps) {
   const surfaceDark = useSurfaceDark();
   const theme = (dark ?? surfaceDark) ? "dark" : "light";
   const g = GLASS[theme];
@@ -248,13 +249,16 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const host = useRef<HTMLDivElement | null>(null);
   const [scrolled, setScrolled] = useState(false);
   useLayoutEffect(() => setScrolled(inScrollView(host.current)), []);
+  const { opacity, ...rest } = StyleSheet.flatten(style) ?? {};
+  const fade: React.CSSProperties = opacity === undefined ? {} : { opacity: Number(opacity) };
   if (scrolled) {
     const radiusStyle: React.CSSProperties = { borderRadius: fallbackRadius(cornerRadius) };
     return (
-      <View pointerEvents="none" {...props} style={style}>
-        <div ref={host} style={scrolledGlassSurface(theme, clear, cornerRadius)}>
+      <View pointerEvents="none" {...props} style={rest}>
+        <div ref={host} style={{ ...scrolledGlassSurface(theme, clear, cornerRadius), ...fade }}>
           {tint ? <div style={{ ...layer, ...radiusStyle, background: tint }} /> : null}
         </div>
+        {children}
       </View>
     );
   }
@@ -262,13 +266,21 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const shape = shapeMask(cornerRadius);
   const clip: React.CSSProperties = shape ? {} : { borderRadius: fallbackRadius(cornerRadius), overflow: "hidden" };
   const shaped = shape ? maskStyle(shape) : {};
+  const rimMask = highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) };
+  const look = specularLook(theme === "dark", clear);
+  const shown = opacity === undefined ? 1 : Number(opacity);
   return (
-    <View pointerEvents="none" {...props} style={style}>
+    <View pointerEvents="none" {...props} style={rest}>
+      <div style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.shadow, ...fade }} />
       <div ref={host} style={{ ...layer, ...clip }}>
-        <div style={backdrop(filter, shaped)} />
-        {tint ? <div style={{ ...layer, ...shaped, background: tint }} /> : null}
-        <div style={backdrop(`brightness(${1 + peakGain(g.rim)})`, highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) })} />
+        <div style={{ ...backdrop(withBlur(filter, look.blur), shaped), ...fade }} />
+        {tint ? <div style={{ ...layer, ...shaped, background: tint, ...fade }} /> : null}
+        <div style={{ ...layer, ...shaped, background: look.sheen, ...fade }} />
+        <div style={{ ...backdrop(`brightness(${1 + peakGain(g.rim)})`, rimMask), ...fade }} />
+        <div data-ardia-glass-rim="" style={{ ...layer, ...rimMask, background: look.rim, opacity: look.rimOpacity * shown }} />
+        <div data-ardia-glass-ring="" style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.ring, mask: look.ringFade, WebkitMask: look.ringFade, opacity: look.ringOpacity * shown }} />
       </div>
+      {children}
     </View>
   );
 }

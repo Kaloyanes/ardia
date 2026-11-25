@@ -311,7 +311,7 @@ inline Item DefaultMainMenu(std::string_view app_name) {
               {role("Minimize", Role::kMinimize, "m", kCommand), role("Zoom", Role::kZoom), separator(),
                role("Bring All to Front", Role::kBringAllToFront)},
               Role::kWindowMenu),
-      submenu("Help", {}, Role::kHelpMenu),
+      submenu("Help", {command("Show Onboarding", "showOnboarding", "", 0)}, Role::kHelpMenu),
   };
   return root;
 }

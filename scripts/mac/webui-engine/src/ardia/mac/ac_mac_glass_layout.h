@@ -57,6 +57,7 @@ enum class Material {
   kHud,
   kWindow,
   kUnderWindow,
+  kWindowTreatment,
 };
 
 enum class Plane { kBehindWindow, kOverPage };
@@ -149,7 +150,15 @@ inline std::optional<Material> MaterialNamed(std::string_view name) {
   if (name == "hud") return Material::kHud;
   if (name == "window") return Material::kWindow;
   if (name == "under" || name == "underWindow") return Material::kUnderWindow;
+  if (name == "windowTreatment") return Material::kWindowTreatment;
   return std::nullopt;
+}
+
+constexpr int kTreatmentMaterialDark = 29;
+constexpr int kTreatmentMaterialLight = 13;
+
+inline int TreatmentMaterial(bool dark) {
+  return dark ? kTreatmentMaterialDark : kTreatmentMaterialLight;
 }
 
 inline Effect EffectFor(Material material, bool liquid_glass_available) {

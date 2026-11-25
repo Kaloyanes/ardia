@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { behindWindowGlassSwitch, glassTint, wantsBehindWindowGlass } from "./behindWindowGlass.ts";
+import { behindWindowGlassSwitch, glassTreatment, wantsBehindWindowGlass, WINDOW_TREATMENT } from "./behindWindowGlass.ts";
 
 test("glass behind the window follows the backdrop's vibrancy and theme as they change, and lets go on the way out", () => {
   const log = [];
@@ -30,13 +30,25 @@ test("WindowBackdrop decides on glass every render instead of freezing its first
   assert.doesNotMatch(source, /useState\(\(\) => !!vibrancy/);
 });
 
-test("the profile's tint stays on top of native glass, as the CSS vibrancy draws it", () => {
-  assert.equal(glassTint("#ff8000", 0.36), "rgba(255, 128, 0, 0.36)");
-  assert.equal(glassTint("rgba(10, 20, 30, 0.5)", 0.5), "rgba(10, 20, 30, 0.25)");
-  assert.equal(glassTint(undefined, 0.36), null, "no tint color, no overlay");
-  assert.equal(glassTint("#ff8000", 0), null);
-  assert.equal(glassTint("#ff8000", undefined), null);
+test("over native glass the backdrop draws the Mac app's WindowTreatmentView: a smoky base and the tint's vertical lightness gradient", () => {
+  const dark = glassTreatment(true, "#ff8000", 0.36, 0.25);
+  assert.equal(dark.base, "rgba(0, 0, 0, 0.4)");
+  assert.equal(dark.gradientOpacity, 0.5);
+  assert.equal(dark.gradient, "linear-gradient(to bottom in display-p3, color(display-p3 1 0.50196 0 / 0.36), color(display-p3 1 0.75098 0.5 / 0.36))");
+  const light = glassTreatment(false, "#ff8000", 0.36, 0.25);
+  assert.equal(light.base, "rgba(255, 255, 255, 0.8)");
+  assert.equal(light.gradientOpacity, 0.75);
+  assert.equal(glassTreatment(true, undefined).gradient, glassTreatment(true, WINDOW_TREATMENT.tintColor, 0.36, 0.25).gradient, "no profile tint keeps the Mac's neutral grey tint");
+  assert.match(glassTreatment(true, "rgba(10, 20, 30, 0.5)", 2).gradient, / \/ 1\)/, "the tint's alpha is the treatment's, clamped, as withAlphaComponent sets it");
   const source = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
-  assert.match(source, /if \(behindGlass\) \{\n\s+const tint = glassTint\(tintColor, tintAlpha\);/);
-  assert.match(source, /\{tint \? <div data-ardia-glass-tint="" style=\{\{ \.\.\.UNDERLAY_FILL, background: tint \}\} \/> : null\}/);
+  assert.match(source, /if \(behindGlass\) \{\n\s+const treatment = glassTreatment\(dark, tintColor, tintAlpha, tintLightness\);/);
+  assert.match(source, /<div data-ardia-glass-base="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.base \}\} \/>\n\s+<div data-ardia-glass-tint="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.gradient, opacity: treatment\.gradientOpacity \}\} \/>/);
+});
+
+test("a window draws one backdrop: the shared base gives way while the profile pages draw theirs", () => {
+  const app = readFileSync(new URL("../../browser/src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /const \{ paging \} = usePagerPages\(windowId\);/);
+  assert.match(app, /\{paging \? null : <WindowBackdrop vibrancy /);
+  const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
+  assert.match(tint, /if \(!paging\) return null;/);
 });
