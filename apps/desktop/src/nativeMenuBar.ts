@@ -40,7 +40,9 @@ const APPKIT_FOR_CHROMIUM: Readonly<Record<number, number>> = { 2: APPKIT.shift,
 const DESKTOP_MODIFIER_BITS: Record<string, number> = Object.fromEntries(
   Object.entries(MODIFIER_FLAGS).map(([modifier, flag]) => [modifier, APPKIT_FOR_CHROMIUM[flag] ?? 0]),
 );
-const SUBMENU_ROLES: Record<string, string> = { "menu:Window": "windowMenu", "menu:Help": "helpMenu", "menu:Bookmarks": "bookmarksMenu" };
+const SUBMENU_ROLES: Record<string, string> = { "menu:Window": "windowMenu", "menu:Help": "helpMenu", "menu:Bookmarks": "bookmarksMenu", "menu:Share": "shareServices" };
+const SHELL_SHARE_ITEMS: ReadonlySet<string> = new Set(["share:via:copy", "share:via:email"]);
+const shellShareItems = (children: MenuItem[]) => children.filter((child) => !("separator" in child) && SHELL_SHARE_ITEMS.has(child.id));
 const ITEM_ROLES: Record<string, string> = {
   ...Object.fromEntries(EDIT_ITEMS.map((item) => [item.id, item.action])),
   about: "about",
@@ -154,7 +156,7 @@ export function nativeMenuSpec(items: readonly MenuItem[], flags: MenuFlags = NO
     if (item.children) {
       if (depth >= NATIVE_MENU_MAX_DEPTH || !take()) return null;
       const role = SUBMENU_ROLES[item.id];
-      const source = role === "bookmarksMenu" ? staticBookmarkItems(item.children) : item.children;
+      const source = role === "bookmarksMenu" ? staticBookmarkItems(item.children) : role === "shareServices" ? shellShareItems(item.children) : item.children;
       const converted = source.map((child) => convert(child, depth + 1)).filter((child): child is NativeMenuItem => !!child);
       const quit = item.id === APP_MENU ? converted.findIndex((child) => child.id === QUIT) : -1;
       if (quit >= 0) converted.splice(quit, 0, ...appMenuStandardItems(appName).filter(() => take()));

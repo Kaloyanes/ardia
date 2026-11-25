@@ -63,6 +63,11 @@ class PageEvents;
 class PipPresenter;
 class PopoverHost;
 class SystemServices;
+
+namespace shared_folders {
+class Watcher;
+}
+
 class ShellBridge;
 class ShellHostView;
 
@@ -227,6 +232,9 @@ class ShellHostView : public views::View,
   std::optional<std::string> PopoverBootstrapJson(
       const content::WebContents* contents) const;
   PopoverHost* popovers() const { return popovers_.get(); }
+  std::unique_ptr<shared_folders::Watcher>& shared_folder_watcher() {
+    return shared_folder_watcher_;
+  }
   SystemServices* system() const { return system_.get(); }
   ExtensionViews* extension_views() const { return extension_views_.get(); }
   PipPresenter* pip() const { return pip_.get(); }
@@ -370,6 +378,7 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
   std::unique_ptr<PopoverHost> popovers_;
+  std::unique_ptr<shared_folders::Watcher> shared_folder_watcher_;
   std::unique_ptr<SystemServices> system_;
   std::unique_ptr<ExtensionViews> extension_views_;
   std::unique_ptr<PipPresenter> pip_;

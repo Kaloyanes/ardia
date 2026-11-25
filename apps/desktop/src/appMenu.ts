@@ -1,6 +1,7 @@
 import type { BrowserCommand, CommandEvent, MenuBookmark, MenuItem, MenuState, ShortcutModifier } from "@ardia-real/shell";
 import { commandSpec, LINUX_STANDARD_ITEMS } from "./commandCatalog";
 import { EDIT_ITEMS, editActionOf, type EditAction, type EditMenu } from "./editCommands";
+import { MORE_SHARE_SERVICE, shareServices, shareServicesListed } from "./linkShare";
 
 type MenuModifier = "command" | "shift" | "option" | "control";
 type AppMenuShortcuts = ReadonlyMap<string, { key: string; modifiers: readonly ShortcutModifier[] }>;
@@ -113,7 +114,13 @@ export function appMenuItems(state: MenuState, shortcuts: AppMenuShortcuts = new
       cmd("cleanUpTabs"),
       separator,
       cmd("savePage"),
-      sub("Share", [cmd("share", "via:copy", "Copy Link"), cmd("share", "via:email", "Email Link")]),
+      sub("Share", [
+        cmd("share", "via:copy", "Copy Link"),
+        cmd("share", "via:email", "Email Link"),
+        ...(shareServicesListed()
+          ? [separator, ...shareServices().map((service) => cmd("share", `via:${service.title}`, service.menuTitle)), cmd("share", `via:${MORE_SHARE_SERVICE}`, "More\u2026")]
+          : []),
+      ]),
       cmd("print"),
       cmd("printWithSystemDialog"),
     ]),

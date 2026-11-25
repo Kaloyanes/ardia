@@ -16,6 +16,13 @@ mode, src = sys.argv[1:3]
 DEV = "#if !defined(OFFICIAL_BUILD)\n"
 MAC_DEV = "#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n"
 HOOKS_INCLUDE = '#include "ardia/mac/ac_mac_hooks.h"  // nogncheck\n'
+PAGE_MENU_OBSERVER = ("RenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n"
+                      "    RenderViewContextMenuBase* menu,\n    ui::SimpleMenuModel* model) = nullptr;\n")
+PAGE_MENU_DECLARATIONS = ("\n" + MAC_DEV + HOOKS_INCLUDE + "\n" + PAGE_MENU_OBSERVER +
+                          "void (*g_ardia_mac_page_menu_destroyed)(RenderViewContextMenuBase* menu) = nullptr;\n#endif\n")
+SUPERSEDED = {
+    PAGE_MENU_DECLARATIONS: ("\n" + MAC_DEV + HOOKS_INCLUDE + "\n" + PAGE_MENU_OBSERVER + "#endif\n",),
+}
 HOOKS = [
     ("chrome/BUILD.gn",
      '      "//ardia/core",  # Ardia: ArdiaCore (engine/ardiacore)\n',
@@ -57,6 +64,20 @@ HOOKS = [
      DEV + "  if (g_ardia_mac_hosts_normal_windows &&\n      GetBrowserView()->GetIsNormalType()) {\n"
      "    return;\n  }\n#endif\n",
      "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     '#include "url/origin.h"\n',
+     PAGE_MENU_DECLARATIONS,
+     "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     "  InitMenu();\n",
+     MAC_DEV + "  if (g_ardia_mac_page_menu_observer) {\n    if (RenderViewContextMenuObserver* observer =\n"
+     "            g_ardia_mac_page_menu_observer(this, &menu_model_)) {\n      observers_.AddObserver(observer);\n"
+     "    }\n  }\n#endif\n",
+     "after"),
+    ("components/renderer_context_menu/render_view_context_menu_base.cc",
+     "RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n",
+     MAC_DEV + "  if (g_ardia_mac_page_menu_destroyed) {\n    g_ardia_mac_page_menu_destroyed(this);\n  }\n#endif\n",
+     "after"),
     ("chrome/browser/ui/views/overlay/video_overlay_window_views.cc",
      "std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n"
      "    content::VideoPictureInPictureWindowController* controller) {\n",
@@ -82,16 +103,27 @@ for path, anchor, text, where in HOOKS:
             if mode == "--revert":
                 continue
             sys.exit(f"apply.sh: {path} is not in {src}")
-    present = text in s
+    copies = s.count(text)
+    stale = [earlier for earlier in SUPERSEDED.get(text, ()) if earlier in s]
     if mode == "--check":
-        if not present:
-            print(f"apply.sh --check: missing hook in {path}: {text.strip().splitlines()[0]}", file=sys.stderr)
+        if copies != 1 or stale:
+            problem = "an earlier shape of" if stale else ("a duplicate" if copies > 1 else "missing")
+            print(f"apply.sh --check: {problem} hook in {path}: {text.strip().splitlines()[0]}", file=sys.stderr)
             failed = True
         continue
+    shapes = [text, *stale]
     if mode == "--revert":
-        if present:
-            s = s.replace(text, "", 1)
-    elif not present:
+        for shape in shapes:
+            s = s.replace(shape, "")
+    elif copies == 1 and not stale:
+        pass
+    elif copies or stale:
+        first = min(s.find(shape) for shape in shapes if shape in s)
+        head, tail = s[:first], s[first:]
+        for shape in shapes:
+            tail = tail.replace(shape, "")
+        s = head + text + tail
+    else:
         if s.count(anchor) != 1:
             sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
         s = s.replace(anchor, anchor + text if where == "after" else text + anchor, 1)
@@ -131,6 +163,7 @@ case "$mode" in
       content/app_shim_remote_cocoa/web_contents_view_cocoa.mm \
       chrome/browser/ui/window_feature_controller/window_feature_controller.cc \
       chrome/browser/ui/views/frame/browser_frame_view_mac.mm \
+      components/renderer_context_menu/render_view_context_menu_base.cc \
       chrome/browser/ui/views/overlay/video_overlay_window_views.cc
     ;;
   --check)

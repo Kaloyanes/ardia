@@ -19,6 +19,8 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
+#include "ardia/mac/ac_mac_share.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
@@ -296,6 +298,8 @@ std::string ShellHostView::BootstrapJson() const {
       capabilities.Append(capability);
     }
   }
+  share::AppendCapabilities(capabilities);
+  shared_folders::AppendCapabilities(capabilities);
   for (std::string_view capability : LifecycleCapabilities()) {
     capabilities.Append(capability);
   }
@@ -340,6 +344,10 @@ std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
     bootstrap->GetDict().Set("session", std::move(*session));
   }
   bootstrap->GetDict().Set("documents", ReadDocuments());
+  bootstrap->GetDict()
+      .EnsureDict("nativeModules")
+      ->EnsureDict("ArdiaSharedFolders")
+      ->Set("location", shared_folders::Location());
   std::optional<std::string> json = base::WriteJson(*bootstrap);
   std::optional<std::string> literal = json ? base::WriteJson(base::Value(*json))
                                             : std::nullopt;
@@ -364,6 +372,12 @@ void ShellHostView::Invoke(const std::string& method,
   };
   if (method == "tab.create") {
     return CreateTab(args, std::move(done));
+  }
+  if (share::Handles(method)) {
+    return share::Invoke(*this, method, values, std::move(done));
+  }
+  if (shared_folders::Handles(method)) {
+    return shared_folders::Invoke(*this, method, values, std::move(done));
   }
   if (method == "tab.viewport") {
     return SetViewport(args, std::move(done));
