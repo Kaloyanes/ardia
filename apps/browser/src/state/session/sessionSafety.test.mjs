@@ -15,7 +15,7 @@ globalThis.setTimeout = (callback, ms, ...args) => {
   return ms >= 1_000 ? timer.unref() : timer;
 };
 const { useBrowser } = await import("../browser/store.ts");
-const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesBlocked, startPersistence, SESSION_VERSION } = await import("./persist.ts");
+const { flushPersistence, holdPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesBlocked, startPersistence, SESSION_VERSION } = await import("./persist.ts");
 const { finishQuitSaves } = await import("../app/quit.ts");
 const { OLDER_BUILD_SESSION_DOCUMENT } = await import("./launchSession.ts");
 const { olderBuildSessionDocument } = await import("./sessionDocument.ts");
@@ -339,6 +339,38 @@ test("quitting after a rollback run stopped never recreates its older-build file
   assert.equal(stub.docs.has(OLDER_BUILD_SESSION_DOCUMENT), false, "the stopped run wrote nothing at quit");
   assert.deepEqual(olderBuildAsides(), []);
   assert.deepEqual(savedUrls(), ["https://active-run.example/"]);
+});
+
+test("stopping a run lets a quit that waits on its held copy finish at once, writing nothing", async () => {
+  clean();
+  const broken = '{"version":';
+  const primary = newerThanThisBuild(["https://newer-build.example/"]);
+  stub.docs.set("session.json", primary);
+  stub.docs.set(OLDER_BUILD_SESSION_DOCUMENT, broken);
+  stub.heldCopies.on = true;
+  const rollback = startPersistence();
+  let quitting;
+  try {
+    S().createWindow({ url: "https://older-build.example/" });
+    holdPersistence();
+    let settled = false;
+    quitting = finishQuitSaves(60_000).then(() => (settled = true));
+    await turn();
+    assert.ok(stub.heldCopies.queue.length > 0, "the quit waits on the copy");
+    assert.equal(settled, false);
+    rollback();
+    for (let i = 0; i < 4 && !settled; i++) await turn();
+    assert.equal(settled, true, "quit finished without the copy landing or the deadline passing");
+    assert.equal(stub.docs.get(OLDER_BUILD_SESSION_DOCUMENT), broken);
+    assert.deepEqual(olderBuildAsides(), []);
+    assert.equal(stub.docs.get("session.json"), primary);
+  } finally {
+    rollback();
+    stub.heldCopies.on = false;
+    for (const land of stub.heldCopies.queue.splice(0)) land();
+    await quitting;
+    resumePersistence();
+  }
 });
 
 test("an older build's own session is ignored once session.json is readable again", async () => {

@@ -155,6 +155,8 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const fileOf = (name: string) => (name === SESSION_DOCUMENT ? ownSessionFile : name);
   sessionFile = ownSessionFile;
   let stopped = false;
+  let signalStopped: () => void = () => {};
+  const whenStopped = new Promise<void>((resolve) => (signalStopped = resolve));
   const consent = consentToken();
   if (launch.session.state === "unusable") noteSessionSetAside(true, launch.session.reason, launch.restored?.ageDays ?? null, consent);
   if (launch.downloads.state === "unusable") noteSessionSetAside(false, launch.downloads.reason, null, consent);
@@ -172,7 +174,11 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const stopSavingBeforeQuit = saveBeforeQuit(async () => {
     if (stopped) return;
     for (const gate of gates.values()) gate.tryNow();
-    return landHeldPins(() => dirty.size > 0 && frozen, anyLanding, () => ((frozen = false), save(), (frozen = true)));
+    const landingUntilStopped = () => {
+      const landing = anyLanding();
+      return landing && Promise.race([landing, whenStopped]);
+    };
+    return landHeldPins(() => !stopped && dirty.size > 0 && frozen, landingUntilStopped, () => ((frozen = false), save(), (frozen = true)));
   });
   const lastSources = new Map<string, unknown[]>();
   const lastJson = new Map<string, string>();
@@ -292,6 +298,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   const unsubscribe = useBrowser.subscribe((s) => check(s));
   return () => {
     stopped = true;
+    signalStopped();
     stopSavingBeforeQuit();
     clearTimeout(timer);
     timer = undefined;
