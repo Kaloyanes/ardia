@@ -72,7 +72,14 @@ bool HoverEpisodeReportedAtQuitOpen() {
 
 NSInteger HoverEpisodeReportedAtQuitSeconds() {
   if (!HoverEpisodeReportedAtQuitOpen()) return -1;
-  return lround(MAX(0, Uptime() - gEpisode.startedAt));
+  return MIN(86400, lround(MAX(0, Uptime() - gEpisode.startedAt)));
+}
+
+void MarkHoverEpisodeCommittedAtQuit() {
+  if (!HoverEpisodeReportedAtQuitOpen()) return;
+  gEpisode.open = false;
+  gEpisode.owner = nil;
+  gReportedAtQuit = 0;
 }
 
 }

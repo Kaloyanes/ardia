@@ -11,15 +11,24 @@ globalThis.fetch = async () => ({ status: 503 });
 const client = await import("./client.ts");
 const diagnostics = await import("./diagnostics.ts");
 const atQuit = await import("./hoverLostAtQuit.ts");
-const { HELD_QUIT_EPISODE_DOC: HELD, COMMITTED_QUIT_EPISODE_DOC: COMMITTED } = atQuit;
+const { HELD_QUIT_EPISODE_DOC: HELD, COMMITTED_QUIT_EPISODE_DOC: COMMITTED, COMMITTED_QUIT_EPISODE_PREFIX: COMMITTED_PREFIX } = atQuit;
 after(() => client.setSharing(false, "settings"));
 client.startClient();
 
 const events = () => JSON.parse(stub.docs.get("telemetry-queue.json") ?? "{}").events?.filter((e) => e.event === "page_hover_lost") ?? [];
 const doc = (name) => stub.stagedDocs.get(name) ?? stub.docs.get(name) ?? null;
-const clear = () => [HELD, COMMITTED].forEach((name) => (stub.docs.delete(name), stub.stagedDocs.delete(name)));
+const clear = () => {
+  for (const name of [...stub.docs.keys(), ...stub.stagedDocs.keys()]) {
+    if (name === HELD || name === COMMITTED || name.startsWith(COMMITTED_PREFIX)) {
+      stub.docs.delete(name);
+      stub.stagedDocs.delete(name);
+    }
+  }
+};
 const commit = () => {
-  stub.docs.set(COMMITTED, doc(HELD));
+  const raw = doc(HELD);
+  const parsed = JSON.parse(raw);
+  stub.docs.set(`${COMMITTED_PREFIX}${parsed.uuid}.json`, raw);
   stub.docs.delete(HELD);
 };
 const episode = (over = {}) => ({ reason: "coveredByView", trigger: "click", keyWindow: "browser", mainWindow: "browser", preventKey: false, canKey: true, windowMain: true, halfActive: false, appActive: true, runningActive: true, frontmost: true, menuActive: false, overPage: true, cover: "reactNative", coverClear: true, coverView: "rnView", coverClearView: "rnView", coverSize: "full", responder: "page", healed: false, healWorked: null, endedBy: "quit", seconds: 412, episode: 7, serial: 7, epoch: client.consentEpoch(), ...over });
@@ -61,16 +70,17 @@ test("S2, S8, S9: a committed record is sent once at the next launch with the qu
   commit();
   const before = events().length;
   Object.assign(stub.appInfo, { appVersion: "0.3.2" });
+  const committedName = `${COMMITTED_PREFIX}${held.uuid}.json`;
   stub.refusedSaves.on = true;
   assert.equal(await atQuit.sendCommittedQuitEpisode(), false);
-  assert.ok(doc(COMMITTED), "a queue that didn't reach the disk keeps the committed record for the next launch");
+  assert.ok(doc(committedName), "a queue that didn't reach the disk keeps the committed record for the next launch");
   stub.refusedSaves.on = false;
   stub.refusedSyncs.on = true;
   assert.equal(await atQuit.sendCommittedQuitEpisode(), false);
-  assert.ok(doc(COMMITTED), "an unsynced queue write still keeps the committed record");
+  assert.ok(doc(committedName), "an unsynced queue write still keeps the committed record");
   stub.refusedSyncs.on = false;
   assert.equal(await atQuit.sendCommittedQuitEpisode(), true);
-  assert.equal(doc(COMMITTED), null);
+  assert.equal(doc(committedName), null);
   const sent = events().slice(before);
   assert.equal(sent.length, 1, "the retry with the same event id adds nothing");
   const { flushLocalNow } = await import("./localStore.ts");
@@ -100,10 +110,22 @@ test("R3-1 & R3-2: a cancelled quit never consumes an episode slot, and multiple
   await client.saveQueueNow();
   assert.equal(events().at(-1).properties.episode, 20, "normal close still gets slot 20");
 
-  const first = { serial: 90, uuid: "01900000-0000-7000-8000-000000000090", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 1 }, context: { $app_version: "0.3.1", $session_id: "s1" } };
-  const second = { serial: 91, uuid: "01900000-0000-7000-8000-000000000091", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 2 }, context: { $app_version: "0.3.1", $session_id: "s2" } };
-  stub.docs.set(COMMITTED, JSON.stringify([first, second]));
+  const first = { serial: 90, uuid: "01900000-0000-7000-8000-000000000090", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 1, lost_seconds: 86500 }, context: { $app_version: "0.3.1", $session_id: "s1" } };
+  const second = { serial: 91, uuid: "01900000-0000-7000-8000-000000000091", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 2, lost_seconds: 12 }, context: { $app_version: "0.3.1", $session_id: "s2" } };
+  const file1 = `${COMMITTED_PREFIX}${first.uuid}.json`;
+  const file2 = `${COMMITTED_PREFIX}${second.uuid}.json`;
+  stub.docs.set(file1, JSON.stringify(first));
+  stub.heldSaves.on = true;
+  const pendingReplay = atQuit.sendCommittedQuitEpisode();
+  stub.docs.set(file2, JSON.stringify(second));
+  stub.heldSaves.on = false;
+  while (stub.heldSaves.queue.length) stub.heldSaves.queue.shift()();
+  assert.equal(await pendingReplay, true);
+  assert.equal(doc(file1), null, "replayed file was removed");
+  assert.ok(doc(file2), "concurrently committed file during pending queue sync survived untouched");
+  assert.equal(events().find((e) => e.uuid === first.uuid)?.properties.lost_seconds, 86400, "duration stays capped at 24h");
   assert.equal(await atQuit.sendCommittedQuitEpisode(), true);
+  assert.equal(doc(file2), null);
   assert.equal(events().filter((e) => e.uuid === first.uuid || e.uuid === second.uuid).length, 2);
 });
 
@@ -148,5 +170,5 @@ test("the diagnostics wiring sends a committed record at launch, drops a held on
   assert.match(watch, /onConsentPeriodChange\(dropQuitEpisodes\);/);
   const quitFlow = readFileSync(new URL("../../../../../packages/shell/ios/QuitFlow.swift", import.meta.url), "utf8");
   assert.match(quitFlow, new RegExp(`static let heldHoverLoss = "${HELD}"`));
-  assert.match(quitFlow, new RegExp(`static let committedHoverLoss = "${COMMITTED}"`));
+  assert.match(quitFlow, new RegExp(`static let committedHoverLossPrefix = "${COMMITTED_PREFIX}"`));
 });

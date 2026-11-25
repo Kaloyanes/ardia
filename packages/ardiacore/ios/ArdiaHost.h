@@ -57,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)reportHoverLossAtQuit;
 + (BOOL)hoverLossReportedAtQuitIsOpen;
 + (NSInteger)hoverLossReportedAtQuitSeconds;
++ (void)markHoverLossCommittedAtQuit;
 + (NSString *)baseProfileOf:(NSString *)profile NS_SWIFT_NAME(baseProfile(of:));
 + (void)resolvePermission:(NSString *)requestId result:(NSString *)result remember:(BOOL)remember
     NS_SWIFT_NAME(resolvePermission(_:result:remember:));

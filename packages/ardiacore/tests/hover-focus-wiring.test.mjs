@@ -228,12 +228,15 @@ test("a quit report commits only if the same episode is still open when the app 
   assert.match(body(probeEpisode, "NSDictionary *EpisodePayload("), /@"serial" : @\(gEpisode\.serial\),/);
   assert.match(body(probeEpisode, "void ReportHoverEpisodeAtQuit("), /gReportedAtQuit = gEpisode\.serial;\s*EmitEpisode\(/);
   assert.match(body(probeEpisode, "bool HoverEpisodeReportedAtQuitOpen("), /return gReportedAtQuit != 0 && gEpisode\.open && gEpisode\.serial == gReportedAtQuit;/);
-  assert.match(body(probeEpisode, "NSInteger HoverEpisodeReportedAtQuitSeconds("), /if \(!HoverEpisodeReportedAtQuitOpen\(\)\) return -1;\s*return lround\(MAX\(0, Uptime\(\) - gEpisode\.startedAt\)\);/);
+  assert.match(body(probeEpisode, "NSInteger HoverEpisodeReportedAtQuitSeconds("), /if \(!HoverEpisodeReportedAtQuitOpen\(\)\) return -1;\s*return MIN\(86400, lround\(MAX\(0, Uptime\(\) - gEpisode\.startedAt\)\)\);/);
+  assert.match(body(probeEpisode, "void MarkHoverEpisodeCommittedAtQuit("), /gEpisode\.open = false;\s*gEpisode\.owner = nil;\s*gReportedAtQuit = 0;/);
   assert.match(quitFlow, /forName: NSApplication\.willTerminateNotification, object: nil, queue: nil\s*\) \{ _ in commitHeldHoverLoss\(\) \}/);
   const commit = body(quitFlow, "static func commitHeldHoverLoss()", "\n  }\n");
   assert.match(commit, /guard ArdiaHost\.hoverLossReportedAtQuitIsOpen\(\), let held = DocumentStore\.read\(heldHoverLoss\) else \{ return \}/);
   assert.match(commit, /ArdiaHost\.hoverLossReportedAtQuitSeconds\(\)/);
-  assert.match(commit, /guard DocumentStore\.writeDurablySync\(committedHoverLoss, merged\) else \{ return \}\s*try\? DocumentStore\.remove\(heldHoverLoss\)\s*DocumentStore\.flush\(\)/);
+  assert.match(commit, /DocumentStore\.writeDurablySync\("\\\(committedHoverLossPrefix\)\\\(prepared\.id\)\.json", prepared\.json, allowWhenClosed: true\) else \{ return \}\s*ArdiaHost\.markHoverLossCommittedAtQuit\(\)\s*DocumentStore\.removeSync\(heldHoverLoss, allowWhenClosed: true\)/);
+  const settled = body(quitFlow, "private func quitAfterUpdaterSettles()", "\n  }\n");
+  assert.ok(settled.indexOf("Self.commitHeldHoverLoss()") > 0 && settled.indexOf("Self.commitHeldHoverLoss()") < settled.indexOf("NSApp.reply(toApplicationShouldTerminate: true)"), "commits before AppKit tears down windows");
   const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
   assert.ok(terminate.indexOf("_ = Self.commitsHoverLossOnTerminate") < terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()"), "the commit watch is in place before the report");
 });

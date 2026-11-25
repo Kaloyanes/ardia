@@ -210,12 +210,12 @@ enum DocumentStore {
     lock.unlock()
   }
 
-  static func writeDurablySync(_ name: String, _ contents: String) -> Bool {
+  static func writeDurablySync(_ name: String, _ contents: String, allowWhenClosed: Bool = false) -> Bool {
     guard let target = try? url(name) else { return false }
     let key = target.lastPathComponent
     return queue.sync {
       lock.lock()
-      if closed {
+      if closed && !allowWhenClosed {
         lock.unlock()
         return false
       }
@@ -246,6 +246,23 @@ enum DocumentStore {
       }
       for waiter in waiters { waiter(failure) }
       return failure == nil
+    }
+  }
+
+  static func removeSync(_ name: String, allowWhenClosed: Bool = false) {
+    guard let target = try? url(name) else { return }
+    let key = target.lastPathComponent
+    queue.sync {
+      lock.lock()
+      if closed && !allowWhenClosed { return lock.unlock() }
+      generation += 1
+      let waiters = staged.removeValue(forKey: key)?.waiters ?? []
+      lock.unlock()
+      if regularFile(target) {
+        unlink(target.path)
+        _ = durable(target.deletingLastPathComponent().path)
+      }
+      for waiter in waiters { waiter(nil) }
     }
   }
 

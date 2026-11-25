@@ -14,7 +14,9 @@ final class QuitFlow {
   private var attempt = 0
   private static let saveWait: TimeInterval = 5
   static let heldHoverLoss = "hover-lost-at-quit.json"
-  static let committedHoverLoss = "hover-lost-at-quit-committed.json"
+  static let committedHoverLossPrefix = "hover-lost-at-quit-committed-"
+  private static let maxHoverLostSeconds = 86_400
+  private static let maxCommittedHoverLossFiles = 20
   private static let commitsHoverLossOnTerminate = NotificationCenter.default.addObserver(
     forName: NSApplication.willTerminateNotification, object: nil, queue: nil
   ) { _ in commitHeldHoverLoss() }
@@ -22,33 +24,30 @@ final class QuitFlow {
   static func commitHeldHoverLoss() {
     guard ArdiaHost.hoverLossReportedAtQuitIsOpen(), let held = DocumentStore.read(heldHoverLoss) else { return }
     let seconds = ArdiaHost.hoverLossReportedAtQuitSeconds()
-    guard let merged = mergeCommittedHoverLoss(existing: DocumentStore.read(committedHoverLoss), held: held, seconds: seconds) else { return }
-    guard DocumentStore.writeDurablySync(committedHoverLoss, merged) else { return }
-    try? DocumentStore.remove(heldHoverLoss)
-    DocumentStore.flush()
+    guard let prepared = prepareCommittedHoverLoss(held: held, seconds: seconds) else { return }
+    let existing = DocumentStore.list(committedHoverLossPrefix)
+    if existing.count >= maxCommittedHoverLossFiles {
+      for old in existing.prefix(existing.count - maxCommittedHoverLossFiles + 1) {
+        DocumentStore.removeSync(old, allowWhenClosed: true)
+      }
+    }
+    guard DocumentStore.writeDurablySync("\(committedHoverLossPrefix)\(prepared.id).json", prepared.json, allowWhenClosed: true) else { return }
+    ArdiaHost.markHoverLossCommittedAtQuit()
+    DocumentStore.removeSync(heldHoverLoss, allowWhenClosed: true)
   }
 
-  private static func mergeCommittedHoverLoss(existing: String?, held: String, seconds: Int) -> String? {
+  private static func prepareCommittedHoverLoss(held: String, seconds: Int) -> (id: String, json: String)? {
     guard let heldData = held.data(using: .utf8),
           var record = (try? JSONSerialization.jsonObject(with: heldData)) as? [String: Any] else { return nil }
     if seconds >= 0, var props = record["properties"] as? [String: Any] {
-      props["lost_seconds"] = seconds
+      props["lost_seconds"] = min(seconds, maxHoverLostSeconds)
       record["properties"] = props
     }
-    var records: [[String: Any]] = []
-    if let existing, let data = existing.data(using: .utf8), let parsed = try? JSONSerialization.jsonObject(with: data) {
-      if let list = parsed as? [[String: Any]] {
-        records = list
-      } else if let single = parsed as? [String: Any] {
-        records = [single]
-      }
-    }
-    let uuid = record["uuid"] as? String
-    if let uuid { records.removeAll { ($0["uuid"] as? String) == uuid } }
-    records.append(record)
-    if records.count > 20 { records.removeFirst(records.count - 20) }
-    guard let out = try? JSONSerialization.data(withJSONObject: records) else { return nil }
-    return String(data: out, encoding: .utf8)
+    let rawId = (record["uuid"] as? String) ?? ""
+    let safeId = !rawId.isEmpty && rawId.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } ? rawId : UUID().uuidString.lowercased()
+    guard let out = try? JSONSerialization.data(withJSONObject: record),
+          let json = String(data: out, encoding: .utf8) else { return nil }
+    return (safeId, json)
   }
 
   private var isSaving: Bool {
@@ -165,6 +164,7 @@ final class QuitFlow {
       holds -= 1
       guard holds == 0, let self, self.attempt == attempt, case .waitingForUpdater = self.phase else { return }
       self.phase = .idle
+      Self.commitHeldHoverLoss()
       NSApp.reply(toApplicationShouldTerminate: true)
     }
     PluginProgramLinks.stopAfterUpdates(done: settled)
