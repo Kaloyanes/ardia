@@ -112,6 +112,19 @@ test("utility windows keep the help shortcuts a browser window plays, so Show On
   assert.equal(commandAt(utilityBindings(linuxBindings()), 87, 4)?.command, "closeTab");
 });
 
+test("Ctrl+\\ opens a split pane, while Ctrl+Shift+= stays Zoom In and no Super combination opens one, since Windows keeps Win+Shift+= for the Magnifier", () => {
+  const bindings = linuxBindings();
+  const split = keyboardCombo(event("Backslash", { ctrlKey: true }));
+  assert.equal(commandAt(bindings, split.keyCode, split.flags)?.command, "openSplitPane");
+  const zoom = keyboardCombo(event("Equal", { ctrlKey: true, shiftKey: true }));
+  assert.equal(commandAt(bindings, zoom.keyCode, zoom.flags)?.command, "zoomIn");
+  for (const binding of bindings.filter((entry) => entry.command === "openSplitPane")) assert.equal(binding.keyCode, 220, "the split pane takes only Ctrl+\\");
+  const item = linuxMenuShortcuts().find((entry) => entry.id === "openSplitPane");
+  assert.equal(item.defaultKey, "\\");
+  assert.deepEqual(item.defaultModifiers, ["command"]);
+  assert.deepEqual(item.aliases, []);
+});
+
 test("Ctrl+J dispatches the advertised Downloads command", () => {
   assert.equal(commandAt(linuxBindings(), 74, 4)?.command, "downloads");
 });
