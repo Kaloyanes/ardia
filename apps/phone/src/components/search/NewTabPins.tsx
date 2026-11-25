@@ -1,5 +1,5 @@
-import { useEffect, useState, type RefObject } from "react";
-import { ScrollView, StyleSheet, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
+import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { ScrollView, StyleSheet, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import type { Point } from "../../lib/menuPlace";
 import { useSearchEditsPage } from "../../state/search/hooks";
@@ -34,7 +34,7 @@ export function useNewTabPins(): NewTabPinsShown | null {
   return { profileId: profile.syncId, tiles: profile.pinned.tiles };
 }
 
-export function NewTabPins({ style, maxHeight }: { style?: StyleProp<ViewStyle>; maxHeight?: number }) {
+export function NewTabPins({ style, maxHeight, plate = null, inset = 0 }: { style?: StyleProp<ViewStyle>; maxHeight?: number; plate?: ReactNode; inset?: number }) {
   const pins = useNewTabPins();
   const [menu, setMenu] = useState<PinsMenu | null>(null);
   const menuOpen = menu !== null;
@@ -51,13 +51,16 @@ export function NewTabPins({ style, maxHeight }: { style?: StyleProp<ViewStyle>;
   );
   return (
     <Animated.View testID="newTabPins" entering={FadeIn.duration(trayMotion.resultsIn)} exiting={FadeOut.duration(trayMotion.resultsIn)} style={style} pointerEvents="box-none">
-      {maxHeight === undefined ? (
-        tiles
-      ) : (
-        <ScrollView testID="newTabPinsScroll" style={[styles.scroll, { maxHeight }]} bounces={false} overScrollMode="never" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="none">
-          {tiles}
-        </ScrollView>
-      )}
+      <View testID={plate ? "newTabPinsPlate" : undefined} style={[{ marginHorizontal: inset }, plate ? styles.plated : null]}>
+        {plate}
+        {maxHeight === undefined ? (
+          tiles
+        ) : (
+          <ScrollView testID="newTabPinsScroll" style={[styles.scroll, { maxHeight: plate ? maxHeight - space.s * 2 : maxHeight }]} bounces={false} overScrollMode="never" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="none">
+            {tiles}
+          </ScrollView>
+        )}
+      </View>
       {menu ? <FloatingMenu items={menu.items} anchor={menu.anchor} at={menu.at} dimmed={menu.at !== null} frost={null} place={{ top: 0, left: space.xl, width: tabsLayout.menuWidth }} onDismiss={() => setMenu(null)} /> : null}
     </Animated.View>
   );
@@ -65,4 +68,5 @@ export function NewTabPins({ style, maxHeight }: { style?: StyleProp<ViewStyle>;
 
 const styles = StyleSheet.create({
   scroll: { flexGrow: 0 },
+  plated: { paddingVertical: space.s },
 });

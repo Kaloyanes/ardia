@@ -602,7 +602,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
         <MotionView style={StyleSheet.absoluteFill} pointerEvents="box-none" to={departed ? PANEL_DEPARTED : PANEL_HOME} motion={PANEL_DEPART}>
         {arcPanel && furnished && !standby && !closing ? (
           <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, trayStyle]}>
-            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} />
+            <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} inset={place.cardInset} plate={origin === "page" ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null} />
           </Animated.View>
         ) : null}
         <Animated.View
@@ -1040,6 +1040,8 @@ function StagedTray() {
             <NewTabPins
               style={[styles.pinsAbovePanel, { paddingLeft: insets.left, paddingRight: insets.right }]}
               maxHeight={window.height - insets.top - lift.lift - trayHeight - place.cardGap - space.m * 2}
+              inset={place.cardInset}
+              plate={overPage ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null}
             />
           ) : null}
         </Animated.View>

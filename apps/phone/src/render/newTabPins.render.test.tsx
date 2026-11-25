@@ -173,3 +173,20 @@ test("the Material search sheet shows the same tiles above its rows, and none wh
   expect(pins(edit)).toBeUndefined();
   unmount(edit);
 });
+
+test("over a page the tiles sit on the panel's own face so they read over any page; over the start page they sit on the space's backdrop", () => {
+  const plate = (root: Root) => root.root.findAll((node) => node.props.testID === "newTabPinsPlate" && typeof node.type === "string")[0];
+  act(() => browse.newTab());
+  const onStart = tray();
+  expect(pins(onStart)).toBeDefined();
+  expect(plate(onStart)).toBeUndefined();
+  unmount(onStart);
+  act(() => dismissSearch());
+  act(() => jest.runOnlyPendingTimers());
+  act(() => browse.useBrowse.setState({ surface: "browsing" }));
+  act(() => browse.newTab());
+  const overPage = tray();
+  expect(plate(overPage)).toBeDefined();
+  expect(plate(overPage)!.findAll((node) => node.props.testID === "searchPanelFace")).not.toHaveLength(0);
+  unmount(overPage);
+});
