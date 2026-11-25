@@ -60,9 +60,18 @@ NSMapTable<ArdiaCoreProfile *, ArdiaCoreTab *> *ActiveTabs(ArdiaWindowController
   return active;
 }
 
-NSMapTable<ArdiaCoreTab *, NSNumber *> *Activations() {
+const NSTimeInterval kActivationMarkerSeconds = 5;
+
+NSMapTable<ArdiaCoreTab *, NSDictionary *> *Activations() {
   static NSMapTable *asked = [NSMapTable weakToStrongObjectsMapTable];
   return asked;
+}
+
+NSNumber *TakeActivation(ArdiaCoreTab *tab) {
+  NSDictionary *marker = tab ? [Activations() objectForKey:tab] : nil;
+  if (!marker) return nil;
+  [Activations() removeObjectForKey:tab];
+  return [NSProcessInfo processInfo].systemUptime - [marker[@"at"] doubleValue] <= kActivationMarkerSeconds ? marker[@"cmd"] : nil;
 }
 
 BOOL ActiveFallback(ArdiaWindowController *controller, ArdiaCoreProfile *profile) {
@@ -164,8 +173,7 @@ NSArray<ArdiaCoreProfile *> *ProfilesWithTabs(ArdiaWindowController *controller)
                   cause:(id)cause
                 trigger:(NSString *)trigger
            activatedTab:(ArdiaCoreTab *)activatedTab {
-  NSNumber *asked = activatedTab ? [Activations() objectForKey:activatedTab] : nil;
-  if (asked) [Activations() removeObjectForKey:activatedTab];
+  NSNumber *asked = TakeActivation(activatedTab);
   if (![ArdiaEvents listens:@"tabs"] || !controller || !profile || controller.standalone) return;
   if (gCommand && controller == gCommandWindow && profile == gCommandProfile) return;
   cause = cause ?: (gCommand ?: (controller.hostChanges > 0 ? @(-1) : NSNull.null));
@@ -242,8 +250,7 @@ NSArray<ArdiaCoreProfile *> *ProfilesWithTabs(ArdiaWindowController *controller)
   if (found && [op isEqualToString:@"activate"]) {
     ArdiaCoreTab *tab = byKey[command[@"key"]];
     if (tab) {
-      for (ArdiaCoreTab *other in [found.coreWindow tabsForProfile:profile]) [Activations() removeObjectForKey:other];
-      [Activations() setObject:@(commandId) forKey:tab];
+      [Activations() setObject:@{@"cmd" : @(commandId), @"at" : @([NSProcessInfo processInfo].systemUptime)} forKey:tab];
       [found.coreWindow activateTab:tab];
       if ([ActiveTabs(found) objectForKey:profile] == tab) [Activations() removeObjectForKey:tab];
     } else {
