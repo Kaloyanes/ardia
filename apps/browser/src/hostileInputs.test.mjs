@@ -23,6 +23,8 @@ const { syncedHome } = await import("./state/sync/pinRecords.ts");
 const { sendableUrl } = await import("./state/sync/sentTabsAdapter.ts");
 const { filterListAddress } = await import("./state/site/contentBlocking.ts");
 const { CLEAN_UP_KEY, LEGACY_CLEAN_UP_KEY } = await import("./state/settings/cleanUpAfter.ts");
+const { checkedInput, isKeyName, MAX_TEXT_LENGTH } = await import("./state/automation/tabInput.ts");
+const { MAX_MESSAGE_LENGTH, redactText, redactUrl } = await import("./state/automation/tabDiagnostics.ts");
 const { updateWithin } = await import("./state/plugins/officialUpdate.ts");
 const { readManifest } = await import("./lib/pluginManifest.ts");
 const { parseIntent, INTENT_SPECS } = await import("./state/plugins/stateIntents.ts");
@@ -720,5 +722,34 @@ test("windows webui native update policy keeps every hostile input and call argu
     assert.equal(unit.status, 0, unit.stderr || unit.stdout);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("socket tabs.input: every hostile value reaches the engine only as a checked action, point, key or text", () => {
+  for (const value of HOSTILE_VALUES.map((h) => h.value)) {
+    for (const params of [{ action: value, x: 1, y: 1 }, { action: "click", x: value, y: 1 }, { action: "key", key: value }, { action: "key", key: "a", code: value }, { action: "text", text: value }, { action: "click", x: 1, y: 1, modifiers: [value] }]) {
+      let out;
+      try {
+        out = checkedInput(params);
+      } catch (error) {
+        assert.equal(error.code, "bad_request", show(params));
+        continue;
+      }
+      if (out.key !== undefined) assert.ok(isKeyName(out.key), show(params));
+      if (out.text !== undefined) assert.ok(typeof out.text === "string" && out.text.length <= MAX_TEXT_LENGTH && !out.text.includes("\0"), show(params));
+      if (out.x !== undefined) assert.ok(Number.isFinite(out.x) && Number.isFinite(out.y), show(params));
+    }
+  }
+});
+
+test("socket tabs.diagnostics: a hostile page's console text and addresses leave only redacted and bounded", () => {
+  for (const value of strings) {
+    const message = redactText(`token=${value} ${value}`);
+    assert.ok(message.length <= MAX_MESSAGE_LENGTH, show(value));
+    assert.equal(typeof message, "string");
+    if (/^[\w.~+/-]+$/.test(value) && value !== "redacted") assert.ok(message.startsWith("token=[redacted]"), show(value));
+    const part = value.isWellFormed() ? encodeURIComponent(value) : value;
+    const url = redactUrl(`https://user:pw@a.example/${part}?q=${part}#${part}`);
+    assert.ok(url.startsWith("https://a.example/") && !url.includes("?") && !url.includes("#") && !url.includes("pw@"), show(value));
   }
 });
