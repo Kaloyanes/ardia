@@ -227,7 +227,42 @@ void WithProfile(std::string_view name,
     std::move(callback).Run(loaded);
     return;
   }
-  manager->CreateProfileAsync(path, std::move(callback));
+  manager->CreateProfileAsync(
+      path, base::BindOnce(
+                [](std::string name, base::OnceCallback<void(Profile*)> callback,
+                   Profile* profile) {
+                  if (profile) {
+                    for (ShellHostView* host : Hosts()) {
+                      host->Emit("ArdiaProfiles", "profiles",
+                                 base::Value(base::DictValue()
+                                                 .Set("name", "profiles.loaded")
+                                                 .Set("data", base::DictValue().Set(
+                                                                  "profile", name))));
+                    }
+                  }
+                  std::move(callback).Run(profile);
+                },
+                std::string(name.empty() ? "default" : name), std::move(callback)));
+}
+
+std::string ProfileName(const Profile* profile) {
+  const std::string directory = profile->GetOriginalProfile()->GetPath().BaseName().value();
+  if (!directory.starts_with(kDirectoryPrefix)) {
+    return "default";
+  }
+  std::string name;
+  const std::string escaped = directory.substr(sizeof(kDirectoryPrefix) - 1);
+  for (size_t i = 0; i < escaped.size(); ++i) {
+    if (escaped[i] == '_' && i + 2 < escaped.size()) {
+      int value = 0;
+      base::HexStringToInt(escaped.substr(i + 1, 2), &value);
+      name.push_back(static_cast<char>(value));
+      i += 2;
+    } else {
+      name.push_back(escaped[i]);
+    }
+  }
+  return name;
 }
 
 std::vector<ShellHostView*>& Hosts() {

@@ -25,7 +25,9 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/version_info/version_info.h"
@@ -115,6 +117,17 @@ base::DictValue ReadDocuments() {
 
 void Reply(ShellHostView::Done done, base::Value value) {
   std::move(done).Run(true, std::move(value));
+}
+
+void* EngineImage() {
+  static void* image = [] {
+    Dl_info info;
+    if (!dladdr(reinterpret_cast<void*>(&EngineImage), &info) || !info.dli_fname) {
+      return static_cast<void*>(nullptr);
+    }
+    return dlopen(info.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+  }();
+  return image;
 }
 
 }
@@ -427,10 +440,24 @@ void ShellHostView::EngineCall(const std::string& name,
                                const std::string& profile,
                                const base::Value* args,
                                Done done) {
+  if (name == "profiles.loaded") {
+    base::ListValue loaded;
+    for (Profile* profile :
+         g_browser_process->profile_manager()->GetLoadedProfiles()) {
+      if (!profile->IsOffTheRecord()) {
+        loaded.Append(ProfileName(profile));
+      }
+    }
+    return std::move(done).Run(
+        true, base::Value(base::WriteJson(base::DictValue().Set(
+                                              "profiles", std::move(loaded)))
+                              .value_or("{}")));
+  }
   const auto* route = ardia::desktop_routes::FindRoute(name);
   EngineFunction call =
       route ? reinterpret_cast<EngineFunction>(
-                  dlsym(RTLD_DEFAULT, std::string(route->service).c_str()))
+                  dlsym(EngineImage() ? EngineImage() : RTLD_DEFAULT,
+                        std::string(route->service).c_str()))
             : nullptr;
   if (!call) {
     NoteUnhandled("engine.call " + name);

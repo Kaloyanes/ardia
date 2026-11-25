@@ -58,6 +58,7 @@ std::optional<GURL> AllowedPageUrl(const std::string& requested);
 int TabId(const content::WebContents* contents);
 void WithProfile(std::string_view name,
                  base::OnceCallback<void(Profile*)> callback);
+std::string ProfileName(const Profile* profile);
 base::FilePath DataDirectory();
 base::FilePath AssetDirectory();
 std::vector<ShellHostView*>& Hosts();
