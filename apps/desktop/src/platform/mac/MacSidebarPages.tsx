@@ -120,7 +120,12 @@ export const SidebarPages = memo(function MacSidebarPages({ windowId, pages, wid
     };
   }, [windowId]);
 
+  const launched = useRef(false);
   useLayoutEffect(() => {
+    if (!launched.current && spots.get(current)?.viewport) {
+      launched.current = true;
+      preReveal(windowId, current, spots.get(current));
+    }
     if (!neighbours) return;
     for (const page of pages) if (page.id !== current) preReveal(windowId, page.id, spots.get(page.id));
   }, [neighbours, selected, current, available]);

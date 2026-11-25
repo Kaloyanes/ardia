@@ -233,8 +233,18 @@ LaunchWindow ReadLaunchWindow() {
     if (order && !order->empty() && (*order)[0].is_string()) {
       launch.id = (*order)[0].GetString();
     }
-    const base::DictValue* windows = dict ? dict->FindDict("windows") : nullptr;
-    const base::DictValue* window = windows ? windows->FindDict(launch.id) : nullptr;
+    const base::DictValue* window = nullptr;
+    if (const base::DictValue* windows = dict ? dict->FindDict("windows") : nullptr) {
+      window = windows->FindDict(launch.id);
+    } else if (const base::ListValue* list = dict ? dict->FindList("windows") : nullptr) {
+      for (const base::Value& entry : *list) {
+        const base::DictValue* candidate = entry.GetIfDict();
+        const std::string* id = candidate ? candidate->FindString("id") : nullptr;
+        if (id && *id == launch.id) {
+          window = candidate;
+        }
+      }
+    }
     const base::ListValue* frame = window ? window->FindList("frame") : nullptr;
     if (frame && frame->size() == 4) {
       launch.frame = gfx::Rect((*frame)[0].GetIfDouble().value_or(80),

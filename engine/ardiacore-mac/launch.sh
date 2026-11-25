@@ -7,7 +7,9 @@ fi
 app=$1 data=$2 port=$3
 shift 3
 mkdir -p "$data/Chromium"
-open -g -n "$app" --args --ardia-shell=webui --user-data-dir="$data/Chromium" --ardia-data-dir="$data" \
+envs=(--env ARDIA_DATA_DIR="$data" --env ARDIA_BACKGROUND=1)
+[[ -n "${MAC_WEBUI_INJECT:-}" ]] && envs+=(--env DYLD_INSERT_LIBRARIES="$MAC_WEBUI_INJECT" --env AC_BENCH_SWIPE=1 --env AC_BENCH_FRAMES=1)
+open -g -n "${envs[@]}" "$app" --args --ardia-shell=webui --user-data-dir="$data/Chromium" --ardia-data-dir="$data" \
   --ardia-background --use-mock-keychain --remote-debugging-port="$port" --enable-logging --v=0 "$@"
 for _ in $(seq 1 200); do
   pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
