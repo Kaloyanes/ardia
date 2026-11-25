@@ -81,6 +81,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
     if (!capturing) void host.invoke("ArdiaShell.restoreShortcutFocus", { args: [] }).catch(reportHostError);
   });
   window.addEventListener("keydown", (event) => {
+    if (isImeKey(event)) return;
     const combo = keyboardCombo(event);
     if (recording) {
       event.preventDefault();
@@ -92,7 +93,6 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
       void host.invoke("ArdiaShell.setShortcutRecording", { args: [false] }).then(() => current.resolve({ key: combo.key, modifiers: combo.modifiers }), (error) => { reportHostError(error); current.resolve(null); });
       return;
     }
-    if (isImeKey(event)) return;
     const binding = bindings.find((b) => b.keyCode === combo.keyCode && b.modifiers === combo.flags);
     if (capturing && binding?.command !== "tabSwitcher") {
       const closes = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && !event.repeat;

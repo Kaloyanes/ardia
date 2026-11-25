@@ -2,8 +2,10 @@ import { displayHostOf } from "./url";
 import { graphemeClusters, isControl, isPictographic, startsCluster } from "./graphemes";
 
 const LETTER = /(?![\u115F\u1160\u3164\uFFA0])\p{L}/u;
-const FILLER = /[\u115F\u1160\u2800\u3164\uFFA0]/u;
-const drawsSomething = (cluster: string) => [...cluster].some((char) => !FILLER.test(char));
+const INVISIBLE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
+const drawsSomething = (cluster: string) => [...cluster].some((char) => !INVISIBLE.test(char));
+const isTag = (char: string) => char >= "\u{E0020}" && char <= "\u{E007F}";
+const withoutRepeatedInvisibles = (cluster: string) => [...cluster].filter((char, i, chars) => !(char === chars[i - 1] && INVISIBLE.test(char) && !isTag(char))).join("");
 
 const firstLetter = (text: string): string | null => {
   for (const char of text) if (LETTER.test(char)) return char.toLocaleUpperCase();
@@ -43,7 +45,7 @@ function withoutStrayJoiners(cluster: string): string {
 function cleanOnce(text: string): string {
   const shown = withoutUnseen(inBasicPlane(withoutUnseen(text), (run) => run.normalize("NFC").toLocaleUpperCase().normalize("NFC")));
   let kept = "";
-  for (const cluster of graphemeClusters(shown).filter(startsCluster).filter(drawsSomething).map(withoutStrayJoiners).slice(0, TILE_LETTERS_MAX)) {
+  for (const cluster of graphemeClusters(shown).filter(startsCluster).filter(drawsSomething).map(withoutStrayJoiners).map(withoutRepeatedInvisibles).slice(0, TILE_LETTERS_MAX)) {
     const room = TILE_LETTERS_MAX_LENGTH - kept.length;
     if (cluster.length <= room) {
       kept += cluster;

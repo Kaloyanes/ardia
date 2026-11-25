@@ -127,3 +127,12 @@ test("a site's default letter skips a Hangul filler that draws nothing", () => {
   assert.equal(tileLetterOf("https://127.0.0.1/", "\u3164News"), "N");
   assert.equal(tileLetterOf("", "\uFFA0\u115F\u1160Ok"), "O");
 });
+
+test("a letter that is only fillers and invisible marks is blank, and repeated invisible marks don't crowd out the second letter (#4197)", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  for (const blank of ["\u2800\u200C", "\u3164\uFE0F", "\uFFA0\u034F", "\u2800\u200C\u3164\uFE0F"]) assert.equal(cleanTileLetters(blank), null, JSON.stringify(blank));
+  assert.equal(cleanTileLetters("A" + "\u200C".repeat(23) + "B"), "A\u200CB");
+  assert.equal(cleanTileLetters("A" + "\uFE0F".repeat(30) + "B"), "A\uFE0FB");
+  assert.equal(cleanTileLetters("\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}x"), "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}X", "a tag flag keeps its tags");
+  assert.equal(cleanTileLetters("\u2764\uFE0F"), "\u2764\uFE0F");
+});

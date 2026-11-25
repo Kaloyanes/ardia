@@ -10,7 +10,7 @@ test("a desktop shortcut key the input method is composing goes to the input met
   globalThis.document.addEventListener ??= () => {};
   const { requireNativeModule } = await import("./shims/expo-modules-core.ts");
   const { useBrowser } = await import("../../browser/src/state/browser/store.ts");
-  const { startLinuxShortcuts } = await import("./shortcutsRuntime.ts");
+  const { recordShortcut, startLinuxShortcuts } = await import("./shortcutsRuntime.ts");
   const { keyboardCombo, linuxBindings } = await import("./shortcuts.ts");
   useBrowser.getState().hydrate({});
   await startLinuxShortcuts({ bootstrap: { windowId: "main" }, invoke: async () => {}, onEvent: () => () => {} });
@@ -34,6 +34,16 @@ test("a desktop shortcut key the input method is composing goes to the input met
     assert.deepEqual(commands, [], "nothing runs while composing");
     assert.equal(press({}).prevented, true);
     assert.deepEqual(commands, [plain.command], "the same key outside composition runs its shortcut");
+    let recorded = "pending";
+    const recording = recordShortcut().then((combo) => (recorded = combo));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(press({ key: "Process", keyCode: 229 }).prevented, false, "the recorder leaves a composing key to the input method");
+    assert.equal(press({ key: "Escape", code: "Escape", keyCode: 27, isComposing: true }).prevented, false, "Escape that cancels a composition doesn't cancel recording");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(recorded, "pending");
+    assert.equal(press({}).prevented, true);
+    await recording;
+    assert.notEqual(recorded, "pending", "the next real key ends the recording");
   } finally {
     sub.remove();
   }
