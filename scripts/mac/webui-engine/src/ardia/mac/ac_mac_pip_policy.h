@@ -1,0 +1,112 @@
+#ifndef ARDIA_MAC_AC_MAC_PIP_POLICY_H_
+#define ARDIA_MAC_AC_MAC_PIP_POLICY_H_
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <optional>
+#include <string_view>
+
+namespace ardia_mac::pip_policy {
+
+inline constexpr std::string_view kPipMethods[] = {"pip.attach", "pip.viewport", "pip.command"};
+inline constexpr std::string_view kAutoPipCall = "webView.setAutoPictureInPicture";
+inline constexpr double kMaxSeekSeconds = 1e7;
+inline constexpr double kMaxCoordinate = 1e6;
+inline constexpr double kCloseFadeMs = 100;
+inline constexpr double kBackToTabFadeMs = 70;
+inline constexpr double kHandoffDeadlineMs = 1000;
+
+enum class Action { kTogglePlayPause, kSeekTo, kSeekBy, kBackToTab, kClose, kPopOut };
+
+inline std::optional<Action> ParseAction(std::string_view action) {
+  if (action == "togglePlayPause") return Action::kTogglePlayPause;
+  if (action == "seekTo") return Action::kSeekTo;
+  if (action == "seekBy") return Action::kSeekBy;
+  if (action == "backToTab") return Action::kBackToTab;
+  if (action == "close") return Action::kClose;
+  if (action == "popOut") return Action::kPopOut;
+  return std::nullopt;
+}
+
+inline bool ValidSeekSeconds(double seconds) {
+  return std::isfinite(seconds) && std::abs(seconds) <= kMaxSeekSeconds;
+}
+
+inline double ClampSeek(double target, std::optional<double> duration) {
+  double clamped = std::max(0.0, target);
+  if (duration && std::isfinite(*duration) && *duration > 0) clamped = std::min(clamped, *duration);
+  return clamped;
+}
+
+inline bool PlayerMatches(std::optional<double> requested, uint64_t presented) {
+  if (!requested || !std::isfinite(*requested) || *requested < 1 || *requested > 9007199254740991.0 ||
+      std::floor(*requested) != *requested || presented == 0) {
+    return false;
+  }
+  return static_cast<uint64_t>(*requested) == presented;
+}
+
+struct Box {
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+
+  bool empty() const { return width <= 0 || height <= 0; }
+  bool operator==(const Box&) const = default;
+};
+
+inline bool Bounded(double value) {
+  return std::isfinite(value) && std::abs(value) <= kMaxCoordinate;
+}
+
+inline std::optional<Box> PlayerBox(double x, double y, double width, double height, double scale,
+                                    int room_width, int room_height) {
+  if (!Bounded(x) || !Bounded(y) || !Bounded(width) || !Bounded(height) || width < 0 || height < 0 ||
+      !std::isfinite(scale) || scale < 0.1 || scale > 10) {
+    return std::nullopt;
+  }
+  const double left = std::floor(x * scale);
+  const double top = std::floor(y * scale);
+  const double right = std::ceil((x + width) * scale);
+  const double bottom = std::ceil((y + height) * scale);
+  const double clip_left = std::clamp(left, 0.0, static_cast<double>(std::max(0, room_width)));
+  const double clip_top = std::clamp(top, 0.0, static_cast<double>(std::max(0, room_height)));
+  const double clip_right = std::clamp(right, clip_left, static_cast<double>(std::max(0, room_width)));
+  const double clip_bottom = std::clamp(bottom, clip_top, static_cast<double>(std::max(0, room_height)));
+  return Box{static_cast<int>(clip_left), static_cast<int>(clip_top), static_cast<int>(clip_right - clip_left),
+             static_cast<int>(clip_bottom - clip_top)};
+}
+
+inline std::optional<int> PopOutCoordinate(double at, double grab, double scale) {
+  if (!Bounded(at) || !Bounded(grab) || !std::isfinite(scale) || scale < 0.1 || scale > 10) return std::nullopt;
+  return static_cast<int>(std::round((at - grab) * scale));
+}
+
+inline Box DefaultPlayerBox(int room_width, int room_height, int natural_width, int natural_height) {
+  const int player_width = std::clamp(static_cast<int>(std::max(0, room_width) * 0.28), 240, 480);
+  const double aspect = natural_width > 0 && natural_height > 0
+                            ? static_cast<double>(natural_width) / natural_height
+                            : 16.0 / 9.0;
+  const int player_height = std::max(1, static_cast<int>(player_width / std::clamp(aspect, 0.1, 10.0)));
+  return Box{std::max(0, room_width - player_width - 10), std::max(0, room_height - player_height - 10),
+             player_width, player_height};
+}
+
+enum class Intent { kExplicit, kAutomatic };
+
+enum class Presentation { kInWindow, kWindow, kDeclined };
+
+inline Presentation PresentationFor(Intent intent, bool presenter_found) {
+  if (intent == Intent::kExplicit) return Presentation::kWindow;
+  return presenter_found ? Presentation::kInWindow : Presentation::kDeclined;
+}
+
+inline bool Presents(bool attached, uint64_t attached_generation, uint64_t renderer_generation, bool binds_source) {
+  return attached && attached_generation == renderer_generation && binds_source;
+}
+
+}
+
+#endif

@@ -68,6 +68,29 @@ that branch). It is a development tool and never runs in a release. Like Windows
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
+- **Downloads, Finder and the system** (`ac_mac_system`, rules in `ac_mac_system_policy.h`).
+  - `downloads.list | remove | clear` are served by the host, which watches each window profile's download manager and
+    sends `ArdiaDownloads` `downloads.changed` (throttled to 100 ms while a download runs) and `downloads.removed`.
+    Private profiles are never watched.
+  - `ArdiaSystem.openFile`, `moveToTrash` and `revealFile` (Finder) take only paths of listed downloads; `fileStatus`,
+    `fileIcon` and `runningAppIcon` answer as `packages/shell/ios` does, icons as PNG data URLs.
+  - `isDefaultBrowser`, `setAsDefaultBrowser`, `launchAtLoginStatus`, `setLaunchAtLogin` (`SMAppService`), `hapticTick`
+    and `setThinScrollBars` (overlay scrollers) match the native modules; a background instance changes none of them.
+  - `ArdiaShell.pickFiles` and `pickFolder` open an `NSOpenPanel` sheet, one per window; a background instance logs the
+    request and answers cancelled. `ArdiaApp.openExternalURL` refuses local, script and browser-internal schemes.
+  - Links from other apps: the host replaces `AppController`'s `application:openURLs:` while a WebUI window exists, keeps
+    http, https and file URLs for the shell and passes the rest on, and sends them as `ArdiaShell` `onOpenURLs` to the key
+    window that called `ArdiaShell.listenForOpenURLs`.
+- **Extension popups and side panels** (`ac_mac_extension_view`, rules in `ac_mac_extension_view_policy.h`).
+  `extensionView.create | viewport | place | command | release` host an extension's `ExtensionViewHost` in the window,
+  a side panel under the shell like a page and a popup above it, with Linux's placement, reveal and `frame` handshake.
+  `extensions.actionStates`, `sidePanelUrl`, `chooseFolder`, `inspectUnpacked` and `resolveInstallPrompt` are served
+  by the host, `tab.command executeExtensionAction` runs an action, and the host answers Chrome's install prompt and
+  side panel hooks with `ArdiaExtensions` `extensions.installPrompt` and `extensions.sidePanel`.
+- **Picture in picture** (`ac_mac_pip`, rules in `ac_mac_pip_policy.h`). `apply.sh` adds `g_ardia_mac_video_overlay` to
+  `CreateVideoOverlayWindow`, so the host makes the player: automatic picture in picture plays inside the window that
+  shows its tab (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
+  Chrome's own window. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -8,10 +9,13 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_pip_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_system_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "ardia/mac/ac_mac_window_layout.h"
 #include "check.h"
@@ -245,6 +249,104 @@ TEST(launch_environment) {
   }
   CHECK(ardia_mac::webui_policy::Active(
       ardia_mac::webui_policy::Decide(ardia_mac::webui_policy::Build::kDevelopment, "webui", std::nullopt)));
+}
+
+TEST(system_files_and_links) {
+  namespace system = ardia_mac::system_policy;
+  const std::vector<std::string> known = {"/Users/me/Downloads/a.zip"};
+  for (const std::string& text : Load().strings) {
+    if (system::ValidDownloadId(text)) CHECK(text.size() == 36 && Charset(text, "-"));
+    if (system::ValidLocalPath(text)) {
+      CHECK(text.front() == '/' && text.find('\0') == std::string::npos && text.find("/../") == std::string::npos &&
+            !text.ends_with("/..") && text.size() <= system::kMaxPathBytes);
+    }
+    if (system::PathListed(text, known)) CHECK(text == known[0]);
+    if (system::IconPathAllowed(text, known)) {
+      CHECK(text == known[0] || (text.find('/') == std::string::npos && NoControls(text) && !text.empty()));
+    }
+    if (system::ExternalSchemeAllowed(text)) {
+      CHECK(Charset(text, "+-.") && text != "file" && text != "javascript" && text != "data");
+    }
+    if (system::ExternalTextAllowed(text)) {
+      CHECK(NoControls(text) && text.find(' ') == std::string::npos && text.find('"') == std::string::npos);
+    }
+    if (system::SchemeGoesToShell(text)) {
+      CHECK(NoControls(text) && text.find(' ') == std::string::npos && text.find("://") != std::string::npos);
+    }
+    if (system::PickerPromptUsable(text)) CHECK(NoControls(text) && text.size() <= system::kPickerPromptLimit);
+  }
+  system::OpenUrlInbox inbox;
+  inbox.Add(Load().strings);
+  CHECK(inbox.pending() <= system::kPendingOpenUrls);
+  while (!inbox.empty()) {
+    for (const std::string& url : inbox.Take()) CHECK(system::SchemeGoesToShell(url));
+  }
+  for (double number : Load().numbers) {
+    const double points = system::IconPoints(number);
+    CHECK(points >= system::kMinIconPoints && points <= system::kMaxIconPoints);
+    if (const auto pid = system::ProcessId(number)) CHECK(*pid >= 1);
+    CHECK(!system::ClearsDownload(false, false, number, std::numeric_limits<double>::quiet_NaN()));
+  }
+  CHECK(system::ExternalSchemeAllowed("https") && system::SchemeGoesToShell("https://example.com"));
+  CHECK(system::ValidDownloadId("0b6a3f2e-1c4d-4e5f-8a9b-0c1d2e3f4a5b"));
+}
+
+TEST(extension_surfaces) {
+  namespace ext = ardia_mac::extension_policy;
+  for (const std::string& text : Load().strings) {
+    if (ext::ValidExtensionId(text)) CHECK(text.size() == 32);
+    if (const auto host = ext::ExtensionUrlHost(text)) {
+      CHECK(ext::ValidExtensionId(*host) && text.starts_with("chrome-extension://" + *host) && NoControls(text));
+    }
+    if (ext::ValidTabKey(text)) CHECK(NoControls(text) && text.size() <= ext::kMaxTabKey);
+    if (ext::ValidRequestId(text)) CHECK(NoControls(text) && text.size() <= ext::kMaxRequestId);
+    if (ext::ValidFolderPath(text)) CHECK(text.front() == '/' && text != "/");
+    if (const auto resource = ext::ResourcePath(text)) {
+      CHECK(resource->find("/../") == std::string::npos && !resource->starts_with("../") && *resource != "..");
+      CHECK(!resource->starts_with("/") && NoControls(*resource));
+    }
+    if (const auto kind = ext::SurfaceKindFor(text)) CHECK(text == "popup" || text == "sidePanel");
+    ext::SurfaceBook book;
+    if (book.Open(ext::SurfaceKind::kPopup, text, 1)) CHECK(ext::ValidExtensionId(text));
+  }
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      const ext::PopupPlacement placement{.anchor_right = a, .anchor_top = b, .room_left = 0, .room_right = a,
+                                          .room_bottom = b};
+      if (const auto box = ext::PopupBoxFor(placement, 1, std::isfinite(a) ? static_cast<int>(std::clamp(a, -1e6, 1e6)) : 0, 300, a, b, a)) {
+        CHECK(box->width >= 1 && box->width <= ext::kPopupMaxWidth && box->height >= 1 &&
+              box->height <= ext::kPopupMaxHeight);
+      }
+      if (const auto box = ext::ViewportBox(a, b, a, b, 1, 1280, 800)) {
+        CHECK(box->x >= 0 && box->y >= 0 && box->x + box->width <= 1280 && box->y + box->height <= 800);
+      }
+      const double radius = ext::CornerRadius(a, b);
+      CHECK(std::isfinite(radius) && radius >= 0 && radius <= ext::kMaxCornerRadius * 10);
+    }
+  }
+  CHECK(ext::ExtensionUrlHost("chrome-extension://abcdefghijklmnopabcdefghijklmnop/popup.html").has_value());
+}
+
+TEST(pip_commands) {
+  namespace pip = ardia_mac::pip_policy;
+  for (const std::string& text : Load().strings) {
+    if (const auto action = pip::ParseAction(text)) {
+      CHECK(text == "togglePlayPause" || text == "seekTo" || text == "seekBy" || text == "backToTab" ||
+            text == "close" || text == "popOut");
+    }
+  }
+  for (double a : Load().numbers) {
+    if (pip::ValidSeekSeconds(a)) CHECK(std::isfinite(a));
+    const double clamped = pip::ClampSeek(std::isfinite(a) ? a : 0, a);
+    CHECK(std::isfinite(clamped) && clamped >= 0);
+    if (pip::PlayerMatches(a, 7)) CHECK(a == 7);
+    for (double b : Load().numbers) {
+      if (const auto box = pip::PlayerBox(a, b, a, b, 1, 1280, 800)) {
+        CHECK(box->x >= 0 && box->y >= 0 && box->x + box->width <= 1280 && box->y + box->height <= 800);
+      }
+    }
+  }
+  CHECK(pip::ParseAction("popOut").has_value() && pip::PlayerMatches(7.0, 7));
 }
 
 int main(int argc, char** argv) {

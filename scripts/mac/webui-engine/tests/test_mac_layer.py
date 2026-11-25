@@ -32,6 +32,7 @@ HOOKED_FILES = (
     'content/app_shim_remote_cocoa/web_contents_view_cocoa.mm',
     'chrome/browser/ui/window_feature_controller/window_feature_controller.cc',
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
+    'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
 )
 
 
@@ -69,6 +70,15 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_shell_policy(self):
         compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
+
+    def test_system_policy(self):
+        compile_and_run(self, TESTS / 'system_policy_test.cc', self.out / 'system-policy')
+
+    def test_extension_view_policy(self):
+        compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
+
+    def test_pip_policy(self):
+        compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
     def test_shared_hostile_corpus_reaches_no_sink(self):
         node = shutil.which('node')
@@ -156,6 +166,11 @@ class ApplyTests(unittest.TestCase):
                 'void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {\n'
                 '  if (!GetBrowserView()->GetIsNormalType() &&\n'
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
+            'chrome/browser/ui/views/overlay/video_overlay_window_views.cc':
+                '#include "build/build_config.h"\n\n'
+                'std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n'
+                '    content::VideoPictureInPictureWindowController* controller) {\n'
+                '  return VideoOverlayWindowViews::Create(controller);\n}\n',
         }
         originals = {}
         for path, text in files.items():
@@ -449,11 +464,15 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
-                       'session.write', 'ArdiaShell.writeDocument'):
+                       'session.write', 'ArdiaShell.writeDocument', 'downloads.remove', 'downloads.clear',
+                       'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL', 'application:openURLs:',
+                       'ArdiaShell.listenForOpenURLs', 'extensionView.create', 'extensions.resolveInstallPrompt',
+                       'executeExtensionAction', 'pip.command', 'webView.setAutoPictureInPicture'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
-                     'hostile_corpus_test.cc', 'shell_policy_test.cc'):
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'system_policy_test.cc',
+                     'extension_view_policy_test.cc', 'pip_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

@@ -27,6 +27,9 @@ if (is_official_build) {
 
   source_set("mac") {
     sources = [
+      "ac_mac_extension_view.h",
+      "ac_mac_extension_view.mm",
+      "ac_mac_extension_view_policy.h",
       "ac_mac_glass.h",
       "ac_mac_glass.mm",
       "ac_mac_glass_layout.h",
@@ -34,6 +37,9 @@ if (is_official_build) {
       "ac_mac_menu.h",
       "ac_mac_menu.mm",
       "ac_mac_menu_model.h",
+      "ac_mac_pip.h",
+      "ac_mac_pip.mm",
+      "ac_mac_pip_policy.h",
       "ac_mac_popover.h",
       "ac_mac_popover.mm",
       "ac_mac_popover_policy.h",
@@ -43,6 +49,9 @@ if (is_official_build) {
       "ac_mac_shell_host.h",
       "ac_mac_shell_host.mm",
       "ac_mac_shell_policy.h",
+      "ac_mac_system.h",
+      "ac_mac_system.mm",
+      "ac_mac_system_policy.h",
       "ac_mac_webui.h",
       "ac_mac_webui.mm",
       "ac_mac_webui_policy.h",
@@ -56,12 +65,20 @@ if (is_official_build) {
     deps = [
       ":bootstrap",
       "//base",
+      "//cc",
       "//chrome/browser",
       "//chrome/browser/profiles:profile",
+      "//components/download/content/public",
+      "//components/download/public/common",
       "//components/sessions",
       "//components/version_info",
+      "//components/viz/common",
       "//components/zoom",
       "//content/public/browser",
+      "//extensions/browser",
+      "//extensions/common",
+      "//media",
+      "//services/media_session/public/cpp",
       "//services/network/public/mojom",
       "//skia",
       "//third_party/blink/public/common",
@@ -74,6 +91,8 @@ if (is_official_build) {
     frameworks = [
       "AppKit.framework",
       "QuartzCore.framework",
+      "ServiceManagement.framework",
+      "UniformTypeIdentifiers.framework",
     ]
   }
 }

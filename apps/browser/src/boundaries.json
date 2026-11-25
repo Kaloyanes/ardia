@@ -2367,6 +2367,101 @@
    "detected": false
   },
   {
+   "id": "mac-webui-system:downloadsAndFiles",
+   "source": "frame",
+   "guard": "Mac WebUI host (dev builds only): downloads.list, downloads.remove and downloads.clear arrive only as engine.call from the trusted shell bridge, as one JSON object of at most 1 MiB; list takes no arguments, remove exactly a GUID-shaped id (ValidDownloadId) of a listed download that is no longer running (Removable), clear exactly keep (at most 100 valid ids) and a finite, non-negative before cutoff, and removes only finished downloads that are not kept and started by the cutoff (ClearsDownload); private profiles are never watched or listed. ArdiaSystem.openFile and moveToTrash reach only a normalized absolute path (ValidLocalPath) that is the target of a finished, listed download of a profile this window watches (PathListed), revealFile any listed download; fileStatus takes at most 64 paths and reports a path as present only when it is listed and exists; fileIcon takes a bare file name or a listed path (IconPathAllowed) and a size clamped to 16-512 points (IconPoints); runningAppIcon takes a whole process id in 1..INT_MAX (ProcessId); pickFiles takes no arguments and pickFolder at most a current folder and a 1-200 byte prompt without control characters (PickerPromptUsable), one panel per window (AdmitPicker), and a background instance answers [] or null without showing a panel; setLaunchAtLogin, setAsDefaultBrowser and hapticTick do nothing in a background instance. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ValidDownloadId",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ValidLocalPath",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#PathListed",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#IconPathAllowed",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#IconPoints",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ProcessId",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ClearsDownload",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#PickerPromptUsable",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#AdmitPicker",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#ValidateDownloads",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#SystemServices::FileCall",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#SystemServices::PickFolder",
+    "scripts/mac/webui-engine/tests/system_policy_test.cc#file_actions_reach_only_listed_downloads",
+    "scripts/mac/webui-engine/tests/system_policy_test.cc#clearing_keeps_running_kept_and_newer_downloads",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#system_files_and_links"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-system:openExternalURL",
+   "source": "frame",
+   "guard": "Mac WebUI host: ArdiaApp.openExternalURL takes exactly one string of at most 32 KB with no whitespace, control characters, quotes or backslashes (ExternalTextAllowed); GURL must parse it, its scheme must be 1-64 characters of [A-Za-z0-9+.-] starting with a letter and not one of the local, script or browser-internal schemes (file, javascript, data, chrome, chrome-extension, about, blob, view-source, devtools, filesystem, x-apple.systempreferences and the rest of kDeniedSchemes, compared case-insensitively) (ExternalSchemeAllowed), and http(s) needs a host and no credentials; only then does NSWorkspace openURL: see the canonical spec, and a background instance opens nothing and answers false. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ExternalSchemeAllowed",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#ExternalTextAllowed",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#kDeniedSchemes",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#ArdiaApp.openExternalURL",
+    "scripts/mac/webui-engine/tests/system_policy_test.cc#external_urls_refuse_local_and_script_schemes",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#system_files_and_links"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-system:openURLs",
+   "source": "other-app",
+   "guard": "Mac WebUI host: links other apps open in Ardia arrive through AppController's application:openURLs:, which the host replaces while a WebUI window exists; only http, https and file URLs written scheme:// with no whitespace or control characters and at most 32 KB (SchemeGoesToShell) go to the shell, every other URL goes to Chrome's own handler unchanged; the inbox holds at most 256 URLs (OpenUrlInbox) and delivers at most 64 at a time as ArdiaShell onOpenURLs to the key window whose current renderer generation called ArdiaShell.listenForOpenURLs (ListeningForOpenUrls), and a reload forgets the listener. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#SchemeGoesToShell",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system_policy.h#OpenUrlInbox",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#ArdiaOpenUrls",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#SystemServices::DeliverOpenUrls",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_system.mm#SystemServices::ListeningForOpenUrls",
+    "scripts/mac/webui-engine/tests/system_policy_test.cc#links_from_other_apps_reach_the_shell_only_as_web_or_file_urls",
+    "scripts/mac/webui-engine/tests/system_policy_test.cc#open_url_inbox_is_bounded_and_drains_in_batches",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#system_files_and_links"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-extensions:surfaces",
+   "source": "frame",
+   "guard": "Mac WebUI host: extensionView.create takes exactly kind (popup or sidePanel), url and profile; the URL must be chrome-extension://<32 letters a-p>[/...] of at most 2 KB with no control characters (ExtensionUrlHost), the extension must be enabled in that profile (and allowed in private profiles), and a window holds at most 4 surfaces (SurfaceBook); viewport, place, command and release act only on a surface this window's current renderer generation opened (SurfaceBook::Owns), rectangles and placements must be finite and within +/-1e6 and are clipped to the window (ViewportBox, PopupLimitsFor, PopupBoxFor), radii are capped at 64 and fades at 1000 ms, and evaluate is refused; a reload retires older surfaces (CloseOlderThan). extensions.actionStates (a tab key and at most 64 valid ids), sidePanelUrl (a tab key and an id), chooseFolder (no arguments; a background instance answers null), inspectUnpacked (a normalized absolute folder other than /, read off the UI thread, icons only from inside the folder via ResourcePath) and extensions.resolveInstallPrompt (a request id of 1-64 bytes and a boolean, resolved only by the window and profile it was shown to, at most 8 pending, PromptLedger) take one JSON object of at most 1 MiB with exactly those keys, and a tab must be this window's tab in the same profile; tab.command executeExtensionAction takes exactly one valid extension id of an enabled extension. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#ValidExtensionId",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#ExtensionUrlHost",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#SurfaceBook",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#ViewportBox",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#PopupBoxFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#ResourcePath",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view_policy.h#PromptLedger",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view.mm#ValidateCall",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view.mm#ExtensionViews::Create",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view.mm#ExtensionViews::Owned",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view.mm#ExtensionViews::ExecuteAction",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_extension_view.mm#ExtensionViews::ResolvePrompt",
+    "scripts/mac/webui-engine/tests/extension_view_policy_test.cc#surfaces_load_only_their_own_extension_pages",
+    "scripts/mac/webui-engine/tests/extension_view_policy_test.cc#install_prompts_resolve_only_in_their_window_and_profile",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#extension_surfaces"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-pip:player",
+   "source": "frame",
+   "guard": "Mac WebUI host: pip.attach takes nothing and binds the in-window player to this window's current renderer generation; pip.viewport and pip.command act only when player is the whole number of the presented player (PlayerMatches) and the player's source tab is bound in this window (Presents); a viewport must be finite, non-negative and within +/-1e6 and is clipped to the window (PlayerBox); pip.command accepts only togglePlayPause, seekTo, seekBy, backToTab, close and popOut (ParseAction), seeks must be finite and at most 1e7 s and are clamped to the media (ValidSeekSeconds, ClampSeek), popOut's at and grab points must be finite; automatic picture in picture plays in the window only when a window presents its tab and is otherwise declined, explicit picture in picture opens Chrome's own window, kept ordered out in a background instance (PresentationFor); webView.setAutoPictureInPicture takes exactly one boolean enabled. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip_policy.h#ParseAction",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip_policy.h#PlayerMatches",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip_policy.h#PlayerBox",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip_policy.h#ValidSeekSeconds",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip_policy.h#PresentationFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip.mm#PipPresenter::Invoke",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip.mm#PipPresenter::Command",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_pip.mm#PipPresenter::EngineCall",
+    "scripts/mac/webui-engine/tests/pip_policy_test.cc#commands_reach_only_the_presented_player",
+    "scripts/mac/webui-engine/tests/pip_policy_test.cc#player_viewports_stay_inside_the_window",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#pip_commands"
+   ],
+   "detected": false
+  },
+  {
    "id": "pasteboard:addressFieldPaste",
    "source": "other-app",
    "guard": "The address and command bar field editor pastes only text: the pasteboard's plain string or URL, else the first item's file: URL (any other scheme under public.file-url is ignored) or the plain text of its RTFD, RTF or HTML with attachment characters removed; RCTUISingleLinePastedText folds every line terminator (CR, LF, VT, FF, NEL, U+2028, U+2029) into one line before the text reaches the field, an image alone beeps, and nothing is opened until the user presses Return through the omnibox's own resolve",
