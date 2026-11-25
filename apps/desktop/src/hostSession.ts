@@ -192,8 +192,10 @@ function seedTabs({ adoptTabs }: ArdiaHost["bootstrap"]): SeedTab[] {
 
 const LAUNCH_WINDOW_ID = "main";
 
+const ownRow = <T,>(table: Record<string, T> | undefined, id: string | null | undefined): T | undefined =>
+  table && isOwnId(id) && Object.hasOwn(table, id) ? table[id] : undefined;
 const hasSavedTabs = (saved: HydrateData, id: string | null | undefined) =>
-  !!id && !!saved.windows?.[id]?.tabIds.some((tabId) => saved.tabs?.[tabId]);
+  !!ownRow(saved.windows, id)?.tabIds.some((tabId) => !!ownRow(saved.tabs, tabId));
 
 const movedTo = <T extends { windowId: string }>(from: string, to: string) => (entry: T): T => entry.windowId === from ? { ...entry, windowId: to } : entry;
 const movedTable = <T extends { windowId: string }>(table: Record<string, T> | undefined, from: string, to: string) =>
@@ -201,7 +203,7 @@ const movedTable = <T extends { windowId: string }>(table: Record<string, T> | u
 
 function withLaunchWindowAdopted(saved: HydrateData, windowId: string): HydrateData {
   if (hasSavedTabs(saved, windowId)) return saved;
-  const adoptable = (id: string | null | undefined): id is string => id !== windowId && saved.windows?.[id ?? ""]?.kind === "main" && hasSavedTabs(saved, id);
+  const adoptable = (id: string | null | undefined): id is string => id !== windowId && ownRow(saved.windows, id)?.kind === "main" && hasSavedTabs(saved, id);
   const from = [saved.focusedWindowId, ...(saved.windowOrder ?? [])].find(adoptable);
   if (!from) return saved;
   const { [from]: adopted, [windowId]: _empty, ...others } = saved.windows!;
@@ -229,10 +231,10 @@ export const withoutTabWakes = (session: HydrateData): HydrateData => {
 
 type LaunchHints = { launchTab?: { id?: unknown; url?: unknown }; launchBackdrop?: unknown; linkProfile?: unknown };
 const LAUNCH_HINTS = ["launchTab", "launchBackdrop", "linkProfile"] as const;
-const focusedWindowOf = (session: HydrateData) => (session.focusedWindowId ? session.windows?.[session.focusedWindowId] : undefined);
+const focusedWindowOf = (session: HydrateData) => ownRow(session.windows, session.focusedWindowId);
 const activeTabOf = (session: HydrateData) => {
   const w = focusedWindowOf(session);
-  return w ? session.tabs?.[w.activeTabIds[w.profileId] ?? ""] : undefined;
+  return w ? ownRow(session.tabs, w.activeTabIds[w.profileId]) : undefined;
 };
 
 function launchHintsHold(snapshot: HydrateData, canonical: HydrateData): boolean {
@@ -240,9 +242,10 @@ function launchHintsHold(snapshot: HydrateData, canonical: HydrateData): boolean
   const now = focusedWindowOf(snapshot);
   const hint = (canonical as LaunchHints).launchTab;
   const active = activeTabOf(snapshot);
-  return !!was && !!now && snapshot.focusedWindowId === canonical.focusedWindowId && now.profileId === was.profileId &&
+  return !!was && !!now && now.profileId === was.profileId && equalSessionValue(now.tabIds, was.tabIds) &&
     equalSessionValue(now.activeTabIds, was.activeTabIds) && snapshot.lastProfileId === canonical.lastProfileId &&
     equalSessionValue(snapshot.profiles, canonical.profiles) && snapshot.settings?.restoreSession === canonical.settings?.restoreSession &&
+    (snapshot.settings?.engineMode ?? "automatic") === (canonical.settings?.engineMode ?? "automatic") &&
     (!hint || (hint.id === active?.id && hint.url === active?.url && active?.url === activeTabOf(canonical)?.url));
 }
 
@@ -279,7 +282,7 @@ function initialSessionWithWakes(host: ArdiaHost, saved: HydrateData | null | un
   const profile = { id: profileId, name: "Personal", color: "plum" as const, icon: null, createdAt: now };
   const profiles = { ...saved?.profiles };
   profiles[profileId] ??= profile;
-  if (saved?.windows?.[windowId]?.tabIds.some((id) => saved.tabs?.[id])) {
+  if (saved && hasSavedTabs(saved, windowId)) {
     onRestored?.(windowId);
     return { ...saved, profiles, focusedWindowId: windowId };
   }

@@ -250,10 +250,11 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   window, its active tabs, the profiles and Restore Session are unchanged. Rows that aren't objects, rows filed under
   a key that isn't their id, and ids the object prototype holds (`__proto__`, `constructor`, `toString`) are dropped
   by both readers; the Mac app keeps such a file aside first.
-  Native startup prewarm reads only its own shell's form: on the first launch after switching shells, when the
-  collections are in the other form or mixed, `ArdiaSavedSession.mm` on the Mac and `ac_linux_startup_tab.cc` on
-  Linux find no launch tab and leave it to the JS session loader, which loads the file losslessly and saves it in
-  its own form, so the next launch prewarms again.
+  Native startup prewarm reads only its own shell's form. `ArdiaSavedSession.mm` on the Mac needs every row
+  collection as a list; `ac_linux_startup_tab.cc` on Linux needs `windows` and `tabs` as tables (list-shaped `groups`
+  or `splits` alone don't stop it). On the first launch after switching shells, a file that misses that finds no
+  launch tab and is left to the JS session loader, which loads it losslessly and saves it in its own form, so the
+  next launch prewarms again.
   `sessionShells.test.mjs` (desktop and browser) round-trips Mac → WebUI → Mac and WebUI → Mac → WebUI. Telemetry
   counts launches whose file held collections in the other shell's form, before any migration, as
   `session_from_other_shell`.

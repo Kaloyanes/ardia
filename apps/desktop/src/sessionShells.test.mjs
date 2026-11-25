@@ -343,3 +343,51 @@ test("null, numeric and text rows, rows under a key that isn't their id, and pro
   }
 });
 
+test("prototype names in windowOrder, focusedWindowId, lastProfileId and profileOrder never throw and are left out in both shells", async () => {
+  const plain = macLaunch(JSON.stringify(macSession())).seen;
+  for (const json of [JSON.stringify(macSession()), await tableFile()]) {
+    const saved = JSON.parse(json);
+    Object.assign(saved, { windowOrder: ["constructor", "toString", ...saved.windowOrder], focusedWindowId: "constructor", lastProfileId: "toString", profileOrder: ["constructor", ...saved.profileOrder] });
+    const hostile = JSON.stringify(saved);
+    const webui = await webuiLaunch(hostile);
+    assert.deepEqual(webui.live.windowOrder, ["w1", "w2"]);
+    assert.equal(webui.live.ui.lastProfileId, null);
+    assert.deepEqual(webui.live.profileOrder, ["default", "p-two"]);
+    const mac = macLaunch(hostile);
+    assert.deepEqual(S().windowOrder, ["w1", "w2"]);
+    assert.deepEqual(S().profileOrder, ["default", "p-two"]);
+    assert.deepEqual(mac.seen, plain);
+    const adopted = await webuiLaunch(hostile, "main");
+    assert.equal(adopted.live.windows.main.tabIds.length, macSession().windows[0].tabIds.length);
+  }
+});
+
+test("a table session whose only damage is a row filed under another key is kept aside by the Mac app, and loads whole in both shells", async () => {
+  const tables = JSON.parse(await tableFile());
+  const { a, ...rest } = tables.tabs;
+  tables.tabs = { ...rest, misfiled: a };
+  const json = JSON.stringify(tables);
+  const mac = macLaunch(json, { damaged: true });
+  assert.equal(S().tabs.a.windowId, "w1");
+  assert.equal(Object.hasOwn(S().tabs, "misfiled"), false);
+  assert.deepEqual((await webuiLaunch(json)).seen, mac.seen);
+});
+
+test("launch hints survive the WebUI adopting the Mac window as main, and go when the engine mode changes", async () => {
+  const hinted = JSON.parse(macLaunch(JSON.stringify(macSession())).written);
+  Object.assign(hinted, { launchTab: { id: "b", url: "https://b.test/", profile: "Default" }, launchBackdrop: { dark: false, vibrancy: true }, linkProfile: "Default" });
+  const touchSecond = () => useBrowser.setState((s) => ({ tabs: { ...s.tabs, second: { ...s.tabs.second, title: "Touched" } } }));
+  const adopted = await webuiLaunch(JSON.stringify(hinted), "main", touchSecond);
+  assert.ok(adopted.live.windows.main);
+  const kept = JSON.parse(adopted.written);
+  assert.equal(kept.focusedWindowId, "main");
+  assert.deepEqual(kept.launchTab, hinted.launchTab);
+  assert.deepEqual(kept.launchBackdrop, hinted.launchBackdrop);
+  assert.equal(kept.linkProfile, "Default");
+  const webkit = () => useBrowser.setState((s) => ({ settings: { ...s.settings, engineMode: "webkit" } }));
+  const switched = JSON.parse((await webuiLaunch(JSON.stringify(hinted), "w1", webkit)).written);
+  assert.equal(switched.settings.engineMode, "webkit");
+  assert.equal(switched.launchTab, undefined);
+  assert.equal(switched.launchBackdrop, undefined);
+  assert.equal(switched.linkProfile, undefined);
+});

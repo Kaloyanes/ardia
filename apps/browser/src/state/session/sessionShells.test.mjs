@@ -103,3 +103,18 @@ test("telemetry counts a launch on the other shell's table session, and not one 
     setConsentPeriod(false, null);
   }
 });
+
+test("a table session whose only damage is a row filed under another key is copied aside before the Mac app rewrites it", async () => {
+  const saved = webuiTables();
+  const { a, ...rest } = saved.tabs;
+  saved.tabs = { ...rest, misfiled: a };
+  const stop = await launchOn(saved);
+  assert.equal(S().tabs.a.windowId, "main");
+  S().newTab("main", { url: "https://new.test/", background: true });
+  await settle();
+  stop();
+  const aside = [...stub.docs.keys()].filter((name) => /^session-unreadable-\d+-\d+\.json$/.test(name));
+  assert.equal(aside.length, 1);
+  assert.ok(Object.hasOwn(JSON.parse(stub.docs.get(aside[0])).tabs, "misfiled"));
+  assert.ok(Array.isArray(JSON.parse(stub.docs.get("session.json")).tabs));
+});
