@@ -6,9 +6,10 @@ import { withDeadline } from "../../lib/deadline";
 import { hermesHeapMegabytes } from "../../lib/hermesHeap";
 import { activeTab } from "../browser/model";
 import { useBrowser } from "../browser/store";
-import { capture, consentNow, consentToken, counted, isSharing, saveContext, stillValid, onConsentPeriodChange } from "./client";
+import { capture, consentNow, consentToken, counted, isSharing, saveContext, stillValid, onConsentPeriodChange, type ConsentToken } from "./client";
 import { nativeConsent } from "./nativeConsent";
-import { claimHeldQuitEpisode, dropQuitEpisode, holdQuitEpisode, hoverLostProperties, oneOf } from "./hoverLost";
+import { hoverLostProperties, oneOf } from "./hoverLost";
+import { dropHeldQuitEpisode, dropQuitEpisodes, holdQuitEpisode, retireHeldQuitEpisode, sendCommittedQuitEpisode } from "./hoverLostAtQuit";
 import { formatRecentPages, readRecentPages, type RecentPage, type SavedContext } from "./savedContext";
 import { noteDragsEnded } from "./stuckDrags";
 import { noteEngineCliTotals } from "./cliCounts";
@@ -284,21 +285,19 @@ export function trackPageProcessGone(info: { reason: string; code: number }, vis
 }
 
 export function trackHoverLost(e: HoverLostEpisode) {
-  if (e.endedBy === "quit") return holdQuitEpisode(e, sessionMinutes());
-  sendHoverLost(e, sessionMinutes());
-}
-
-function sendHoverLost(e: HoverLostEpisode, sessionMin: number) {
   const consent = nativeConsent(e);
+  if (e.endedBy === "quit") return holdHoverLostAtQuit(e, consent);
+  retireHeldQuitEpisode(e.serial);
   if (hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
   const valid = stillValid(consent);
   if (valid) hoverLostEvents++;
-  capture("page_hover_lost", { ...hoverLostProperties(e, sessionMin), episode: valid ? hoverLostEvents : null }, consent);
+  capture("page_hover_lost", { ...hoverLostProperties(e, sessionMinutes()), episode: valid ? hoverLostEvents : null }, consent);
 }
 
-export function sendHeldQuitEpisode() {
-  const held = claimHeldQuitEpisode();
-  if (held) sendHoverLost(held.episode, held.sessionMin);
+function holdHoverLostAtQuit(e: HoverLostEpisode, consent: ConsentToken | null) {
+  if (!stillValid(consent) || hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
+  hoverLostEvents++;
+  holdQuitEpisode(e.serial, { ...hoverLostProperties(e, sessionMinutes()), episode: hoverLostEvents }, consent);
 }
 
 const UNPAINTED_WINDOWS = new Set(["regular", "private"]);
@@ -340,11 +339,12 @@ export function trackWindowUnpainted(r: WindowUnpaintedRecord) {
 }
 
 export function watchEngineReports() {
-  sendHeldQuitEpisode();
+  void sendCommittedQuitEpisode();
   onHoverLost(trackHoverLost);
   onAppEvent((e) => {
-    if (e.type === "quitCancelled") dropQuitEpisode();
+    if (e.type === "quitCancelled") dropHeldQuitEpisode();
   });
+  onConsentPeriodChange(dropQuitEpisodes);
   onWindowUnpainted(trackWindowUnpainted);
 }
 

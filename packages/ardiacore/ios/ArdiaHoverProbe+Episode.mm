@@ -8,6 +8,7 @@ namespace hover_probe {
 namespace {
 
 constexpr NSUInteger kDevHoverEventsKept = 16;
+NSUInteger gReportedAtQuit = 0;
 
 }
 
@@ -43,6 +44,7 @@ NSDictionary *EpisodePayload(NSString *endedBy) {
     @"endedBy" : endedBy,
     @"seconds" : @(lround(MAX(0, Uptime() - gEpisode.startedAt))),
     @"episode" : @(gEpisodeCount),
+    @"serial" : @(gEpisode.serial),
   };
 }
 
@@ -60,7 +62,12 @@ using namespace hover_probe;
 void ReportHoverEpisodeAtQuit() {
   if (!gEpisode.open) return;
   NoteFocusChange(@"hover episode reported for quit", nil);
+  gReportedAtQuit = gEpisode.serial;
   EmitEpisode(EpisodePayload(@"quit"), gEpisode.stamp);
+}
+
+bool HoverEpisodeReportedAtQuitOpen() {
+  return gReportedAtQuit != 0 && gEpisode.open && gEpisode.serial == gReportedAtQuit;
 }
 
 }

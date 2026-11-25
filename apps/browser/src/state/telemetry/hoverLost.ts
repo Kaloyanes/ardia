@@ -1,9 +1,7 @@
 import type { HoverLostEpisode } from "../../platform/performance";
-import { readDocument, removeDocument, writeDocument } from "../../platform/documents";
 
 const MAX_HOVER_LOST_SECONDS = 24 * 60 * 60;
 const MAX_OTHER_WINDOW_CLICKS = 1000;
-export const QUIT_EPISODE_DOC = "hover-lost-at-quit.json";
 
 const HOVER_REASONS = new Set(["halfActive", "staleMenu", "notKeyOrMain", "coveredByView", "responderLost", "coveredByWindow"]);
 const HOVER_RESPONDERS = new Set(["none", "window", "otherWindow", "page", "control"]);
@@ -75,36 +73,4 @@ export function hoverLostProperties(e: HoverLostEpisode, sessionMin: number) {
     lost_seconds: Number.isFinite(e.seconds) ? Math.min(Math.max(0, Math.round(e.seconds)), MAX_HOVER_LOST_SECONDS) : null,
     session_min: sessionMin,
   };
-}
-
-type HeldQuitEpisode = { episode: HoverLostEpisode; sessionMin: number };
-
-export function holdQuitEpisode(episode: HoverLostEpisode, sessionMin: number) {
-  try {
-    writeDocument(QUIT_EPISODE_DOC, JSON.stringify({ episode, sessionMin }));
-  } catch {}
-}
-
-export function dropQuitEpisode() {
-  try {
-    removeDocument(QUIT_EPISODE_DOC);
-  } catch {}
-}
-
-export function claimHeldQuitEpisode(): HeldQuitEpisode | null {
-  let raw: string | null = null;
-  try {
-    raw = readDocument(QUIT_EPISODE_DOC);
-  } catch {
-    return null;
-  }
-  if (!raw) return null;
-  dropQuitEpisode();
-  try {
-    const held = JSON.parse(raw) as Partial<HeldQuitEpisode> | null;
-    if (!held?.episode || typeof held.episode !== "object" || held.episode.endedBy !== "quit") return null;
-    return { episode: held.episode, sessionMin: typeof held.sessionMin === "number" && Number.isFinite(held.sessionMin) ? held.sessionMin : 0 };
-  } catch {
-    return null;
-  }
 }

@@ -43,4 +43,8 @@ test("Ardia's visual-only concealments keep their hits: the page identity hidden
   const covers = read("packages/ardiacore/ios/ArdiaEarlyWindowCovers.mm");
   assert.match(covers, /ardia_host::KeepHitsWhileClear\(root, true\);\s*root\.alphaValue = 0;/);
   assert.match(covers, /root\.alphaValue = 1;\s*ardia_host::KeepHitsWhileClear\(root, false\);/);
+  const early = read("packages/ardiacore/ios/ArdiaEarlyWindow.mm");
+  assert.match(early, /s\.root\.alphaValue = 1;\s*ardia_host::KeepHitsWhileClear\(s\.root, false\);/, "a root replaced while hidden gives its hits back too");
+  for (const [file, source] of [["ArdiaWebView+RevealInput.mm", reveal], ["ArdiaEarlyWindowCovers.mm", covers], ["ArdiaEarlyWindow.mm", early]])
+    assert.equal((source.match(/KeepHitsWhileClear\([^)]*, true\)/g) ?? []).length <= (source.match(/KeepHitsWhileClear\([^)]*, false\)/g) ?? []).length, true, `${file} clears every flag it sets`);
 });

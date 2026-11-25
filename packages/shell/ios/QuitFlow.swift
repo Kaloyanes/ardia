@@ -13,6 +13,18 @@ final class QuitFlow {
   private var phase = Phase.idle
   private var attempt = 0
   private static let saveWait: TimeInterval = 5
+  static let heldHoverLoss = "hover-lost-at-quit.json"
+  static let committedHoverLoss = "hover-lost-at-quit-committed.json"
+  private static let commitsHoverLossOnTerminate = NotificationCenter.default.addObserver(
+    forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+  ) { _ in commitHeldHoverLoss() }
+
+  static func commitHeldHoverLoss() {
+    guard ArdiaHost.hoverLossReportedAtQuitIsOpen(), let held = DocumentStore.read(heldHoverLoss) else { return }
+    try? DocumentStore.write(committedHoverLoss, held)
+    try? DocumentStore.remove(heldHoverLoss)
+    DocumentStore.flush()
+  }
 
   private var isSaving: Bool {
     if case .saving = phase { return true }
@@ -49,6 +61,7 @@ final class QuitFlow {
     attempt += 1
     phase = .saving(wait: nil, lateAlert: nil)
     WindowManager.shared.flushFrameReports()
+    _ = Self.commitsHoverLossOnTerminate
     ArdiaHost.reportHoverLossAtQuit()
     ShellEvents.send(.app, ["type": "willQuit"])
     waitForSave()

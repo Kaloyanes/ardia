@@ -150,9 +150,9 @@ export function capture<P extends Record<string, unknown>, R extends Record<stri
   }
   try {
     const { installId } = saved();
-    const at = Date.now();
+    const at = options.at ?? Date.now();
     const record: QueuedEvent = {
-      uuid: uuidv7(),
+      uuid: options.uuid ?? uuidv7(),
       event,
       distinct_id: installId ?? "",
       timestamp: new Date(at).toISOString(),
@@ -164,6 +164,7 @@ export function capture<P extends Record<string, unknown>, R extends Record<stri
       return false;
     }
     loadQueue();
+    if (options.uuid && queue.events.some((queued) => queued.uuid === options.uuid)) return true;
     queue.events.push(record);
     if (queue.events.length > MAX_EVENTS) queue.events.splice(0, queue.events.length - MAX_EVENTS);
     persistQueue(options.persist);

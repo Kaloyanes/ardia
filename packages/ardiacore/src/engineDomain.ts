@@ -101,6 +101,7 @@ export type HoverLostEpisode = {
   endedBy: "hover" | "heal" | "appInactive" | "windowClosed" | "quit";
   seconds: number;
   episode: number;
+  serial?: number;
   epoch: string;
 };
 

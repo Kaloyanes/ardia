@@ -55,6 +55,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)endPressLoop;
 + (void)notePointer:(NSEvent *)event swallowedBy:(NSString *)name NS_SWIFT_NAME(notePointer(_:swallowedBy:));
 + (void)reportHoverLossAtQuit;
++ (BOOL)hoverLossReportedAtQuitIsOpen;
 + (NSString *)baseProfileOf:(NSString *)profile NS_SWIFT_NAME(baseProfile(of:));
 + (void)resolvePermission:(NSString *)requestId result:(NSString *)result remember:(BOOL)remember
     NS_SWIFT_NAME(resolvePermission(_:result:remember:));

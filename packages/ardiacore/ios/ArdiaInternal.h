@@ -60,6 +60,7 @@ inline void KeepHitsWhileClear(NSView *view, bool keep) {
   if ([view respondsToSelector:NSSelectorFromString(@"setArdiaKeepsHitsWhileClear:")]) [view setValue:@(keep) forKey:@"ardiaKeepsHitsWhileClear"];
 }
 void ReportHoverEpisodeAtQuit();
+bool HoverEpisodeReportedAtQuitOpen();
 void WatchPageCursor();
 NSString *PageCursorDev(NSWindow *window, NSString *_Nullable argument);
 NSString *PaintProbeLine();

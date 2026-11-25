@@ -223,3 +223,15 @@ test("a page covered by a view reports the kind of view, the kind that made it s
   const kinds = body(probeCover, "CoverView CoverViewOf(");
   assert.doesNotMatch(kinds, /return name|stringWithFormat/, "a class name is only compared, never kept");
 });
+
+test("a quit report commits only if the same episode is still open when the app really terminates", () => {
+  assert.match(body(probeEpisode, "NSDictionary *EpisodePayload("), /@"serial" : @\(gEpisode\.serial\),/);
+  assert.match(body(probeEpisode, "void ReportHoverEpisodeAtQuit("), /gReportedAtQuit = gEpisode\.serial;\s*EmitEpisode\(/);
+  assert.match(body(probeEpisode, "bool HoverEpisodeReportedAtQuitOpen("), /return gReportedAtQuit != 0 && gEpisode\.open && gEpisode\.serial == gReportedAtQuit;/);
+  assert.match(quitFlow, /forName: NSApplication\.willTerminateNotification, object: nil, queue: nil\s*\) \{ _ in commitHeldHoverLoss\(\) \}/);
+  const commit = body(quitFlow, "static func commitHeldHoverLoss()", "\n  }\n");
+  assert.match(commit, /guard ArdiaHost\.hoverLossReportedAtQuitIsOpen\(\), let held = DocumentStore\.read\(heldHoverLoss\) else \{ return \}/);
+  assert.match(commit, /try\? DocumentStore\.write\(committedHoverLoss, held\)\s*try\? DocumentStore\.remove\(heldHoverLoss\)\s*DocumentStore\.flush\(\)/);
+  const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
+  assert.ok(terminate.indexOf("_ = Self.commitsHoverLossOnTerminate") < terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()"), "the commit watch is in place before the report");
+});
