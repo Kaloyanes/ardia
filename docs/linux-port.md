@@ -247,9 +247,9 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
   file as read, so every collection is written back in its shaped form. It keeps what only the Mac app uses: a
   sleeping tab's `page.wake` restore handle (left out of the WebUI's live tab, written back while the tab keeps its
   address) and the early launch hints (`launchTab`, `launchBackdrop`, `linkProfile`), kept while the focused
-  window, its active tabs, the profiles and Restore Session are unchanged. Rows that aren't objects, rows filed under
-  a key that isn't their id, and ids the object prototype holds (`__proto__`, `constructor`, `toString`) are dropped
-  by both readers; the Mac app keeps such a file aside first.
+  window, its active tabs, the profiles and Restore Session are unchanged. Rows that aren't objects and ids the object prototype holds (`__proto__`, `constructor`, `toString`) are dropped
+  by both readers; a valid row filed under a key that isn't its id is recovered only when no correctly keyed copy
+  exists (the correctly keyed row wins), and the Mac app keeps any file with dropped or misfiled rows aside first.
   Native startup prewarm reads only its own shell's form. `ArdiaSavedSession.mm` on the Mac needs every row
   collection as a list; `ac_linux_startup_tab.cc` on Linux needs `windows` and `tabs` as tables (list-shaped `groups`
   or `splits` alone don't stop it). On the first launch after switching shells, a file that misses that finds no
