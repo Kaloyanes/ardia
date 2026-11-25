@@ -460,3 +460,26 @@ test("a host dismissal that lands after a local close but before the open is ack
   assert.equal(h.listening(), false);
   assert.deepEqual(h.dismissed, ["closed"]);
 });
+
+test("Escape is heard in the bubble phase, so a control inside the popover that handles it keeps the popover open", () => {
+  const h = harness();
+  const registered = [];
+  const add = h.target.addEventListener.bind(h.target);
+  h.target.addEventListener = (type, listener, options) => {
+    registered.push({ type, options });
+    return add(type, listener, options);
+  };
+  const consumeEscape = (event) => event.preventDefault();
+  add("keydown", consumeEscape);
+  const handle = h.host.open(h.spec());
+  const keydown = registered.find((entry) => entry.type === "keydown");
+  assert.ok(keydown);
+  assert.ok(!keydown.options || keydown.options === false || keydown.options.capture === false, "not a capture listener that runs before the control");
+  const handled = h.key();
+  assert.equal(handled.defaultPrevented, true);
+  assert.equal(handle.closed(), false);
+  h.target.removeEventListener("keydown", consumeEscape);
+  h.key();
+  assert.equal(handle.closed(), true);
+  assert.deepEqual(h.dismissed, ["escape"]);
+});

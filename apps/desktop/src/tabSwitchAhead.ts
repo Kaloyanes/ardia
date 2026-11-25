@@ -1,7 +1,7 @@
-import { showInPlaceOf, type HostTab } from "./hostTab.ts";
+import { showInPlaceOf, type HostTab, type TabViewport } from "./hostTab.ts";
 import { PEEK_MOVING_ATTRIBUTE } from "./peekStageMotion.ts";
 
-type SwitchView = { tab: () => HostTab | null; slot: Element; regions: { setPage(slot: Element, visible: boolean): void } };
+type SwitchView = { tab: () => HostTab | null; slot: Element; regions: { setPage(slot: Element, visible: boolean): void; pageViewport?(slot: Element, rect: TabViewport["rect"]): void } };
 type ActiveWindows = { windows: Record<string, { profileId: string; activeTabIds: Record<string, string> } | undefined> };
 type ActiveStore = { subscribe(listener: (state: ActiveWindows, previous: ActiveWindows) => void): () => void };
 
@@ -26,8 +26,10 @@ function switchAhead(fromId: string, toId: string) {
   const toTab = to?.tab();
   if (!from || !to || !fromTab || !toTab || inMovingStage(from) || inMovingStage(to)) return;
   for (const view of views.values()) if (view !== from && view.tab()?.shownViewport()) return;
+  const shownRect = fromTab.shownViewport()?.rect;
   if (!showInPlaceOf(fromTab, toTab)) return;
   switchedAhead++;
+  if (shownRect) to.regions.pageViewport?.(to.slot, shownRect);
   to.regions.setPage(to.slot, true);
   from.regions.setPage(from.slot, false);
 }

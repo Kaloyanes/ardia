@@ -673,8 +673,46 @@ test("a page whose first viewport ack lands mid-motion is cut and routed at the 
   frozen.delete(peekPage);
   h.registry.refresh();
   await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 300, y: 100, width: 600, height: 500 }], "unfrozen but not yet accepted: still where the host holds the page");
+  h.registry.pageViewport(peekPage, { x: 360, y: 130, width: 480, height: 400 });
+  await h.settle();
   assert.deepEqual(h.pagesSeen.at(-1), [{ x: 360, y: 130, width: 480, height: 400 }]);
 });
+
+test("after a stage settles, the cutout and routing stay on the host's acknowledged rect until it accepts the settled one, and stay there if it refuses", async () => {
+  const frozen = new Set();
+  const h = harness({ frozen });
+  const peekPage = node({ x: 300, y: 100, width: 600, height: 500 });
+  h.registry.pageViewport(peekPage, { x: 300, y: 100, width: 600, height: 500 });
+  h.registry.setPage(peekPage, true);
+  await h.settle();
+  h.replies.splice(0).forEach((reply) => reply.resolve());
+  await h.settle();
+  frozen.add(peekPage);
+  peekPage.rect = { x: 200, y: 80, width: 800, height: 600 };
+  h.registry.refresh();
+  await h.settle();
+  frozen.delete(peekPage);
+  h.registry.refresh();
+  await h.settle();
+  h.replies.splice(0).forEach((reply) => reply.resolve());
+  await h.settle();
+  const held = { x: 300, y: 100, width: 600, height: 500 };
+  assert.deepEqual(h.pagesSeen.at(-1), [held]);
+  assert.deepEqual(h.sent.at(-1).pages, [held]);
+  h.registry.refresh();
+  await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [held], "a refused settled viewport leaves the cutout where the native page still is");
+  h.registry.pageViewport(peekPage, { x: 200, y: 80, width: 800, height: 600 });
+  await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 200, y: 80, width: 800, height: 600 }]);
+  h.registry.dropPage(peekPage);
+  h.registry.setPage(peekPage, true);
+  peekPage.rect = { x: 10, y: 10, width: 100, height: 100 };
+  await h.settle();
+  assert.deepEqual(h.pagesSeen.at(-1), [{ x: 10, y: 10, width: 100, height: 100 }], "a dropped page forgets its acknowledged rect");
+});
+
 
 test("painters moving with a Peek stage drop the frozen page's hole, while painters that stay put keep it at the window rect the native page holds", () => {
   const stage = { moving: true };

@@ -319,3 +319,17 @@ test("a Peek being expanded to a tab is not switched in early: it publishes its 
   assert.equal(settledBounds, 2);
   stop();
 });
+
+test("an early switch hands the shown page's rect to the regions as the switched-in page's acknowledged rect", async () => {
+  const { store, view } = stage();
+  const a = await view("a");
+  const b = await view("b");
+  await a.viewport({ rect: RECT, visible: true });
+  await b.viewport({ rect: { ...RECT, x: 0 }, visible: false });
+  const acknowledged = [];
+  registerSwitchView("b", { tab: () => b, slot: { key: "b" }, regions: { setPage() {}, pageViewport: (slot, rect) => acknowledged.push([slot.key, rect]) } });
+  const stop = watchTabSwitches(store);
+  store.activate("b");
+  assert.deepEqual(acknowledged, [["b", RECT]]);
+  stop();
+});

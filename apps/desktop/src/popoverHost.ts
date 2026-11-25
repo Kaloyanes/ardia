@@ -219,14 +219,14 @@ export function createPopoverHost(deps: PopoverHostDeps) {
       finish(entry, reason, false);
       if (reason === "blur" && deps.windowFocused && !deps.windowFocused()) closeFrom(0, "blur");
     });
-    deps.target.addEventListener("keydown", keydown, true);
+    deps.target.addEventListener("keydown", keydown);
     deps.target.addEventListener("pointerdown", pointerdown, true);
     deps.target.addEventListener("blur", blur);
     deps.target.addEventListener("resize", resize);
     detach = () => {
       stopEvents();
       stopPageFocus();
-      deps.target.removeEventListener("keydown", keydown, true);
+      deps.target.removeEventListener("keydown", keydown);
       deps.target.removeEventListener("pointerdown", pointerdown, true);
       deps.target.removeEventListener("blur", blur);
       deps.target.removeEventListener("resize", resize);

@@ -106,9 +106,11 @@ export function createInputRegions(deps: RegionDeps) {
   const settledPageRects = new WeakMap<Element, Rect>();
   const hostPageRects = new WeakMap<Element, Rect>();
   const pageRectOf = (slot: Element) => {
+    const acknowledged = hostPageRects.get(slot);
+    if (acknowledged) return acknowledged;
     if (deps.pageFrozen?.(slot)) {
-      const frozen = hostPageRects.get(slot) ?? settledPageRects.get(slot);
-      if (frozen) return frozen;
+      const settled = settledPageRects.get(slot);
+      if (settled) return settled;
     }
     const rect = measuredPageRect(slot);
     settledPageRects.set(slot, rect);
