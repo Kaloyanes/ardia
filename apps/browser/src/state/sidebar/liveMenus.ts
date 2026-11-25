@@ -11,7 +11,9 @@ import { dismissNowBadge, live, markRead, markUnread, setRepoHidden, updateCalen
 import { folderRepos, setShowNewRepos, showAllRepos } from "../live/repoFilter";
 import { noteLiveFolderColorPick, noteLiveRepoMenuPick } from "../telemetry/liveHides";
 import { consentToken } from "../telemetry/client";
-import type { LiveItem, LiveSourceId } from "../live/types";
+import type { FolderStatus, LiveItem, LiveSourceId } from "../live/types";
+import { blockedLink } from "../live/github";
+import { newTab } from "../tabs/actions";
 import type { GroupColor } from "../browser/types";
 import { groupColorItems } from "./groupMenu";
 import { useBrowser } from "../browser/store";
@@ -108,6 +110,7 @@ export function liveFolderMenuItems(folderId: string): MenuItem[] {
       ]
     : [];
   return sections(
+    [s.status[folderId]?.error ? { id: FIX_ERROR_CHOICE, title: "Resolve Warning…", symbol: "exclamationmark.triangle" } : null],
     [
       { id: "refresh", title: "Refresh", symbol: "arrow.clockwise", enabled: s.status[folderId]?.state !== "updating" },
       { id: "read", title: "Mark All as Read", symbol: "checkmark", enabled: (s.unread[folderId]?.length ?? 0) > 0 },
@@ -161,6 +164,14 @@ function runRepoChoice(folderId: string, choice: string): boolean {
   return false;
 }
 
+const FIX_ERROR_CHOICE = "fixError";
+
+export function fixLiveFolderError(windowId: string, error: FolderStatus["error"]) {
+  const link = error ? blockedLink(error.message) : null;
+  if (link) newTab(windowId, { url: link });
+  else openSettings("automations");
+}
+
 export async function openLiveFolderMenu(windowId: string, folderId: string) {
   const folder = live().folders[folderId];
   if (!folder) return;
@@ -175,7 +186,8 @@ export async function openLiveFolderMenu(windowId: string, folderId: string) {
   if (showedRepo) queueMicrotask(() => void refreshFolder(folderId));
   if (!choice) return;
   const option = FOLDER_OPTIONS.find((key) => choice === `option:${key}`);
-  if (choice === "refresh") void manualRefresh(folderId);
+  if (choice === FIX_ERROR_CHOICE) fixLiveFolderError(windowId, live().status[folderId]?.error ?? null);
+  else if (choice === "refresh") void manualRefresh(folderId);
   else if (option) updateFolder(folderId, { [option]: !folder[option] });
   else if (choice.startsWith("filter:")) {
     const key = choice.slice(7) as "authored" | "reviewRequests";

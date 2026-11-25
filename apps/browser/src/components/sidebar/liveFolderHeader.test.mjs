@@ -23,6 +23,9 @@ test("a live folder's warning sits in the header's far-right slot, where hoverin
   const rest = slot.slice(slot.indexOf("opacity: restOpacity"));
   assert.ok(rest.indexOf("exclamationmark.triangle.fill") > rest.indexOf("<Badge"), "the warning comes after the count, at the far right");
   assert.ok(slot.indexOf("exclamationmark.triangle.fill") < slot.indexOf("REFRESH_OVER"), "the refresh button that fades in on hover covers the warning's place");
+  const warning = rest.slice(rest.lastIndexOf("<Pressable", rest.indexOf("exclamationmark.triangle.fill")), rest.indexOf("exclamationmark.triangle.fill"));
+  assert.match(warning, /accessibilityRole="button"/, "assistive tech can still press the warning");
+  assert.match(warning, /onAccessibilityTap=\{\(\) => fixLiveFolderError\(/, "pressing it runs the warning's fix");
   const header = text.slice(text.indexOf("function FolderHeader"), text.indexOf("function RefreshButton"));
   assert.equal(header.split("exclamationmark.triangle.fill").length - 1, 1, "only one warning in the header");
 });
