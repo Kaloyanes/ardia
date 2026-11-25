@@ -11,7 +11,7 @@ const store = () => useBrowser.getState();
 const SITE_MOVE_SPACING_MS = 10_000;
 
 type Move = { from: PageEngine; to: PageEngine; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string } };
-type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null };
+type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null; cooling: ReturnType<typeof setTimeout> | null };
 
 const tabMoves = new Map<string, TabMoves>();
 const probingVideo = new Set<string>();
@@ -19,11 +19,28 @@ let unwatch: (() => void) | null = null;
 
 function movesOf(tabId: string): TabMoves {
   unwatch ??= useBrowser.subscribeTo(["tabs"], (s) => {
-    for (const id of tabMoves.keys()) if (!s.tabs[id]) tabMoves.delete(id);
+    for (const [id, moves] of tabMoves) {
+      if (s.tabs[id]) continue;
+      if (moves.cooling) clearTimeout(moves.cooling);
+      tabMoves.delete(id);
+    }
   });
   let moves = tabMoves.get(tabId);
-  if (!moves) tabMoves.set(tabId, (moves = { lastMovedAt: 0, moving: false, pending: null }));
+  if (!moves) tabMoves.set(tabId, (moves = { lastMovedAt: 0, moving: false, pending: null, cooling: null }));
   return moves;
+}
+
+function queue(moves: TabMoves, move: Move) {
+  const kept = moves.pending;
+  if (move.forVideo && kept && !kept.forVideo && kept.to === move.to) return;
+  moves.pending = move;
+}
+
+const declinedVideo = (move: Move) => !!move.forVideo && siteDeclined(move.forVideo.site);
+
+function dropVideoMovesFor(tabId: string, site: string) {
+  const moves = tabMoves.get(tabId);
+  if (moves?.pending?.forVideo?.site === site) moves.pending = null;
 }
 
 const GOOGLE_SIGN_IN = /^https:\/\/accounts\.google\.com([/?#]|$)/i;
@@ -43,28 +60,54 @@ export const routedTo = (tabId: string, engine: PageEngine) => (url: string) => 
 
 function startMove(tabId: string, move: Move) {
   const moves = movesOf(tabId);
-  if (moves.moving) return void (moves.pending = move);
-  if (!move.forVideo && Date.now() - moves.lastMovedAt < SITE_MOVE_SPACING_MS) return;
+  if (declinedVideo(move)) return;
+  if (moves.moving || moves.cooling) return queue(moves, move);
+  const wait = SITE_MOVE_SPACING_MS - (Date.now() - moves.lastMovedAt);
+  if (!move.forVideo && wait > 0) {
+    queue(moves, move);
+    moves.cooling = setTimeout(() => {
+      moves.cooling = null;
+      drain(tabId, moves);
+    }, wait);
+    return;
+  }
   moves.moving = true;
+  void runMove(tabId, moves, move);
+}
+
+async function runMove(tabId: string, moves: TabMoves, move: Move) {
   const holds = modeStillHolds();
   const opened = openedByPage(tabId);
   const video = move.forVideo;
   const options = video
-    ? { routedHere: routedTo(tabId, move.to), onStayed: () => declineSite(video.site) }
+    ? {
+        routedHere: routedTo(tabId, move.to),
+        onStayed: () => {
+          declineSite(video.site);
+          dropVideoMovesFor(tabId, video.site);
+        },
+      }
     : { checkWork: false, routedHere: routedTo(tabId, move.to) };
-  void openPageIn(tabId, move.to, options).then((moved) => {
+  let moved = false;
+  try {
+    moved = await openPageIn(tabId, move.to, options);
+  } catch {
+    moved = false;
+  } finally {
     moves.moving = false;
-    if (!video && (moved || !moves.pending)) noteSiteMove(moved ? "moved" : "dropped", opened, move.consent);
-    if (moved) {
-      moves.lastMovedAt = Date.now();
-      moves.pending = null;
-      if (holds() && (canSwitchEngine(move.previousUrl) || needsChromium(move.previousUrl))) patchPage(tabId, { engineBack: { engine: move.from, url: move.previousUrl } });
-      return;
-    }
-    const next = moves.pending;
-    moves.pending = null;
-    if (next) settlePending(tabId, next);
-  });
+  }
+  if (!video && (moved || !moves.pending)) noteSiteMove(moved ? "moved" : "dropped", opened, move.consent);
+  if (moved) {
+    moves.lastMovedAt = Date.now();
+    if (holds() && (canSwitchEngine(move.previousUrl) || needsChromium(move.previousUrl))) patchPage(tabId, { engineBack: { engine: move.from, url: move.previousUrl } });
+  }
+  drain(tabId, moves);
+}
+
+function drain(tabId: string, moves: TabMoves) {
+  const next = moves.pending;
+  moves.pending = null;
+  if (next && tabMoves.get(tabId) === moves) settlePending(tabId, next);
 }
 
 function settlePending(tabId: string, move: Move) {
@@ -72,7 +115,7 @@ function settlePending(tabId: string, move: Move) {
   if (!t) return;
   const url = pageUrl(t);
   const from = tabEngine(store(), tabId);
-  if (from === move.to || !routedTo(tabId, move.to)(url)) return;
+  if (from === move.to || declinedVideo(move) || !routedTo(tabId, move.to)(url)) return;
   startMove(tabId, { ...move, from });
 }
 

@@ -761,3 +761,149 @@ test("S8: an automatic protected-video move a rule change stops declines nothing
   assert.equal(tabEngine(S(), fourth), "chromium", "and the site isn't moved again this session");
   webviews.clear();
 });
+
+function streamingTab(url, evaluate) {
+  const { w } = streamingWindow(url);
+  const tabId = model.activeTabId(S(), w);
+  S().updateTab(tabId, { engine: "chromium", url });
+  webviews.set(tabId, { evaluate, pageCookies: () => Promise.resolve([]) });
+  return tabId;
+}
+
+const unsavedWork = (unsaved) => (script) => Promise.resolve(script.includes("defaultValue") ? unsaved : false);
+
+test("S4: a Chromium rule added while the unsaved-work check runs never shows the WebKit confirmation", async () => {
+  const held = heldAnswer();
+  const tabId = streamingTab("https://www.netflix.com/watch/1", held.answer);
+  const asked = [];
+  shellNativeModules.ArdiaDialogs.confirm = (options) => (asked.push(options), Promise.resolve({ confirmed: true, suppressed: false }));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    await settle();
+    S().updateSettings({ websiteEngines: { "https://www.netflix.com": "chromium" } });
+    held.release(true);
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(asked.length, 0);
+    assert.notEqual(S().tabs[tabId].engine, "webkit");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S4: an address typed while a protected-video move waits on its confirmation wins, and the old page isn't reloaded in WebKit", async () => {
+  const tabId = streamingTab("https://www.netflix.com/watch/1", unsavedWork(true));
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    S().navigate(tabId, "https://news.example/today");
+    answerDialog({ confirmed: true, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.notEqual(S().tabs[tabId].engine, "webkit");
+    assert.equal(S().tabs[tabId].page.nav.url, "https://news.example/today");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S5: a redirect inside the 10 s gap after a move waits for the gap instead of being dropped", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const flush = async () => {
+    for (let i = 0; i < 200; i++) await Promise.resolve();
+  };
+  const tabId = streamingTab("https://search.example/?q=film", () => Promise.resolve(false));
+  S().updateSettings({ engineSwitchCarriesSiteData: false, websiteEngines: { "https://www.hulu.com": "chromium" } });
+  S().updateTab(tabId, { url: "https://www.netflix.com/" });
+  followSiteChoice(tabId, "chromium", "https://www.netflix.com/", "https://search.example/?q=film");
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "webkit");
+  dropSwap(tabId);
+  S().updateTab(tabId, { url: "https://www.hulu.com/" });
+  followSiteChoice(tabId, "webkit", "https://www.hulu.com/", "https://www.netflix.com/");
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "webkit", "still inside the gap");
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium", "the redirect lands once the gap ends");
+  assert.deepEqual(pageOf(tabId).engineBack, { engine: "webkit", url: "https://www.netflix.com/" });
+  dropSwap(tabId);
+  S().updateSettings({ engineSwitchCarriesSiteData: true });
+  webviews.clear();
+});
+
+test("S5: a protected-video refusal on a redirect still waiting its turn keeps that redirect's Back", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 2_000_000 });
+  const flush = async () => {
+    for (let i = 0; i < 200; i++) await Promise.resolve();
+  };
+  const tabId = streamingTab("https://www.netflix.com/watch/1", () => Promise.resolve(false));
+  S().updateSettings({ engineSwitchCarriesSiteData: false, websiteEngines: { "https://www.hulu.com": "chromium" } });
+  S().updateTab(tabId, { engine: "webkit" });
+  S().updateTab(tabId, { url: "https://www.hulu.com/" });
+  followSiteChoice(tabId, "webkit", "https://www.hulu.com/", "https://www.netflix.com/watch/1");
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium");
+  dropSwap(tabId);
+  S().updateTab(tabId, { url: "https://www.disneyplus.com/" });
+  followSiteChoice(tabId, "chromium", "https://www.disneyplus.com/", "https://www.hulu.com/");
+  offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "chromium", "both wait for the gap");
+  t.mock.timers.tick(10_000);
+  await flush();
+  assert.equal(tabEngine(S(), tabId), "webkit");
+  assert.deepEqual(pageOf(tabId).engineBack, { engine: "chromium", url: "https://www.hulu.com/" });
+  dropSwap(tabId);
+  S().updateSettings({ engineSwitchCarriesSiteData: true });
+  webviews.clear();
+});
+
+test("S8: a second protected-video refusal while Stay on Page is open doesn't move the tab after the user stays", async () => {
+  const tabId = streamingTab("https://www.netflix.com/watch/1", unsavedWork(true));
+  let calls = 0;
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => (++calls === 1 ? new Promise((resolve) => (answerDialog = resolve)) : Promise.resolve({ confirmed: true, suppressed: false }));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    await settle();
+    answerDialog({ confirmed: false, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium");
+    assert.equal(calls, 1, "the queued refusal never asks again");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S9: a move that throws frees the tab's queue, so a later redirect still moves", async () => {
+  const tabId = streamingTab("https://www.peacocktv.com/watch/1", unsavedWork(true));
+  shellNativeModules.ArdiaDialogs.confirm = () => Promise.reject(new Error("dialog host gone"));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium");
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.set(tabId, { evaluate: unsavedWork(false), pageCookies: () => Promise.resolve([]) });
+    S().updateTab(tabId, { url: "https://www.disneyplus.com/" });
+    followSiteChoice(tabId, "chromium", "https://www.disneyplus.com/", "https://www.peacocktv.com/watch/1");
+    assert.ok(await waitFor(() => tabEngine(S(), tabId) === "webkit"), "the queue isn't stuck");
+    dropSwap(tabId);
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S9: an unsaved-work check the page rejects counts as no unsaved work instead of throwing", async () => {
+  const tabId = streamingTab("https://www.paramountplus.com/watch/1", () => Promise.reject(new Error("page gone")));
+  offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+  assert.ok(await waitFor(() => tabEngine(S(), tabId) === "webkit"));
+  dropSwap(tabId);
+  webviews.clear();
+});

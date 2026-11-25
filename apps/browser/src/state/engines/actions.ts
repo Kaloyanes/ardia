@@ -76,7 +76,7 @@ const UNSAVED_WORK = `(() => {
 async function hasUnsavedWork(tabId: string): Promise<boolean> {
   const web = webviews.get(tabId);
   if (!web) return false;
-  return (await withDeadline(web.evaluate<boolean>(UNSAVED_WORK), 1500, null)) === true;
+  return (await withDeadline(web.evaluate<boolean>(UNSAVED_WORK).catch(() => null), 1500, null)) === true;
 }
 
 export function setWebsiteEngine(url: string, engine: PageEngine | null) {
@@ -98,10 +98,13 @@ export function persistEngine(tabId: string, engine: PageEngine) {
 
 const asksAboutUnsavedWork = () => store().settings.engineSwitchAsksAboutUnsavedWork;
 
-async function mayLeavePage(t: Tab, title: string, message: string, confirmTitle: string, ask: typeof confirm = confirm): Promise<boolean> {
-  if (!wantsPage(t) || !asksAboutUnsavedWork() || !(await hasUnsavedWork(t.id))) return true;
+type LeaveAnswer = "leave" | "stay" | "stale";
+
+async function mayLeavePage(t: Tab, title: string, message: string, confirmTitle: string, ask: typeof confirm = confirm, stillWanted: () => boolean = () => true): Promise<LeaveAnswer> {
+  if (!wantsPage(t) || !asksAboutUnsavedWork() || !(await hasUnsavedWork(t.id))) return stillWanted() ? "leave" : "stale";
+  if (!stillWanted()) return "stale";
   const { confirmed } = await ask({ title, message, confirmTitle, cancelTitle: "Stay on Page", windowId: t.windowId });
-  return confirmed;
+  return confirmed ? "leave" : "stay";
 }
 
 export const pageUrl = (t: Tab | undefined) => t?.url || navigationOf(t)?.url || "";
@@ -117,7 +120,7 @@ export async function goBackAcrossEngines(tabId: string, mayAct: () => boolean =
   }
   const from = pageUrl(t);
   const holds = modeStillHolds();
-  const leaving = await mayLeavePage(t, "Go back to the previous page?", `It opens in ${ENGINE_NAMES[back.engine]}, so changes you made on this page may not be saved.`, "Go Back", ask);
+  const leaving = (await mayLeavePage(t, "Go back to the previous page?", `It opens in ${ENGINE_NAMES[back.engine]}, so changes you made on this page may not be saved.`, "Go Back", ask)) === "leave";
   const now = store().tabs[tabId];
   if (!leaving || !holds() || !now || pageUrl(now) !== from || pageOf(tabId).engineBack !== back || !mayAct()) return false;
   const held = await holdPageForSwap(tabId, tabEngine(store(), tabId), back.engine, back.url, false, holds);
@@ -160,21 +163,25 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
     return true;
   }
   const holds = modeStillHolds();
-  if (options.checkWork !== false && !(await mayLeavePage(t, `Open this page in ${ENGINE_NAMES[engine]}?`, `The page reloads in ${ENGINE_NAMES[engine]}, so changes you made on it may not be saved.`, `Open in ${ENGINE_NAMES[engine]}`))) {
-    options.onStayed?.();
-    return false;
+  const navigation = navigationOf(t)?.seq ?? null;
+  const stillWanted = () => {
+    const now = store().tabs[tabId];
+    if (!holds() || !now || (navigationOf(now)?.seq ?? null) !== navigation) return false;
+    const at = pageUrl(now);
+    return options.routedHere ? siteOf(at) === siteOf(url) && options.routedHere(at) : at === url;
+  };
+  if (options.checkWork !== false) {
+    const answer = await mayLeavePage(t, `Open this page in ${ENGINE_NAMES[engine]}?`, `The page reloads in ${ENGINE_NAMES[engine]}, so changes you made on it may not be saved.`, `Open in ${ENGINE_NAMES[engine]}`, confirm, stillWanted);
+    if (answer === "stay") options.onStayed?.();
+    if (answer !== "leave") return false;
   }
-  if (!holds()) return false;
-  const afterPrompt = pageUrl(store().tabs[tabId]);
-  if (options.routedHere && (siteOf(afterPrompt) !== siteOf(url) || !options.routedHere(afterPrompt))) return false;
-  if (carriesSiteData()) await carrySignIn(tabId, url, engine, consent, holds);
-  if (!holds()) return false;
+  if (!stillWanted()) return false;
+  if (carriesSiteData()) await carrySignIn(tabId, url, engine, consent, stillWanted);
+  if (!stillWanted()) return false;
   const from = tabEngine(store(), tabId);
-  const held = from !== engine && wantsPage(store().tabs[tabId]) ? await holdPageForSwap(tabId, from, engine, url, true, holds) : null;
+  const held = from !== engine && wantsPage(store().tabs[tabId]) ? await holdPageForSwap(tabId, from, engine, url, true, stillWanted) : null;
   const now = store().tabs[tabId];
-  const routedHere = options.routedHere;
-  const samePage = !!now && (routedHere ? siteOf(pageUrl(now)) === siteOf(url) && routedHere(pageUrl(now)) : pageUrl(now) === url);
-  if (!holds() || !now || !samePage || (options.mayWrite && !options.mayWrite())) {
+  if (!now || !stillWanted() || (options.mayWrite && !options.mayWrite())) {
     dropSwap(tabId, held);
     return false;
   }
