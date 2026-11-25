@@ -167,6 +167,11 @@ class FloatingWindowHostTests(unittest.TestCase):
         release = self.section('void ReleasePinnedSize() {', 'void set_small(bool small) {')
         self.assertLess(release.index('pinned_ = false;'), release.index('GetWidget()->OnSizeConstraintsChanged();'))
 
+    def test_a_window_restored_to_full_screen_lets_go_of_the_pin_first(self):
+        restore = self.section('void ShellHostView::RestoreFullScreenNow() {', 'FinishFullScreenRestore();')
+        self.assertLess(restore.index('ReleasePinnedSize();'), restore.index('widget->SetFullscreen(true, output->first);'))
+        self.assertLess(restore.index('ReleasePinnedSize();'), restore.index('fullscreen->ToggleBrowserFullscreenMode(false);'))
+
     def test_tiled_edges_never_release_the_pin(self):
         hook = self.section('g_ardia_linux_tiled_edges_changed = [](', 'g_ardia_linux_minimum_size = [](')
         self.assertNotIn('ReleasePinnedSize', hook)

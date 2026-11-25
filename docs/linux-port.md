@@ -1162,18 +1162,19 @@ caller: sync keys, sealing and opening files and passwords, and the recovery phr
   `g_ardia_linux_window_class` in `chromium-linux-floating-windows.patch`, at the end of `GetWindowClass()`), and maps
   them with their minimum size equal to their maximum (`g_ardia_linux_pins_window_size`,
   `BrowserWidget::GetMinimumSize` and `GetMaximumSize`), which those compositors float by default. The host releases
-  the pin 400 ms after the window's first frame (3 s at most), so the window resizes like any other afterwards. The
-  pin isn't released on tiled edges: niri sends them to floating windows too when it draws their decorations. A window
-  saved maximized opens unpinned. Main windows keep the `ardia` class and tile. Hidden desktop entries
-  (`NoDisplay=true`, `StartupWMClass` set to the class, `Icon=ardia`) give the three classes Ardia's name and icon in
-  bars and switchers; `install.sh` (so the tarball and the AUR package) and the `.deb` install them
-  (`linux_formats.desktop_entries`). The AppImage carries them but installs nothing, so there the bars show the bare
-  class. A compositor rule can still match the class, for niri
-  `window-rule { match app-id="^ardia-little$"; open-floating false; }` to tile it again; Chromium holds such a window
-  at its pinned size until the pin is released and the compositor configures it again (untested on the Chromium 158
-  engine). Settings' app id was `chrome-ArdiaSettings-Default` before, so an existing rule naming it needs the new id.
-  A window that the shell turns into Little Ardia after it opened, or back (`set_small`), keeps the class and the
-  tiling it opened with: the host answers the class hook with the class the window opened with.
+  the pin 400 ms after the window's first frame (3 s at most), so the window resizes like any other afterwards; a
+  window restored to full screen lets go of it first. The pin isn't released on tiled edges: niri sends them to
+  floating windows too when it draws their decorations. A window saved maximized opens unpinned. Main windows keep the
+  `ardia` class and tile. Hidden desktop entries (`NoDisplay=true`, `StartupWMClass` set to the class, `Icon=ardia`)
+  give the three classes Ardia's name and icon in bars and switchers; `install.sh` (so the tarball and the AUR
+  package) and the `.deb` install them (`linux_formats.desktop_entries`). The AppImage carries them but installs
+  nothing, so there the bars show the bare class. On any desktop, Little Ardia now shows in docks and switchers as its
+  own app rather than grouped with Ardia, as Settings and Import already did. A compositor rule can still match the
+  class, for niri `window-rule { match app-id="^ardia-little$"; open-floating false; }` to tile it again; Chromium
+  holds such a window at its pinned size until the pin is released and the compositor configures it again (untested on
+  the Chromium 158 engine). Settings' app id was `chrome-ArdiaSettings-Default` before, so an existing rule naming it
+  needs the new id. A window that the shell turns into Little Ardia after it opened, or back (`set_small`), keeps the
+  class and the tiling it opened with: the host answers the class hook with the class the window opened with.
   `usage_counts.little_ardia_opened_floating` and `utility_windows_opened_floating` count windows that opened with
   Chromium reading the pin, once per window, in the first shell that loads in it.
 - **Header drag and double-click.** Dragging the header moves the window (`DispatchHostWindowDragMovement`).

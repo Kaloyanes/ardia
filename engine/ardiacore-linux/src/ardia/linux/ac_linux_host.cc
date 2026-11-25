@@ -4850,6 +4850,7 @@ void ShellHostView::RestoreFullScreenNow() {
   if (!manager) return;
   FullscreenController* fullscreen = manager->fullscreen_controller();
   if (FullScreenRestorer().Enter(window_id_, fullscreen->IsFullscreenForBrowser())) {
+    ReleasePinnedSize();
     if (const auto output = SavedWindowOutput()) {
       output_target_ = output->second;
       widget->SetFullscreen(true, output->first);
