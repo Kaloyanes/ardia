@@ -11,6 +11,7 @@ import { reopenSession } from "../../browser/src/state/telemetry/sessionControl"
 import { uuidv4 } from "../../browser/src/state/telemetry/ids";
 import { setTelemetryHost } from "../../browser/src/state/telemetry/transport";
 import { emitWindowUsage, sessionEnding, setCountsRelayNow } from "../../browser/src/state/telemetry/usage";
+import { noteMultipleDownloadFollowUp } from "../../browser/src/state/telemetry/downloadWork";
 import { isLinuxUtility } from "./session";
 import { documentSaved } from "../../browser/src/platform/documents";
 import { withDeadline } from "../../browser/src/lib/deadline";
@@ -165,8 +166,14 @@ export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolea
         void current.request("choice", RESET_TIMEOUT_MS, JSON.stringify({ kind: "installId", id } satisfies ChoiceChange)).catch(report).then(refreshState);
         return id;
       },
+      downloadFollowUp: (until, consent) => void forward({ kind: "downloadFollowUp", until, consent }),
     }),
-    deliver: (message) => message.kind === "capture" ? capture(message.event, message.props, relayedConsent(message.consent), message.options) : queueLog(message.level, message.message, message.attributes, relayedConsent(message.consent)),
+    deliver: (message) =>
+      message.kind === "capture"
+        ? capture(message.event, message.props, relayedConsent(message.consent), message.options)
+        : message.kind === "log"
+          ? queueLog(message.level, message.message, message.attributes, relayedConsent(message.consent))
+          : noteMultipleDownloadFollowUp(message.until, relayedConsent(message.consent)),
     handle: handleTelemetryOp,
     lead: async () => {
       await Promise.all(TELEMETRY_DOCUMENTS.map((name) => refreshDocument(name).catch(report)));

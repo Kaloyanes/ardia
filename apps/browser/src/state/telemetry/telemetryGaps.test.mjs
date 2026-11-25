@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 
 globalThis.__DEV__ = false;
@@ -133,13 +134,49 @@ test("process CPU sums each kind of process once per process and keeps the busie
   assert.deepEqual(processCpuFields([{ id: 1, pid: 10, type: "browser", cpu: 0 }, { id: 2, pid: 11, type: "renderer", cpu: 0 }]), {}, "a sample with every process at zero is one the task manager hadn't taken yet");
 });
 
-test("page metrics from native keep only the known counters, rounded", () => {
-  assert.deepEqual(pageMetricsFields({ media_errors_decode: 2, video_frames_60hz: 600.4, video_frames_dropped_120hz_low_power: 3, scroll_bursts: 1, "https://example.com": 4, scroll_ms_90hz: 1, media_errors_network: -1 }), {
-    media_errors_decode: 2,
-    video_frames_60hz: 600,
-    video_frames_dropped_120hz_low_power: 3,
-    scroll_bursts: 1,
-  });
+test("page metrics from native keep only the known counters, rounded, including every key Mac native emits", () => {
+  assert.deepEqual(
+    pageMetricsFields({
+      media_errors_decode: 2,
+      video_frames_60hz: 600.4,
+      video_frames_dropped_120hz_low_power: 3,
+      scroll_bursts: 1,
+      scroll_frames_60hz: 58.6,
+      scroll_ms_60hz: 1000.2,
+      scroll_frames_120hz: 118,
+      scroll_ms_120hz: 990,
+      scroll_frames_60hz_low_power: 30,
+      scroll_ms_60hz_low_power: 500,
+      scroll_frames_120hz_low_power: 60,
+      scroll_ms_120hz_low_power: 1000,
+      "https://example.com": 4,
+      scroll_ms_90hz: 1,
+      media_errors_network: -1,
+    }),
+    {
+      media_errors_decode: 2,
+      video_frames_60hz: 600,
+      video_frames_dropped_120hz_low_power: 3,
+      scroll_bursts: 1,
+      scroll_frames_60hz: 59,
+      scroll_ms_60hz: 1000,
+      scroll_frames_120hz: 118,
+      scroll_ms_120hz: 990,
+      scroll_frames_60hz_low_power: 30,
+      scroll_ms_60hz_low_power: 500,
+      scroll_frames_120hz_low_power: 60,
+      scroll_ms_120hz_low_power: 1000,
+    },
+  );
+  const mm = readFileSync(new URL("../../../../../packages/ardiacore/ios/ArdiaWebView+PageMetrics.mm", import.meta.url), "utf8");
+  const buckets = ["_60hz", "_120hz", "_60hz_low_power", "_120hz_low_power"];
+  const direct = [...mm.matchAll(/Add\(@"([a-z0-9_]+)"/g)].map((m) => m[1]);
+  const media = [...mm.matchAll(/@"(media_errors_[a-z]+)"/g)].map((m) => m[1]);
+  const bucketed = [...mm.matchAll(/Add\(\[@"([a-z0-9_]+)" stringByAppendingString:bucket\]/g)].flatMap((m) => buckets.map((b) => `${m[1]}${b}`));
+  const allNative = [...new Set([...direct, ...media, ...bucketed])];
+  assert.ok(allNative.includes("scroll_frames_120hz") && allNative.includes("scroll_ms_120hz"));
+  const payload = Object.fromEntries(allNative.map((k, i) => [k, i + 1]));
+  assert.deepEqual(pageMetricsFields(payload), payload);
   assert.deepEqual(pageMetricsFields(null), {});
 });
 
@@ -218,14 +255,79 @@ test("on Linux one download seen by a leader and a follower window counts once",
   assert.deepEqual([sum("downloads_started"), sum("downloads_finished"), sum("downloads_timed")], [1, 1, 1]);
 });
 
-test("a window that becomes the leader mid-download doesn't count that download's start again", async () => {
+test("a window that becomes the leader mid-download keeps the download's identity and never counts its start again, even on a zero-byte update", async () => {
   const work = await import("./downloadWork.ts?window=handoff");
   let leading = false;
   work.setDownloadFlowOwner(() => leading);
   work.noteDownloadSeen({ id: "h", state: "downloading", received: 0 }, 1_000);
   leading = true;
+  work.noteDownloadSeen({ id: "h", state: "downloading", received: 0 }, 1_500);
   work.noteDownloadSeen({ id: "h", state: "downloading", received: 2 * MB }, 2_000);
   work.noteDownloadSeen({ id: "h", state: "finished", received: 4 * MB }, 3_000);
   const taken = work.takeDownloadWork(4_000);
-  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed], [0, 1, 0]);
+  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed], [0, 1, 1]);
+});
+
+test("a download started while sharing was off is never counted as finished after opt-in and leadership handoff", async () => {
+  const work = await import("./downloadWork.ts?window=handoff-consent");
+  let leading = false;
+  work.setDownloadFlowOwner(() => leading);
+  client.setSharing(false, "settings");
+  work.noteDownloadSeen({ id: "pre", state: "downloading", received: 0 }, 1_000);
+  client.setSharing(true, "settings");
+  leading = true;
+  work.noteDownloadSeen({ id: "pre", state: "downloading", received: 0 }, 1_500);
+  work.noteDownloadSeen({ id: "pre", state: "downloading", received: 2 * MB }, 2_000);
+  work.noteDownloadSeen({ id: "pre", state: "finished", received: 4 * MB }, 3_000);
+  const taken = work.takeDownloadWork(4_000);
+  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed], [0, 0, 0]);
+});
+
+test("a download started in an earlier consent period or already running before the window opened isn't counted after handoff", async () => {
+  const work = await import("./downloadWork.ts?window=handoff-prior");
+  let leading = false;
+  work.setDownloadFlowOwner(() => leading);
+  work.noteDownloadSeen({ id: "old-period", state: "downloading", received: 0 }, 1_000);
+  work.seedRunningDownloads([{ id: "seeded", state: "downloading", received: 0 }], 1_000);
+  client.setSharing(false, "settings");
+  client.setSharing(true, "settings");
+  leading = true;
+  work.noteDownloadSeen({ id: "old-period", state: "finished", received: 4 * MB }, 3_000);
+  work.noteDownloadSeen({ id: "seeded", state: "downloading", received: 0 }, 3_100);
+  work.noteDownloadSeen({ id: "seeded", state: "finished", received: 4 * MB }, 4_000);
+  const taken = work.takeDownloadWork(5_000);
+  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed], [0, 0, 0]);
+});
+
+test("a multiple-downloads approval in a follower window relays its follow-up window to the leader", async () => {
+  const { setTelemetryRelay } = await import("./relay.ts");
+  const leader = await import("./downloadWork.ts?window=fu-leader");
+  const follower = await import("./downloadWork.ts?window=fu-follower");
+  leader.setDownloadFlowOwner(() => true);
+  follower.setDownloadFlowOwner(() => false);
+  const relayed = [];
+  setTelemetryRelay({
+    capture: () => true,
+    log: () => {},
+    resetId: async () => "",
+    change: async () => true,
+    installId: () => "",
+    downloadFollowUp: (until, consent) => {
+      relayed.push([until, consent]);
+      leader.noteMultipleDownloadFollowUp(until, consent, 10_000);
+    },
+  });
+  try {
+    const consent = client.consentNow();
+    follower.noteMultipleDownloadsAnswered("accept", consent, 10_000);
+    assert.equal(relayed.length, 1);
+    leader.noteDownloadSeen({ id: "relayed-1", state: "downloading", received: 0 }, 11_000);
+    follower.noteDownloadSeen({ id: "relayed-1", state: "downloading", received: 0 }, 11_000);
+    const l = leader.takeDownloadWork(30_000);
+    const f = follower.takeDownloadWork(30_000);
+    assert.deepEqual([f.multiple_download_asks, f.multiple_download_allows, f.multiple_download_follow_ups], [1, 1, 0]);
+    assert.deepEqual([l.downloads_started, l.multiple_download_follow_ups, l.multiple_download_single_follow_ups], [1, 1, 1]);
+  } finally {
+    setTelemetryRelay(null);
+  }
 });

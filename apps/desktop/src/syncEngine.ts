@@ -11,7 +11,7 @@ import { keyringMessage, presentSyncState, SYNC_KEY_NOT_SAVED } from "./syncKeyS
 import { consentToken } from "../../browser/src/state/telemetry/client";
 import { noteSyncOpenFailures } from "../../browser/src/state/telemetry/syncFileCounts";
 import { warnFor } from "../../browser/src/state/telemetry/logs";
-import { noteKeyringFailure } from "../../browser/src/state/telemetry/keyringCounts";
+import { noteSyncKeyStore } from "./syncKeyringCounts";
 import type { ConsentToken } from "../../browser/src/state/telemetry/choice";
 import {
   claimSyncAuthority,
@@ -55,22 +55,14 @@ export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), s
 let authority: SyncAuthority | null = null;
 let keyStore: SyncKeyStoreStatus | null = null;
 let keyringAskConsent: ConsentToken | null = null;
-let keyringCounted: string | null = null;
-
-function newKeyringFailure(status: SyncKeyStoreStatus | null): "locked" | "unavailable" | null {
-  const failed = status?.keyStore === "secretService" && (status.keyStoreStatus === "locked" || status.keyStoreStatus === "unavailable") ? status.keyStoreStatus : null;
-  const counted = keyringCounted;
-  keyringCounted = failed;
-  return failed && failed !== counted ? failed : null;
-}
 
 function readKeyStore(host: ArdiaHost, consent: ConsentToken | null): Promise<SyncKeyStoreStatus> {
   return syncKeyStoreStatus(host).then((status) => {
-    const failed = newKeyringFailure(status);
-    if (failed) noteKeyringFailure("sync", failed, consent);
+    noteSyncKeyStore(status, consent);
     return status;
   });
 }
+
 let heldLogins: ReturnType<typeof createHeldLogins> | null = null;
 
 function adoptHeldLogins() {
@@ -104,8 +96,7 @@ function resumeWhenKeyringOpens(host: ArdiaHost) {
       return syncKeyStoreStatus(host);
     },
     seen: (status) => {
-      const failed = newKeyringFailure(status);
-      if (failed) noteKeyringFailure("sync", failed, keyringAskConsent);
+      noteSyncKeyStore(status, keyringAskConsent);
       const shown = keyringMessage(keyStore, false);
       keyStore = status;
       if (keyringMessage(status, false) !== shown) engine.useSync.setState({});

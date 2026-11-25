@@ -1,5 +1,7 @@
 import type { ConsentToken } from "./choice";
+import { stillValid } from "./consentPeriod";
 import { consentOrNow, countFor } from "./countFor";
+import { telemetryRelay } from "./relay";
 
 type DownloadSeen = { id: string; state: string; received: number; startTime?: number };
 
@@ -68,23 +70,37 @@ function settleFollowUp(now: number) {
   }
 }
 
+export function seedRunningDownloads(list: readonly DownloadSeen[], now = Date.now()) {
+  for (const d of list) {
+    if (d.state !== "downloading" || tracked.has(d.id)) continue;
+    if (tracked.size >= MAX_TRACKED) tracked.delete(tracked.keys().next().value!);
+    tracked.set(d.id, { state: d.state, firstSeen: now, consent: null, interrupted: true });
+  }
+}
+
 export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
   settleFollowUp(now);
-  if (!ownsDownloadFlow()) {
-    followed = true;
-    return void tracked.clear();
-  }
-  if (followed) tookOver = true;
+  const leading = ownsDownloadFlow();
+  if (!leading) followed = true;
+  else if (followed) tookOver = true;
   const before = tracked.get(d.id);
   if (!before) {
     if (d.state !== "downloading") return;
     if (tracked.size >= MAX_TRACKED) tracked.delete(tracked.keys().next().value!);
+    if (!leading) {
+      const consent = d.received > 0 ? null : consentOrNow(undefined);
+      tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
+      return;
+    }
+    if (tookOver && d.received > 0) {
+      tracked.set(d.id, { state: d.state, firstSeen: now, consent: null, interrupted: true });
+      return;
+    }
     const consent = consentOrNow(undefined);
     tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
-    if (tookOver && d.received > 0) return;
     bump("downloads_started", consent);
     const newest = followUps.at(-1);
-    if (newest) newest.started++;
+    if (newest && stillValid(newest.consent)) newest.started++;
     return;
   }
   if (before.state === d.state) return;
@@ -92,10 +108,11 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
   if (d.state === "downloading") return;
   if (d.state === "failed") {
     before.interrupted = true;
-    return bump("downloads_failed", before.consent);
+    if (leading) bump("downloads_failed", before.consent);
+    return;
   }
   tracked.delete(d.id);
-  if (d.state !== "finished") return;
+  if (!leading || d.state !== "finished") return;
   bump("downloads_finished", before.consent);
   if (before.interrupted) return;
   const started = typeof d.startTime === "number" && Number.isFinite(d.startTime) && d.startTime > 0 && d.startTime <= now ? d.startTime : before.firstSeen;
@@ -105,12 +122,24 @@ export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
   bump(speed, before.consent);
 }
 
+export function noteMultipleDownloadFollowUp(until: number, consent: ConsentToken | null, now = Date.now()) {
+  settleFollowUp(now);
+  const active = consentOrNow(consent);
+  if (!ownsDownloadFlow() || !stillValid(active) || !(until > now)) return;
+  followUps = [...followUps.slice(-(MAX_FOLLOW_UPS - 1)), { until: Math.min(until, now + FOLLOW_UP_MS), started: 0, consent: active }];
+}
+
 export function noteMultipleDownloadsAnswered(result: "accept" | "deny" | "dismiss", consent: ConsentToken | null, now = Date.now()) {
   settleFollowUp(now);
   bump("multiple_download_asks", consent);
   if (result === "dismiss") return;
   bump(result === "accept" ? "multiple_download_allows" : "multiple_download_blocks", consent);
-  if (result === "accept") followUps = [...followUps.slice(-(MAX_FOLLOW_UPS - 1)), { until: now + FOLLOW_UP_MS, started: 0, consent }];
+  if (result !== "accept") return;
+  const active = consentOrNow(consent);
+  if (!stillValid(active)) return;
+  const until = now + FOLLOW_UP_MS;
+  if (ownsDownloadFlow()) followUps = [...followUps.slice(-(MAX_FOLLOW_UPS - 1)), { until, started: 0, consent: active }];
+  else telemetryRelay()?.downloadFollowUp?.(until, active);
 }
 
 export function takeDownloadWork(now = Date.now()) {

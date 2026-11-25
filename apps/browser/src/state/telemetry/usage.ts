@@ -292,8 +292,6 @@ function watchTranslate() {
   });
 }
 
-
-
 const mb = (bytes: number) => Math.round(bytes / 1_048_576);
 
 async function sampleMemory(consent: ConsentToken | null) {

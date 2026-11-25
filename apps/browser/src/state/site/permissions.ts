@@ -88,8 +88,8 @@ export function answerPermission(tabId: string, requestId: string, result: Permi
   const consent = consentToken();
   const request = pageOf(tabId).permission;
   if (!request || request.id !== requestId) return;
-  void resolvePermission(request.id, result, result !== "dismiss");
   if (request.permissions.includes("multipleDownloads")) noteMultipleDownloadsAnswered(result, consent);
+  void resolvePermission(request.id, result, result !== "dismiss");
   if (result === "accept" && request.permissions.includes("notifications")) {
     void ensureNotificationPermission(useBrowser.getState().tabs[tabId]?.windowId);
   }

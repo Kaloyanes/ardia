@@ -12,7 +12,7 @@ import { appearanceTelemetry, chromeStyle, colorChoiceTelemetry, glassRenderTele
 import { useBoot } from "../app/bootState";
 import { isDemoSession } from "../app/launchFlags";
 import { currentPreferences } from "../settings/store";
-import { readPreferences, writePreference } from "../store/browserDatabase";
+import { readPreference, writePreference } from "../store/browserDatabase";
 import { browserDatabase } from "../store/database";
 import { syncOffered } from "../../platform/system";
 import { syncData } from "../sync/store";
@@ -23,7 +23,7 @@ export const useUsageSharing = create<{ sharing: boolean }>()(() => ({ sharing: 
 
 const gate = createGate({
   store: {
-    read: (key) => readPreferences(browserDatabase())[key] ?? null,
+    read: (key) => readPreference(browserDatabase(), key),
     write: (key, value) => writePreference(browserDatabase(), key, value),
   },
   post: postTelemetry,
@@ -57,7 +57,7 @@ function reportCrashes() {
   const crashes = collectCrashes(
     {
       sharing: () => gate.isSharing() && !isDemoSession(),
-      readPending: () => readPreferences(db)[PENDING_CRASH_KEY] ?? null,
+      readPending: () => readPreference(db, PENDING_CRASH_KEY),
       clearPending: () => writePreference(db, PENDING_CRASH_KEY, null),
       takeExits,
     },
@@ -101,7 +101,7 @@ export function startTelemetry() {
   gate.load();
   useUsageSharing.setState({ sharing: gate.isSharing() });
   setUsageConsent(gate.isSharing());
-  launchPrevious = previousSession(readPreferences(browserDatabase())[SESSION_KEY] ?? null);
+  launchPrevious = previousSession(readPreference(browserDatabase(), SESSION_KEY));
   markSession(AppState.currentState === "active");
   watchJsErrors();
   gate.rollDaily();
@@ -157,7 +157,7 @@ export async function reportLaunchTray(trayUpAt: number) {
 }
 
 export function usageToday(): { day: string | null; counts: Partial<Record<Counted, number>>; sharing: boolean } {
-  const daily = parseDaily(readPreferences(browserDatabase())[DAILY_KEY] ?? null);
+  const daily = parseDaily(readPreference(browserDatabase(), DAILY_KEY));
   const counts: Partial<Record<Counted, number>> = {};
   if (daily) for (const field of COUNTED) if (daily[field] > 0) counts[field] = daily[field];
   return { day: daily?.day ?? null, counts, sharing: gate.isSharing() };
