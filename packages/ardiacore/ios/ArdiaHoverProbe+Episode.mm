@@ -70,4 +70,9 @@ bool HoverEpisodeReportedAtQuitOpen() {
   return gReportedAtQuit != 0 && gEpisode.open && gEpisode.serial == gReportedAtQuit;
 }
 
+NSInteger HoverEpisodeReportedAtQuitSeconds() {
+  if (!HoverEpisodeReportedAtQuitOpen()) return -1;
+  return lround(MAX(0, Uptime() - gEpisode.startedAt));
+}
+
 }

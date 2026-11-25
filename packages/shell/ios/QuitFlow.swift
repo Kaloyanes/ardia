@@ -21,9 +21,34 @@ final class QuitFlow {
 
   static func commitHeldHoverLoss() {
     guard ArdiaHost.hoverLossReportedAtQuitIsOpen(), let held = DocumentStore.read(heldHoverLoss) else { return }
-    try? DocumentStore.write(committedHoverLoss, held)
+    let seconds = ArdiaHost.hoverLossReportedAtQuitSeconds()
+    guard let merged = mergeCommittedHoverLoss(existing: DocumentStore.read(committedHoverLoss), held: held, seconds: seconds) else { return }
+    guard DocumentStore.writeDurablySync(committedHoverLoss, merged) else { return }
     try? DocumentStore.remove(heldHoverLoss)
     DocumentStore.flush()
+  }
+
+  private static func mergeCommittedHoverLoss(existing: String?, held: String, seconds: Int) -> String? {
+    guard let heldData = held.data(using: .utf8),
+          var record = (try? JSONSerialization.jsonObject(with: heldData)) as? [String: Any] else { return nil }
+    if seconds >= 0, var props = record["properties"] as? [String: Any] {
+      props["lost_seconds"] = seconds
+      record["properties"] = props
+    }
+    var records: [[String: Any]] = []
+    if let existing, let data = existing.data(using: .utf8), let parsed = try? JSONSerialization.jsonObject(with: data) {
+      if let list = parsed as? [[String: Any]] {
+        records = list
+      } else if let single = parsed as? [String: Any] {
+        records = [single]
+      }
+    }
+    let uuid = record["uuid"] as? String
+    if let uuid { records.removeAll { ($0["uuid"] as? String) == uuid } }
+    records.append(record)
+    if records.count > 20 { records.removeFirst(records.count - 20) }
+    guard let out = try? JSONSerialization.data(withJSONObject: records) else { return nil }
+    return String(data: out, encoding: .utf8)
   }
 
   private var isSaving: Bool {

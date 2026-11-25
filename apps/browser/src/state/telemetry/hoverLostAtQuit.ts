@@ -11,15 +11,29 @@ type HeldQuitEpisode = { serial: number; uuid: string; at: number; epoch: string
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+function parseHeldRecord(held: unknown): HeldQuitEpisode | null {
+  if (!isRecord(held)) return null;
+  const { serial, uuid, at, epoch, properties, context: original } = held;
+  if (typeof serial !== "number" || typeof uuid !== "string" || typeof at !== "number" || typeof epoch !== "string" || !isRecord(properties) || !isRecord(original)) return null;
+  return { serial, uuid, at, epoch, properties, context: original };
+}
+
 function readHeld(name: string): HeldQuitEpisode | null {
   try {
-    const held: unknown = JSON.parse(readDocument(name) ?? "null");
-    if (!isRecord(held)) return null;
-    const { serial, uuid, at, epoch, properties, context: original } = held;
-    if (typeof serial !== "number" || typeof uuid !== "string" || typeof at !== "number" || typeof epoch !== "string" || !isRecord(properties) || !isRecord(original)) return null;
-    return { serial, uuid, at, epoch, properties, context: original };
+    return parseHeldRecord(JSON.parse(readDocument(name) ?? "null"));
   } catch {
     return null;
+  }
+}
+
+function readCommitted(name: string): HeldQuitEpisode[] {
+  try {
+    const parsed: unknown = JSON.parse(readDocument(name) ?? "null");
+    if (Array.isArray(parsed)) return parsed.map(parseHeldRecord).filter((entry): entry is HeldQuitEpisode => entry !== null);
+    const single = parseHeldRecord(parsed);
+    return single ? [single] : [];
+  } catch {
+    return [];
   }
 }
 
@@ -50,13 +64,14 @@ export function dropQuitEpisodes() {
 
 export async function sendCommittedQuitEpisode(): Promise<boolean> {
   remove(HELD_QUIT_EPISODE_DOC);
-  const committed = readHeld(COMMITTED_QUIT_EPISODE_DOC);
-  const consent = committed?.epoch as ConsentToken | undefined;
-  if (!committed || !consent || !stillValid(consent)) {
+  const committed = readCommitted(COMMITTED_QUIT_EPISODE_DOC).filter((entry) => stillValid(entry.epoch as ConsentToken));
+  if (!committed.length) {
     remove(COMMITTED_QUIT_EPISODE_DOC);
     return false;
   }
-  capture(EVENT, committed.properties, consent, { raw: committed.context, uuid: committed.uuid, at: committed.at, persist: true });
+  for (const entry of committed) {
+    capture(EVENT, entry.properties, entry.epoch as ConsentToken, { raw: entry.context, uuid: entry.uuid, at: entry.at, persist: true });
+  }
   const durable = await queueSavedDurably();
   if (durable) remove(COMMITTED_QUIT_EPISODE_DOC);
   return durable;

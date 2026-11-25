@@ -296,8 +296,7 @@ export function trackHoverLost(e: HoverLostEpisode) {
 
 function holdHoverLostAtQuit(e: HoverLostEpisode, consent: ConsentToken | null) {
   if (!stillValid(consent) || hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
-  hoverLostEvents++;
-  holdQuitEpisode(e.serial, { ...hoverLostProperties(e, sessionMinutes()), episode: hoverLostEvents }, consent);
+  holdQuitEpisode(e.serial, { ...hoverLostProperties(e, sessionMinutes()), episode: hoverLostEvents + 1 }, consent);
 }
 
 const UNPAINTED_WINDOWS = new Set(["regular", "private"]);

@@ -228,10 +228,12 @@ test("a quit report commits only if the same episode is still open when the app 
   assert.match(body(probeEpisode, "NSDictionary *EpisodePayload("), /@"serial" : @\(gEpisode\.serial\),/);
   assert.match(body(probeEpisode, "void ReportHoverEpisodeAtQuit("), /gReportedAtQuit = gEpisode\.serial;\s*EmitEpisode\(/);
   assert.match(body(probeEpisode, "bool HoverEpisodeReportedAtQuitOpen("), /return gReportedAtQuit != 0 && gEpisode\.open && gEpisode\.serial == gReportedAtQuit;/);
+  assert.match(body(probeEpisode, "NSInteger HoverEpisodeReportedAtQuitSeconds("), /if \(!HoverEpisodeReportedAtQuitOpen\(\)\) return -1;\s*return lround\(MAX\(0, Uptime\(\) - gEpisode\.startedAt\)\);/);
   assert.match(quitFlow, /forName: NSApplication\.willTerminateNotification, object: nil, queue: nil\s*\) \{ _ in commitHeldHoverLoss\(\) \}/);
   const commit = body(quitFlow, "static func commitHeldHoverLoss()", "\n  }\n");
   assert.match(commit, /guard ArdiaHost\.hoverLossReportedAtQuitIsOpen\(\), let held = DocumentStore\.read\(heldHoverLoss\) else \{ return \}/);
-  assert.match(commit, /try\? DocumentStore\.write\(committedHoverLoss, held\)\s*try\? DocumentStore\.remove\(heldHoverLoss\)\s*DocumentStore\.flush\(\)/);
+  assert.match(commit, /ArdiaHost\.hoverLossReportedAtQuitSeconds\(\)/);
+  assert.match(commit, /guard DocumentStore\.writeDurablySync\(committedHoverLoss, merged\) else \{ return \}\s*try\? DocumentStore\.remove\(heldHoverLoss\)\s*DocumentStore\.flush\(\)/);
   const terminate = body(quitFlow, "func shouldTerminate()", "\n  }\n");
   assert.ok(terminate.indexOf("_ = Self.commitsHoverLossOnTerminate") < terminate.indexOf("ArdiaHost.reportHoverLossAtQuit()"), "the commit watch is in place before the report");
 });

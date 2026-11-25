@@ -65,10 +65,18 @@ test("S2, S8, S9: a committed record is sent once at the next launch with the qu
   assert.equal(await atQuit.sendCommittedQuitEpisode(), false);
   assert.ok(doc(COMMITTED), "a queue that didn't reach the disk keeps the committed record for the next launch");
   stub.refusedSaves.on = false;
+  stub.refusedSyncs.on = true;
+  assert.equal(await atQuit.sendCommittedQuitEpisode(), false);
+  assert.ok(doc(COMMITTED), "an unsynced queue write still keeps the committed record");
+  stub.refusedSyncs.on = false;
   assert.equal(await atQuit.sendCommittedQuitEpisode(), true);
   assert.equal(doc(COMMITTED), null);
   const sent = events().slice(before);
   assert.equal(sent.length, 1, "the retry with the same event id adds nothing");
+  const { flushLocalNow } = await import("./localStore.ts");
+  flushLocalNow();
+  const localRecords = stub.telemetryLocal.lines().map((line) => JSON.parse(line)).filter((r) => r.uuid === held.uuid);
+  assert.equal(localRecords.length, 1, "retrying replay never duplicates the local diagnostics copy");
   assert.equal(sent[0].uuid, held.uuid);
   assert.equal(sent[0].timestamp, new Date(held.at).toISOString());
   assert.equal(sent[0].properties.$app_version, "0.3.1");
@@ -77,6 +85,26 @@ test("S2, S8, S9: a committed record is sent once at the next launch with the qu
   assert.equal(sent[0].properties.episode, held.properties.episode);
   assert.equal(sent[0].properties.lost_seconds, 412);
   Object.assign(stub.appInfo, { appVersion: "0.3.1" });
+});
+
+test("R3-1 & R3-2: a cancelled quit never consumes an episode slot, and multiple committed records all replay", async () => {
+  clear();
+  for (let i = 0; i < 17; i++) diagnostics.trackHoverLost(episode({ endedBy: "hover", serial: 50 + i }));
+  diagnostics.trackHoverLost(episode({ serial: 80 }));
+  assert.ok(doc(HELD), "slot 20 stages provisionally");
+  atQuit.dropHeldQuitEpisode();
+  diagnostics.trackHoverLost(episode({ serial: 80 }));
+  assert.ok(doc(HELD), "retrying quit still stages slot 20");
+  assert.equal(JSON.parse(doc(HELD)).properties.episode, 20);
+  diagnostics.trackHoverLost(episode({ endedBy: "hover", serial: 80 }));
+  await client.saveQueueNow();
+  assert.equal(events().at(-1).properties.episode, 20, "normal close still gets slot 20");
+
+  const first = { serial: 90, uuid: "01900000-0000-7000-8000-000000000090", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 1 }, context: { $app_version: "0.3.1", $session_id: "s1" } };
+  const second = { serial: 91, uuid: "01900000-0000-7000-8000-000000000091", at: Date.now(), epoch: client.consentEpoch(), properties: { reason: "coveredByView", ended_by: "quit", episode: 2 }, context: { $app_version: "0.3.1", $session_id: "s2" } };
+  stub.docs.set(COMMITTED, JSON.stringify([first, second]));
+  assert.equal(await atQuit.sendCommittedQuitEpisode(), true);
+  assert.equal(events().filter((e) => e.uuid === first.uuid || e.uuid === second.uuid).length, 2);
 });
 
 test("S8: sending a committed record doesn't use the new session's episode quota", async () => {

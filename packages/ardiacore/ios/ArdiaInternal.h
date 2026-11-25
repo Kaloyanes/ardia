@@ -61,6 +61,7 @@ inline void KeepHitsWhileClear(NSView *view, bool keep) {
 }
 void ReportHoverEpisodeAtQuit();
 bool HoverEpisodeReportedAtQuitOpen();
+NSInteger HoverEpisodeReportedAtQuitSeconds();
 void WatchPageCursor();
 NSString *PageCursorDev(NSWindow *window, NSString *_Nullable argument);
 NSString *PaintProbeLine();

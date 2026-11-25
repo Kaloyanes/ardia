@@ -210,6 +210,45 @@ enum DocumentStore {
     lock.unlock()
   }
 
+  static func writeDurablySync(_ name: String, _ contents: String) -> Bool {
+    guard let target = try? url(name) else { return false }
+    let key = target.lastPathComponent
+    return queue.sync {
+      lock.lock()
+      if closed {
+        lock.unlock()
+        return false
+      }
+      generation += 1
+      let waiters = staged.removeValue(forKey: key)?.waiters ?? []
+      lock.unlock()
+      let staging = target.deletingLastPathComponent().appendingPathComponent(".\(key).\(UUID().uuidString).tmp")
+      var failure: Error?
+      do {
+        try Data(contents.utf8).write(to: staging, options: [.withoutOverwriting])
+        guard durable(staging.path) else {
+          try? FileManager.default.removeItem(at: staging)
+          throw CocoaError(.fileWriteUnknown)
+        }
+        do {
+          if FileManager.default.fileExists(atPath: target.path) {
+            _ = try FileManager.default.replaceItemAt(target, withItemAt: staging)
+          } else {
+            try FileManager.default.moveItem(at: staging, to: target)
+          }
+        } catch {
+          try? FileManager.default.removeItem(at: staging)
+          throw error
+        }
+        guard durable(target.deletingLastPathComponent().path) else { throw CocoaError(.fileWriteUnknown) }
+      } catch {
+        failure = error
+      }
+      for waiter in waiters { waiter(failure) }
+      return failure == nil
+    }
+  }
+
   @discardableResult
   static func flush() -> Bool {
     queue.sync {

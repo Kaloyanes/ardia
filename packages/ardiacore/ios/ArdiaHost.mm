@@ -506,6 +506,10 @@ static NSDictionary<NSString *, id> *OffscreenRefusal(NSString *reason) {
   return ardia_host::HoverEpisodeReportedAtQuitOpen();
 }
 
++ (NSInteger)hoverLossReportedAtQuitSeconds {
+  return ardia_host::HoverEpisodeReportedAtQuitSeconds();
+}
+
 + (NSDictionary<NSString *, id> *)engineInfo {
   ArdiaCoreEngine *engine = ArdiaCoreEngine.sharedEngine;
   NSInteger chromeWindows = 0;
