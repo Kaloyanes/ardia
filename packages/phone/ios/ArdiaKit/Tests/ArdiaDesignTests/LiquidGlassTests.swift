@@ -248,6 +248,20 @@ struct LiquidGlassTests {
     #expect(!GlassFlowRules.documentOverBudgetPublicly(privateDocument, now: 2), "WebKit's PDF work for a private page stays out of the count")
   }
 
+  @Test func `a capture started on the Incognito deck charges its landing to private work, not to the public frame it lands in`() {
+    let frameMs = 1000.0 / 60
+    let landingFrame = LiquidGlassRules.CaptureSample(at: 1.0, ms: 24, privateMs: 22)
+    let slowPublicFrame = LiquidGlassRules.CaptureSample(at: 1.5, ms: 20)
+    let frames = [landingFrame, slowPublicFrame]
+    #expect(abs(landingFrame.publicMs - 2) < 1e-9)
+    #expect(LiquidGlassRules.overBudget(frames, now: 1.6, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes), "both frames were slow, so the glass still cools down")
+    #expect(!LiquidGlassRules.overBudgetPublicly(frames, now: 1.6, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes), "only one public frame was slow: the deck's two strikes aren't met by public work")
+    let bothPublic = [LiquidGlassRules.CaptureSample(at: 1.0, ms: 24), slowPublicFrame]
+    #expect(LiquidGlassRules.overBudgetPublicly(bothPublic, now: 1.6, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes))
+    #expect(LiquidGlassRules.CaptureSample(at: 0, ms: 10, privately: true).publicMs == 0)
+    #expect(LiquidGlassRules.CaptureSample(at: 0, ms: 10, privateMs: 40).publicMs == 0)
+  }
+
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {
     let light = LiquidGlassRules.light(LiquidGlassParams.defaults.lightAngle)
     #expect(light.x < 0 && light.y < 0)

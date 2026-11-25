@@ -188,18 +188,21 @@ public enum LiquidGlassRules {
     public var at: TimeInterval
     public var ms: Double
     public var cold: Bool
-    public var privately: Bool
+    public var privateMs: Double
 
-    public init(at: TimeInterval, ms: Double, cold: Bool = false, privately: Bool = false) {
+    public init(at: TimeInterval, ms: Double, cold: Bool = false, privately: Bool = false, privateMs: Double = 0) {
       self.at = at
       self.ms = ms
       self.cold = cold
-      self.privately = privately
+      self.privateMs = privately ? ms : min(max(privateMs, 0), ms)
     }
+
+    public var publicMs: Double { ms - privateMs }
   }
 
   public static func overBudgetPublicly(_ samples: [CaptureSample], now: TimeInterval, frameMs: Double, strikes: Int = 1) -> Bool {
-    overBudget(samples.filter { !$0.privately }, now: now, frameMs: frameMs, strikes: strikes)
+    let publicWork = samples.compactMap { sample in sample.publicMs > 0 ? CaptureSample(at: sample.at, ms: sample.publicMs, cold: sample.cold) : nil }
+    return overBudget(publicWork, now: now, frameMs: frameMs, strikes: strikes)
   }
 
   public static func recentSamples(_ samples: [CaptureSample], now: TimeInterval) -> [CaptureSample] {

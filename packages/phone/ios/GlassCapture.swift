@@ -23,6 +23,7 @@ final class GlassCapture {
     let ms: Double
     let askedAt: CFTimeInterval
     let follow: (web: WKWebView, offset: CGPoint)?
+    let privately: Bool
   }
 
   private static let queue = DispatchQueue(label: "ardia.glass.capture", qos: .userInitiated)
@@ -45,6 +46,7 @@ final class GlassCapture {
   private var flying = false
   private var landed: Landed?
   private(set) var lastTiming: (ms: Double, offMain: Bool) = (0, false)
+  private(set) var landedPrivately = false
   var probe: ((CVPixelBuffer) -> Void)?
   private var samples: [LiquidGlassRules.CaptureSample] = []
   private var quiet = 0
@@ -95,8 +97,8 @@ final class GlassCapture {
     samples = []
   }
 
-  func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool, privately: Bool) {
-    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms, cold: captured && !warmed, privately: privately)]
+  func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool, privately: Bool, privateMs: Double = 0) {
+    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms, cold: captured && !warmed, privately: privately, privateMs: privateMs)]
     if captured { warmed = true }
   }
 
@@ -199,7 +201,7 @@ final class GlassCapture {
     return .captured
   }
 
-  func start(rect wanted: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval, steps: GlassSteps, follow web: WKWebView?) -> Outcome {
+  func start(rect wanted: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval, steps: GlassSteps, follow web: WKWebView?, privately: Bool) -> Outcome {
     if now < retryAt || flying { return .waiting }
     let width = max(Int((wanted.width * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
     let height = max(Int((wanted.height * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
@@ -223,7 +225,7 @@ final class GlassCapture {
             return
           }
           self.flying = false
-          self.landed = Landed(pixels: box.pixels, rect: captured, valid: wanted, inked: inked, ms: ms, askedAt: now, follow: follow)
+          self.landed = Landed(pixels: box.pixels, rect: captured, valid: wanted, inked: inked, ms: ms, askedAt: now, follow: follow, privately: privately)
           GlassFrames.shared.schedule()
         }
       }
@@ -235,6 +237,7 @@ final class GlassCapture {
     guard let landed else { return nil }
     self.landed = nil
     lastTiming = (landed.ms, true)
+    landedPrivately = landed.privately
     probe?(landed.pixels)
     guard landed.inked, install(landed.pixels, rect: landed.rect, valid: landed.valid, sigma: sigma, blurs: &blurs, at: landed.askedAt) else { return fail(now) }
     scrollWeb = landed.follow?.web

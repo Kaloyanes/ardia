@@ -2,7 +2,7 @@ import { Image, Platform } from "react-native";
 import { act } from "react-test-renderer";
 import { renderSurface, someTabs, unmount } from "../../test/render/harness";
 import { ReaderView } from "../components/browsing/ReaderView";
-import { TabDeck } from "../components/tabs/TabDeck";
+import { deckGlassPrivately, TabDeck } from "../components/tabs/TabDeck";
 import { ChromeSurface, DesignProvider } from "../components/ui";
 import { useBrowse } from "../state/browse/store";
 import * as pageActions from "../state/page/actions";
@@ -93,4 +93,13 @@ onIPhone("the deck's glass follows its visible side: private on the Incognito si
   act(() => useTabs.setState({ incognito: false }));
   expect(deckGlass().every((node) => node.props.privately === true)).toBe(true);
   unmount(deck);
+});
+
+test("leaving the Incognito side, the deck's glass stays private until both the private backdrop has faded and the Incognito cards have left, in either order", () => {
+  expect(deckGlassPrivately(true, true, "instant")).toBe(true);
+  const backdropFirst = [deckGlassPrivately(false, true, "fade"), deckGlassPrivately(false, true, null), deckGlassPrivately(false, false, null)];
+  expect(backdropFirst).toEqual([true, true, false]);
+  const cardsFirst = [deckGlassPrivately(false, true, "fade"), deckGlassPrivately(false, false, "fade"), deckGlassPrivately(false, false, null)];
+  expect(cardsFirst).toEqual([true, true, false]);
+  expect(deckGlassPrivately(false, false, null)).toBe(false);
 });

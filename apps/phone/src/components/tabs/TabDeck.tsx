@@ -121,6 +121,8 @@ type Phase = { kind: "opening" | "settled" | "closing"; id: string | null };
 
 type DeckPrivateBackdrop = "instant" | "fade" | null;
 
+export const deckGlassPrivately = (incognito: boolean, side: boolean, privateBackdrop: DeckPrivateBackdrop) => incognito || side || privateBackdrop !== null;
+
 const SETTLED: Phase = { kind: "settled", id: null };
 
 type LeavingCard = { id: string; tab: BrowserTab; at: number };
@@ -1267,7 +1269,7 @@ export const TabDeck = memo(function TabDeck() {
   const [privateBackdrop, setPrivateBackdrop] = useState<DeckPrivateBackdrop>(privateLook ? "instant" : null);
   if (privateLook && privateBackdrop === null) setPrivateBackdrop(shown ? "fade" : "instant");
   if (!privateLook && privateBackdrop !== null && !shown) setPrivateBackdrop(null);
-  const glassPrivately = incognito || privateBackdrop !== null;
+  const glassPrivately = deckGlassPrivately(incognito, side, privateBackdrop);
   const gridTabs = gridAvailable && (grid || gridLayer) ? order.flatMap((id) => {
     const tab = tabs.get(id);
     return tab && !hidden.current.has(id) ? [tab] : [];

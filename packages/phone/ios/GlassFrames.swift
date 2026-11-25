@@ -220,12 +220,14 @@ final class GlassFrames: NSObject {
     let started = CACurrentMediaTime()
     let workPrivately = members.contains(where: \.privately)
     var capturedNow = false
+    var landingMs = 0.0
+    var landingPrivately = false
     var marks: [String] = []
     func mark(_ name: String) { if PhoneTestBuild.isOn { marks.append("\(name)=\(String(format: "%.1f", (CACurrentMediaTime() - started) * 1000))") } }
     defer {
       let spent = (CACurrentMediaTime() - started) * 1000
       if PhoneTestBuild.isOn, spent > frameMs { NSLog("PAGELAB look glass slow pass %@ %.1f ms: %@", members.map(\.label).joined(separator: ","), spent, marks.joined(separator: " ")) }
-      capture.noteMainThread(ms: spent, now: now, captured: capturedNow, privately: workPrivately)
+      capture.noteMainThread(ms: spent, now: now, captured: capturedNow, privately: workPrivately, privateMs: landingPrivately ? landingMs : 0)
       if capturedNow { warmedOwners.add(owner) }
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
       if capture.overBudget(now: now, frameMs: frameMs), !isOverBudget(owner) {
@@ -304,7 +306,12 @@ final class GlassFrames: NSObject {
       if PhoneTestBuild.isOn { stats.heldFrames += 1 }
       return
     }
-    if let landed = capture.land(sigma: sigma, blurs: &blurs, now: now) { finish(landed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
+    let landingStarted = CACurrentMediaTime()
+    if let landed = capture.land(sigma: sigma, blurs: &blurs, now: now) {
+      landingMs = (CACurrentMediaTime() - landingStarted) * 1000
+      landingPrivately = capture.landedPrivately
+      finish(landed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil)
+    }
     if capture.dropsPageCapture(shiftable: shiftable) {
       capture.drop()
       if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ page capture dropped: the page no longer shifts under it", members.map(\.label).joined(separator: ",")) }
@@ -341,7 +348,7 @@ final class GlassFrames: NSObject {
     if let pageOnly {
       let outcome: GlassCapture.Outcome
       if GlassLaunch.offMain {
-        outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: pageOnly.steps, follow: web)
+        outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: pageOnly.steps, follow: web, privately: workPrivately)
       } else {
         outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, blurs: &blurs, now: now) { context in
           pageOnly.steps.draw(in: context)
@@ -361,7 +368,7 @@ final class GlassFrames: NSObject {
       if let steps = made {
         mark("copy\(steps.layers)")
         if GlassLaunch.copyProbe { GlassCopyProbe.arm(capture, pieces: pieces, rect: wanted, pixelsPerPoint: pixelsPerPoint) }
-        let outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: steps, follow: shiftable ? web : nil)
+        let outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: steps, follow: shiftable ? web : nil, privately: workPrivately)
         if outcome == .started { capturedNow = true }
         if outcome == .failed { finish(.failed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
         return
