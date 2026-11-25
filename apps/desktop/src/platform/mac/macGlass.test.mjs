@@ -1,26 +1,49 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BACKDROP_METHOD, createMacBackdrops } from "./macGlass.ts";
+import { BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops } from "./macGlass.ts";
 
-function harness() {
+function harness({ fail = () => false } = {}) {
   const sent = [];
   const frames = [];
+  const timers = [];
   const watched = new Map();
   const rects = new Map();
+  const replies = [];
+  let motion = null;
+  let animating = false;
   const backdrops = createMacBackdrops({
-    send: async (regions) => void sent.push(regions),
+    send: (regions) => {
+      sent.push(regions);
+      const reply = fail(sent.length) ? Promise.reject(new Error("host refused")) : Promise.resolve();
+      replies.push(reply.catch(() => {}));
+      return reply;
+    },
     measure: (element) => rects.get(element) ?? null,
     frame: (run) => frames.push(run),
+    timeout: (run, ms) => (timers.push({ run, ms }), timers.length),
+    clearTimeout: () => {},
     watch: (element, changed) => {
       watched.set(element, changed);
       return () => watched.delete(element);
     },
+    watchMotion: (changed) => {
+      motion = changed;
+      return () => (motion = null);
+    },
+    animating: () => animating,
   });
-  const runFrames = () => frames.splice(0).forEach((run) => run());
-  return { sent, frames, watched, rects, backdrops, runFrames };
+  const settle = async () => {
+    await Promise.all(replies);
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const runFrames = async () => {
+    frames.splice(0).forEach((run) => run());
+    await settle();
+  };
+  return { sent, frames, timers, watched, rects, backdrops, runFrames, motion: () => motion, setAnimating: (value) => (animating = value) };
 }
 
-test("the Mac WebUI asks the host for glass behind the window where each vibrancy backdrop sits, once per frame", () => {
+test("the Mac WebUI asks the host for glass behind the window where each vibrancy backdrop sits, once per frame", async () => {
   assert.equal(BACKDROP_METHOD, "shell.backdropRegions");
   const { sent, frames, watched, rects, backdrops, runFrames } = harness();
   const sidebar = {};
@@ -30,36 +53,76 @@ test("the Mac WebUI asks the host for glass behind the window where each vibranc
   backdrops.add(sidebar);
   backdrops.add(toolbar, "sidebar");
   assert.equal(frames.length, 1, "two layers in one frame send once");
-  runFrames();
+  await runFrames();
   assert.deepEqual(sent, [[{ rect: { x: 0, y: 0, width: 240, height: 800 }, material: "liquid" }, { rect: { x: 240, y: 0, width: 1000, height: 40 }, material: "sidebar" }]]);
   watched.get(sidebar)();
-  runFrames();
+  await runFrames();
   assert.equal(sent.length, 1, "an unchanged layout sends nothing");
   rects.set(sidebar, { x: 0, y: 0, width: 300, height: 800 });
   watched.get(sidebar)();
-  runFrames();
+  await runFrames();
   assert.equal(sent.at(-1)[0].rect.width, 300);
 });
 
-test("a hidden or removed backdrop takes its glass away, and the material follows the setting", () => {
-  const { sent, watched, rects, backdrops, runFrames } = harness();
+test("a backdrop moved without resizing, by an ancestor's transform or a running transition, keeps its glass under it", async () => {
+  const { sent, rects, backdrops, runFrames, motion, setAnimating, frames } = harness();
+  const sidebar = {};
+  rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
+  backdrops.add(sidebar);
+  await runFrames();
+  rects.set(sidebar, { x: -120, y: 0, width: 240, height: 800 });
+  motion()();
+  await runFrames();
+  assert.equal(sent.at(-1)[0].rect.x, -120, "a style or class change on an ancestor re-measures");
+  setAnimating(true);
+  motion()();
+  for (const x of [-80, -40, 0]) {
+    rects.set(sidebar, { x, y: 0, width: 240, height: 800 });
+    await runFrames();
+    assert.equal(sent.at(-1)[0].rect.x, x, "every frame of a slide is followed");
+  }
+  setAnimating(false);
+  await runFrames();
+  assert.equal(frames.length, 0, "the frame loop stops once nothing animates");
+});
+
+test("a send the host refuses is retried, and only an accepted layout counts as sent", async () => {
+  const { sent, timers, rects, backdrops, runFrames } = harness({ fail: (n) => n === 1 });
+  const sidebar = {};
+  rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
+  backdrops.add(sidebar);
+  await runFrames();
+  assert.equal(sent.length, 1);
+  assert.equal(timers.length, 1, "a refused send schedules a retry");
+  assert.equal(timers[0].ms, BACKDROP_RETRY_MS);
+  timers[0].run();
+  await runFrames();
+  assert.equal(sent.length, 2, "the same layout is sent again after a refusal");
+  backdrops.flushNow();
+  await runFrames();
+  assert.equal(sent.length, 2, "once accepted, the layout isn't sent again");
+});
+
+test("a hidden or removed backdrop takes its glass away, and the material follows the setting", async () => {
+  const { sent, watched, rects, backdrops, runFrames, motion } = harness();
   const sidebar = {};
   rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
   const remove = backdrops.add(sidebar);
-  runFrames();
+  await runFrames();
   backdrops.setMaterial("underWindow");
-  runFrames();
+  await runFrames();
   assert.equal(sent.at(-1)[0].material, "underWindow");
   rects.delete(sidebar);
   watched.get(sidebar)();
-  runFrames();
+  await runFrames();
   assert.deepEqual(sent.at(-1), []);
   rects.set(sidebar, { x: 0, y: 0, width: 240, height: 800 });
   watched.get(sidebar)();
-  runFrames();
+  await runFrames();
   remove();
   assert.equal(watched.size, 0, "removing stops watching");
-  runFrames();
+  assert.equal(motion(), null, "the last backdrop stops watching for motion");
+  await runFrames();
   assert.deepEqual(sent.at(-1), []);
   assert.equal(backdrops.size(), 0);
 });

@@ -1,14 +1,20 @@
 export const BACKDROP_METHOD = "shell.backdropRegions";
 export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow"] as const;
+export const BACKDROP_RETRY_MS = 250;
+export const BACKDROP_RETRY_MAX_MS = 4000;
 export type BackdropMaterial = (typeof BACKDROP_MATERIALS)[number];
 export type BackdropRect = { x: number; y: number; width: number; height: number };
 export type BackdropRegion = { rect: BackdropRect; material: BackdropMaterial };
 
 type BackdropDeps = {
-  send: (regions: BackdropRegion[]) => Promise<void>;
+  send: (regions: BackdropRegion[]) => Promise<unknown>;
   measure: (element: Element) => BackdropRect | null;
   frame: (run: () => void) => void;
+  timeout: (run: () => void, ms: number) => unknown;
+  clearTimeout: (handle: unknown) => void;
   watch: (element: Element, changed: () => void) => () => void;
+  watchMotion: (changed: () => void) => () => void;
+  animating: () => boolean;
 };
 
 export function measureBackdrop(element: Element): BackdropRect | null {
@@ -20,42 +26,88 @@ export function measureBackdrop(element: Element): BackdropRect | null {
 
 export function createMacBackdrops(deps: BackdropDeps) {
   const layers = new Map<Element, { material: BackdropMaterial; stop: () => void }>();
-  let queued = false;
-  let sent = "[]";
+  let frameQueued = false;
+  let accepted = "[]";
+  let inFlight = false;
+  let resendAfterReply = false;
+  let failures = 0;
+  let retry: unknown = null;
+  let stopMotion: (() => void) | null = null;
 
-  const flush = () => {
-    queued = false;
+  const measured = () => {
     const regions = [...layers].flatMap(([element, { material }]) => {
       const rect = deps.measure(element);
       return rect ? [{ rect, material }] : [];
     });
-    const text = JSON.stringify(regions);
-    if (text === sent) return;
-    sent = text;
-    void deps.send(regions);
+    return { regions, text: JSON.stringify(regions) };
   };
 
-  const schedule = () => {
-    if (queued) return;
-    queued = true;
-    deps.frame(flush);
+  const transmit = () => {
+    if (inFlight) {
+      resendAfterReply = true;
+      return;
+    }
+    const { regions, text } = measured();
+    if (text === accepted) return;
+    inFlight = true;
+    deps.send(regions).then(
+      () => {
+        accepted = text;
+        failures = 0;
+      },
+      () => {
+        failures += 1;
+        if (retry === null) {
+          retry = deps.timeout(() => {
+            retry = null;
+            schedule();
+          }, Math.min(BACKDROP_RETRY_MS * 2 ** (failures - 1), BACKDROP_RETRY_MAX_MS));
+        }
+      },
+    ).finally(() => {
+      inFlight = false;
+      if (!resendAfterReply) return;
+      resendAfterReply = false;
+      schedule();
+    });
   };
+
+  const flush = () => {
+    frameQueued = false;
+    transmit();
+    if (layers.size && deps.animating()) schedule();
+  };
+
+  function schedule() {
+    if (frameQueued) return;
+    frameQueued = true;
+    deps.frame(flush);
+  }
 
   return {
     add(element: Element, material: BackdropMaterial = "liquid") {
       const entry = { material, stop: deps.watch(element, schedule) };
       layers.set(element, entry);
+      stopMotion ??= deps.watchMotion(schedule);
       schedule();
       return () => {
         if (layers.get(element) !== entry) return;
         entry.stop();
         layers.delete(element);
+        if (!layers.size && stopMotion) {
+          stopMotion();
+          stopMotion = null;
+        }
         schedule();
       };
     },
     setMaterial(material: BackdropMaterial) {
       for (const entry of layers.values()) entry.material = material;
       schedule();
+    },
+    dispose() {
+      if (retry !== null) deps.clearTimeout(retry);
+      retry = null;
     },
     flushNow: flush,
     size: () => layers.size,

@@ -120,7 +120,7 @@ test("production graph uses current Linux adapters and one canonical shared stat
   assert.ok(card.importedIds.includes(`${desktop}SplitToastRegion.tsx`), "toasts reserve their input region over the page, so their buttons take the click");
   assert.ok(!card.importedIds.includes(`${browser}components/split/SplitChrome.tsx`));
 
-  assert.ok(graph.has(`${browser}lib/platformChrome.windows.ts`), "Linux lays out its window like the Windows build");
+  assert.ok(graph.has(`${browser}lib/captionChrome.ts`) && !graph.has(`${browser}lib/platformChrome.windows.ts`), "Linux lays out its window like the Windows build, from the shared caption chrome");
   assert.ok(!graph.has(`${browser}platform/windowControls.ts`) && !graph.has(`${browser}platform/windowControls.windows.ts`), "window buttons reach the Linux host, not a native Windows module");
   assert.ok(graph.get(`${browser}state/windows/controls.ts`).importedIds.includes(`${desktop}hostWindowControls.ts`));
   const sharedControls = graph.get(`${browser}components/window/WindowControls.tsx`);
@@ -364,7 +364,7 @@ test("the win build shares every desktop adapter, takes Windows terms, and leave
 test("the linux build keeps every Windows twin out", { timeout: 120000 }, async () => {
   const { ids } = await productionGraph("linux");
   assert.deepEqual(ids.filter((id) => id.startsWith(`${desktop}platform/win/`) || /\.win\.tsx?$/.test(id)), []);
-  assert.deepEqual(ids.filter((id) => /\.windows\.tsx?$/.test(id)), [`${browser}lib/platformChrome.windows.ts`]);
+  assert.deepEqual(ids.filter((id) => /\.windows\.tsx?$/.test(id)), []);
 });
 
 const MAC_TWINS = [
@@ -376,7 +376,7 @@ const MAC_TWINS = [
   ["state/commands/comboWords", ".desktop"],
   ["state/tabs/engineKeptCodes", ".desktop"],
 ];
-const winOnly = (id) => id.startsWith(`${desktop}platform/win/`) || /\.win\.tsx?$/.test(id);
+const winOnly = (id) => id.startsWith(`${desktop}platform/win/`) || /\.(win|windows)\.tsx?$/.test(id);
 const reactNativeNative = (id) => /\/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?react-native(-macos|-windows)?\//.test(id) || /\/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?expo-modules-core\//.test(id);
 
 test("the mac build shares every desktop adapter, takes the Mac's own terms, and leaves Linux, Windows and React Native out", { timeout: 120000 }, async () => {
@@ -389,7 +389,8 @@ test("the mac build shares every desktop adapter, takes the Mac's own terms, and
     for (const other of [".linux", ".win"]) assert.ok(!graph.has(`${browser}${twin}${other}.ts`), `the ${other} ${twin} stays out of the mac bundle`);
   }
   assert.deepEqual(ids.filter(linuxOnly), [], "no Linux-only module reaches the mac bundle");
-  assert.deepEqual(ids.filter(winOnly), [], "no Windows-only module reaches the mac bundle");
+  assert.deepEqual(ids.filter(winOnly), [], "no Windows-only module, .win or .windows, reaches the mac bundle");
+  assert.ok(graph.has(`${browser}lib/captionChrome.ts`), "the desktop chrome takes its caption sizes from the shared module, not the Windows twin");
   assert.deepEqual(ids.filter(reactNativeNative), [], "React Native and Expo's native modules stay out of the mac WebUI bundle");
   const seams = [
     ["main.tsx", "platform/buttonLayout.mac.ts"],

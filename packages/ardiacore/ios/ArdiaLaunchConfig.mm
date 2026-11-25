@@ -1,6 +1,9 @@
 #import "ArdiaLaunchConfig.h"
 
 #import <Security/Security.h>
+#import <limits.h>
+#import <stdlib.h>
+#import <sys/stat.h>
 #import <os/log.h>
 
 namespace {
@@ -21,6 +24,9 @@ NSString *const kWebUIShell = @"webui";
 NSString *const kWebUIHostAppVariable = @"ARDIA_WEBUI_APP";
 NSString *const kWebUIHandedOffVariable = @"ARDIA_WEBUI_HANDED_OFF";
 NSString *const kWebUIDevDataFolder = @"Library/Application Support/Ardia WebUI Dev";
+NSString *const kApplicationSupportFolder = @"Library/Application Support";
+NSString *const kInstalledBundleIdentifier = @"com.ardia.browser";
+NSString *const kLegacyProfileFolder = @"Ardia";
 
 NSArray<NSString *> *InstanceKeys() {
   return @[
@@ -168,6 +174,56 @@ BOOL WebUIShellRequested(NSString *_Nullable shell, NSArray<NSString *> *argumen
     if ([arguments[i].lowercaseString isEqualToString:kShellArgument]) return YES;
   return NO;
 }
+
+NSString *RealPath(NSString *path) {
+  char resolved[PATH_MAX];
+  return realpath(path.fileSystemRepresentation, resolved) ? [NSString stringWithUTF8String:resolved] : nil;
+}
+
+NSString *CanonicalPath(NSString *path) {
+  NSString *existing = path.stringByStandardizingPath;
+  NSMutableArray<NSString *> *missing = [NSMutableArray array];
+  NSString *real = nil;
+  while (!(real = RealPath(existing))) {
+    if (existing.length <= 1) return path.stringByStandardizingPath;
+    [missing insertObject:existing.lastPathComponent atIndex:0];
+    existing = existing.stringByDeletingLastPathComponent;
+  }
+  for (NSString *component in missing) real = [real stringByAppendingPathComponent:component];
+  return real;
+}
+
+BOOL SameFile(const struct stat &a, const struct stat &b) {
+  return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
+BOOL PathWithin(NSString *path, NSString *root) {
+  NSString *canonicalPath = CanonicalPath(path).lowercaseString;
+  NSString *canonicalRoot = CanonicalPath(root).lowercaseString;
+  if ([canonicalPath isEqualToString:canonicalRoot] || [canonicalPath hasPrefix:[canonicalRoot stringByAppendingString:@"/"]]) return YES;
+  struct stat rootStatus;
+  if (stat(root.fileSystemRepresentation, &rootStatus) != 0) return NO;
+  for (NSString *ancestor = CanonicalPath(path); ancestor.length > 1; ancestor = ancestor.stringByDeletingLastPathComponent) {
+    struct stat status;
+    if (stat(ancestor.fileSystemRepresentation, &status) == 0 && SameFile(status, rootStatus)) return YES;
+  }
+  return NO;
+}
+
+NSArray<NSString *> *LiveProfileRoots(NSString *home) {
+  NSString *support = [home stringByAppendingPathComponent:kApplicationSupportFolder];
+  NSMutableOrderedSet<NSString *> *names = [NSMutableOrderedSet orderedSetWithArray:@[ kInstalledBundleIdentifier, kLegacyProfileFolder ]];
+  if (NSString *running = NSBundle.mainBundle.bundleIdentifier) [names addObject:running];
+  NSMutableArray<NSString *> *roots = [NSMutableArray array];
+  for (NSString *name in names) [roots addObject:[support stringByAppendingPathComponent:name]];
+  return roots;
+}
+
+BOOL InsideLiveProfile(NSString *path, NSString *home) {
+  for (NSString *root in LiveProfileRoots(home))
+    if (PathWithin(path, root)) return YES;
+  return NO;
+}
 #endif
 
 BOOL SignedForDistribution() {
@@ -209,6 +265,7 @@ BOOL SignedForDistribution() {
   dispatch_once(&once, ^{
     shared = [[ArdiaLaunchConfig alloc] initWithEnvironment:NSProcessInfo.processInfo.environment
                                                   arguments:NSProcessInfo.processInfo.arguments
+                                              homeDirectory:NSHomeDirectory()
                                       signedForDistribution:^BOOL { return SignedForDistribution(); }];
   });
   return shared;
@@ -216,6 +273,7 @@ BOOL SignedForDistribution() {
 
 - (instancetype)initWithEnvironment:(NSDictionary<NSString *, NSString *> *)environment
                           arguments:(NSArray<NSString *> *)arguments
+                      homeDirectory:(NSString *)homeDirectory
               signedForDistribution:(BOOL (^)(void))signedForDistribution {
   if ((self = [super init])) {
     _dataDirectory = StandardizedDirectory(environment[kDataDirVariable]);
@@ -225,8 +283,17 @@ BOOL SignedForDistribution() {
       _webUIHostApp = Present(environment[kWebUIHostAppVariable]);
       _webUIHandedOff = Present(environment[kWebUIHandedOffVariable]) != nil;
       if (!_dataDirectory) {
-        _dataDirectory = [NSHomeDirectory() stringByAppendingPathComponent:kWebUIDevDataFolder];
+        _dataDirectory = [homeDirectory stringByAppendingPathComponent:kWebUIDevDataFolder];
         _webUIDataDirectoryDefaulted = YES;
+      }
+      if (InsideLiveProfile(_dataDirectory, homeDirectory)) {
+        Note([NSString stringWithFormat:@"%@=webui ignored: %@ is inside the installed app's profile; pass a copy in %@", kShellVariable, _dataDirectory, kDataDirVariable]);
+        if (_webUIDataDirectoryDefaulted) _dataDirectory = nil;
+        _webUIShell = NO;
+        _webUIDataDirectoryDefaulted = NO;
+        _webUIHostApp = nil;
+        _webUIHandedOff = NO;
+        _webUIRefusedDataDirectory = YES;
       }
     }
 #endif
@@ -362,6 +429,7 @@ BOOL SignedForDistribution() {
     @"test" : self.honouredTest,
     @"feedbackURL" : _feedbackURL ?: NSNull.null,
     @"webUIShell" : @(_webUIShell),
+    @"webUIRefusedDataDirectory" : @(_webUIRefusedDataDirectory),
   };
 }
 

@@ -25,6 +25,13 @@ echo "==> Content blocker"
 echo "==> Rust core"
 "$root/packages/core-rs/scripts/build-xcframework.sh" >&2 || die "ArdiaCoreRS.xcframework didn't build (packages/core-rs/scripts/build-xcframework.sh)"
 
+echo "==> Release build settings"
+"$(dirname "$0")/no-debug-build.sh" --settings "$@" || die "a release build setting would compile in Debug-only code"
+(cd "$root/apps/browser" && "$root/scripts/agent/locked" pod --wait 1800 -- sh -c '
+  xcodebuild -workspace macos/Ardia.xcworkspace -scheme Ardia-macOS -configuration Release "$@" -showBuildSettings &&
+  xcodebuild -project macos/Pods/Pods.xcodeproj -alltargets -configuration Release "$@" -showBuildSettings' release-settings "$@") \
+  2> "$dist/release-settings.log" | "$(dirname "$0")/no-debug-build.sh" --effective || die "the Release build would define DEBUG ($dist/release-settings.log)"
+
 echo "==> Archive"
 (cd "$root/apps/browser" && ARDIACORE_FRAMEWORK="$framework" "$root/scripts/agent/locked" pod --wait 1800 -- \
   "$root/scripts/agent/locked" xcodebuild --wait 1800 -- xcodebuild -workspace macos/Ardia.xcworkspace -scheme Ardia-macOS \

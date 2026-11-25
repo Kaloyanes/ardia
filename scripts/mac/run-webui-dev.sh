@@ -12,8 +12,9 @@
 #
 # --app PATH         the Debug Ardia.app to open (default: $ARDIA_APP, else the newest apps/browser/build-*/ Debug app).
 # --webui-app PATH   the WebUI host app engine/ardiacore-mac builds (sets ARDIA_WEBUI_APP).
-# --data-dir PATH    the profile to use (default: ~/Library/Application Support/Ardia WebUI Dev). The live Ardia
-#                    profile is refused; point it at a copy instead.
+# --data-dir PATH    the profile to use (default: ~/Library/Application Support/Ardia WebUI Dev). Anything inside the
+#                    installed app's profile (Application Support/com.ardia.browser or Application Support/Ardia, by
+#                    any case, symlink or alias) is refused; point it at a copy instead.
 # --background       a hidden instance (ARDIA_BACKGROUND=1): no focus, menus and file panels are logged.
 # --port N           ARDIA_REMOTE_DEBUGGING_PORT for CDP.
 # --no-build         reuse apps/desktop/dist/mac as it is.
@@ -24,8 +25,45 @@ usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' 
 die() { echo "run-webui-dev: $*" >&2; exit 1; }
 
 root=$(cd "$(dirname "$0")/../.." && pwd -P)
-live_profile="$HOME/Library/Application Support/Ardia"
-data_dir="$HOME/Library/Application Support/Ardia WebUI Dev"
+support="$HOME/Library/Application Support"
+data_dir="$support/Ardia WebUI Dev"
+
+lowercase() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+canonical_path() {
+  local path=$1 missing=""
+  case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
+  while [ ! -e "$path" ] && [ "$path" != "/" ]; do
+    missing="/$(basename "$path")$missing"
+    path=$(dirname "$path")
+  done
+  [ -d "$path" ] || return 1
+  path=$(cd "$path" 2>/dev/null && pwd -P) || return 1
+  [ "$path" = / ] && path=""
+  printf '%s%s' "$path" "$missing"
+}
+
+inside_profile() {
+  local candidate=$1 root=$2 canonical_root ancestor root_id
+  canonical_root=$(canonical_path "$root") || return 0
+  case "$(lowercase "$candidate")/" in "$(lowercase "$canonical_root")"/*) return 0 ;; esac
+  [ -e "$root" ] || return 1
+  root_id=$(stat -L -f '%d:%i' "$root") || return 0
+  ancestor=$candidate
+  while [ -n "$ancestor" ] && [ "$ancestor" != / ]; do
+    [ -e "$ancestor" ] && [ "$(stat -L -f '%d:%i' "$ancestor")" = "$root_id" ] && return 0
+    ancestor=$(dirname "$ancestor")
+  done
+  return 1
+}
+
+refuse_live_profile() {
+  local candidate root
+  candidate=$(canonical_path "$1") || die "can't resolve $1; pass --data-dir with a directory you own"
+  for root in "${live_roots[@]}"; do
+    ! inside_profile "$candidate" "$root" || die "refusing $1: it is inside the installed app's profile ($root); pass --data-dir with a copy"
+  done
+}
 app="${ARDIA_APP:-}"
 webui_app=""
 background=0
@@ -48,17 +86,20 @@ while [ $# -gt 0 ]; do
 done
 
 [ -z "$port" ] || [[ "$port" =~ ^[0-9]+$ ]] || die "--port takes a number, not $port"
-[ "$dry_run" = 1 ] || mkdir -p "$data_dir" || die "can't create $data_dir"
-data_dir=$(cd "$data_dir" 2>/dev/null && pwd -P || echo "$data_dir")
-live_real=$(cd "$live_profile" 2>/dev/null && pwd -P || echo "$live_profile")
-[ "$data_dir" != "$live_real" ] || die "refusing the live profile $live_profile; pass --data-dir with a copy"
-
 if [ -z "$app" ]; then
   app=$(ls -td "$root"/apps/browser/build-*/Build/Products/Debug/Ardia*.app "$root"/apps/browser/build-*/Prebuilt/Debug*/Ardia*.app 2>/dev/null | head -1 || true)
   [ -n "$app" ] || [ "$dry_run" = 1 ] || die "no Debug app found; build one with scripts/agent/build-app --as <you>, or pass --app"
   app="${app:-<Debug Ardia.app>}"
 fi
 [ "$dry_run" = 1 ] || [ -d "$app" ] || die "no app at $app"
+
+live_roots=("$support/com.ardia.browser" "$support/Ardia")
+app_identifier=$([ -f "$app/Contents/Info.plist" ] && /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)
+[ -z "$app_identifier" ] || live_roots+=("$support/$app_identifier")
+refuse_live_profile "$data_dir"
+[ "$dry_run" = 1 ] || mkdir -p "$data_dir" || die "can't create $data_dir"
+data_dir=$(canonical_path "$data_dir") || die "can't resolve $data_dir"
+refuse_live_profile "$data_dir"
 
 bundle="$root/apps/desktop/dist/mac"
 build_cmd=(pnpm -C "$root/apps/desktop" build:mac)
