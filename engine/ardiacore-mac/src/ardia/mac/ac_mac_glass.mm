@@ -3,12 +3,17 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/layer.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
 namespace ardia_mac {
 
 struct GlassRegions::Views {
   NSMutableArray<NSView*>* effects = [NSMutableArray array];
+  bool translucent = false;
 };
 
 namespace {
@@ -54,8 +59,26 @@ void GlassRegions::Apply(const std::vector<GlassRegion>& regions) {
   NSWindow* window =
       widget_ ? widget_->GetNativeWindow().GetNativeNSWindow() : nil;
   NSView* content = window.contentView;
-  if (!content) {
+  NSView* frame = content.superview;
+  if (!content || !frame) {
     return;
+  }
+  if (!views_->translucent && !regions.empty()) {
+    views_->translucent = true;
+    window.opaque = NO;
+    window.backgroundColor = NSColor.clearColor;
+    if (ui::Compositor* compositor = widget_->GetCompositor()) {
+      compositor->SetBackgroundColor(SK_ColorTRANSPARENT);
+    }
+    if (ui::Layer* layer = widget_->GetLayer()) {
+      layer->SetFillsBoundsOpaquely(false);
+    }
+    if (views::View* root = widget_->GetRootView()) {
+      root->SetBackground(nullptr);
+    }
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = NSColor.clearColor.CGColor;
+    content.layer.opaque = NO;
   }
   while (views_->effects.count > regions.size()) {
     [views_->effects.lastObject removeFromSuperview];
@@ -72,16 +95,19 @@ void GlassRegions::Apply(const std::vector<GlassRegion>& regions) {
     }
     if (!view) {
       view = MakeEffect(region);
-      [content addSubview:view positioned:NSWindowBelow relativeTo:nil];
+      [frame addSubview:view positioned:NSWindowBelow relativeTo:content];
       [views_->effects insertObject:view atIndex:index];
     }
-    const CGFloat height = NSHeight(content.bounds);
-    const CGFloat y = content.isFlipped ? region.rect.y()
-                                        : height - region.rect.bottom();
+    const CGFloat top = content.isFlipped
+                            ? region.rect.y()
+                            : NSHeight(content.bounds) - region.rect.bottom();
+    const NSRect placed = [content convertRect:NSMakeRect(region.rect.x(), top,
+                                                          region.rect.width(),
+                                                          region.rect.height())
+                                        toView:frame];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    view.frame = NSMakeRect(region.rect.x(), y, region.rect.width(),
-                            region.rect.height());
+    view.frame = placed;
     if ([view isKindOfClass:NSVisualEffectView.class]) {
       view.layer.cornerRadius = region.radius;
       view.layer.masksToBounds = region.radius > 0;
