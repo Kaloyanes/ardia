@@ -29,6 +29,40 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
   await page.getByRole("button", { name: "Run checks" }).click();
   await page.waitForFunction(() => document.getElementById("results")?.textContent);
   const results = JSON.parse(await page.locator("#results").textContent());
+  const cornerPixel = async (selector) => {
+    const card = await page.locator(selector).boundingBox();
+    const shot = await page.screenshot({ clip: { x: card.x, y: card.y, width: 12, height: 12 } });
+    return page.evaluate(async (png) => {
+      const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0);
+      return [...context.getImageData(4, 4, 1, 1).data];
+    }, shot.toString("base64"));
+  };
+  const ringCorner = await cornerPixel("#ring > div");
+  const coveredCorner = await cornerPixel("#ring-under > div");
+  results.checks.siblingOverlayAboveRing = coveredCorner[0] > 200 && coveredCorner[1] < 60 && coveredCorner[2] < 60;
+  results.checks.selectedRingCorner = ringCorner[2] > 200 && ringCorner[0] < 60;
+  const dragAcross = async (id) => {
+    const handle = page.locator(`#${id} [style*='height: 20px']`).first();
+    await handle.scrollIntoViewIfNeeded();
+    const track = await handle.boundingBox();
+    const middle = track.y + track.height / 2;
+    await page.mouse.move(track.x + track.width * 0.3, middle);
+    await page.mouse.down();
+    for (let step = 1; step <= 10; step++) await page.mouse.move(track.x + track.width * (0.3 + step * 0.05), middle);
+    await page.mouse.up();
+    const dragged = await page.evaluate((key) => window.sliderValues[key], id);
+    t.diagnostic(`slider drag ${id} ${JSON.stringify(dragged)}`);
+    const live = dragged.filter((entry) => !entry.endsWith("!")).map(Number);
+    return live.length === 11 && Math.abs(live[0] - 0.3) < 0.01 && Math.abs(live.at(-1) - 0.8) < 0.01 &&
+      live.every((value, i) => i === 0 || value > live[i - 1]) && dragged.at(-1) === `${live.at(-1).toFixed(3)}!`;
+  };
+  results.checks.sliderFollowsDrag = await dragAcross("drag");
+  const followsScrolled = await dragAcross("drag-far");
+  const scrolled = await page.evaluate(() => [window.scrollX, window.scrollY]);
+  results.checks.sliderFollowsDragScrolled = followsScrolled && scrolled[0] > 0 && scrolled[1] > 0;
   t.diagnostic(JSON.stringify(results));
   assert.deepEqual(results.checks, {
     pointerBeforeSubscriber: true,
@@ -47,6 +81,13 @@ test("web shims survive ticker failures, reject inherited palettes and enter a v
     hudCloseOnDarkHud: true,
     breathe: true,
     holdKeyLookQuiet: true,
+    retinaStripeTile: true,
+    retinaIconSharp: true,
+    retinaMarkLogical: true,
+    selectedRingCorner: true,
+    siblingOverlayAboveRing: true,
+    sliderFollowsDrag: true,
+    sliderFollowsDragScrolled: true,
   });
 });
 

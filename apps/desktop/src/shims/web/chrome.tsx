@@ -1,11 +1,12 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../browser/src/state/browser/store";
 import { useScopedTheme } from "../../../../browser/src/components/ui/theme";
 import { materialFill } from "./materials";
 import { ardiaHost, hostModuleMethod, hostSupports, reportHostError } from "../../host";
 import { shellOverPages, useInputRegion } from "../../shellAbove";
-import { GlassInside, GlassOptIn, useGlassSurface, useVisualEffectMark } from "../../shellGlass";
+import { GlassGroupContext, GlassInside, GlassOptIn, glassTint, nativeGlassBehindWindow, useGlassLook, useGlassSurface, useVisualEffectMark } from "../../shellGlass";
+import type { GlassMaterial } from "../../glassRegions";
 import { watchPageFocus } from "../../pageFocus";
 import { menuShown } from "../../menus";
 import { watchOutsidePresses } from "../../outsidePress";
@@ -113,13 +114,34 @@ export function useSurfaceDark(): boolean {
   return useScopedTheme()?.dark ?? appDark;
 }
 
+const NATIVE_MATERIALS: Record<string, GlassMaterial> = {
+  popover: "popover",
+  menu: "menu",
+  toolTip: "popover",
+  hudWindow: "hud",
+  sidebar: "sidebar",
+  headerView: "header",
+  titlebar: "header",
+  sheet: "window",
+  windowBackground: "window",
+  underWindowBackground: "underWindow",
+  fullScreenUI: "hud",
+  contentBackground: "window",
+};
+
+export const nativeMaterial = (material: string): GlassMaterial => NATIVE_MATERIALS[material] ?? "popover";
+
+export const nativeGlassFor = (overPages: boolean) => overPages && nativeGlassBehindWindow();
+
 export type VisualEffectProps = ViewProps & { material?: string; blendingMode?: "withinWindow" | "behindWindow"; cornerRadius?: number };
 
 export function VisualEffect({ material = "popover", cornerRadius, style, ...props }: VisualEffectProps) {
   const mark = useRef<View & Element>(null);
   useVisualEffectMark(mark);
-  const fill = materialFill(material, useSurfaceDark());
+  const dark = useSurfaceDark();
+  const fill = materialFill(material, dark);
   const opaque = shellOverPages();
+  useGlassLook(mark, { material: nativeMaterial(material), appearance: dark ? "dark" : "light" }, nativeGlassFor(opaque));
   const glass: Style = {
     backgroundColor: opaque ? opaqueColor(fill) : fill,
     backdropFilter: opaque ? undefined : "blur(24px) saturate(180%)",
@@ -239,6 +261,15 @@ function scrolledGlassSurface(theme: "light" | "dark", clear: boolean, cornerRad
   };
 }
 
+export function GlassGroup({ strength: _strength, children, ...props }: ViewProps & { strength?: number }) {
+  const id = `group-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
+  return (
+    <View {...props}>
+      <GlassGroupContext.Provider value={id}>{children}</GlassGroupContext.Provider>
+    </View>
+  );
+}
+
 export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", dark, style, ...props }: GlassEffectProps) {
   const surfaceDark = useSurfaceDark();
   const theme = (dark ?? surfaceDark) ? "dark" : "light";
@@ -246,13 +277,20 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const clear = glassStyle === "clear";
   const filter = clear ? glassFilter(1, (1 + g.slope) / 2, g.offset / 2) : glassFilter(g.saturate, g.slope, g.offset);
   const host = useRef<HTMLDivElement | null>(null);
+  const frame = useRef<View & Element>(null);
+  const group = useContext(GlassGroupContext);
   const [scrolled, setScrolled] = useState(false);
-  useLayoutEffect(() => setScrolled(inScrollView(host.current)), []);
+  useLayoutEffect(() => {
+    setScrolled(inScrollView(host.current));
+    frame.current?.setAttribute("data-ardia-glass-effect", "");
+  }, []);
+  useGlassLook(frame, { material: clear ? "clear" : "regular", tint: glassTint(tint), group: group ?? undefined, appearance: theme }, !scrolled && nativeGlassFor(shellOverPages()));
+  const framed = [{ borderRadius: cornerRadius }, style];
   if (scrolled) {
     const radiusStyle: React.CSSProperties = { borderRadius: fallbackRadius(cornerRadius) };
     return (
-      <View pointerEvents="none" {...props} style={style}>
-        <div ref={host} style={scrolledGlassSurface(theme, clear, cornerRadius)}>
+      <View ref={frame} pointerEvents="none" {...props} style={framed}>
+        <div ref={host} data-ardia-glass-layers="" style={scrolledGlassSurface(theme, clear, cornerRadius)}>
           {tint ? <div style={{ ...layer, ...radiusStyle, background: tint }} /> : null}
         </div>
       </View>
@@ -263,8 +301,8 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const clip: React.CSSProperties = shape ? {} : { borderRadius: fallbackRadius(cornerRadius), overflow: "hidden" };
   const shaped = shape ? maskStyle(shape) : {};
   return (
-    <View pointerEvents="none" {...props} style={style}>
-      <div ref={host} style={{ ...layer, ...clip }}>
+    <View ref={frame} pointerEvents="none" {...props} style={framed}>
+      <div ref={host} data-ardia-glass-layers="" style={{ ...layer, ...clip }}>
         <div style={backdrop(filter, shaped)} />
         {tint ? <div style={{ ...layer, ...shaped, background: tint }} /> : null}
         <div style={backdrop(`brightness(${1 + peakGain(g.rim)})`, highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) })} />

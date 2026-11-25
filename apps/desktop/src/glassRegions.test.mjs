@@ -14,7 +14,7 @@ function node(geometry, parent = null) {
   return element;
 }
 
-function harness({ available = true, send = true } = {}) {
+function harness({ available = true, send = true, behindWindow = false } = {}) {
   const sent = [];
   const replies = [];
   const frames = [];
@@ -49,6 +49,7 @@ function harness({ available = true, send = true } = {}) {
       availability: (value) => availability.push(value),
     },
     available,
+    { behindWindow },
   );
   const tick = (count = 1) => {
     for (let i = 0; i < count; i++) {
@@ -393,4 +394,58 @@ test("a device scale change is a geometry change", async () => {
   assert.equal(panel.attributes.glass, "off", "the rescaled region waits for its presentation");
   h.glass.presented(h.sent.at(-1).generation);
   assert.equal(panel.attributes.glass, "on");
+});
+
+test("with behind-window glass a panel over the sidebar, toolbar or empty space is sent and turns translucent", async () => {
+  const h = harness({ behindWindow: true });
+  h.glass.setPages([PAGE]);
+  const sidebar = node({ rect: { x: 1010, y: 20, width: 120, height: 40 }, radii: RADII, opacity: 1 });
+  h.glass.add(sidebar);
+  h.tick(STABLE_FRAMES + 1);
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.sent[0].regions.map((region) => region.rect), [sidebar.geometry.rect]);
+  await h.accept();
+  h.glass.presented(h.sent[0].generation);
+  assert.equal(sidebar.attributes.glass, "on");
+  assert.equal(h.glass.behindWindow(), true);
+});
+
+test("without behind-window glass a panel over no page still stays opaque", () => {
+  const h = harness();
+  h.glass.setPages([PAGE]);
+  const sidebar = node({ rect: { x: 1010, y: 20, width: 120, height: 40 }, radii: RADII, opacity: 1 });
+  h.glass.add(sidebar);
+  h.tick(STABLE_FRAMES + 1);
+  assert.deepEqual(h.sent.flatMap((update) => update.regions), []);
+  assert.equal(sidebar.attributes.glass, "off");
+  assert.equal(h.glass.behindWindow(), false);
+});
+
+test("a panel's look travels with its region and a restyle resends without dropping the glass", async () => {
+  const h = harness({ behindWindow: true });
+  const pin = node(menu());
+  h.glass.add(pin, undefined, { material: "clear", tint: "rgba(255,255,255,0.2)", group: "group-r1", appearance: "dark", ignored: true });
+  h.tick(STABLE_FRAMES + 1);
+  assert.deepEqual(
+    h.sent[0].regions.map(({ material, tint, group, appearance, ignored }) => ({ material, tint, group, appearance, ignored })),
+    [{ material: "clear", tint: "rgba(255,255,255,0.2)", group: "group-r1", appearance: "dark", ignored: undefined }],
+  );
+  await h.accept();
+  h.glass.presented(h.sent[0].generation);
+  assert.equal(pin.attributes.glass, "on");
+  h.glass.restyle(pin, { material: "clear", tint: "rgba(0,0,0,0.1)", group: "group-r1", appearance: "dark" });
+  h.tick();
+  assert.equal(h.sent.length, 2);
+  assert.equal(h.sent[1].regions[0].tint, "rgba(0,0,0,0.1)");
+  assert.equal(pin.attributes.glass, "on");
+  h.glass.restyle(pin, { material: "clear", tint: "rgba(0,0,0,0.1)", group: "group-r1", appearance: "dark" });
+  h.tick();
+  assert.equal(h.sent.length, 2);
+});
+
+test("a panel without a look sends only its geometry", () => {
+  const h = harness({ behindWindow: true });
+  h.glass.add(node(menu()));
+  h.tick(STABLE_FRAMES + 1);
+  assert.deepEqual(Object.keys(h.sent[0].regions[0]).sort(), ["blur", "id", "opacity", "radii", "rect"]);
 });
