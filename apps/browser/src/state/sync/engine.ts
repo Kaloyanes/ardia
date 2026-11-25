@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { useBrowser } from "../browser/store";
 import { engineProfile } from "../browser/model";
 import { historyExpired } from "./historyAdapter";
-import { settleSettingsFromSavedSync } from "./settingsAdapter";
+import { settleRetiredDefaultsWithoutSync, settleSettingsFromSavedSync } from "./settingsAdapter";
 import { watchExtensionIntents } from "./extensions";
 import { appAdapters, extensionsOf, forgetScopeAdapters, profileAdapters, typeSynced } from "./scopeAdapters";
 import { APP_SCOPE, emptyDoc, emptyUi, typeSyncedFor, type DataType, type SendTarget, type SyncDoc, type SyncUi } from "./syncDoc";
@@ -52,6 +52,7 @@ function load() {
 }
 
 function publishUi(patch: Partial<SyncUi> = {}) {
+  if (!doc.enabled || !typeSyncedFor(doc.types, "settings", true)) settleRetiredDefaultsWithoutSync();
   useSync.setState({
     enabled: doc.enabled,
     joining: doc.enabled && doc.joining,
@@ -204,11 +205,11 @@ export function adoptProfileTheme(profileId: string) {
 }
 
 async function loadSavedState() {
+  const loading = doc;
   await loadState();
   startEditClock(doc.deviceId ?? "", doc.clock);
-  const app = doc.scopes[APP_SCOPE];
-  settleSettingsFromSavedSync(app, typeSyncedFor(doc.types, "settings", true));
-  settleThemeAdoption(doc.profiles, app, false);
+  settleSettingsFromSavedSync(doc.scopes[APP_SCOPE], doc === loading && doc.enabled && !stopping && typeSyncedFor(doc.types, "settings", true));
+  settleThemeAdoption(doc.profiles, doc.scopes[APP_SCOPE], false);
 }
 
 async function resetFromElsewhere() {

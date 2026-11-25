@@ -15,14 +15,18 @@ type RetireOptions = { waitForSync?: boolean; heldBySync?: (key: string) => bool
 
 const marked = (meta: SettingsMeta, applied: string): SettingsMeta => ({ chosen: meta.chosen, inferred: [...meta.inferred, applied] });
 
+export const chosenHere = (meta: SettingsMeta, key: string) => meta.chosen.includes(key) && !meta.inferred.includes(key);
+
 function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied }: RetiredDefault, { waitForSync = false, heldBySync }: RetireOptions): Retired<S> {
   if (meta.inferred.includes(applied)) return { settings: saved, settingsMeta: meta };
-  const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !(meta.chosen.includes(key) && !meta.inferred.includes(key));
-  if (!oldDefaultNobodyChose || heldBySync?.(key)) return { settings: saved, settingsMeta: marked(meta, applied) };
+  const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !chosenHere(meta, key);
+  if (!oldDefaultNobodyChose) return { settings: saved, settingsMeta: marked(meta, applied) };
+  const without = (keys: string[]) => keys.filter((k) => k !== key);
+  const unchosen = marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }, applied);
+  if (heldBySync?.(key)) return { settings: saved, settingsMeta: unchosen };
   if (waitForSync) return { settings: saved, settingsMeta: meta };
   const { [key]: _untouched, ...settings } = saved as Record<string, unknown>;
-  const without = (keys: string[]) => keys.filter((k) => k !== key);
-  return { settings: settings as S, settingsMeta: marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }, applied) };
+  return { settings: settings as S, settingsMeta: unchosen };
 }
 
 export const withRetiredDefaults = <S extends object>(saved: S | undefined, meta: SettingsMeta, options: RetireOptions = {}): Retired<S> =>

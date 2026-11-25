@@ -159,14 +159,14 @@ const GROUPING_RETIRED = "cmdClickCreatesTabGroup:offByDefault";
 const { loadSession, SESSION_VERSION } = await import("../session/persist.ts");
 const { settingsSyncWaitsAtLaunch } = await import("./settingsSyncAtLaunch.ts");
 
-function upgradeWithGroupingOn({ settings, synced }) {
+function upgradeWithGroupingOn({ settings, synced, meta = { chosen: [], inferred: [] } }) {
   reset();
   const record = { h: "0000000001000.0000.peer", v: { v: synced }, o: ["peer", 1] };
   const app = { ...emptyScope(), records: synced === undefined ? {} : { [GROUPING]: record }, base: synced === undefined ? {} : { [GROUPING]: canonical(record.v) }, vv: { peer: 1 }, joined: true, seen: { peer: 1 } };
   shell.docs.set("sync-state.nns", `sealed:${JSON.stringify({ covers: -1, scopes: { app }, version: 1 })}`);
   shell.docs.set("sync.json", JSON.stringify({ v: 1, enabled: true, folder: "/sync", deviceId: "me", clock: null, types: { bookmarks: true, history: true, tabs: true, pinned: true, passwords: true, extensions: true, settings }, profiles: {}, lastSyncedAt: null, setupAt: 1, joining: false }));
   const profile = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
-  shell.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: { default: profile }, profileOrder: ["default"], settings: { ...S().settings, cmdClickCreatesTabGroup: true }, settingsMeta: { chosen: [], inferred: ["hideToolbarWhileScrolling:offByDefault"] }, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
+  shell.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: { default: profile }, profileOrder: ["default"], settings: { ...S().settings, cmdClickCreatesTabGroup: true }, settingsMeta: { chosen: meta.chosen, inferred: [...meta.inferred, "hideToolbarWhileScrolling:offByDefault"] }, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
   S().hydrate(loadSession({ retiredDefaultsWaitForSync: settingsSyncWaitsAtLaunch() }));
 }
 const grouping = () => ({ on: S().settings.cmdClickCreatesTabGroup, retired: S().settingsMeta.inferred.includes(GROUPING_RETIRED) });
@@ -211,4 +211,70 @@ test("with Settings sync off at launch the old on retires during hydration, and 
   engine.startSync();
   await settle();
   assert.deepEqual(grouping(), { on: false, retired: true });
+});
+
+async function withSyncNative(overrides, run) {
+  const sync = globalThis.acTestNativeModules.ArdiaSync;
+  const kept = Object.fromEntries(Object.keys(overrides).map((k) => [k, sync[k]]));
+  Object.assign(sync, overrides);
+  try {
+    await run();
+  } finally {
+    Object.assign(sync, kept);
+  }
+}
+
+test("stopping sync while the saved state is still being read never lets the late read keep the waiting on", async () => {
+  let release;
+  const opening = new Promise((resolve) => (release = resolve));
+  const sync = globalThis.acTestNativeModules.ArdiaSync;
+  const open = sync.openLocal;
+  await withSyncNative({ openLocal: async (sealed) => (await opening, open(sealed)) }, async () => {
+    upgradeWithGroupingOn({ settings: true, synced: true });
+    const engine = await import("./engine.ts?groupingStopDuringRead");
+    engine.startSync();
+    await settle();
+    assert.deepEqual(grouping(), { on: true, retired: false }, "the read is still out");
+    const stopping = engine.stopSync();
+    await settle();
+    release();
+    await stopping;
+    await settle();
+    assert.equal(engine.useSync.getState().status, "off");
+    assert.deepEqual(grouping(), { on: false, retired: true });
+  });
+});
+
+test("turning Settings sync off while the key is locked retires the waiting on at once", async () => {
+  await withSyncNative({ unlock: async () => false }, async () => {
+    upgradeWithGroupingOn({ settings: true, synced: true });
+    const engine = await import("./engine.ts?groupingTypeOffLocked");
+    engine.startSync();
+    await settle();
+    assert.deepEqual(grouping(), { on: true, retired: false });
+    engine.setTypeSynced("settings", false);
+    assert.deepEqual(grouping(), { on: false, retired: true });
+  });
+});
+
+test("stopping all sync while the key is locked retires the waiting on at once", async () => {
+  await withSyncNative({ unlock: async () => false }, async () => {
+    upgradeWithGroupingOn({ settings: true, synced: true });
+    const engine = await import("./engine.ts?groupingStopLocked");
+    engine.startSync();
+    await settle();
+    assert.equal(engine.useSync.getState().status, "locked");
+    await engine.stopSync();
+    assert.deepEqual(grouping(), { on: false, retired: true });
+  });
+});
+
+test("an on from before Ardia tracked choices (chosen and inferred) waits at launch and keeps its synced on at unlock, now unchosen", async () => {
+  upgradeWithGroupingOn({ settings: true, synced: true, meta: { chosen: ["cmdClickCreatesTabGroup"], inferred: ["cmdClickCreatesTabGroup"] } });
+  assert.deepEqual(grouping(), { on: true, retired: false });
+  const engine = await import("./engine.ts?groupingLegacy");
+  engine.startSync();
+  await settle();
+  assert.deepEqual(grouping(), { on: true, retired: true });
+  assert.ok(!S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup") && !S().settingsMeta.inferred.includes("cmdClickCreatesTabGroup"));
 });
