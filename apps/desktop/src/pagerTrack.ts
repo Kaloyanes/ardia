@@ -110,7 +110,7 @@ export type ScrollExtent = { scrollTop: number; scrollHeight: number; clientHeig
 const extentOf = (node: ScrollExtent | null | undefined) =>
   node && [node.scrollTop, node.scrollHeight, node.clientHeight].every(Number.isFinite) ? node : null;
 
-export type RevealRow = { section: string; top: number; height: number };
+export type RevealRow = { section: string; top: number; height: number; listHeight: number };
 
 export function revealRow(spot: RevealTarget | undefined, row: () => RevealRow | null, listInset: number): RevealAttempt {
   if (!spot || !spot.scroller?.scrollTo || !(spot.viewport > 0)) return "wait";
@@ -126,8 +126,9 @@ export function revealRow(spot: RevealTarget | undefined, row: () => RevealRow |
     return "done";
   }
   const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
-  const rowBottom = listTop + span.top + span.height;
-  if (wanted > maxScroll + 1 && rowBottom > node.scrollHeight) return "wait";
+  const listEnd = listInset + (spot.regions.list ?? 0) + Math.max(0, span.listHeight);
+  const laidOut = node.scrollHeight + 1 >= Math.max(listEnd, listTop + span.top + span.height);
+  if (wanted > maxScroll + 1 && !laidOut) return "wait";
   const target = Math.min(wanted, maxScroll);
   if (Math.abs(target - scrollY) >= 1) spot.scroller.scrollTo({ y: target, animated: false });
   return "done";

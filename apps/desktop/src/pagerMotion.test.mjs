@@ -687,7 +687,7 @@ test("a neighbour whose viewport is measured after it mounts still pre-scrolls t
   const spot = { viewport: 0, scrollY: 0, regions: { list: 40, pinnedGroups: 0 }, scroller: { scrollTo: (to) => scrolled.push(to) } };
   const spots = new Map();
   const queue = new track.RevealQueue();
-  const row = () => ({ section: "list", top: 130 * 32, height: 32 });
+  const row = () => ({ section: "list", top: 130 * 32, height: 32, listHeight: 150 * 32 });
   const attempt = (id) => track.revealRow(spots.get(id), row, 12);
   queue.want(["work"]);
   assert.equal(queue.pump(attempt), 1, "not mounted yet");
@@ -711,7 +711,7 @@ test("a neighbour measured before its lazy rows exist keeps waiting until the se
   const node = { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
   const spot = { viewport: 600, scrollY: 0, regions: { list: 40 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => { scrolled.push(to.y); node.scrollTop = Math.min(to.y, node.scrollHeight - node.clientHeight); } } };
   const queue = new track.RevealQueue();
-  const attempt = () => track.revealRow(spot, () => ({ section: "list", top: 130 * 32, height: 32 }), 12);
+  const attempt = () => track.revealRow(spot, () => ({ section: "list", top: 130 * 32, height: 32, listHeight: 150 * 32 }), 12);
   const target = Math.round(12 + 40 + 130 * 32 + 16 - 300);
   queue.want(["work"]);
   assert.equal(queue.pump(attempt), 1);
@@ -823,7 +823,7 @@ test("a row near the end of a fully loaded list is revealed at the bottom of the
   const scrolled = [];
   const node = { scrollTop: 0, scrollHeight: 2000, clientHeight: 600 };
   const spot = { viewport: 600, scrollY: 0, regions: { list: 0 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => { scrolled.push(to.y); node.scrollTop = to.y; } } };
-  const row = () => ({ section: "list", top: 1916, height: 32 });
+  const row = () => ({ section: "list", top: 1916, height: 32, listHeight: 1990 });
   assert.equal(track.centredOffset(0, 1916, 32, 600), 1632);
   assert.equal(track.revealRow(spot, row, 0), "done");
   assert.deepEqual(scrolled, [1400]);
@@ -832,4 +832,27 @@ test("a row near the end of a fully loaded list is revealed at the bottom of the
   node.scrollHeight = 1200;
   node.scrollTop = 0;
   assert.equal(track.revealRow(spot, row, 0), "wait", "the row itself hasn't mounted yet");
+});
+
+test("a row inside an empty viewport waits for the lazy rows before it scrolls to centre", () => {
+  const scrolled = [];
+  const node = { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
+  const spot = { viewport: 600, scrollY: 0, regions: { list: 0 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => { scrolled.push(to.y); node.scrollTop = to.y; } } };
+  const queue = new track.RevealQueue();
+  const attempt = () => track.revealRow(spot, () => ({ section: "list", top: 324, height: 32, listHeight: 40 * 32 }), 0);
+  queue.want(["work"]);
+  assert.equal(queue.pump(attempt), 1, "the 600 px viewport is filled before any row mounts");
+  assert.deepEqual(scrolled, []);
+  node.scrollHeight = 900;
+  assert.equal(queue.pump(attempt), 0);
+  assert.deepEqual(scrolled, [40]);
+  assert.equal(node.scrollTop, 40);
+});
+
+test("a short list that is fully laid out reveals its last row without waiting", () => {
+  const scrolled = [];
+  const node = { scrollTop: 0, scrollHeight: 600, clientHeight: 600 };
+  const spot = { viewport: 600, scrollY: 0, regions: { list: 0 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => scrolled.push(to.y) } };
+  assert.equal(track.revealRow(spot, () => ({ section: "list", top: 324, height: 32, listHeight: 356 }), 0), "done");
+  assert.deepEqual(scrolled, []);
 });

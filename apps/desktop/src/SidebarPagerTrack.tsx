@@ -2,7 +2,9 @@ import { memo, startTransition, useEffect, useLayoutEffect, useRef, useState } f
 import { StyleSheet, View } from "react-native";
 import { useBrowser } from "../../browser/src/state/browser/store";
 import { activeTabId } from "../../browser/src/state/browser/model";
-import { rowSpan } from "../../browser/src/state/sidebar/geometry";
+import { entriesHeight, rowSpan } from "../../browser/src/state/sidebar/geometry";
+import { sidebarEntries } from "../../browser/src/state/sidebar/entries";
+import { SIDEBAR_ROW } from "../../browser/src/lib/sidebarMetrics";
 import { pagerFor, useSettledProfile } from "../../browser/src/state/windows/profilePager";
 import { GLOW_ROOM, type PageSpot } from "../../browser/src/components/sidebar/pageLayout";
 import { SCROLL_EDGE } from "../../browser/src/components/sidebar/ScrollEdge";
@@ -20,7 +22,11 @@ function preReveal(windowId: string, profileId: string, spot: PageSpot | undefin
   return revealRow(spot as unknown as RevealTarget | undefined, () => {
     const s = useBrowser.getState();
     const tabId = activeTabId(s, windowId, profileId);
-    return tabId && spot ? rowSpan(s, windowId, profileId, tabId, spot.newTabAtTop) : null;
+    const span = tabId && spot ? rowSpan(s, windowId, profileId, tabId, spot.newTabAtTop) : null;
+    if (!span || !spot) return null;
+    const { list } = sidebarEntries(s, windowId, profileId);
+    const listHeight = (spot.newTabAtTop ? SIDEBAR_ROW.height + SIDEBAR_ROW.gap : 0) + entriesHeight(s, windowId, profileId, list);
+    return { ...span, listHeight };
   }, GLOW_ROOM + SCROLL_EDGE.inset);
 }
 
