@@ -662,12 +662,12 @@
    ]
   },
   {
-   "id": "evaluate-result:state/engines/siteMoves.ts",
+   "id": "evaluate-result:state/engines/openedPages.ts",
    "source": "main-world",
-   "guard": "Opener check: only a boolean counts, and only false lets a tab a page opened move engines; anything else retries, then keeps the tab where it is",
+   "guard": "Opener check: the script calls nothing the page can replace (our own post and string literals picked by window.opener's truthiness); only the boolean false lets a page-made tab move engines, true keeps it, anything else retries and then drops the move",
    "count": 1,
    "checks": [
-    "apps/browser/src/state/engines/siteMoves.ts#openerAnswer"
+    "apps/browser/src/state/engines/openedPages.ts#openerAnswer"
    ]
   },
   {

@@ -5,6 +5,7 @@ import { answerExternalApp } from "../site/prompts";
 import { setPageSelection } from "../site/selection";
 import { clearEngineOffer } from "../engines/actions";
 import { followSiteChoice } from "../engines/siteMoves";
+import { madeByPage, notePageMadeTab } from "../engines/openedPages";
 import { revealToolbar } from "../windows/toolbarAutoHide";
 import { noteCaptureIndicatorCleared, noteMediaCardCleared } from "../telemetry/tabSleepCounts";
 import { setNowPlaying, useMedia } from "../media/media";
@@ -28,9 +29,10 @@ export function leftPage(tabId: string, url: string, previousPage: string, engin
   followSiteChoice(tabId, engine, url, previousPage);
 }
 
-export function arrivedFromOpener(tabId: string, url: string, engine: PageEngine) {
-  const t = useBrowser.getState().tabs[tabId];
-  if (t?.openerId && t.page.kind === "adopted") followSiteChoice(tabId, engine, url, "");
+export function arrivedOnFirstPage(tabId: string, url: string, engine: PageEngine) {
+  if (!madeByPage(useBrowser.getState().tabs[tabId])) return;
+  notePageMadeTab(tabId);
+  followSiteChoice(tabId, engine, url, "");
 }
 
 export function pageEnded(tabId: string) {

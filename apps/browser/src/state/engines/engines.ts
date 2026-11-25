@@ -149,9 +149,12 @@ function engineOf(s: EngineState, t: Tab, depth: number): PageEngine {
   if (t.engine) return offered(t.engine);
   const adopted = fromAdoption(s, t, depth);
   if (adopted) return offered(adopted);
+  const url = navigationOf(t)?.url ?? t.url;
+  const chosen = chosenEngine(s, url);
+  if (chosen) return chosen;
   const opener = t.openerId ? s.tabs[t.openerId] : undefined;
   if (opener?.engine && (opener.url || navigationOf(opener))) return offered(opener.engine);
-  return engineForUrl(s, navigationOf(t)?.url ?? t.url);
+  return defaultEngine(s);
 }
 
 function livePopupOpener(s: EngineState, t: Tab): Tab | undefined {

@@ -38,7 +38,7 @@ import { fieldProviderHint, fieldProviderOpened, verificationCodeFound, type Fie
 import { verificationCodeDocument, verificationCodeTabGone } from "../../state/site/verificationCodes";
 import { hoverStatus } from "../../state/tabs/hoverStatus";
 import { endPageDocument, forgetPageDocument, notePageDocument } from "../../state/plugins/pageBarDocuments";
-import { arrivedFromOpener, leftPage, pageAskedToClose, pageEnded } from "../../state/tabs/pageEvents";
+import { arrivedOnFirstPage, leftPage, pageAskedToClose, pageEnded } from "../../state/tabs/pageEvents";
 import { copyLinkToSelection, searchSelection, setPageSelection } from "../../state/site/selection";
 import { shareFromPage } from "../../state/site/share";
 import { useAutoPictureInPicture } from "../../state/media/pip";
@@ -266,7 +266,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         dropOutlivedFavicon(tabId, url, isLoading);
         if (engine === "webkit") noteWebKitPage(tabId, { url, title, isLoading, committedUrl: committedUrl ?? "" });
         if (lastPage.current !== null && withoutFragment(url) !== lastPage.current) leftPage(tabId, url, lastPage.current, engine);
-        else if (lastPage.current === null) arrivedFromOpener(tabId, url, engine);
+        else if (lastPage.current === null) arrivedOnFirstPage(tabId, url, engine);
         lastPage.current = withoutFragment(url);
         patchPage(tabId, { themeColorSource: themeColorSource ?? null });
       }}
