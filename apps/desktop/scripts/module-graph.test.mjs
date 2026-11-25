@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -327,6 +328,17 @@ test("Linux shell exports and shared package Expo dialogs use one adapter", () =
   const result = spawnSync(process.execPath, ["--experimental-strip-types", script], { encoding: "utf8", timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /share the production adapter/);
+});
+
+const LIQUID_GLASS = ["engine.ts", "dom-snapshot.ts"].map((file) => `${repo}third_party/liquid-glass/${file}`);
+
+test("every desktop build draws glass with the one vendored Liquid Glass engine, through the layer the demo shares byte for byte", { timeout: 120000 }, async () => {
+  assert.equal(readFileSync(`${desktop}shims/web/liquidGlass.tsx`, "utf8"), readFileSync(`${repo}packages/demo/src/shims/web/liquidGlass.tsx`, "utf8"), "the desktop and demo Liquid Glass layers drifted apart");
+  for (const mode of ["linux", "win", "mac"]) {
+    const { graph, ids } = await productionGraph(mode);
+    for (const id of LIQUID_GLASS) assert.deepEqual(only(ids, id), [id], `${mode}: ${id}`);
+    assert.ok(graph.get(`${desktop}shims/web/chrome.tsx`)?.importedIds.includes(`${desktop}shims/web/liquidGlass.tsx`), `${mode}: GlassEffect draws through the shared layer`);
+  }
 });
 
 const WIN_TWINS = [

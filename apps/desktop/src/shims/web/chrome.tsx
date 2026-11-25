@@ -1,5 +1,5 @@
 import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { View, type ViewProps, type ViewStyle } from "react-native";
+import { StyleSheet, View, type ViewProps, type ViewStyle } from "react-native";
 import { useBrowser } from "../../../../browser/src/state/browser/store";
 import { useScopedTheme } from "../../../../browser/src/components/ui/theme";
 import { materialFill } from "./materials";
@@ -13,6 +13,7 @@ import { watchOutsidePresses } from "../../outsidePress";
 import { OutsidePressIgnoreContext } from "../../outsidePressScope";
 import { markWindowDrag, WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import type { MiddleClickEvent } from "./MouseArea";
+import { LiquidGlassLayer } from "./liquidGlass";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;
@@ -229,6 +230,7 @@ function fallbackBands(rim: RimProfile) {
 }
 
 const layer: React.CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
+const GLASS_LAYERS = { "data-ardia-glass-layers": "" };
 
 function backdrop(filter: string, extra?: Record<string, string>): React.CSSProperties {
   return { ...layer, backdropFilter: filter, WebkitBackdropFilter: filter, ...extra };
@@ -270,7 +272,7 @@ export function GlassGroup({ strength: _strength, children, ...props }: ViewProp
   );
 }
 
-export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", dark, style, ...props }: GlassEffectProps) {
+export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", dark, style, children, ...props }: GlassEffectProps) {
   const surfaceDark = useSurfaceDark();
   const theme = (dark ?? surfaceDark) ? "dark" : "light";
   const g = GLASS[theme];
@@ -279,20 +281,23 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const host = useRef<HTMLDivElement | null>(null);
   const frame = useRef<View & Element>(null);
   const group = useContext(GlassGroupContext);
-  const [scrolled, setScrolled] = useState(false);
+  const [scrolled, setScrolled] = useState<boolean | null>(null);
   useLayoutEffect(() => {
     setScrolled(inScrollView(host.current));
     frame.current?.setAttribute("data-ardia-glass-effect", "");
   }, []);
-  useGlassLook(frame, { material: clear ? "clear" : "regular", tint: glassTint(tint), group: group ?? undefined, appearance: theme }, !scrolled && nativeGlassFor(shellOverPages()));
-  const framed = [{ borderRadius: cornerRadius }, style];
+  const native = useGlassLook(frame, { material: clear ? "clear" : "regular", tint: glassTint(tint), group: group ?? undefined, appearance: theme }, scrolled === false && nativeGlassFor(shellOverPages()));
+  const { opacity, ...rest } = StyleSheet.flatten(style) ?? {};
+  const layerOpacity = native || opacity === undefined ? undefined : Number(opacity);
+  const framed = [{ borderRadius: cornerRadius }, native ? style : rest];
   if (scrolled) {
     const radiusStyle: React.CSSProperties = { borderRadius: fallbackRadius(cornerRadius) };
     return (
       <View ref={frame} pointerEvents="none" {...props} style={framed}>
-        <div ref={host} data-ardia-glass-layers="" style={scrolledGlassSurface(theme, clear, cornerRadius)}>
+        <div ref={host} data-ardia-glass-layers="" style={{ ...scrolledGlassSurface(theme, clear, cornerRadius), opacity: layerOpacity }}>
           {tint ? <div style={{ ...layer, ...radiusStyle, background: tint }} /> : null}
         </div>
+        {children}
       </View>
     );
   }
@@ -300,13 +305,28 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const shape = shapeMask(cornerRadius);
   const clip: React.CSSProperties = shape ? {} : { borderRadius: fallbackRadius(cornerRadius), overflow: "hidden" };
   const shaped = shape ? maskStyle(shape) : {};
+  const fallback = (
+    <div style={{ ...layer, ...clip }}>
+      <div style={backdrop(filter, shaped)} />
+      {tint ? <div style={{ ...layer, ...shaped, background: tint }} /> : null}
+      <div style={backdrop(`brightness(${1 + peakGain(g.rim)})`, highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) })} />
+    </div>
+  );
   return (
     <View ref={frame} pointerEvents="none" {...props} style={framed}>
-      <div ref={host} data-ardia-glass-layers="" style={{ ...layer, ...clip }}>
-        <div style={backdrop(filter, shaped)} />
-        {tint ? <div style={{ ...layer, ...shaped, background: tint }} /> : null}
-        <div style={backdrop(`brightness(${1 + peakGain(g.rim)})`, highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) })} />
-      </div>
+      <LiquidGlassLayer
+        hostRef={(node) => void (host.current = node)}
+        hostProps={GLASS_LAYERS}
+        theme={theme}
+        glassStyle={glassStyle}
+        cornerRadius={cornerRadius}
+        radius={fallbackRadius(cornerRadius)}
+        tint={tint}
+        opacity={layerOpacity}
+        enabled={scrolled === false && !native}
+        fallback={fallback}
+      />
+      {children}
     </View>
   );
 }
