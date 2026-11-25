@@ -21,6 +21,12 @@ double Unband(double stretch) {
   return -kRubberBandScale * std::log(1 - std::min(stretch, kRubberBand - 0.01) / kRubberBand);
 }
 
+double Px(double dip, double scale) { return Finite(dip) ? RoundHalfUp(dip * scale) : 0; }
+
+int64_t SaturatingAdd(int64_t base, int64_t amount) {
+  return base > std::numeric_limits<int64_t>::max() - amount ? std::numeric_limits<int64_t>::max() : base + amount;
+}
+
 struct Span {
   double start = 0;
   double size = 0;
@@ -41,12 +47,45 @@ std::vector<Span> Cut(double total, const std::vector<double>& sizes, double gap
   return spans;
 }
 
-Rect SnappedRect(double left, double top, double right, double bottom, double scale) {
-  const double x = SnapToDevice(left, scale);
-  const double y = SnapToDevice(top, scale);
-  const double r = SnapToDevice(right, scale);
-  const double b = SnapToDevice(bottom, scale);
-  return Rect{x, y, std::max(0.0, r - x), std::max(0.0, b - y)};
+struct Edge {
+  double start = 0;
+  double end = 0;
+};
+
+std::vector<Edge> PixelEdges(double low, double high, const std::vector<double>& sizes, double gap, double scale) {
+  const double origin = low / scale;
+  const std::vector<Span> spans = Cut((high - low) / scale, sizes, gap);
+  std::vector<Edge> edges;
+  edges.reserve(spans.size());
+  double previous_end = low;
+  for (size_t i = 0; i < spans.size(); ++i) {
+    double start = i == 0 ? low : gap == 0 ? previous_end : Px(origin + spans[i].start, scale);
+    start = std::clamp(start, previous_end, high);
+    double end = i + 1 == spans.size() ? high : Px(origin + (spans[i].start + spans[i].size), scale);
+    end = std::clamp(end, start, high);
+    edges.push_back({start, end});
+    previous_end = end;
+  }
+  return edges;
+}
+
+Rect DipRect(double left, double top, double right, double bottom, double scale) {
+  return Rect{left / scale, top / scale, (right - left) / scale, (bottom - top) / scale};
+}
+
+PixelRect Pixels(double left, double top, double right, double bottom) {
+  return PixelRect{static_cast<int>(left), static_cast<int>(top), static_cast<int>(right - left),
+                   static_cast<int>(bottom - top)};
+}
+
+PaneLayout Pane(size_t slot, size_t stack_index, double left, double top, double right, double bottom,
+                double scale) {
+  return PaneLayout{slot, stack_index, DipRect(left, top, right, bottom, scale), Pixels(left, top, right, bottom)};
+}
+
+DividerLayout Divider(DividerRef ref, bool vertical, double left, double top, double right, double bottom,
+                      double scale) {
+  return DividerLayout{ref, vertical, DipRect(left, top, right, bottom, scale), Pixels(left, top, right, bottom)};
 }
 
 bool ValidRect(const Rect& rect) {
@@ -58,6 +97,38 @@ bool ValidRect(const Rect& rect) {
 bool ValidWindow(const WindowFrame& window) {
   return Finite(window.width) && Finite(window.height) && window.width > 0 && window.height > 0 &&
          window.width <= kMaxExtent && window.height <= kMaxExtent;
+}
+
+std::array<double, 2> NormalizedPair(const std::array<double, 2>& pair) {
+  const double first = Finite(pair[0]) && pair[0] > 0 ? pair[0] : 0;
+  const double second = Finite(pair[1]) && pair[1] > 0 ? pair[1] : 0;
+  const double sum = first + second;
+  if (!(sum > 0) || !Finite(sum)) return {0.5, 0.5};
+  return {first / sum, second / sum};
+}
+
+double RatioOf(const std::vector<SplitSlot>& slots, DividerRef ref) {
+  if (ref.kind == DividerKind::kStack) {
+    const double pair = slots[ref.index].stack_sizes[0] + slots[ref.index].stack_sizes[1];
+    return pair > 0 ? slots[ref.index].stack_sizes[0] / pair : 0.5;
+  }
+  const double pair = slots[ref.index].size + slots[ref.index + 1].size;
+  return pair > 0 ? slots[ref.index].size / pair : 0.5;
+}
+
+std::optional<DividerRef> RatioDivider(const std::vector<SplitSlot>& slots, std::optional<DividerRef> active,
+                                       DividerRef preferred) {
+  if (active && HasDivider(slots, *active)) return active;
+  if (HasDivider(slots, preferred)) return preferred;
+  if (HasDivider(slots, DividerRef{DividerKind::kRoot, 0})) return DividerRef{DividerKind::kRoot, 0};
+  if (HasDivider(slots, DividerRef{DividerKind::kStack, 0})) return DividerRef{DividerKind::kStack, 0};
+  return std::nullopt;
+}
+
+double SplitTotal(const LayoutInput& input, const Rect& content, DividerRef ref) {
+  const bool horizontal = input.orientation == SplitOrientation::kHorizontal;
+  const bool along_width = ref.kind == DividerKind::kRoot ? horizontal : !horizontal;
+  return along_width ? content.width : content.height;
 }
 
 }
@@ -123,11 +194,18 @@ double SnapToDevice(double dip, double device_scale) {
 PixelRect ToPixels(const Rect& rect, double device_scale) {
   if (!ValidRect(rect)) return {};
   const double scale = SanitizeDeviceScale(device_scale);
-  const int x = static_cast<int>(RoundHalfUp(rect.x * scale));
-  const int y = static_cast<int>(RoundHalfUp(rect.y * scale));
-  const int right = static_cast<int>(RoundHalfUp((rect.x + rect.width) * scale));
-  const int bottom = static_cast<int>(RoundHalfUp((rect.y + rect.height) * scale));
-  return PixelRect{x, y, std::max(0, right - x), std::max(0, bottom - y)};
+  const double left = Px(rect.x, scale);
+  const double top = Px(rect.y, scale);
+  const double right = std::max(left, Px(rect.x + rect.width, scale));
+  const double bottom = std::max(top, Px(rect.y + rect.height, scale));
+  return Pixels(left, top, right, bottom);
+}
+
+bool HasDivider(size_t count, size_t index) { return count >= 2 && index < count - 1; }
+
+bool HasDivider(const std::vector<SplitSlot>& slots, DividerRef ref) {
+  if (ref.kind == DividerKind::kStack) return ref.index < slots.size() && slots[ref.index].stacked;
+  return HasDivider(slots.size(), ref.index);
 }
 
 std::vector<double> NormalizedSizes(const std::vector<double>& sizes) {
@@ -145,8 +223,22 @@ std::vector<double> NormalizedSizes(const std::vector<double>& sizes) {
   return out;
 }
 
+std::vector<SplitSlot> NormalizedSlots(const std::vector<SplitSlot>& slots) {
+  if (slots.empty() || slots.size() > kMaxSlots) return {};
+  std::vector<double> sizes;
+  sizes.reserve(slots.size());
+  for (const SplitSlot& slot : slots) sizes.push_back(slot.size);
+  sizes = NormalizedSizes(sizes);
+  std::vector<SplitSlot> out = slots;
+  for (size_t i = 0; i < out.size(); ++i) {
+    out[i].size = sizes[i];
+    out[i].stack_sizes = NormalizedPair(out[i].stack_sizes);
+  }
+  return out;
+}
+
 std::vector<double> ResizePair(const std::vector<double>& sizes, size_t index, double delta, double total, double gap) {
-  if (index + 1 >= sizes.size() || !Finite(delta) || !Finite(total) || !Finite(gap)) return sizes;
+  if (!HasDivider(sizes.size(), index) || !Finite(delta) || !Finite(total) || !Finite(gap)) return sizes;
   const double free = std::max(1.0, total - gap * static_cast<double>(sizes.size() - 1));
   std::vector<double> px;
   px.reserve(sizes.size());
@@ -161,7 +253,7 @@ std::vector<double> ResizePair(const std::vector<double>& sizes, size_t index, d
 }
 
 std::vector<double> EvenPair(const std::vector<double>& sizes, size_t index) {
-  if (index + 1 >= sizes.size()) return sizes;
+  if (!HasDivider(sizes.size(), index)) return sizes;
   std::vector<double> out = sizes;
   const double half = (sizes[index] + sizes[index + 1]) / 2;
   out[index] = half;
@@ -169,232 +261,333 @@ std::vector<double> EvenPair(const std::vector<double>& sizes, size_t index) {
   return out;
 }
 
+std::vector<SplitSlot> ResizeSlots(const std::vector<SplitSlot>& slots, DividerRef ref, double delta, double total,
+                                   double gap) {
+  if (!HasDivider(slots, ref)) return slots;
+  std::vector<SplitSlot> out = slots;
+  if (ref.kind == DividerKind::kStack) {
+    const std::vector<double> pair = ResizePair({slots[ref.index].stack_sizes[0], slots[ref.index].stack_sizes[1]}, 0,
+                                                delta, total, gap);
+    out[ref.index].stack_sizes = {pair[0], pair[1]};
+    return out;
+  }
+  std::vector<double> sizes;
+  sizes.reserve(slots.size());
+  for (const SplitSlot& slot : slots) sizes.push_back(slot.size);
+  sizes = ResizePair(sizes, ref.index, delta, total, gap);
+  for (size_t i = 0; i < out.size(); ++i) out[i].size = sizes[i];
+  return out;
+}
+
+std::vector<SplitSlot> EvenSlots(const std::vector<SplitSlot>& slots, DividerRef ref) {
+  if (!HasDivider(slots, ref)) return slots;
+  std::vector<SplitSlot> out = slots;
+  if (ref.kind == DividerKind::kStack) {
+    out[ref.index].stack_sizes = {0.5, 0.5};
+    return out;
+  }
+  const double half = (slots[ref.index].size + slots[ref.index + 1].size) / 2;
+  out[ref.index].size = half;
+  out[ref.index + 1].size = half;
+  return out;
+}
+
 std::optional<LayoutSnapshot> ComputeLayout(const LayoutInput& input, uint64_t sequence,
-                                            std::optional<size_t> active_divider) {
-  if (!ValidWindow(input.window)) return std::nullopt;
-  if (input.split_sizes.size() > kMaxSlots) return std::nullopt;
+                                            std::optional<DividerRef> active_divider) {
+  if (!ValidWindow(input.window) || input.split_slots.size() > kMaxSlots) return std::nullopt;
   const double scale = SanitizeDeviceScale(input.window.device_scale);
-  const double window_width = input.window.width;
-  const double window_height = input.window.height;
-  const double limit = SidebarWidthLimit(window_width);
-  double width = input.sidebar_live
-                     ? std::min(limit + kRubberBand,
-                                std::max(kSidebarMinWidth - kRubberBand,
-                                         Finite(input.sidebar_width) ? input.sidebar_width : kDefaultSidebarWidth))
-                     : ShownSidebarWidth(input.sidebar_width, window_width);
+  const double limit = SidebarWidthLimit(input.window.width);
+  const double width = input.sidebar_live
+                           ? std::min(limit + kRubberBand,
+                                      std::max(kSidebarMinWidth - kRubberBand,
+                                               Finite(input.sidebar_width) ? input.sidebar_width : kDefaultSidebarWidth))
+                           : ShownSidebarWidth(input.sidebar_width, input.window.width);
   const bool collapsed = !input.sidebar_shown || (Finite(input.collapse_below) && input.collapse_below > 0 &&
                                                   width < input.collapse_below);
-  width = collapsed ? 0 : std::min(SnapToDevice(width, scale), SnapToDevice(window_width, scale));
+  const double window_right = Px(input.window.width, scale);
+  const double window_bottom = Px(input.window.height, scale);
+  const double sidebar_px = collapsed ? 0 : std::clamp(Px(width, scale), 0.0, window_right);
+  const bool left = input.side == SidebarSide::kLeft;
+  const double sidebar_left = left ? 0 : window_right - sidebar_px;
+  const double region_left = left ? sidebar_px : 0;
+  const double region_right = left ? window_right : window_right - sidebar_px;
+  const double content_left =
+      std::min(region_right, Px(region_left / scale + NonNegative(input.card_insets.left), scale));
+  const double content_right =
+      std::max(content_left, Px(region_right / scale - NonNegative(input.card_insets.right), scale));
+  const double content_top = std::min(window_bottom, Px(NonNegative(input.card_insets.top), scale));
+  const double content_bottom =
+      std::max(content_top, Px(window_bottom / scale - NonNegative(input.card_insets.bottom), scale));
 
   LayoutSnapshot out;
   out.sequence = sequence;
   out.device_scale = scale;
-  out.sidebar_width = width;
+  out.sidebar_width = sidebar_px / scale;
   out.sidebar_collapsed = collapsed;
-  const double right_edge = SnapToDevice(window_width, scale);
-  const double bottom_edge = SnapToDevice(window_height, scale);
-  const bool left = input.side == SidebarSide::kLeft;
-  out.sidebar = left ? Rect{0, 0, width, bottom_edge} : Rect{right_edge - width, 0, width, bottom_edge};
-  const double region_left = left ? width : 0;
-  const double region_right = left ? right_edge : right_edge - width;
-  out.content = SnappedRect(region_left + NonNegative(input.card_insets.left), NonNegative(input.card_insets.top),
-                            region_right - NonNegative(input.card_insets.right),
-                            bottom_edge - NonNegative(input.card_insets.bottom), scale);
+  out.sidebar = DipRect(sidebar_left, 0, sidebar_left + sidebar_px, window_bottom, scale);
+  out.sidebar_pixels = Pixels(sidebar_left, 0, sidebar_left + sidebar_px, window_bottom);
+  out.content = DipRect(content_left, content_top, content_right, content_bottom, scale);
+  out.content_pixels = Pixels(content_left, content_top, content_right, content_bottom);
 
-  if (input.split_sizes.empty()) {
-    out.panes.push_back(out.content);
+  out.split_slots = NormalizedSlots(input.split_slots);
+  if (out.split_slots.empty()) {
+    out.panes.push_back(Pane(0, 0, content_left, content_top, content_right, content_bottom, scale));
     out.css = {out.sidebar_width, 0, sequence};
     return out;
   }
-  out.split_sizes = NormalizedSizes(input.split_sizes);
   const bool horizontal = input.orientation == SplitOrientation::kHorizontal;
   const double gap = NonNegative(input.split_gap);
-  const Rect& area = out.content;
-  const double axis_origin = horizontal ? area.x : area.y;
-  const double axis_total = horizontal ? area.width : area.height;
-  const std::vector<Span> spans = Cut(axis_total, out.split_sizes, gap);
-  const double axis_end = axis_origin + axis_total;
-  for (size_t i = 0; i < spans.size(); ++i) {
-    const double start = std::min(axis_end, axis_origin + spans[i].start);
-    const double end = std::min(axis_end, start + spans[i].size);
-    out.panes.push_back(horizontal ? SnappedRect(start, area.y, end, area.y + area.height, scale)
-                                   : SnappedRect(area.x, start, area.x + area.width, end, scale));
-    if (i + 1 < spans.size()) {
-      const double next = std::min(axis_end, axis_origin + spans[i + 1].start);
-      out.dividers.push_back(horizontal ? SnappedRect(end, area.y, next, area.y + area.height, scale)
-                                        : SnappedRect(area.x, end, area.x + area.width, next, scale));
+  const double main_low = horizontal ? content_left : content_top;
+  const double main_high = horizontal ? content_right : content_bottom;
+  const double cross_low = horizontal ? content_top : content_left;
+  const double cross_high = horizontal ? content_bottom : content_right;
+  std::vector<double> sizes;
+  sizes.reserve(out.split_slots.size());
+  for (const SplitSlot& slot : out.split_slots) sizes.push_back(slot.size);
+  const std::vector<Edge> main = PixelEdges(main_low, main_high, sizes, gap, scale);
+  const auto oriented = [&](double main_start, double main_end, double cross_start, double cross_end) {
+    return horizontal ? std::array<double, 4>{main_start, cross_start, main_end, cross_end}
+                      : std::array<double, 4>{cross_start, main_start, cross_end, main_end};
+  };
+  for (size_t i = 0; i < main.size(); ++i) {
+    const SplitSlot& slot = out.split_slots[i];
+    if (slot.stacked) {
+      const std::vector<Edge> inner =
+          PixelEdges(cross_low, cross_high, {slot.stack_sizes[0], slot.stack_sizes[1]}, gap, scale);
+      for (size_t j = 0; j < inner.size(); ++j) {
+        const auto box = oriented(main[i].start, main[i].end, inner[j].start, inner[j].end);
+        out.panes.push_back(Pane(i, j, box[0], box[1], box[2], box[3], scale));
+      }
+      const auto bar = oriented(main[i].start, main[i].end, inner[0].end, inner[1].start);
+      out.dividers.push_back(
+          Divider(DividerRef{DividerKind::kStack, i}, !horizontal, bar[0], bar[1], bar[2], bar[3], scale));
+    } else {
+      const auto box = oriented(main[i].start, main[i].end, cross_low, cross_high);
+      out.panes.push_back(Pane(i, 0, box[0], box[1], box[2], box[3], scale));
+    }
+    if (i + 1 < main.size()) {
+      const auto bar = oriented(main[i].end, main[i + 1].start, cross_low, cross_high);
+      out.dividers.push_back(
+          Divider(DividerRef{DividerKind::kRoot, i}, horizontal, bar[0], bar[1], bar[2], bar[3], scale));
     }
   }
-  const size_t ratio_index = active_divider && *active_divider + 1 < out.split_sizes.size() ? *active_divider : 0;
-  if (ratio_index + 1 < out.split_sizes.size()) {
-    out.active_divider = active_divider && *active_divider == ratio_index ? active_divider : std::nullopt;
-    const double pair = out.split_sizes[ratio_index] + out.split_sizes[ratio_index + 1];
-    out.split_ratio = pair > 0 ? out.split_sizes[ratio_index] / pair : 0.5;
-  } else {
-    out.split_ratio = 1;
-  }
+  if (active_divider && HasDivider(out.split_slots, *active_divider)) out.active_divider = active_divider;
+  const std::optional<DividerRef> ratio = RatioDivider(out.split_slots, out.active_divider, input.ratio_divider);
+  out.split_ratio = ratio ? RatioOf(out.split_slots, *ratio) : 1;
   out.css = {out.sidebar_width, out.split_ratio, sequence};
   return out;
 }
 
-LayoutDragSession::LayoutDragSession(LayoutInput input) : input_(std::move(input)), before_drag_(input_) {
-  input_.sidebar_live = false;
-  if (input_.split_sizes.size() > kMaxSlots) input_.split_sizes.clear();
-  if (!input_.split_sizes.empty()) input_.split_sizes = NormalizedSizes(input_.split_sizes);
-  input_.window.device_scale = SanitizeDeviceScale(input_.window.device_scale);
-  Publish();
+LayoutDragSession::LayoutDragSession(LayoutInput input, uint64_t first_sequence) : sequence_(first_sequence) {
+  input.sidebar_live = false;
+  input.split_slots = NormalizedSlots(input.split_slots);
+  input.window.device_scale = SanitizeDeviceScale(input.window.device_scale);
+  input_ = input;
+  before_drag_ = input;
+  Apply(input, Drag{});
 }
 
 LayoutDragSession::~LayoutDragSession() = default;
 
-double LayoutDragSession::SidebarMax() const { return SidebarWidthLimit(input_.window.width); }
-
-double LayoutDragSession::SplitAxisTotal() const {
-  return input_.orientation == SplitOrientation::kHorizontal ? snapshot_.content.width : snapshot_.content.height;
-}
-
-bool LayoutDragSession::Publish() {
-  const std::optional<size_t> divider = kind_ == DragKind::kSplit ? std::optional<size_t>(divider_) : std::nullopt;
-  std::optional<LayoutSnapshot> next = ComputeLayout(input_, sequence_ + 1, divider);
-  if (!next) return false;
+bool LayoutDragSession::Apply(const LayoutInput& next, const Drag& drag) {
+  if (sequence_ == std::numeric_limits<uint64_t>::max()) return false;
+  const std::optional<DividerRef> active =
+      drag.kind == DragKind::kSplit ? std::optional<DividerRef>(drag.divider) : std::nullopt;
+  std::optional<LayoutSnapshot> layout = ComputeLayout(next, sequence_ + 1, active);
+  if (!layout) return false;
+  layout->settle_target = drag.settle_target;
+  input_ = next;
+  drag_ = drag;
   ++sequence_;
-  snapshot_ = std::move(*next);
+  snapshot_ = std::move(*layout);
   return true;
 }
 
-bool LayoutDragSession::BeginSidebar(double pointer_x, double pointer_from_edge) {
-  if (!Finite(pointer_x) || !Finite(pointer_from_edge) || kind_ == DragKind::kSplit) return false;
-  const bool settling = kind_ == DragKind::kSidebar;
-  if (!settling) before_drag_ = input_;
-  const double max = SidebarMax();
-  const double width = settling ? input_.sidebar_width : ShownSidebarWidth(input_.sidebar_width, input_.window.width);
+double LayoutDragSession::SidebarWidthAt(const Drag& drag, double pointer, double max, bool* dragged) const {
+  const double dx = pointer - drag.origin;
+  *dragged = drag.dragged || dx != 0;
   const double direction = input_.side == SidebarSide::kLeft ? 1 : -1;
-  kind_ = DragKind::kSidebar;
-  settle_target_.reset();
-  dragged_ = settling;
-  origin_ = pointer_x;
-  last_pointer_ = pointer_x;
-  rest_ = Unstretch(width, kSidebarMinWidth, max);
-  grabbed_ = Unstretch(width + direction * pointer_from_edge, kSidebarMinWidth, max);
-  input_.sidebar_shown = true;
-  input_.sidebar_live = true;
-  input_.sidebar_width = RubberBand(dragged_ ? grabbed_ : rest_, kSidebarMinWidth, max);
-  return Publish();
+  return RubberBand((*dragged ? drag.grabbed : drag.rest) + direction * dx, kSidebarMinWidth, max);
 }
 
-bool LayoutDragSession::BeginSplit(size_t divider, double pointer) {
-  if (!Finite(pointer) || kind_ != DragKind::kNone || divider + 1 >= input_.split_sizes.size()) return false;
-  before_drag_ = input_;
-  kind_ = DragKind::kSplit;
-  divider_ = divider;
-  origin_ = pointer;
-  last_pointer_ = pointer;
-  split_start_ = NormalizedSizes(input_.split_sizes);
-  return Publish();
+std::optional<std::vector<SplitSlot>> LayoutDragSession::SlotsAt(const LayoutInput& next, const Drag& drag,
+                                                                 double pointer) const {
+  const std::optional<LayoutSnapshot> probe = ComputeLayout(next, 0);
+  if (!probe) return std::nullopt;
+  return ResizeSlots(split_start_, drag.divider, pointer - drag.origin, SplitTotal(next, probe->content, drag.divider),
+                     NonNegative(next.split_gap));
+}
+
+bool LayoutDragSession::BeginSidebar(double pointer_x, double pointer_from_edge) {
+  if (!Finite(pointer_x) || !Finite(pointer_from_edge) || drag_.kind == DragKind::kSplit) return false;
+  const bool regrab = drag_.kind == DragKind::kSidebar;
+  const LayoutInput before = regrab ? before_drag_ : input_;
+  const double max = SidebarWidthLimit(input_.window.width);
+  const double width = regrab ? input_.sidebar_width : ShownSidebarWidth(input_.sidebar_width, input_.window.width);
+  const double direction = input_.side == SidebarSide::kLeft ? 1 : -1;
+  Drag drag;
+  drag.kind = DragKind::kSidebar;
+  drag.origin = pointer_x;
+  drag.last_pointer = pointer_x;
+  drag.rest = Unstretch(width, kSidebarMinWidth, max);
+  drag.grabbed = Unstretch(width + direction * pointer_from_edge, kSidebarMinWidth, max);
+  drag.dragged = regrab;
+  LayoutInput next = input_;
+  next.sidebar_shown = true;
+  next.sidebar_live = true;
+  next.sidebar_width = RubberBand(drag.dragged ? drag.grabbed : drag.rest, kSidebarMinWidth, max);
+  if (!Apply(next, drag)) return false;
+  before_drag_ = before;
+  return true;
+}
+
+bool LayoutDragSession::BeginSplit(DividerRef divider, double pointer) {
+  if (!Finite(pointer) || drag_.kind != DragKind::kNone || !HasDivider(input_.split_slots, divider)) return false;
+  const LayoutInput before = input_;
+  std::vector<SplitSlot> start = NormalizedSlots(input_.split_slots);
+  Drag drag;
+  drag.kind = DragKind::kSplit;
+  drag.origin = pointer;
+  drag.last_pointer = pointer;
+  drag.divider = divider;
+  LayoutInput next = input_;
+  next.ratio_divider = divider;
+  if (!Apply(next, drag)) return false;
+  before_drag_ = before;
+  split_start_ = std::move(start);
+  return true;
 }
 
 bool LayoutDragSession::Move(double pointer) {
   if (!Finite(pointer)) return false;
-  if (kind_ == DragKind::kSidebar && !settle_target_) {
-    last_pointer_ = pointer;
-    const double dx = pointer - origin_;
-    if (dx != 0) dragged_ = true;
-    const double direction = input_.side == SidebarSide::kLeft ? 1 : -1;
-    input_.sidebar_width = RubberBand((dragged_ ? grabbed_ : rest_) + direction * dx, kSidebarMinWidth, SidebarMax());
-    return Publish();
+  LayoutInput next = input_;
+  Drag drag = drag_;
+  drag.last_pointer = pointer;
+  if (drag_.kind == DragKind::kSidebar && !drag_.settle_target) {
+    next.sidebar_width = SidebarWidthAt(drag_, pointer, SidebarWidthLimit(next.window.width), &drag.dragged);
+    return Apply(next, drag);
   }
-  if (kind_ == DragKind::kSplit) {
-    last_pointer_ = pointer;
-    input_.split_sizes = ResizePair(split_start_, divider_, pointer - origin_, SplitAxisTotal(),
-                                    NonNegative(input_.split_gap));
-    return Publish();
+  if (drag_.kind == DragKind::kSplit) {
+    std::optional<std::vector<SplitSlot>> slots = SlotsAt(next, drag_, pointer);
+    if (!slots) return false;
+    next.split_slots = std::move(*slots);
+    return Apply(next, drag);
   }
   return false;
 }
 
-bool LayoutDragSession::ResizeWindow(double width, double height) {
-  const WindowFrame next{width, height, input_.window.device_scale};
-  if (!ValidWindow(next)) return false;
-  if (next.width == input_.window.width && next.height == input_.window.height) return false;
-  input_.window = next;
-  if (kind_ == DragKind::kSidebar && !settle_target_) return Move(last_pointer_);
-  if (kind_ == DragKind::kSidebar && settle_target_) {
-    settle_target_ = ClampWidth(*settle_target_, kSidebarMinWidth, SidebarMax());
+bool LayoutDragSession::Reapply(LayoutInput next) {
+  Drag drag = drag_;
+  const double max = SidebarWidthLimit(next.window.width);
+  if (drag_.kind == DragKind::kSidebar && !drag_.settle_target) {
+    next.sidebar_width = SidebarWidthAt(drag_, drag_.last_pointer, max, &drag.dragged);
+  } else if (drag_.kind == DragKind::kSidebar) {
+    drag.settle_target = ClampWidth(*drag_.settle_target, kSidebarMinWidth, max);
+  } else if (drag_.kind == DragKind::kSplit) {
+    std::optional<std::vector<SplitSlot>> slots = SlotsAt(next, drag_, drag_.last_pointer);
+    if (!slots) return false;
+    next.split_slots = std::move(*slots);
   }
-  if (!Publish()) return false;
-  if (kind_ == DragKind::kSplit) return Move(last_pointer_);
-  return true;
+  return Apply(next, drag);
+}
+
+bool LayoutDragSession::ResizeWindow(double width, double height) {
+  const WindowFrame frame{width, height, input_.window.device_scale};
+  if (!ValidWindow(frame) || (frame.width == input_.window.width && frame.height == input_.window.height)) {
+    return false;
+  }
+  LayoutInput next = input_;
+  next.window = frame;
+  return Reapply(std::move(next));
 }
 
 bool LayoutDragSession::SetDeviceScale(double device_scale) {
   const double scale = SanitizeDeviceScale(device_scale);
   if (scale == input_.window.device_scale) return false;
-  input_.window.device_scale = scale;
-  return Publish();
+  LayoutInput next = input_;
+  next.window.device_scale = scale;
+  return Reapply(std::move(next));
 }
 
-std::optional<LayoutDragSession::Release> LayoutDragSession::End(double pointer) {
-  if (kind_ == DragKind::kNone || settle_target_) return std::nullopt;
-  if (Finite(pointer)) Move(pointer);
-  if (kind_ == DragKind::kSplit) {
-    kind_ = DragKind::kNone;
-    Publish();
-    return Release{snapshot_.split_ratio, snapshot_.split_ratio, snapshot_.split_ratio, false, false};
-  }
-  const double max = SidebarMax();
-  const double raw = input_.sidebar_width;
+std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSplit() {
+  LayoutInput next = input_;
+  next.ratio_divider = drag_.divider;
+  if (!Apply(next, Drag{})) return std::nullopt;
+  const double ratio = snapshot_.split_ratio;
+  return Release{ratio, ratio, ratio, false, false};
+}
+
+std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSidebar(double raw, bool spring) {
+  const double max = SidebarWidthLimit(input_.window.width);
   const double collapse_below = Finite(input_.collapse_below) ? input_.collapse_below : 0;
+  LayoutInput next = input_;
+  next.sidebar_live = false;
   if (collapse_below > 0 && raw < collapse_below) {
-    kind_ = DragKind::kNone;
-    input_.sidebar_live = false;
-    input_.sidebar_shown = false;
-    input_.sidebar_width = before_drag_.sidebar_width;
-    Publish();
-    return Release{raw, 0, input_.sidebar_width, false, true};
+    next.sidebar_shown = false;
+    next.sidebar_width = before_drag_.sidebar_width;
+    if (!Apply(next, Drag{})) return std::nullopt;
+    return Release{raw, 0, next.sidebar_width, false, true};
   }
   const double target = ClampWidth(raw, kSidebarMinWidth, max);
   const double kept = KeptSidebarWidth(target, max, before_drag_.sidebar_width);
-  if (raw != target) {
-    settle_target_ = target;
+  if (spring && raw != target) {
+    Drag drag = drag_;
+    drag.settle_target = target;
+    if (!Apply(input_, drag)) return std::nullopt;
     return Release{raw, target, kept, true, false};
   }
-  kind_ = DragKind::kNone;
-  input_.sidebar_live = false;
-  input_.sidebar_width = kept;
-  Publish();
+  next.sidebar_width = kept;
+  if (!Apply(next, Drag{})) return std::nullopt;
   return Release{raw, target, kept, false, false};
 }
 
+std::optional<LayoutDragSession::Release> LayoutDragSession::End(double pointer) {
+  if (drag_.kind == DragKind::kNone || drag_.settle_target) return std::nullopt;
+  if (Finite(pointer)) Move(pointer);
+  if (drag_.kind == DragKind::kSplit) return FinishSplit();
+  return FinishSidebar(input_.sidebar_width, true);
+}
+
+std::optional<LayoutDragSession::Release> LayoutDragSession::Terminate() {
+  if (drag_.kind == DragKind::kSplit) return FinishSplit();
+  if (drag_.kind == DragKind::kSidebar && drag_.settle_target) return FinishSettle();
+  if (drag_.kind == DragKind::kSidebar) return FinishSidebar(input_.sidebar_width, false);
+  return std::nullopt;
+}
+
 bool LayoutDragSession::Settle(double width) {
-  if (kind_ != DragKind::kSidebar || !settle_target_ || !Finite(width)) return false;
-  const double target = *settle_target_;
-  if (std::abs(width - target) < 1e-6) {
-    kind_ = DragKind::kNone;
-    settle_target_.reset();
-    input_.sidebar_live = false;
-    input_.sidebar_width = KeptSidebarWidth(target, SidebarMax(), before_drag_.sidebar_width);
-    return Publish();
-  }
-  input_.sidebar_width = width;
-  return Publish();
+  if (drag_.kind != DragKind::kSidebar || !drag_.settle_target || !Finite(width)) return false;
+  if (std::abs(width - *drag_.settle_target) < 1e-6) return FinishSettle().has_value();
+  LayoutInput next = input_;
+  next.sidebar_width = width;
+  return Apply(next, drag_);
+}
+
+std::optional<LayoutDragSession::Release> LayoutDragSession::FinishSettle() {
+  if (drag_.kind != DragKind::kSidebar || !drag_.settle_target) return std::nullopt;
+  const double target = *drag_.settle_target;
+  const double kept = KeptSidebarWidth(target, SidebarWidthLimit(input_.window.width), before_drag_.sidebar_width);
+  LayoutInput next = input_;
+  next.sidebar_live = false;
+  next.sidebar_width = kept;
+  if (!Apply(next, Drag{})) return std::nullopt;
+  return Release{target, target, kept, false, false};
 }
 
 bool LayoutDragSession::Cancel() {
-  if (kind_ == DragKind::kNone) return false;
-  const WindowFrame window = input_.window;
-  input_ = before_drag_;
-  input_.window = window;
-  input_.sidebar_live = false;
-  kind_ = DragKind::kNone;
-  settle_target_.reset();
-  dragged_ = false;
-  return Publish();
+  if (drag_.kind == DragKind::kNone) return false;
+  LayoutInput next = before_drag_;
+  next.window = input_.window;
+  next.sidebar_live = false;
+  return Apply(next, Drag{});
 }
 
-bool LayoutDragSession::ResetSplitPair(size_t divider) {
-  if (kind_ != DragKind::kNone || divider + 1 >= input_.split_sizes.size()) return false;
-  input_.split_sizes = EvenPair(input_.split_sizes, divider);
-  return Publish();
+bool LayoutDragSession::ResetSplitPair(DividerRef divider) {
+  if (drag_.kind != DragKind::kNone || !HasDivider(input_.split_slots, divider)) return false;
+  LayoutInput next = input_;
+  next.split_slots = EvenSlots(input_.split_slots, divider);
+  next.ratio_divider = divider;
+  return Apply(next, Drag{});
 }
 
 SurfaceSyncTracker::SurfaceSyncTracker(int64_t vsync_interval_micros) { SetVsyncInterval(vsync_interval_micros); }
@@ -403,6 +596,14 @@ SurfaceSyncTracker::~SurfaceSyncTracker() = default;
 
 void SurfaceSyncTracker::SetVsyncInterval(int64_t micros) {
   hold_budget_ = micros <= 0 ? kMaxHoldMicros : std::min(kMaxHoldMicros, std::max(kMinHoldMicros, micros));
+}
+
+void SurfaceSyncTracker::SetDeviceScale(double device_scale) {
+  const double scale = SanitizeDeviceScale(device_scale);
+  if (scale == device_scale_) return;
+  device_scale_ = scale;
+  shell_.has_rect = false;
+  for (Surface& child : children_) child.has_rect = false;
 }
 
 void SurfaceSyncTracker::Begin() {
@@ -432,13 +633,27 @@ const SurfaceSyncTracker::Surface* SurfaceSyncTracker::Find(uint64_t child_id) c
 }
 
 bool SurfaceSyncTracker::Caught(const Surface& surface) {
-  return surface.submitted.surface_generation >= surface.expected.surface_generation;
+  return surface.expected.surface_generation != 0 &&
+         surface.submitted.surface_generation == surface.expected.surface_generation;
+}
+
+bool SurfaceSyncTracker::ShellCaught() const {
+  return Caught(shell_) && shell_.submitted.frame_sequence == frame_sequence_;
+}
+
+bool SurfaceSyncTracker::ClockWentBack(int64_t now_micros) {
+  const bool back = has_clock_ && now_micros < last_now_micros_;
+  has_clock_ = true;
+  last_now_micros_ = now_micros;
+  if (back) ++counts_.clock_jumps;
+  return back;
 }
 
 std::optional<std::vector<SurfaceId>> SurfaceSyncTracker::ExpectLayout(uint64_t frame_sequence, const Rect& shell,
                                                                        const std::vector<ChildGeometry>& children,
                                                                        int64_t now_micros) {
-  if (!active_ || frame_sequence <= frame_sequence_ || children.size() > kMaxSurfaces || !ValidRect(shell)) {
+  if (!active_ || frame_sequence <= frame_sequence_ || children.size() > kMaxSurfaces || !ValidRect(shell) ||
+      last_generation_ > std::numeric_limits<uint64_t>::max() - (children.size() + 1)) {
     return std::nullopt;
   }
   for (size_t i = 0; i < children.size(); ++i) {
@@ -450,13 +665,13 @@ std::optional<std::vector<SurfaceId>> SurfaceSyncTracker::ExpectLayout(uint64_t 
   if (children_.size() + children.size() > kMaxSurfaces * 2) {
     std::erase_if(children_, [](const Surface& child) { return !child.participating; });
   }
+  const bool clock_went_back = ClockWentBack(now_micros);
   frame_sequence_ = frame_sequence;
   if (!shell_.has_rect || !(shell_.rect == shell)) {
     shell_.rect = shell;
     shell_.has_rect = true;
-    ++shell_.expected.surface_generation;
+    shell_.expected = {frame_sequence, ++last_generation_};
   }
-  shell_.expected.frame_sequence = frame_sequence;
   shell_.participating = true;
   for (Surface& child : children_) child.participating = false;
   std::vector<SurfaceId> out;
@@ -471,43 +686,55 @@ std::optional<std::vector<SurfaceId>> SurfaceSyncTracker::ExpectLayout(uint64_t 
     if (!child->has_rect || !(child->rect == geometry.rect)) {
       child->rect = geometry.rect;
       child->has_rect = true;
-      ++child->expected.surface_generation;
-      child->expected.frame_sequence = frame_sequence;
+      child->expected = {frame_sequence, ++last_generation_};
     }
     child->participating = true;
     out.push_back(child->expected);
   }
   if (!pending_) {
     pending_ = true;
-    started_micros_ = now_micros;
+    deadline_micros_ = SaturatingAdd(now_micros, hold_budget_);
+  } else if (clock_went_back) {
+    deadline_micros_ = std::min(deadline_micros_, now_micros);
   }
   ++counts_.layouts;
   return out;
 }
 
-bool SurfaceSyncTracker::ShellSubmitted(SurfaceId id) {
-  if (id.frame_sequence > frame_sequence_ || id.surface_generation > shell_.expected.surface_generation) return false;
-  if (id.frame_sequence < shell_.submitted.frame_sequence ||
-      id.surface_generation < shell_.submitted.surface_generation) {
+bool SurfaceSyncTracker::Accept(Surface& surface, SurfaceId id) {
+  if (surface.expected.surface_generation == 0 || id.frame_sequence > frame_sequence_ ||
+      id.surface_generation > surface.expected.surface_generation) {
+    ++counts_.rejected_submissions;
+    return false;
+  }
+  if (id.surface_generation < surface.expected.surface_generation) {
     ++counts_.stale_submissions;
     return false;
   }
-  shell_.submitted = id;
+  if (id.frame_sequence < surface.expected.frame_sequence) {
+    ++counts_.rejected_submissions;
+    return false;
+  }
+  if (surface.submitted.surface_generation == id.surface_generation &&
+      id.frame_sequence <= surface.submitted.frame_sequence) {
+    ++counts_.stale_submissions;
+    return false;
+  }
+  surface.submitted = id;
   return true;
 }
 
+bool SurfaceSyncTracker::ShellSubmitted(SurfaceId id) { return Accept(shell_, id); }
+
 bool SurfaceSyncTracker::ChildSubmitted(uint64_t child_id, SurfaceId id) {
   Surface* child = Find(child_id);
-  if (!child || id.surface_generation > child->expected.surface_generation) return false;
-  if (id.surface_generation < child->submitted.surface_generation) {
-    ++counts_.stale_submissions;
+  if (!child) {
+    ++counts_.rejected_submissions;
     return false;
   }
-  child->submitted = id;
-  if (Caught(*child)) {
-    child->misses = 0;
-    child->stalled = false;
-  }
+  if (!Accept(*child, id)) return false;
+  child->misses = 0;
+  child->stalled = false;
   return true;
 }
 
@@ -518,9 +745,13 @@ bool SurfaceSyncTracker::RemoveChild(uint64_t child_id) {
 PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
   PresentDecision decision;
   decision.frame_sequence = frame_sequence_;
-  if (!active_ || !pending_) return decision;
-  const bool shell_caught = shell_.submitted.frame_sequence >= frame_sequence_ && Caught(shell_);
-  size_t waiting = shell_caught ? 0 : 1;
+  if (!active_ || !pending_) {
+    has_clock_ = true;
+    last_now_micros_ = now_micros;
+    return decision;
+  }
+  const bool clock_went_back = ClockWentBack(now_micros);
+  size_t waiting = ShellCaught() ? 0 : 1;
   for (const Surface& child : children_) {
     if (child.participating && !child.stalled && !Caught(child)) ++waiting;
   }
@@ -533,17 +764,16 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
     decision.reason = PresentReason::kMatched;
     return decision;
   }
-  const uint64_t elapsed = now_micros > started_micros_
-                               ? static_cast<uint64_t>(now_micros) - static_cast<uint64_t>(started_micros_)
-                               : 0;
-  if (elapsed >= static_cast<uint64_t>(hold_budget_)) {
+  if (clock_went_back || now_micros >= deadline_micros_) {
     pending_ = false;
     ++counts_.deadline_fallbacks;
-    for (Surface& child : children_) {
-      if (!child.participating || child.stalled || Caught(child)) continue;
-      if (++child.misses >= kMissesBeforeStalled) {
-        child.stalled = true;
-        ++counts_.stalls;
+    if (!clock_went_back) {
+      for (Surface& child : children_) {
+        if (!child.participating || child.stalled || Caught(child)) continue;
+        if (++child.misses >= kMissesBeforeStalled) {
+          child.stalled = true;
+          ++counts_.stalls;
+        }
       }
     }
     decision.reason = PresentReason::kDeadline;
@@ -553,9 +783,7 @@ PresentDecision SurfaceSyncTracker::Decide(int64_t now_micros) {
   decision.reason = PresentReason::kHolding;
   decision.present = false;
   decision.waiting_on = waiting;
-  decision.deadline_micros = started_micros_ > std::numeric_limits<int64_t>::max() - hold_budget_
-                                ? std::numeric_limits<int64_t>::max()
-                                : started_micros_ + hold_budget_;
+  decision.deadline_micros = deadline_micros_;
   return decision;
 }
 

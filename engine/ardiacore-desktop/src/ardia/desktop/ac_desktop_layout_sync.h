@@ -1,6 +1,7 @@
 #ifndef ARDIA_DESKTOP_AC_DESKTOP_LAYOUT_SYNC_H_
 #define ARDIA_DESKTOP_AC_DESKTOP_LAYOUT_SYNC_H_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -53,6 +54,22 @@ struct Insets {
 enum class SidebarSide { kLeft, kRight };
 enum class SplitOrientation { kHorizontal, kVertical };
 enum class DragKind { kNone, kSidebar, kSplit };
+enum class DividerKind { kRoot, kStack };
+
+struct DividerRef {
+  DividerKind kind = DividerKind::kRoot;
+  size_t index = 0;
+
+  friend constexpr bool operator==(const DividerRef&, const DividerRef&) = default;
+};
+
+struct SplitSlot {
+  double size = 1;
+  bool stacked = false;
+  std::array<double, 2> stack_sizes{0.5, 0.5};
+
+  friend constexpr bool operator==(const SplitSlot&, const SplitSlot&) = default;
+};
 
 struct WindowFrame {
   double width = 0;
@@ -76,8 +93,9 @@ struct LayoutInput {
   double collapse_below = 0;
   Insets card_insets;
   SplitOrientation orientation = SplitOrientation::kHorizontal;
-  std::vector<double> split_sizes;
+  std::vector<SplitSlot> split_slots;
   double split_gap = 0;
+  DividerRef ratio_divider;
 };
 
 struct CssVarSnapshot {
@@ -86,6 +104,20 @@ struct CssVarSnapshot {
   uint64_t sequence = 0;
 
   friend constexpr bool operator==(const CssVarSnapshot&, const CssVarSnapshot&) = default;
+};
+
+struct PaneLayout {
+  size_t slot = 0;
+  size_t stack_index = 0;
+  Rect rect;
+  PixelRect pixels;
+};
+
+struct DividerLayout {
+  DividerRef ref;
+  bool vertical = false;
+  Rect rect;
+  PixelRect pixels;
 };
 
 struct LayoutSnapshot {
@@ -101,11 +133,14 @@ struct LayoutSnapshot {
   double sidebar_width = 0;
   bool sidebar_collapsed = false;
   Rect sidebar;
+  PixelRect sidebar_pixels;
   Rect content;
-  std::vector<Rect> panes;
-  std::vector<Rect> dividers;
-  std::vector<double> split_sizes;
-  std::optional<size_t> active_divider;
+  PixelRect content_pixels;
+  std::vector<PaneLayout> panes;
+  std::vector<DividerLayout> dividers;
+  std::vector<SplitSlot> split_slots;
+  std::optional<DividerRef> active_divider;
+  std::optional<double> settle_target;
   double split_ratio = 0;
   CssVarSnapshot css;
 };
@@ -119,11 +154,17 @@ double KeptSidebarWidth(double dragged, double limit, double saved);
 double SanitizeDeviceScale(double scale);
 double SnapToDevice(double dip, double device_scale);
 PixelRect ToPixels(const Rect& rect, double device_scale);
+bool HasDivider(size_t count, size_t index);
+bool HasDivider(const std::vector<SplitSlot>& slots, DividerRef ref);
 std::vector<double> NormalizedSizes(const std::vector<double>& sizes);
+std::vector<SplitSlot> NormalizedSlots(const std::vector<SplitSlot>& slots);
 std::vector<double> ResizePair(const std::vector<double>& sizes, size_t index, double delta, double total, double gap);
 std::vector<double> EvenPair(const std::vector<double>& sizes, size_t index);
+std::vector<SplitSlot> ResizeSlots(const std::vector<SplitSlot>& slots, DividerRef ref, double delta, double total,
+                                   double gap);
+std::vector<SplitSlot> EvenSlots(const std::vector<SplitSlot>& slots, DividerRef ref);
 std::optional<LayoutSnapshot> ComputeLayout(const LayoutInput& input, uint64_t sequence,
-                                            std::optional<size_t> active_divider = std::nullopt);
+                                            std::optional<DividerRef> active_divider = std::nullopt);
 
 class LayoutDragSession {
  public:
@@ -135,44 +176,54 @@ class LayoutDragSession {
     bool collapsed = false;
   };
 
-  explicit LayoutDragSession(LayoutInput input);
+  explicit LayoutDragSession(LayoutInput input, uint64_t first_sequence = 0);
   LayoutDragSession(const LayoutDragSession&) = delete;
   LayoutDragSession& operator=(const LayoutDragSession&) = delete;
   ~LayoutDragSession();
 
   const LayoutSnapshot& Snapshot() const { return snapshot_; }
   const LayoutInput& Input() const { return input_; }
-  DragKind Active() const { return kind_; }
+  DragKind Active() const { return drag_.kind; }
   uint64_t Sequence() const { return sequence_; }
+  std::optional<double> SettleTarget() const { return drag_.settle_target; }
 
   bool BeginSidebar(double pointer_x, double pointer_from_edge = 0);
-  bool BeginSplit(size_t divider, double pointer);
+  bool BeginSplit(DividerRef divider, double pointer);
   bool Move(double pointer);
   bool ResizeWindow(double width, double height);
   bool SetDeviceScale(double device_scale);
   std::optional<Release> End(double pointer);
+  std::optional<Release> Terminate();
   bool Settle(double width);
+  std::optional<Release> FinishSettle();
   bool Cancel();
-  bool ResetSplitPair(size_t divider);
+  bool ResetSplitPair(DividerRef divider);
 
  private:
-  double SidebarMax() const;
-  double SplitAxisTotal() const;
-  bool Publish();
+  struct Drag {
+    DragKind kind = DragKind::kNone;
+    double origin = 0;
+    double last_pointer = 0;
+    double rest = 0;
+    double grabbed = 0;
+    bool dragged = false;
+    std::optional<double> settle_target;
+    DividerRef divider;
+  };
+
+  bool Apply(const LayoutInput& next, const Drag& drag);
+  bool Reapply(LayoutInput next);
+  std::optional<Release> FinishSidebar(double raw, bool spring);
+  std::optional<Release> FinishSplit();
+  double SidebarWidthAt(const Drag& drag, double pointer, double max, bool* dragged) const;
+  std::optional<std::vector<SplitSlot>> SlotsAt(const LayoutInput& next, const Drag& drag, double pointer) const;
 
   LayoutInput input_;
   LayoutInput before_drag_;
   LayoutSnapshot snapshot_;
-  DragKind kind_ = DragKind::kNone;
   uint64_t sequence_ = 0;
-  double origin_ = 0;
-  double last_pointer_ = 0;
-  double rest_ = 0;
-  double grabbed_ = 0;
-  std::optional<double> settle_target_;
-  bool dragged_ = false;
-  size_t divider_ = 0;
-  std::vector<double> split_start_;
+  Drag drag_;
+  std::vector<SplitSlot> split_start_;
 };
 
 struct SurfaceId {
@@ -196,8 +247,10 @@ struct SyncCounts {
   uint64_t layouts = 0;
   uint64_t matched = 0;
   uint64_t deadline_fallbacks = 0;
+  uint64_t clock_jumps = 0;
   uint64_t stalls = 0;
   uint64_t stale_submissions = 0;
+  uint64_t rejected_submissions = 0;
 };
 
 struct ChildGeometry {
@@ -213,6 +266,7 @@ class SurfaceSyncTracker {
   ~SurfaceSyncTracker();
 
   void SetVsyncInterval(int64_t micros);
+  void SetDeviceScale(double device_scale);
   int64_t HoldBudget() const { return hold_budget_; }
   bool Active() const { return active_; }
   const SyncCounts& Counts() const { return counts_; }
@@ -225,6 +279,7 @@ class SurfaceSyncTracker {
   bool ChildSubmitted(uint64_t child_id, SurfaceId id);
   bool RemoveChild(uint64_t child_id);
   PresentDecision Decide(int64_t now_micros);
+  SurfaceId ExpectedShell() const { return {frame_sequence_, shell_.expected.surface_generation}; }
   std::optional<SurfaceId> Expected(uint64_t child_id) const;
   bool IsStalled(uint64_t child_id) const;
 
@@ -242,13 +297,20 @@ class SurfaceSyncTracker {
 
   Surface* Find(uint64_t child_id);
   const Surface* Find(uint64_t child_id) const;
+  bool Accept(Surface& surface, SurfaceId id);
+  bool ShellCaught() const;
   static bool Caught(const Surface& surface);
+  bool ClockWentBack(int64_t now_micros);
 
   bool active_ = false;
   int64_t hold_budget_ = kMaxHoldMicros;
+  double device_scale_ = 1;
   uint64_t frame_sequence_ = 0;
+  uint64_t last_generation_ = 0;
   bool pending_ = false;
-  int64_t started_micros_ = 0;
+  int64_t deadline_micros_ = 0;
+  bool has_clock_ = false;
+  int64_t last_now_micros_ = 0;
   Surface shell_;
   std::vector<Surface> children_;
   SyncCounts counts_;
