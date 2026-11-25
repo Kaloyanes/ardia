@@ -3,7 +3,7 @@ import type { PageEngine } from "../../platform/tabs";
 import { dismissPermissions } from "../site/permissions";
 import { answerExternalApp } from "../site/prompts";
 import { setPageSelection } from "../site/selection";
-import { clearEngineOffer } from "../engines/actions";
+import { clearEngineOffer, notePageEnded } from "../engines/actions";
 import { followSiteChoice } from "../engines/siteMoves";
 import { madeByPage, notePageMadeTab } from "../engines/openedPages";
 import { revealToolbar } from "../windows/toolbarAutoHide";
@@ -36,6 +36,7 @@ export function arrivedOnFirstPage(tabId: string, url: string, engine: PageEngin
 }
 
 export function pageEnded(tabId: string) {
+  notePageEnded(tabId);
   forgetRendererHang(tabId);
   if (useMedia.getState().sessions[tabId]) {
     noteMediaCardCleared();

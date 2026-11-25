@@ -18,7 +18,7 @@ const model = await import("../browser/model.ts");
 const { webviews } = await import("../../platform/webviews.ts");
 const { patchPage, pageOf } = await import("../tabs/pageState.ts");
 const { followSiteChoice, offerWebKit } = await import("./siteMoves.ts");
-const { goBackAcrossEngines, noteWebKitPage, openPageIn, setEngineMode, useEngineModeSwitch, useEngineOffers } = await import("./actions.ts");
+const { goBackAcrossEngines, notePageCommit, notePageEnded, noteWebKitPage, openPageIn, setEngineMode, useEngineModeSwitch, useEngineOffers } = await import("./actions.ts");
 const { takeStreamingSiteCounts } = await import("../telemetry/streamingSiteCounts.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
 const { tabEngine } = await import("./engines.ts");
@@ -990,5 +990,152 @@ test("S10: a queued move whose page has moved to another site is dropped when th
   assert.equal(tabEngine(S(), tabId), "chromium");
   assert.equal(pageOf(tabId).engineBack ?? null, null);
   S().updateSettings({ engineSwitchCarriesSiteData: true, websiteEngines: {} });
+  webviews.clear();
+});
+
+test("S11: a native reload at the same URL invalidates Open in WebKit, while same-document updates do not", async () => {
+  const tabId = streamingTab("https://www.primevideo.com/detail/1", unsavedWork(true));
+  notePageCommit(tabId, 1000);
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    notePageCommit(tabId, 1000);
+    notePageCommit(tabId, 2000);
+    engineCalls.length = 0;
+    answerDialog({ confirmed: true, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium");
+    assert.deepEqual(engineCalls.filter(carryCall), []);
+    assert.equal(useRetiringPages.getState()[tabId], undefined);
+
+    answerDialog = undefined;
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    notePageCommit(tabId, 2000);
+    answerDialog({ confirmed: true, suppressed: false });
+    assert.ok(await waitFor(() => tabEngine(S(), tabId) === "webkit"));
+    dropSwap(tabId);
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S11: a native reload at the same URL invalidates Stay on Page so the site is not declined", async () => {
+  const tabId = streamingTab("https://tv.apple.com/show/1", unsavedWork(true));
+  notePageCommit(tabId, 1000);
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    notePageCommit(tabId, 2000);
+    answerDialog({ confirmed: false, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+  }
+  const later = liveTab("https://tv.apple.com/show/2", "chromium");
+  offerWebKit(later, { keySystem: "com.widevine.alpha", main: true });
+  assert.ok(await waitFor(() => tabEngine(S(), later) === "webkit"), "tv.apple.com is not declined by a stale Stay on Page");
+  dropSwap(later);
+  webviews.clear();
+});
+
+test("S11: an ended document invalidates an open unsaved-work prompt at the same URL", async () => {
+  const tabId = streamingTab("https://music.apple.com/album/1", unsavedWork(true));
+  notePageCommit(tabId, 1000);
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    notePageEnded(tabId);
+    answerDialog({ confirmed: true, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S11: TabWebView reports every live document commit to notePageCommit", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../../components/window/TabWebView.tsx", import.meta.url), "utf8");
+  const handler = source.slice(source.indexOf("onNavigationChange={("));
+  assert.match(handler, /if \(!retired\) notePageCommit\(tabId, committedAt\);/);
+});
+
+test("S12: text typed during the 10 s cooldown triggers the unsaved-work prompt instead of switching unconditionally", async (t) => {
+  const { tabId, flush } = await queuedDisneyFromHulu(t, 5_000_000);
+  webviews.set(tabId, { evaluate: unsavedWork(true), pageCookies: () => Promise.resolve([]) });
+  const asked = [];
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = (options) => {
+    asked.push(options);
+    return new Promise((resolve) => (answerDialog = resolve));
+  };
+  try {
+    t.mock.timers.tick(10_000);
+    await flush();
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].title, "Open this page in WebKit?");
+    assert.equal(tabEngine(S(), tabId), "chromium");
+    answerDialog({ confirmed: false, suppressed: false });
+    await flush();
+    assert.equal(tabEngine(S(), tabId), "chromium", "Stay on Page keeps the text entered during cooldown");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    S().updateSettings({ engineSwitchCarriesSiteData: true, websiteEngines: {} });
+    webviews.clear();
+  }
+});
+
+test("S12: confirming a delayed site move's unsaved-work prompt lands the move, and disabling the setting skips the prompt", async (t) => {
+  const { tabId, flush } = await queuedDisneyFromHulu(t, 6_000_000);
+  webviews.set(tabId, { evaluate: unsavedWork(true), pageCookies: () => Promise.resolve([]) });
+  const asked = [];
+  shellNativeModules.ArdiaDialogs.confirm = (options) => (asked.push(options), Promise.resolve({ confirmed: true, suppressed: false }));
+  try {
+    t.mock.timers.tick(10_000);
+    await flush();
+    assert.equal(asked.length, 1);
+    assert.equal(tabEngine(S(), tabId), "webkit");
+    assert.deepEqual(pageOf(tabId).engineBack, { engine: "chromium", url: "https://www.hulu.com/" });
+    dropSwap(tabId);
+
+    S().updateSettings({ engineSwitchAsksAboutUnsavedWork: false });
+    S().updateTab(tabId, { url: "https://www.hulu.com/" });
+    followSiteChoice(tabId, "webkit", "https://www.hulu.com/", "https://www.disneyplus.com/");
+    await flush();
+    assert.equal(tabEngine(S(), tabId), "webkit");
+    t.mock.timers.tick(10_000);
+    await flush();
+    assert.equal(asked.length, 1, "with the setting off, the delayed move does not ask");
+    assert.equal(tabEngine(S(), tabId), "chromium");
+    dropSwap(tabId);
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    S().updateSettings({ engineSwitchAsksAboutUnsavedWork: true, engineSwitchCarriesSiteData: true, websiteEngines: {} });
+    webviews.clear();
+  }
+});
+
+test("openPageIn refuses to commit WebKit after a same-host redirect to the Web Store even with a permissive routedHere", async () => {
+  const { w } = streamingWindow("https://chrome.google.com/", { websiteEngines: { "https://chrome.google.com": "webkit" } });
+  const tabId = model.activeTabId(S(), w);
+  const held = heldAnswer();
+  webviews.set(tabId, { evaluate: held.answer, pageCookies: () => Promise.resolve([]) });
+  const moving = openPageIn(tabId, "webkit", { checkWork: false, routedHere: () => true });
+  await settle();
+  S().updateTab(tabId, { url: "https://chrome.google.com/webstore/detail/abc" });
+  held.release(null);
+  assert.equal(await moving, false);
+  assert.notEqual(S().tabs[tabId].engine, "webkit");
+  dropSwap(tabId);
   webviews.clear();
 });

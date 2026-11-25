@@ -48,7 +48,25 @@ const store = () => useBrowser.getState();
 const declinedSites = new Set<string>();
 const toldInChromiumMode = new Set<string>();
 const webKitSites = new Map<string, string>();
+const committedDocuments = new Map<string, { id: number; at: number }>();
+let nextDocument = 0;
 const hostLabel = (site: string) => new URL(site).hostname.replace(/^www\./, "");
+
+export function notePageCommit(tabId: string, committedAt: number | undefined) {
+  if (typeof committedAt !== "number" || !(committedAt > 0)) return;
+  watchClosedTabs();
+  const last = committedDocuments.get(tabId);
+  if (last && committedAt <= last.at) return;
+  committedDocuments.set(tabId, { id: ++nextDocument, at: committedAt });
+}
+
+export function notePageEnded(tabId: string) {
+  watchClosedTabs();
+  const last = committedDocuments.get(tabId);
+  committedDocuments.set(tabId, { id: ++nextDocument, at: last?.at ?? 0 });
+}
+
+export const pageDocumentOf = (tabId: string) => committedDocuments.get(tabId)?.id ?? 0;
 
 export const useEngineModeSwitch = create<{ pending: EngineMode | null }>()(() => ({ pending: null }));
 
@@ -121,11 +139,16 @@ export async function goBackAcrossEngines(tabId: string, mayAct: () => boolean =
   }
   const from = pageUrl(t);
   const holds = modeStillHolds();
-  const leaving = (await mayLeavePage(t, "Go back to the previous page?", `It opens in ${ENGINE_NAMES[back.engine]}, so changes you made on this page may not be saved.`, "Go Back", ask)) === "leave";
-  const now = store().tabs[tabId];
-  if (!leaving || !holds() || !now || pageUrl(now) !== from || pageOf(tabId).engineBack !== back || !mayAct()) return false;
-  const held = await holdPageForSwap(tabId, tabEngine(store(), tabId), back.engine, back.url, false, holds);
-  if (!holds() || pageUrl(store().tabs[tabId]) !== from || pageOf(tabId).engineBack !== back || !mayAct()) {
+  const navigation = navigationOf(t)?.seq ?? null;
+  const document = pageDocumentOf(tabId);
+  const stillHere = () => {
+    const now = store().tabs[tabId];
+    return holds() && !!now && pageUrl(now) === from && (navigationOf(now)?.seq ?? null) === navigation && pageDocumentOf(tabId) === document && pageOf(tabId).engineBack === back;
+  };
+  const leaving = (await mayLeavePage(t, "Go back to the previous page?", `It opens in ${ENGINE_NAMES[back.engine]}, so changes you made on this page may not be saved.`, "Go Back", ask, stillHere)) === "leave";
+  if (!leaving || !stillHere() || !mayAct()) return false;
+  const held = await holdPageForSwap(tabId, tabEngine(store(), tabId), back.engine, back.url, false, stillHere);
+  if (!stillHere() || !mayAct()) {
     dropSwap(tabId, held);
     return false;
   }
@@ -166,10 +189,13 @@ async function movePage(tabId: string, engine: PageEngine, options: MoveOptions)
   const holds = modeStillHolds();
   const checksWork = options.checkWork !== false;
   const navigation = navigationOf(t)?.seq ?? null;
+  const document = pageDocumentOf(tabId);
   const stillWanted = () => {
     const now = store().tabs[tabId];
     if (!holds() || !now || (navigationOf(now)?.seq ?? null) !== navigation) return false;
+    if (checksWork && pageDocumentOf(tabId) !== document) return false;
     const at = pageUrl(now);
+    if (engine === "webkit" && !canSwitchEngine(at)) return false;
     if (options.routedHere && !options.routedHere(at)) return false;
     return checksWork || !options.routedHere ? at === url : siteOf(at) === siteOf(url);
   };
@@ -332,6 +358,7 @@ function watchClosedTabs() {
       visits.close(id);
     }
     for (const id of webKitSites.keys()) if (!s.tabs[id] || tabEngine(s, id) !== "webkit") webKitSites.delete(id);
+    for (const id of committedDocuments.keys()) if (!s.tabs[id]) committedDocuments.delete(id);
   });
 }
 

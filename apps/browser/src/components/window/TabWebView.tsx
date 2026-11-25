@@ -16,7 +16,7 @@ import { opaqueCard } from "../ui/opaqueCard";
 import { handOff, takeHandOff, wantsPage } from "../../state/tabs/tabPages";
 import { noteDiscarded, noteGone, noteReady } from "../../state/tabs/tabLifecycle";
 import { noteTabHidden, presentTab, trackPageArrival } from "../../state/tabs/busyTabWatch";
-import { noteWebKitPage, persistEngine, refusedVideoSiteOf } from "../../state/engines/actions";
+import { notePageCommit, noteWebKitPage, persistEngine, refusedVideoSiteOf } from "../../state/engines/actions";
 import { offerWebKit } from "../../state/engines/siteMoves";
 import { heldBySwap, watchFirstPaint } from "../../state/engines/engineSwap";
 import { useRetiringEngine } from "../../state/engines/hooks";
@@ -224,6 +224,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         noteCommit(tabId, committedUrl, committedAt, httpStatus);
         notePluginStateCommit(tabId, committedUrl, committedAt);
         verificationCodeDocument(tabId, committedAt);
+        if (!retired) notePageCommit(tabId, committedAt);
         notePageDocument(tabId, reported, committedUrl, committedAt, isIncognitoProfile(profileId), documentReporter);
         if (reopening.current && reported && !isBlankAddress(reported)) {
           reopening.current = false;

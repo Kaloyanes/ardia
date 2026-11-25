@@ -11,7 +11,7 @@ import { consentToken, type ConsentToken } from "../telemetry/client";
 const store = () => useBrowser.getState();
 const SITE_MOVE_SPACING_MS = 10_000;
 
-type Move = { from: PageEngine; to: PageEngine; url: string; navigation: number | null; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string } };
+type Move = { from: PageEngine; to: PageEngine; url: string; navigation: number | null; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string }; delayed?: boolean };
 type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null; cooling: ReturnType<typeof setTimeout> | null };
 
 const tabMoves = new Map<string, TabMoves>();
@@ -34,7 +34,7 @@ function movesOf(tabId: string): TabMoves {
 function queue(moves: TabMoves, move: Move) {
   const kept = moves.pending;
   if (move.forVideo && kept && !kept.forVideo && kept.to === move.to) return;
-  moves.pending = move;
+  moves.pending = { ...move, delayed: true };
 }
 
 const declinedVideo = (move: Move) => !!move.forVideo && siteDeclined(move.forVideo.site);
@@ -100,7 +100,7 @@ async function runMove(tabId: string, moves: TabMoves, move: Move) {
           dropVideoMovesFor(tabId, video.site);
         },
       }
-    : { checkWork: false, routedHere: routedTo(tabId, move.to) };
+    : { checkWork: !!move.delayed, routedHere: routedTo(tabId, move.to) };
   let moved = false;
   try {
     moved = await openPageIn(tabId, move.to, options);
