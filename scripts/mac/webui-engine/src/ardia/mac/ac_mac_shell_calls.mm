@@ -173,6 +173,15 @@ MergedSession MergeAndWriteSession(base::DictValue base, base::DictValue local) 
   if (std::optional<base::DictValue> previous = ReadSessionFile()) {
     result.previous = std::move(*previous);
   }
+  if (shell_policy::SetsAsideSessionOnDisk(result.previous.empty(),
+                                          ardia::ValidLinuxSession(result.previous))) {
+    const base::FilePath session = DataDirectory().Append("session.json");
+    if (!base::CopyFile(session, DataDirectory().Append(
+                                     std::string(shell_policy::kOversizedSessionBackup)))) {
+      return result;
+    }
+    result.previous = base::DictValue();
+  }
   std::optional<base::DictValue> merged =
       ardia::MergeLinuxSession(base, local, result.previous);
   if (!merged || !WriteSessionFile(*merged)) {
@@ -382,7 +391,7 @@ void ShellHostView::Invoke(const std::string& method,
     if (!values || values->size() != 1 || !(*values)[0].is_bool()) {
       return std::move(done).Run(false, base::Value("A recording flag is required"));
     }
-    shortcut_recording_ = (*values)[0].GetBool();
+    SetShortcutRecording((*values)[0].GetBool());
     return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.readDocument") {

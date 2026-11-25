@@ -529,7 +529,7 @@ class ContractTests(unittest.TestCase):
         self.assertLess(ack.index('close_.Seal(*identity, renderer_generation_)'), ack.index('SessionFiles()->PostTaskAndReplyWithResult('))
         self.assertLess(ack.index('SessionFiles()->PostTaskAndReplyWithResult('), ack.index('&ShellHostView::FinishClose'))
         finish = host.split('void ShellHostView::FinishClose() {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('shell_policy::CloseActionFor(true, is_utility(), browser_windows)', finish)
+        self.assertIn('shell_policy::FinalCloseFor(is_utility(), ends_session_, staying)', finish)
         desktop = (REPO / 'apps/desktop/src/shims/shell.tsx').read_text()
         self.assertIn('hostModuleMethod("ArdiaShell", "requestWindowClose")', desktop)
         self.assertIn('envelope?.name === "shell.closeRequested"', desktop)
@@ -560,7 +560,7 @@ class ContractTests(unittest.TestCase):
         pressed = host.split('bool ShellHostView::AcceleratorPressed(', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(pressed.index('if (!CanHandleAccelerators()) {'), pressed.index('shortcuts_.find(accelerator)'))
         self.assertIn('shell_policy::AcceleratorsLive(browser_ != nullptr, handler_ != nullptr,', host)
-        self.assertIn('shortcut_recording_ = (*values)[0].GetBool();', self.read('ac_mac_shell_calls.mm'))
+        self.assertIn('SetShortcutRecording((*values)[0].GetBool());', self.read('ac_mac_shell_calls.mm'))
         retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('shortcut_recording_ = false;', retire)
 
@@ -576,8 +576,65 @@ class ContractTests(unittest.TestCase):
         assemble = (ROOT / 'assemble.sh').read_text()
         self.assertIn('<key>CFBundleIconFile</key><string>AppIcon</string>', assemble)
         self.assertIn('iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"', assemble)
-        self.assertIn('apps/browser/assets/app-icon.png', assemble)
-        self.assertTrue((REPO / 'apps/browser/assets/app-icon.png').is_file())
+        self.assertIn("trap 'rm -rf \"$scratch\"' EXIT", assemble)
+        self.assertLess(assemble.index('trap '), assemble.index('iconutil -c icns'))
+        icons = REPO / 'apps/browser/macos/Ardia-macOS/Assets.xcassets/AppIcon.appiconset'
+        self.assertIn('apps/browser/macos/Ardia-macOS/Assets.xcassets/AppIcon.appiconset', assemble)
+        for size in (16, 32, 128, 256, 512):
+            for scale in (1, 2):
+                self.assertTrue((icons / f'icon_{size}x{size}_{scale}x.png').is_file(), f'{size}@{scale}x')
+
+    def test_the_red_close_button_asks_the_shell_first(self):
+        window = self.read('ac_mac_window.mm')
+        route = window.split('void RouteCloseButton(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('button.action = @selector(closePressed:);', route)
+        self.assertIn('objc_setAssociatedObject(ns_window, kCloseTargetKey, target', route)
+        lights = window.split('void SetTrafficLights(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('close_button.action = @selector(closePressed:);', lights)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('host->CloseFromNativeButton();', host)
+        native = host.split('void ShellHostView::CloseFromNativeButton() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(native.index('RequestWindowClose()'), native.index('FinishClose();'))
+        self.assertIn('browser_->RegisterBrowserCloseCancelled(', host)
+        cancelled = host.split('void ShellHostView::CloseCancelled(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('close_.Unseal()', cancelled)
+        self.assertIn('EmitCloseCancelled(*identity);', cancelled)
+        self.assertIn('.Set("name", "shell.closeCancelled")', host)
+
+    def test_departures_that_fail_keep_the_window_and_the_last_window_alone_quits(self):
+        host = self.read('ac_mac_shell_host.mm')
+        ack = host.split('void ShellHostView::AcknowledgeWindowClose(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(ack.index('host->close_.Reopen(identity, host->renderer_generation_);'), ack.index('"ERR_WINDOW_DEPARTURE"'))
+        self.assertLess(ack.index('"ERR_WINDOW_DEPARTURE"'), ack.index('&ShellHostView::FinishClose'))
+        drain = host.split('void ShellHostView::BeginWindowCloseDrain(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ends_session_ = EndsSession();', drain)
+        ends = host.split('bool ShellHostView::EndsSession() const {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('!host->LeavingSession()', ends)
+        finish = host.split('void ShellHostView::FinishClose() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::FinalCloseFor(is_utility(), ends_session_, staying)', finish)
+        calls = self.read('ac_mac_shell_calls.mm')
+        merge = calls.split('MergedSession MergeAndWriteSession(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(merge.index('shell_policy::SetsAsideSessionOnDisk('), merge.index('ardia::MergeLinuxSession('))
+        self.assertLess(merge.index('base::CopyFile('), merge.index('result.previous = base::DictValue();'))
+
+    def test_recording_hands_key_equivalents_to_the_shell(self):
+        host = self.read('ac_mac_shell_host.mm')
+        record = host.split('void ShellHostView::SetShortcutRecording(bool recording) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown', record)
+        self.assertIn('shell_policy::RecordingRouteFor(', record)
+        self.assertIn('return nil;', record)
+        self.assertIn('ForwardKeyboardEvent(event)', host)
+        keys = host.split('bool ShellHostView::HandleKeyboardEvent(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(keys.index('shortcut_recording_ && source == shell_contents()'), keys.index('unhandled_keys_'))
+        self.assertIn('SetShortcutRecording((*values)[0].GetBool());', self.read('ac_mac_shell_calls.mm'))
+
+    def test_shell_dialogs_fall_back_until_the_host_serves_them(self):
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('javascript_dialogs::AppModalDialogManager::GetInstance()', host)
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertNotIn('ArdiaShell.beginDialog', listed)
+        self.assertIn('"//components/javascript_dialogs"', (MAC / 'BUILD.gn').read_text())
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

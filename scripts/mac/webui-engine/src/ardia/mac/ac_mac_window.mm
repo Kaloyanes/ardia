@@ -3,6 +3,9 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
@@ -19,11 +22,36 @@
 @synthesize height = _height;
 @end
 
+@interface ArdiaMacCloseButtonTarget : NSObject
+- (instancetype)initWithClose:(base::RepeatingClosure)close;
+- (void)closePressed:(id)sender;
+@end
+
+@implementation ArdiaMacCloseButtonTarget {
+  base::RepeatingClosure _close;
+}
+
+- (instancetype)initWithClose:(base::RepeatingClosure)close {
+  if ((self = [super init])) {
+    _close = std::move(close);
+  }
+  return self;
+}
+
+- (void)closePressed:(id)sender {
+  if (_close) {
+    _close.Run();
+  }
+}
+
+@end
+
 namespace ardia_mac {
 
 namespace {
 
 const void* const kMetricsKey = &kMetricsKey;
+const void* const kCloseTargetKey = &kCloseTargetKey;
 
 ArdiaMacTitlebarMetrics* MetricsOf(NSView* frame) {
   return objc_getAssociatedObject(frame.window, kMetricsKey);
@@ -118,8 +146,26 @@ void SetTrafficLights(views::Widget* widget, const window::Lights& lights) {
   for (NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
     [ns_window standardWindowButton:kind].hidden = lights.hidden;
   }
+  if (ArdiaMacCloseButtonTarget* target = objc_getAssociatedObject(ns_window, kCloseTargetKey)) {
+    NSButton* close_button = [ns_window standardWindowButton:NSWindowCloseButton];
+    close_button.target = target;
+    close_button.action = @selector(closePressed:);
+  }
   frame.needsLayout = YES;
   [frame layoutSubtreeIfNeeded];
+}
+
+void RouteCloseButton(views::Widget* widget, base::RepeatingClosure close) {
+  NSWindow* ns_window = widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
+  NSButton* button = [ns_window standardWindowButton:NSWindowCloseButton];
+  if (!button) {
+    return;
+  }
+  ArdiaMacCloseButtonTarget* target =
+      [[ArdiaMacCloseButtonTarget alloc] initWithClose:std::move(close)];
+  objc_setAssociatedObject(ns_window, kCloseTargetKey, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  button.target = target;
+  button.action = @selector(closePressed:);
 }
 
 }

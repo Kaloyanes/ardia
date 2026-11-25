@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -19,6 +20,7 @@
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -42,6 +44,7 @@ class GURL;
 class Profile;
 
 namespace content {
+class JavaScriptDialogManager;
 class WebContents;
 class WebUI;
 }
@@ -171,6 +174,10 @@ class ShellHostView : public views::View,
   void CloseWindow();
   base::DictValue RequestWindowClose();
   bool ClosingBlocksWrites() const { return close_.BlocksWrites(); }
+  bool LeavingSession() const { return close_.Leaving(); }
+  void CloseFromNativeButton();
+  void SetShortcutRecording(bool recording);
+  void ForwardRecordedKey(const input::NativeWebKeyboardEvent& event);
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* app_profile() const { return app_profile_; }
   content::WebContents* shell_contents() const;
@@ -220,6 +227,8 @@ class ShellHostView : public views::View,
   bool CanHandleAccelerators() const override;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
+  content::JavaScriptDialogManager* GetJavaScriptDialogManager(
+      content::WebContents* source) override;
 
  private:
   friend class PageBinding;
@@ -267,6 +276,8 @@ class ShellHostView : public views::View,
       std::size_t fields) const;
   bool EndsSession() const;
   void FinishClose();
+  void CloseCancelled(BrowserWindowInterface::ClosingStatus status);
+  void EmitCloseCancelled(const shell_policy::CloseIdentity& identity);
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
@@ -295,7 +306,11 @@ class ShellHostView : public views::View,
   base::DictValue utility_;
   bool utility_ready_ = false;
   bool shortcut_recording_ = false;
+  bool ends_session_ = false;
   shell_policy::CloseLedger close_;
+  base::CallbackListSubscription close_cancelled_;
+  struct RecordingKeys;
+  std::unique_ptr<RecordingKeys> recording_keys_;
   bool closing_ = false;
   bool painted_ = false;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;

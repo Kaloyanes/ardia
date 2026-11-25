@@ -39,6 +39,12 @@ inline bool SessionFits(std::size_t serialized_bytes) {
   return serialized_bytes <= kSessionLimit;
 }
 
+inline constexpr std::string_view kOversizedSessionBackup = "session-backup-oversized.json";
+
+inline bool SetsAsideSessionOnDisk(bool empty_on_disk, bool mergeable_on_disk) {
+  return !empty_on_disk && !mergeable_on_disk;
+}
+
 inline std::optional<int> ParseAdoptId(std::string_view adopt) {
   constexpr std::string_view prefix = "tab:";
   if (!adopt.starts_with(prefix) || adopt.size() == prefix.size() || adopt.size() > prefix.size() + 10) {
@@ -236,9 +242,21 @@ class CloseLedger {
     return true;
   }
 
-  void RendererRetired() {
-    if (phase_ != Phase::kSealed) phase_ = Phase::kIdle;
+  bool Reopen(const CloseIdentity& identity, std::uint64_t renderer) {
+    if (!Matches(identity, renderer) || phase_ != Phase::kSealed) return false;
+    phase_ = Phase::kDraining;
+    return true;
   }
+
+  std::optional<CloseIdentity> Unseal() {
+    if (phase_ != Phase::kSealed) return std::nullopt;
+    phase_ = Phase::kIdle;
+    return identity_;
+  }
+
+  void RendererRetired() { phase_ = Phase::kIdle; }
+
+  bool Leaving() const { return phase_ == Phase::kDraining || phase_ == Phase::kSealed; }
 
   bool BlocksWrites() const { return phase_ == Phase::kSealed; }
   Phase phase() const { return phase_; }
@@ -253,6 +271,26 @@ class CloseLedger {
   CloseIdentity identity_;
   std::uint64_t generation_ = 0;
 };
+
+inline bool EndsSessionFor(bool utility, std::size_t staying_browser_windows) {
+  return !utility && staying_browser_windows == 0;
+}
+
+enum class FinalClose { kCloseWindow, kQuit };
+
+inline FinalClose FinalCloseFor(bool utility, bool ends_session, std::size_t staying_browser_windows) {
+  return !utility && ends_session && staying_browser_windows == 0 ? FinalClose::kQuit : FinalClose::kCloseWindow;
+}
+
+inline bool CloseCancelledFor(bool denied_by_user, bool denied_by_policy, bool unload_handlers_need_time) {
+  return !unload_handlers_need_time && (denied_by_user || denied_by_policy);
+}
+
+enum class RecordingRoute { kNormal, kToShell };
+
+inline RecordingRoute RecordingRouteFor(bool recording, bool in_this_window, bool command_or_control) {
+  return recording && in_this_window && command_or_control ? RecordingRoute::kToShell : RecordingRoute::kNormal;
+}
 
 enum class CloseAction { kRefuse, kCloseWindow, kQuit };
 

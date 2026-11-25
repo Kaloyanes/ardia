@@ -16,6 +16,7 @@
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
+#include "base/apple/owned_objc.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -47,6 +48,9 @@
 #include "content/public/browser/page.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/javascript_dialogs/app_modal_dialog_manager.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -403,6 +407,15 @@ struct ShellHostView::WindowDrag {
   NSMutableArray* observers = [NSMutableArray array];
 };
 
+struct ShellHostView::RecordingKeys {
+  id monitor = nil;
+  ~RecordingKeys() {
+    if (monitor) {
+      [NSEvent removeMonitor:monitor];
+    }
+  }
+};
+
 ShellHostView::ShellHostView(BrowserWindowInterface* browser,
                              BrowserView* browser_view,
                              Profile* app_profile,
@@ -463,6 +476,22 @@ void ShellHostView::Initialize() {
           },
           GetWeakPtr()));
   browser_->GetTabStripModel()->AddObserver(this);
+  close_cancelled_ = browser_->RegisterBrowserCloseCancelled(base::BindRepeating(
+      [](base::WeakPtr<ShellHostView> host, BrowserWindowInterface*,
+         BrowserWindowInterface::ClosingStatus status) {
+        if (host) {
+          host->CloseCancelled(status);
+        }
+      },
+      GetWeakPtr()));
+  RouteCloseButton(browser_view_->GetWidget(),
+                   base::BindRepeating(
+                       [](base::WeakPtr<ShellHostView> host) {
+                         if (host) {
+                           host->CloseFromNativeButton();
+                         }
+                       },
+                       GetWeakPtr()));
   WatchWindowDrag();
   LayoutOverlay();
   shell_->LoadInitialURL(GURL(kShellUrl));
@@ -474,6 +503,8 @@ void ShellHostView::DetachBrowser() {
     return;
   }
   closing_ = true;
+  close_cancelled_ = base::CallbackListSubscription();
+  recording_keys_.reset();
   RetireRenderer();
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
@@ -847,6 +878,7 @@ void ShellHostView::RetireRenderer() {
   }
   shortcuts_.clear();
   shortcut_recording_ = false;
+  recording_keys_.reset();
   close_.RendererRetired();
 }
 
@@ -1501,12 +1533,93 @@ std::optional<shell_policy::CloseIdentity> ShellHostView::OwnCloseIdentity(
 }
 
 bool ShellHostView::EndsSession() const {
-  if (is_utility()) {
-    return false;
+  const std::size_t staying = static_cast<std::size_t>(
+      std::ranges::count_if(Hosts(), [this](ShellHostView* host) {
+        return host != this && host->browser() && !host->is_utility() &&
+               !host->LeavingSession();
+      }));
+  return shell_policy::EndsSessionFor(is_utility(), staying);
+}
+
+void ShellHostView::CloseFromNativeButton() {
+  if (close_.Leaving()) {
+    return;
   }
-  return std::ranges::none_of(Hosts(), [this](ShellHostView* host) {
-    return host != this && host->browser() && !host->is_utility();
-  });
+  if (!RequestWindowClose().empty()) {
+    return;
+  }
+  ends_session_ = EndsSession();
+  FinishClose();
+}
+
+void ShellHostView::EmitCloseCancelled(const shell_policy::CloseIdentity& identity) {
+  Emit("ArdiaShell", "shell",
+       base::Value(base::DictValue()
+                       .Set("name", "shell.closeCancelled")
+                       .Set("data", base::DictValue()
+                                        .Set("windowId", window_id_)
+                                        .Set("rendererGeneration",
+                                             base::NumberToString(identity.renderer))
+                                        .Set("closeGeneration",
+                                             base::NumberToString(identity.close)))));
+}
+
+void ShellHostView::CloseCancelled(BrowserWindowInterface::ClosingStatus status) {
+  using Status = BrowserWindowInterface::ClosingStatus;
+  if (!shell_policy::CloseCancelledFor(status == Status::kDeniedByUser,
+                                       status == Status::kDeniedByPolicy,
+                                       status == Status::kDeniedUnloadHandlersNeedTime)) {
+    return;
+  }
+  if (const std::optional<shell_policy::CloseIdentity> identity = close_.Unseal()) {
+    ends_session_ = false;
+    EmitCloseCancelled(*identity);
+  }
+}
+
+void ShellHostView::SetShortcutRecording(bool recording) {
+  shortcut_recording_ = recording;
+  if (!recording) {
+    recording_keys_.reset();
+    return;
+  }
+  if (recording_keys_) {
+    return;
+  }
+  views::Widget* widget = browser_view_ ? browser_view_->GetWidget() : nullptr;
+  NSWindow* ns_window = widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
+  if (!ns_window) {
+    return;
+  }
+  recording_keys_ = std::make_unique<RecordingKeys>();
+  base::WeakPtr<ShellHostView> weak = GetWeakPtr();
+  NSWindow* __weak watched = ns_window;
+  recording_keys_->monitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     ShellHostView* host = weak.get();
+                                     const NSEventModifierFlags flags = event.modifierFlags;
+                                     if (!host ||
+                                         shell_policy::RecordingRouteFor(
+                                             host->shortcut_recording_,
+                                             watched && event.window == watched,
+                                             (flags & (NSEventModifierFlagCommand |
+                                                       NSEventModifierFlagControl)) != 0) !=
+                                             shell_policy::RecordingRoute::kToShell) {
+                                       return event;
+                                     }
+                                     host->ForwardRecordedKey(input::NativeWebKeyboardEvent(
+                                         gfx::NativeEvent(base::apple::OwnedNSEvent(event))));
+                                     return nil;
+                                   }];
+}
+
+void ShellHostView::ForwardRecordedKey(const input::NativeWebKeyboardEvent& event) {
+  content::WebContents* shell = shell_contents();
+  content::RenderWidgetHostView* view = shell ? shell->GetRenderWidgetHostView() : nullptr;
+  if (view && view->GetRenderWidgetHost()) {
+    view->GetRenderWidgetHost()->ForwardKeyboardEvent(event);
+  }
 }
 
 void ShellHostView::BeginWindowCloseDrain(const base::DictValue* request,
@@ -1518,9 +1631,10 @@ void ShellHostView::BeginWindowCloseDrain(const base::DictValue* request,
     return std::move(done).Run(
         false, Failure("ERR_WINDOW_CLOSE_STALE", "Invalid close drain"));
   }
+  ends_session_ = EndsSession();
   std::move(done).Run(true, base::Value(base::DictValue()
                                             .Set("accepted", true)
-                                            .Set("endsSession", EndsSession())));
+                                            .Set("endsSession", ends_session_)));
 }
 
 void ShellHostView::RejectWindowClose(const base::DictValue* request,
@@ -1576,9 +1690,18 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
           },
           std::move(base), std::move(session)),
       base::BindOnce(
-          [](base::WeakPtr<ShellHostView> host, std::string window, Done done,
+          [](base::WeakPtr<ShellHostView> host, std::string window,
+             shell_policy::CloseIdentity identity, bool departing, Done done,
              std::optional<MergedSession> merged) {
-            if (merged && merged->ok) {
+            if (departing && (!merged || !merged->ok)) {
+              if (host) {
+                host->close_.Reopen(identity, host->renderer_generation_);
+              }
+              return std::move(done).Run(
+                  false, Failure("ERR_WINDOW_DEPARTURE",
+                                 "The window's departure could not be saved"));
+            }
+            if (merged) {
               BroadcastSession(*merged, window, nullptr);
             }
             std::move(done).Run(true, base::Value());
@@ -1587,16 +1710,18 @@ void ShellHostView::AcknowledgeWindowClose(const base::DictValue* request,
                   FROM_HERE, base::BindOnce(&ShellHostView::FinishClose, host));
             }
           },
-          GetWeakPtr(), window_id_, std::move(done)));
+          GetWeakPtr(), window_id_, *identity, departure != nullptr,
+          std::move(done)));
 }
 
 void ShellHostView::FinishClose() {
-  const std::size_t browser_windows = static_cast<std::size_t>(
-      std::ranges::count_if(Hosts(), [](ShellHostView* host) {
-        return host->browser() && !host->is_utility();
+  const std::size_t staying = static_cast<std::size_t>(
+      std::ranges::count_if(Hosts(), [this](ShellHostView* host) {
+        return host != this && host->browser() && !host->is_utility() &&
+               !host->LeavingSession();
       }));
-  if (shell_policy::CloseActionFor(true, is_utility(), browser_windows) ==
-      shell_policy::CloseAction::kQuit) {
+  if (shell_policy::FinalCloseFor(is_utility(), ends_session_, staying) ==
+      shell_policy::FinalClose::kQuit) {
     chrome::AttemptExit();
     return;
   }
@@ -1879,10 +2004,20 @@ content::WebContents* ShellHostView::MemberTab(int id, Profile* profile) const {
 bool ShellHostView::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
+  if (shortcut_recording_ && source == shell_contents()) {
+    return true;
+  }
   if (!focus_manager_) {
     return false;
   }
   return unhandled_keys_.HandleKeyboardEvent(event, focus_manager_);
+}
+
+content::JavaScriptDialogManager* ShellHostView::GetJavaScriptDialogManager(
+    content::WebContents* source) {
+  return source && source == shell_contents()
+             ? javascript_dialogs::AppModalDialogManager::GetInstance()
+             : nullptr;
 }
 
 bool ShellHostView::AcceleratorPressed(const ui::Accelerator& accelerator) {

@@ -243,7 +243,8 @@ TEST(a_close_request_drains_seals_and_only_its_own_identity_moves_it) {
   CHECK(!ledger.Cancel(*first, 4));
   CHECK(!ledger.Request(4));
   ledger.RendererRetired();
-  CHECK(ledger.BlocksWrites());
+  CHECK(!ledger.BlocksWrites());
+  CHECK(ledger.phase() == policy::CloseLedger::Phase::kIdle);
 }
 
 TEST(a_rejected_close_frees_the_window_and_the_next_request_is_new) {
@@ -260,6 +261,65 @@ TEST(a_rejected_close_frees_the_window_and_the_next_request_is_new) {
   const auto reloaded = ledger.Request(3);
   CHECK(reloaded && reloaded->renderer == 3 && reloaded->close == 3);
   CHECK(!ledger.BeginDrain(*second, 3));
+}
+
+TEST(a_failed_departure_reopens_the_drain_and_a_vetoed_teardown_unseals) {
+  policy::CloseLedger ledger;
+  const auto identity = *ledger.Request(6);
+  CHECK(ledger.BeginDrain(identity, 6) && ledger.Seal(identity, 6));
+  CHECK(!ledger.Reopen(policy::CloseIdentity{6, 99}, 6));
+  CHECK(ledger.Reopen(identity, 6));
+  CHECK(!ledger.BlocksWrites() && ledger.Leaving());
+  CHECK(ledger.Cancel(identity, 6));
+  const auto next = *ledger.Request(6);
+  CHECK(ledger.BeginDrain(next, 6) && ledger.Seal(next, 6));
+  CHECK(ledger.Unseal() == next);
+  CHECK(!ledger.BlocksWrites() && !ledger.Leaving());
+  CHECK(!ledger.Unseal());
+  CHECK(ledger.Request(6)->close == next.close + 1);
+}
+
+TEST(only_the_last_staying_browser_window_ends_the_session) {
+  CHECK(policy::EndsSessionFor(false, 0));
+  CHECK(!policy::EndsSessionFor(false, 1));
+  CHECK(!policy::EndsSessionFor(true, 0));
+  policy::CloseLedger first;
+  policy::CloseLedger second;
+  const auto a = *first.Request(1);
+  const auto b = *second.Request(1);
+  CHECK(first.BeginDrain(a, 1));
+  const bool first_ends = policy::EndsSessionFor(false, second.Leaving() ? 0 : 1);
+  CHECK(second.BeginDrain(b, 1));
+  const bool second_ends = policy::EndsSessionFor(false, first.Leaving() ? 0 : 1);
+  CHECK(!first_ends && second_ends);
+  CHECK(policy::FinalCloseFor(false, first_ends, 0) == policy::FinalClose::kCloseWindow);
+  CHECK(policy::FinalCloseFor(false, second_ends, 0) == policy::FinalClose::kQuit);
+  CHECK(policy::FinalCloseFor(false, true, 1) == policy::FinalClose::kCloseWindow);
+  CHECK(policy::FinalCloseFor(true, true, 0) == policy::FinalClose::kCloseWindow);
+}
+
+TEST(only_a_refused_teardown_counts_as_cancelled) {
+  CHECK(policy::CloseCancelledFor(true, false, false));
+  CHECK(policy::CloseCancelledFor(false, true, false));
+  CHECK(!policy::CloseCancelledFor(false, false, true));
+  CHECK(!policy::CloseCancelledFor(true, false, true));
+  CHECK(!policy::CloseCancelledFor(false, false, false));
+}
+
+TEST(recording_sends_this_windows_key_equivalents_to_the_shell) {
+  using policy::RecordingRoute;
+  CHECK(policy::RecordingRouteFor(true, true, true) == RecordingRoute::kToShell);
+  CHECK(policy::RecordingRouteFor(false, true, true) == RecordingRoute::kNormal);
+  CHECK(policy::RecordingRouteFor(true, false, true) == RecordingRoute::kNormal);
+  CHECK(policy::RecordingRouteFor(true, true, false) == RecordingRoute::kNormal);
+}
+
+TEST(a_session_on_disk_the_merge_cannot_take_is_set_aside_not_wedged) {
+  CHECK(policy::SetsAsideSessionOnDisk(false, false));
+  CHECK(!policy::SetsAsideSessionOnDisk(false, true));
+  CHECK(!policy::SetsAsideSessionOnDisk(true, false));
+  CHECK(policy::kOversizedSessionBackup.starts_with("session-backup"));
+  CHECK(policy::ValidDocumentName(policy::kOversizedSessionBackup));
 }
 
 int main(int argc, char** argv) {

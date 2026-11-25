@@ -77,6 +77,8 @@ if (is_official_build) {
       "//base",
       "//chrome/browser",
       "//chrome/browser/profiles:profile",
+      "//components/input",
+      "//components/javascript_dialogs",
       "//components/sessions",
       "//components/version_info",
       "//components/zoom",
