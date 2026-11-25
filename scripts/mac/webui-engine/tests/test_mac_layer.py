@@ -637,12 +637,17 @@ class ContractTests(unittest.TestCase):
         self.assertIn('weak_factory_.GetWeakPtr()', send)
         policy = self.read('ac_mac_page_policy.h')
         self.assertIn('kEvaluationSlotTtlMilliseconds = 6000', policy)
-        self.assertIn('setTimeout(() => ardiaSlots.delete(', policy)
+        self.assertIn('setTimeout(() => { if (ardiaSlots.get(', policy)
+        self.assertIn('!ardiaSlot.pending || ardiaSlots.get(', policy)
 
     def test_evaluations_belong_to_the_binding_that_asked(self):
         commands = self.read('ac_mac_page_commands.mm')
         frame = commands.split('content::RenderFrameHost* PageCommands::EvaluationFrame(', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('binding_->contents() == pending.contents.get()', frame)
+        self.assertIn('Live() == pending.contents.get()', frame)
+        document = commands.split('content::RenderFrameHost* PageCommands::EvaluationDocument(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotRegex(document, r'\bLive\(\)')
+        settle = commands.split('void PageCommands::SettleEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('EvaluationDocument(*pending)', settle)
         reset = commands.split('void PageCommands::Reset() {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('CancelEvaluations();', reset)
         host = self.read('ac_mac_shell_host.mm')

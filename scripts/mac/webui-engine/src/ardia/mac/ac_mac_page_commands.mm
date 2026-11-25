@@ -739,12 +739,19 @@ void PageCommands::Evaluate(const base::ListValue& args, Done done) {
   SendEvaluation(id, std::move(evaluation->script));
 }
 
-content::RenderFrameHost* PageCommands::EvaluationFrame(
+content::RenderFrameHost* PageCommands::EvaluationDocument(
     const PendingEvaluation& pending) const {
   content::RenderFrameHost* frame = pending.document.AsRenderFrameHostIfValid();
   return pending.contents && frame && frame == pending.contents->GetPrimaryMainFrame() &&
-                 frame->IsRenderFrameLive() && frame->IsActive() &&
-                 binding_ && binding_->contents() == pending.contents.get()
+                 frame->IsRenderFrameLive()
+             ? frame
+             : nullptr;
+}
+
+content::RenderFrameHost* PageCommands::EvaluationFrame(
+    const PendingEvaluation& pending) const {
+  content::RenderFrameHost* frame = EvaluationDocument(pending);
+  return frame && frame->IsActive() && Live() && Live() == pending.contents.get()
              ? frame
              : nullptr;
 }
@@ -802,7 +809,7 @@ void PageCommands::SettleEvaluation(uint64_t id, base::Value value) {
   std::unique_ptr<PendingEvaluation> pending = std::move(found->second);
   evaluations_.erase(found);
   if (pending->awaited && value.is_none()) {
-    if (content::RenderFrameHost* frame = EvaluationFrame(*pending)) {
+    if (content::RenderFrameHost* frame = EvaluationDocument(*pending)) {
       frame->ExecuteJavaScriptInIsolatedWorld(
           base::UTF8ToUTF16(page_policy::ForgetEvaluation(id)),
           content::RenderFrameHost::JavaScriptResultCallback(),
@@ -820,9 +827,7 @@ void PageCommands::CancelEvaluations() {
     pending->deadline.Stop();
     pending->poll.Stop();
     if (pending->awaited) {
-      content::RenderFrameHost* frame = pending->document.AsRenderFrameHostIfValid();
-      if (pending->contents && frame && frame == pending->contents->GetPrimaryMainFrame() &&
-          frame->IsRenderFrameLive()) {
+      if (content::RenderFrameHost* frame = EvaluationDocument(*pending)) {
         frame->ExecuteJavaScriptInIsolatedWorld(
             base::UTF8ToUTF16(page_policy::ForgetEvaluation(id)),
             content::RenderFrameHost::JavaScriptResultCallback(),

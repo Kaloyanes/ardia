@@ -539,19 +539,27 @@ inline std::string WrapAwaitedEvaluation(std::string_view body, uint64_t token) 
          "const ardiaSlots = " +
          EvaluationSlots() +
          ";\n"
-         "const post = (kind, value) => { if (kind !== \"result\" || typeof value "
-         "!== \"string\" || ardiaResult !== null) return; ardiaResult = value; "
+         "const ardiaSlot = { pending: true, value: null };\n"
          "ardiaSlots.set(" +
          key +
-         ", value); setTimeout(() => ardiaSlots.delete(" +
-         key + "), " + std::to_string(kEvaluationSlotTtlMilliseconds) +
-         "); while (ardiaSlots.size > " + std::to_string(kEvaluationSlotsMax) +
-         ") ardiaSlots.delete(ardiaSlots.keys().next().value); };\n"
+         ", ardiaSlot);\n"
+         "while (ardiaSlots.size > " +
+         std::to_string(kEvaluationSlotsMax) +
+         ") ardiaSlots.delete(ardiaSlots.keys().next().value);\n"
+         "setTimeout(() => { if (ardiaSlots.get(" +
+         key + ") === ardiaSlot) ardiaSlots.delete(" + key + "); }, " +
+         std::to_string(kEvaluationSlotTtlMilliseconds) +
+         ");\n"
+         "const post = (kind, value) => { if (kind !== \"result\" || typeof value "
+         "!== \"string\" || !ardiaSlot.pending || ardiaSlots.get(" +
+         key +
+         ") !== ardiaSlot) return; ardiaSlot.pending = false; ardiaSlot.value = "
+         "value; if (ardiaResult === null) ardiaResult = value; };\n"
          "try {\n" +
          std::string(body) +
          "\n;\n} catch (ardiaError) {}\n"
-         "if (ardiaResult !== null) ardiaSlots.delete(" +
-         key +
+         "if (ardiaResult !== null && ardiaSlots.get(" +
+         key + ") === ardiaSlot) ardiaSlots.delete(" + key +
          ");\n"
          "return ardiaResult;\n"
          "})()";
@@ -563,16 +571,14 @@ inline std::string TakeEvaluation(uint64_t token) {
          "const ardiaSlots = " +
          EvaluationSlots() +
          ";\n"
-         "if (!ardiaSlots.has(" +
-         key +
-         ")) return null;\n"
-         "const ardiaResult = ardiaSlots.get(" +
+         "const ardiaSlot = ardiaSlots.get(" +
          key +
          ");\n"
+         "if (!ardiaSlot || ardiaSlot.pending) return null;\n"
          "ardiaSlots.delete(" +
          key +
          ");\n"
-         "return ardiaResult;\n"
+         "return ardiaSlot.value;\n"
          "})()";
 }
 

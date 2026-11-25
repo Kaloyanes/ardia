@@ -61,6 +61,7 @@ class PageCommands : public find_in_page::FindResultObserver {
   void PageAction(const base::ListValue& args, Done done);
   void DevTools(const base::ListValue& args, Done done);
   void Evaluate(const base::ListValue& args, Done done);
+  content::RenderFrameHost* EvaluationDocument(const PendingEvaluation& pending) const;
   content::RenderFrameHost* EvaluationFrame(const PendingEvaluation& pending) const;
   void SendEvaluation(uint64_t id, std::string script);
   void EvaluationAnswered(uint64_t id, base::Value value);

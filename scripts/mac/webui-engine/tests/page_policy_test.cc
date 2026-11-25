@@ -264,12 +264,15 @@ TEST(promise_operations_are_awaited_by_token) {
   CHECK(!policy::AwaitsResult(look));
   CHECK(!policy::AwaitsResult(take));
   const std::string awaited = policy::WrapAwaitedEvaluation("post(\"result\", \"1\")", 7);
-  CHECK(awaited.find("ardiaSlots.set(7, value)") != std::string::npos);
+  CHECK(awaited.find("ardiaSlots.set(7, ardiaSlot)") != std::string::npos);
+  CHECK(awaited.find("ardiaSlots.set(7, ardiaSlot)") < awaited.find("try {"));
+  CHECK(awaited.find("ardiaSlots.get(7) !== ardiaSlot) return;") != std::string::npos);
   CHECK(awaited.find("ardiaSlots.delete(7)") != std::string::npos);
   CHECK(policy::TakeEvaluation(7).find("ardiaSlots.get(7)") != std::string::npos);
   CHECK(policy::kEvaluationDeadlineMilliseconds == 5000);
   CHECK(policy::kEvaluationSlotTtlMilliseconds > policy::kEvaluationDeadlineMilliseconds);
-  CHECK(awaited.find("setTimeout(() => ardiaSlots.delete(7), 6000)") != std::string::npos);
+  CHECK(awaited.find("setTimeout(() => { if (ardiaSlots.get(7) === ardiaSlot) ardiaSlots.delete(7); }, 6000)") != std::string::npos);
+  CHECK(policy::TakeEvaluation(7).find("ardiaSlot.pending") != std::string::npos);
   CHECK(policy::ForgetEvaluation(7).find(".delete(7)") != std::string::npos);
   if (const char* out = std::getenv("ARDIA_EVALUATION_SCRIPTS")) {
     std::ofstream file(out);
@@ -287,7 +290,13 @@ TEST(promise_operations_are_awaited_by_token) {
                 43)
          << "\n--ardia-split--\n"
          << policy::TakeEvaluation(43) << "\n--ardia-split--\n"
-         << policy::ForgetEvaluation(43);
+         << policy::ForgetEvaluation(43) << "\n--ardia-split--\n"
+         << policy::WrapAwaitedEvaluation(
+                "new Promise((resolve) => setImmediate(() => resolve(2))).then((v) => post(\"result\", JSON.stringify(v)), () => post(\"result\", \"null\"));",
+                44)
+         << "\n--ardia-split--\n"
+         << policy::TakeEvaluation(44) << "\n--ardia-split--\n"
+         << policy::ForgetEvaluation(44);
   }
 }
 
