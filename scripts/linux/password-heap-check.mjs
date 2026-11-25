@@ -83,8 +83,8 @@ function randomSecret(length) {
 }
 
 function mixedSecret(length) {
-  const alphabet = "abcdefghijkmnpqrstuvwxyz23456789äéîøüßñçæ中文字東京語";
-  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
+  const pick = (alphabet) => alphabet[randomBytes(1)[0] % alphabet.length];
+  return `${randomSecret(length - 4)}${pick("äéîøüßñçæ")}${pick("中文字東京語")}${randomSecret(2)}`;
 }
 
 function windows(text) {
