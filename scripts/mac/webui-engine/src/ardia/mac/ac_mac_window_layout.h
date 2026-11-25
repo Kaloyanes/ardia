@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string_view>
 
 namespace ardia_mac::window {
 
@@ -66,6 +67,32 @@ inline TitlebarMetrics TitlebarFor(const Lights& lights, Size button) {
   const double width = button.width > 0 ? button.width : kButtonSide;
   return TitlebarMetrics{std::max(0.0, std::round(lights.center.x - width / 2)),
                          std::max(1.0, std::round(lights.center.y * 2))};
+}
+
+enum class CaptionAction { kZoom, kMinimize, kNone };
+
+inline CaptionAction CaptionActionFor(std::optional<std::string_view> action,
+                                      std::optional<bool> legacy_minimize,
+                                      bool background_instance) {
+  if (background_instance) return CaptionAction::kNone;
+  if (action) {
+    if (*action == "Minimize") return CaptionAction::kMinimize;
+    if (*action == "None") return CaptionAction::kNone;
+    if (*action == "Maximize" || *action == "Fill" || *action == "Zoom") return CaptionAction::kZoom;
+  }
+  return legacy_minimize.value_or(false) ? CaptionAction::kMinimize : CaptionAction::kZoom;
+}
+
+inline std::string_view CaptionActionName(CaptionAction action) {
+  switch (action) {
+    case CaptionAction::kZoom:
+      return "zoom";
+    case CaptionAction::kMinimize:
+      return "minimize";
+    case CaptionAction::kNone:
+      return "none";
+  }
+  return "none";
 }
 
 struct Presentation {

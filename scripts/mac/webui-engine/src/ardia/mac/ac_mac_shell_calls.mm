@@ -9,6 +9,7 @@
 
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
+#include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
@@ -67,6 +68,7 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.readText",
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
+    "ArdiaShell.captionDoubleClick",
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
@@ -85,22 +87,14 @@ constexpr size_t kBootstrapDocumentLimit = 1024 * 1024;
 constexpr size_t kBootstrapBudget = 8 * 1024 * 1024;
 
 bool ValidDocumentName(const std::string& name) {
-  if (name.empty() || name.size() > 200 || name[0] == '.') {
-    return false;
-  }
-  for (char c : name) {
-    if (!(base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '.' ||
-          c == '_' || c == '-')) {
-      return false;
-    }
-  }
-  return name != "session.json";
+  return shell_policy::ValidDocumentName(name);
 }
 
 std::optional<base::DictValue> ReadSessionFile() {
   std::string text;
   if (!base::ReadFileToStringWithMaxSize(
-          DataDirectory().Append("session.json"), &text, 64 * 1024 * 1024)) {
+          DataDirectory().Append("session.json"), &text,
+          shell_policy::kSessionLimit)) {
     return std::nullopt;
   }
   std::optional<base::Value> parsed =
@@ -113,8 +107,11 @@ std::optional<base::DictValue> ReadSessionFile() {
 
 bool WriteSessionFile(base::DictValue session) {
   std::optional<std::string> json = base::WriteJson(base::Value(std::move(session)));
-  return json && base::ImportantFileWriter::WriteFileAtomically(
-                     DataDirectory().Append("session.json"), *json);
+  if (!json || !shell_policy::SessionFits(json->size())) {
+    return false;
+  }
+  return base::ImportantFileWriter::WriteFileAtomically(
+      DataDirectory().Append("session.json"), *json);
 }
 
 base::DictValue ReadDocuments() {
@@ -268,6 +265,9 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));
+  }
+  if (method == "ArdiaShell.captionDoubleClick") {
+    return CaptionDoubleClick(std::move(done));
   }
   if (method == "ArdiaShell.startWindowMove") {
     return StartWindowMove(std::move(done));

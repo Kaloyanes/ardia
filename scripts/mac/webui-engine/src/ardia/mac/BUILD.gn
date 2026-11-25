@@ -42,6 +42,7 @@ if (is_official_build) {
       "ac_mac_shell_calls.mm",
       "ac_mac_shell_host.h",
       "ac_mac_shell_host.mm",
+      "ac_mac_shell_policy.h",
       "ac_mac_webui.h",
       "ac_mac_webui.mm",
       "ac_mac_webui_policy.h",

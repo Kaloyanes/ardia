@@ -220,6 +220,7 @@ class ShellHostView : public views::View,
   void ShowShellContextMenu(const base::DictValue& args, Done done);
   void SetTrafficLights(const base::DictValue& args, Done done);
   void StartWindowMove(Done done);
+  void CaptionDoubleClick(Done done);
 
   void OnViewBoundsChanged(views::View* observed_view) override;
   void OnViewIsDeleting(views::View* observed_view) override;

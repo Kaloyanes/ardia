@@ -223,6 +223,22 @@ inline std::uint8_t CornerMask(const Radii& radii) {
   return mask;
 }
 
+struct CornerShape {
+  bool uniform = true;
+  Radii radii;
+};
+
+inline CornerShape ShapeFor(double radius, std::uint8_t corners) {
+  const double r = Finite(radius) && radius > 0 ? radius : 0;
+  const auto pick = [&](std::uint8_t corner) { return corners & corner ? r : 0.0; };
+  return CornerShape{r == 0 || (corners & kAllCorners) == kAllCorners,
+                     Radii{pick(kUpperLeft), pick(kUpperRight), pick(kLowerRight), pick(kLowerLeft)}};
+}
+
+inline int GlassStyle(Material material) {
+  return material == Material::kLiquidClear ? 1 : 0;
+}
+
 inline double SanitizedScale(double scale) {
   return Finite(scale) && scale > 0.05 && scale < 20 ? scale : 1;
 }

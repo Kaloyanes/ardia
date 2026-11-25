@@ -35,14 +35,14 @@ HOOKED_FILES = (
 )
 
 
-def compile_and_run(test, source, binary, defines=()):
+def compile_and_run(test, source, binary, defines=(), env=None):
     built = subprocess.run([CXX, *FLAGS, *defines, '-I', str(SOURCE), '-I', str(TESTS), '-I', str(ROOT / 'launcher'),
                             str(source), '-o', str(binary)],
                            capture_output=True, text=True, timeout=180)
     test.assertEqual(built.returncode, 0, built.stderr)
     ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                          env={**os.environ, 'UBSAN_OPTIONS': 'halt_on_error=1:print_stacktrace=1',
-                              'ASAN_OPTIONS': 'detect_leaks=0'})
+                              'ASAN_OPTIONS': 'detect_leaks=0', **(env or {})})
     test.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
     test.assertNotIn('FAIL', ran.stdout)
     return ran.stdout
@@ -66,6 +66,20 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_menu_and_window_layout(self):
         compile_and_run(self, TESTS / 'menu_window_test.cc', self.out / 'menu')
+
+    def test_shell_policy(self):
+        compile_and_run(self, TESTS / 'shell_policy_test.cc', self.out / 'shell-policy')
+
+    def test_shared_hostile_corpus_reaches_no_sink(self):
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('node is unavailable to export scripts/security/hostile-inputs.mjs')
+        corpus = self.out / 'corpus.txt'
+        exported = subprocess.run([node, str(TESTS / 'hostile-corpus.mjs'), str(corpus)],
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(exported.returncode, 0, exported.stderr)
+        compile_and_run(self, TESTS / 'hostile_corpus_test.cc', self.out / 'hostile-corpus',
+                        env={'ARDIA_HOSTILE_CORPUS': str(corpus)})
 
     def test_launcher_arguments(self):
         compile_and_run(self, TESTS / 'launch_args_test.cc', self.out / 'launcher')
@@ -311,6 +325,38 @@ class ContractTests(unittest.TestCase):
             self.assertIn(f'- "{path}"', trigger, path)
         self.assertIn('runs-on: blacksmith-6vcpu-macos-27', workflow.split('webui-engine:', 1)[1].split('\n\n', 1)[0])
 
+    def test_caption_double_click_is_served_and_advertised(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('"ArdiaShell.captionDoubleClick",', calls)
+        self.assertIn('return CaptionDoubleClick(std::move(done));', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('AppleActionOnDoubleClick', host)
+        self.assertIn('[ns_window performZoom:nil];', host)
+        self.assertIn('[ns_window performMiniaturize:nil];', host)
+        routes = (REPO / 'apps/desktop/src/windowDrag.ts').read_text()
+        self.assertIn('"ArdiaShell.captionDoubleClick"', routes)
+
+    def test_reused_effects_take_new_materials_and_corner_masks(self):
+        style = self.read('ac_mac_glass.mm').split('void Style(NSView* view, const glass::Placement& placement) {', 1)[1]
+        style = style.split('\n}\n', 1)[0]
+        self.assertIn('vibrancy.material = VibrancyMaterial(placement.material);', style)
+        self.assertIn('glass::GlassStyle(placement.material)', style)
+        self.assertIn('view.layer.mask = mask;', style)
+        self.assertIn('view.layer.mask = nil;', style)
+
+    def test_sessions_and_documents_use_the_shell_policy(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('return shell_policy::ValidDocumentName(name);', calls)
+        write = calls.split('bool WriteSessionFile(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(write.index('shell_policy::SessionFits(json->size())'), write.index('WriteFileAtomically'))
+
+    def test_cross_profile_replacement_opens_before_it_retires(self):
+        host = self.read('ac_mac_shell_host.mm')
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('Navigate(&params);'), create.index('bindings_.erase(replaced_id);'))
+        self.assertLess(create.index('shell_policy::AfterReplacement('), create.index('bindings_.erase(replaced_id);'))
+        self.assertIn('if (outcome.close_old_tab) {', create)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -324,10 +370,12 @@ class BoundaryTests(unittest.TestCase):
         guards = ' '.join(row['guard'] for row in mac)
         for method in ('shell.glassRegions', 'shell.backdropRegions', 'shell.trafficLights', 'shell.popover.open',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
-                       'shell.showContextMenu', 'ardiaRequest'):
+                       'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
+                       'session.write', 'ArdiaShell.writeDocument'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
-        for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc'):
+        for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

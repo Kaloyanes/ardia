@@ -13,6 +13,7 @@
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
+#include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
@@ -567,9 +568,9 @@ void ShellHostView::CloseCompanions() {
 }
 
 PageBinding* ShellHostView::BindingForKey(std::string_view key) const {
-  for (const auto& [id, binding] : bindings_) {
-    if (binding->key() == key && binding->contents()) {
-      return binding.get();
+  for (auto it = bindings_.rbegin(); it != bindings_.rend(); ++it) {
+    if (it->second->key() == key && it->second->contents()) {
+      return it->second.get();
     }
   }
   return nullptr;
@@ -924,15 +925,18 @@ void ShellHostView::CreateTabIn(base::DictValue args,
         false, Failure("ERR_PROFILE_UNAVAILABLE",
                        "The tab's profile has no window to live in"));
   }
-  if (PageBinding* existing = BindingForKey(key)) {
-    if (existing->contents()->GetBrowserContext() == profile) {
-      existing->claim = claim;
-      existing->renderer_generation = renderer_generation_;
-      ReattachViewports();
-      return std::move(done).Run(true, base::Value(Identity(existing)));
-    }
-    bindings_.erase(existing->id());
+  PageBinding* existing = BindingForKey(key);
+  const shell_policy::TabRequest request = shell_policy::RequestFor(
+      existing != nullptr,
+      existing && existing->contents()->GetBrowserContext() == profile);
+  if (request == shell_policy::TabRequest::kReclaim) {
+    existing->claim = claim;
+    existing->renderer_generation = renderer_generation_;
+    ReattachViewports();
+    return std::move(done).Run(true, base::Value(Identity(existing)));
   }
+  const int replaced_id =
+      request == shell_policy::TabRequest::kReplace ? existing->id() : 0;
   content::WebContents* contents = nullptr;
   {
     NavigateParams params(member, *url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
@@ -940,6 +944,28 @@ void ShellHostView::CreateTabIn(base::DictValue args,
     params.window_action = NavigateParams::WindowAction::kNoAction;
     Navigate(&params);
     contents = params.navigated_or_inserted_contents;
+  }
+  if (replaced_id) {
+    content::WebContents* old_contents = nullptr;
+    if (auto found = bindings_.find(replaced_id); found != bindings_.end()) {
+      old_contents = found->second->contents();
+    }
+    BrowserWindowInterface* old_owner = OwnerOf(old_contents);
+    TabStripModel* old_model = old_owner ? old_owner->GetTabStripModel() : nullptr;
+    const int old_index = old_model ? old_model->GetIndexOfWebContents(old_contents)
+                                    : TabStripModel::kNoTab;
+    const shell_policy::Replacement outcome = shell_policy::AfterReplacement(
+        contents != nullptr, old_index != TabStripModel::kNoTab);
+    if (!outcome.bind_new) {
+      return std::move(done).Run(false, base::Value("The tab did not open"));
+    }
+    if (outcome.close_old_tab) {
+      bindings_.erase(replaced_id);
+      old_model->CloseWebContentsAt(old_index, TabCloseTypes::CLOSE_USER_GESTURE);
+    } else if (auto found = bindings_.find(replaced_id); found != bindings_.end()) {
+      found->second->claim.clear();
+      found->second->visible = false;
+    }
   }
   if (!contents) {
     return std::move(done).Run(false, base::Value("The tab did not open"));
@@ -1282,6 +1308,31 @@ void ShellHostView::SetTrafficLights(const base::DictValue& args, Done done) {
   }
   ardia_mac::SetTrafficLights(widget, *lights);
   std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::CaptionDoubleClick(Done done) {
+  views::Widget* widget = browser_view_ ? browser_view_->GetWidget() : nullptr;
+  NSWindow* ns_window =
+      widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
+  NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+  NSString* action = [defaults stringForKey:@"AppleActionOnDoubleClick"];
+  id legacy = [defaults objectForKey:@"AppleMiniaturizeOnDoubleClick"];
+  const window::CaptionAction chosen = window::CaptionActionFor(
+      action ? std::optional<std::string>(base::SysNSStringToUTF8(action))
+             : std::nullopt,
+      [legacy respondsToSelector:@selector(boolValue)]
+          ? std::optional<bool>([legacy boolValue])
+          : std::nullopt,
+      BackgroundInstance());
+  if (!ns_window || chosen == window::CaptionAction::kNone) {
+    return std::move(done).Run(true, base::Value("none"));
+  }
+  if (chosen == window::CaptionAction::kMinimize) {
+    [ns_window performMiniaturize:nil];
+  } else {
+    [ns_window performZoom:nil];
+  }
+  std::move(done).Run(true, base::Value(window::CaptionActionName(chosen)));
 }
 
 void ShellHostView::StartWindowMove(Done done) {

@@ -74,22 +74,36 @@ CACornerMask LayerCorners(std::uint8_t corners) {
 NSView* MakeEffect(const glass::Placement& placement, glass::Plane plane) {
   if (glass::EffectFor(placement.material, LiquidGlassAvailable()) ==
       glass::Effect::kLiquidGlass) {
-    NSView* view = [[GlassEffectClass() alloc] initWithFrame:NSZeroRect];
-    if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
-      [view setValue:@(placement.material == glass::Material::kLiquidClear ? 1 : 0)
-              forKey:@"style"];
-    }
-    return view;
+    return [[GlassEffectClass() alloc] initWithFrame:NSZeroRect];
   }
   NSVisualEffectView* view =
       [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
   view.blendingMode = plane == glass::Plane::kBehindWindow
                           ? NSVisualEffectBlendingModeBehindWindow
                           : NSVisualEffectBlendingModeWithinWindow;
-  view.material = VibrancyMaterial(placement.material);
   view.state = NSVisualEffectStateActive;
   view.wantsLayer = YES;
   return view;
+}
+
+CGPathRef CornerPath(NSRect bounds, const glass::Radii& radii, bool flipped) {
+  const CGFloat top = flipped ? NSMinY(bounds) : NSMaxY(bounds);
+  const CGFloat bottom = flipped ? NSMaxY(bounds) : NSMinY(bounds);
+  const CGFloat down = flipped ? 1 : -1;
+  const CGFloat left = NSMinX(bounds);
+  const CGFloat right = NSMaxX(bounds);
+  CGMutablePathRef path = CGPathCreateMutable();
+  CGPathMoveToPoint(path, nullptr, left + radii.upper_left, top);
+  CGPathAddLineToPoint(path, nullptr, right - radii.upper_right, top);
+  CGPathAddArcToPoint(path, nullptr, right, top, right, top + down * radii.upper_right, radii.upper_right);
+  CGPathAddLineToPoint(path, nullptr, right, bottom - down * radii.lower_right);
+  CGPathAddArcToPoint(path, nullptr, right, bottom, right - radii.lower_right, bottom, radii.lower_right);
+  CGPathAddLineToPoint(path, nullptr, left + radii.lower_left, bottom);
+  CGPathAddArcToPoint(path, nullptr, left, bottom, left, bottom - down * radii.lower_left, radii.lower_left);
+  CGPathAddLineToPoint(path, nullptr, left, top + down * radii.upper_left);
+  CGPathAddArcToPoint(path, nullptr, left, top, left + radii.upper_left, top, radii.upper_left);
+  CGPathCloseSubpath(path);
+  return path;
 }
 
 void Style(NSView* view, const glass::Placement& placement) {
@@ -98,11 +112,29 @@ void Style(NSView* view, const glass::Placement& placement) {
   view.frame = NSMakeRect(placement.frame.x, placement.frame.y,
                           placement.frame.width, placement.frame.height);
   view.alphaValue = placement.opacity;
+  const glass::CornerShape shape =
+      glass::ShapeFor(placement.radius, placement.corners);
   if ([view isKindOfClass:GlassEffectClass()]) {
+    if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
+      [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
+    }
     if ([view respondsToSelector:NSSelectorFromString(@"setCornerRadius:")]) {
       [view setValue:@(placement.radius) forKey:@"cornerRadius"];
     }
-  } else {
+    view.wantsLayer = YES;
+    if (shape.uniform) {
+      view.layer.mask = nil;
+    } else {
+      CAShapeLayer* mask = [CAShapeLayer layer];
+      mask.frame = view.bounds;
+      CGPathRef path = CornerPath(view.bounds, shape.radii, view.isFlipped);
+      mask.path = path;
+      CGPathRelease(path);
+      view.layer.mask = mask;
+    }
+  } else if ([view isKindOfClass:NSVisualEffectView.class]) {
+    NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
+    vibrancy.material = VibrancyMaterial(placement.material);
     view.layer.cornerRadius = placement.radius;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.maskedCorners = LayerCorners(placement.corners);

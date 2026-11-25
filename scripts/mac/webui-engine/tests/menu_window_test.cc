@@ -222,6 +222,19 @@ TEST(queued_context_menu_dies_with_its_document) {
   CHECK(!menu::ContextMenuLive(true, 0, 0, true));
 }
 
+TEST(caption_double_click_follows_the_system_setting) {
+  using window::CaptionAction;
+  CHECK(window::CaptionActionFor(std::nullopt, std::nullopt, false) == CaptionAction::kZoom);
+  CHECK(window::CaptionActionFor("Maximize", std::nullopt, false) == CaptionAction::kZoom);
+  CHECK(window::CaptionActionFor("Fill", std::nullopt, false) == CaptionAction::kZoom);
+  CHECK(window::CaptionActionFor("Minimize", std::nullopt, false) == CaptionAction::kMinimize);
+  CHECK(window::CaptionActionFor("None", true, false) == CaptionAction::kNone);
+  CHECK(window::CaptionActionFor(std::nullopt, true, false) == CaptionAction::kMinimize);
+  CHECK(window::CaptionActionFor("Bogus", std::nullopt, false) == CaptionAction::kZoom);
+  CHECK(window::CaptionActionFor("Minimize", true, true) == CaptionAction::kNone);
+  CHECK(window::CaptionActionName(CaptionAction::kMinimize) == "minimize");
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

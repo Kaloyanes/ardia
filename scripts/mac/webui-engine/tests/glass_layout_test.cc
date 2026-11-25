@@ -405,6 +405,37 @@ TEST(clear_cancels_pending_presented) {
   CHECK(!gate.Live(after) && !gate.Live(before));
 }
 
+TEST(material_changes_within_a_family_update_the_reused_view) {
+  Region sidebar = Make("m", {0, 0, 10, 10}, Layer::kBehind);
+  sidebar.material = Material::kSidebar;
+  Region hud = sidebar;
+  hud.material = Material::kHud;
+  const auto a = glass::Lay({sidebar}, {}, kWindow, 1);
+  const auto b = glass::Lay({hud}, {}, kWindow, 1);
+  const auto diff = glass::DiffPlacements(a.placements, b.placements, true);
+  CHECK(diff.create.empty() && diff.remove.empty());
+  CHECK(diff.update.size() == 1 && diff.update[0].material == Material::kHud);
+  Region liquid = Make("l", {0, 0, 10, 10}, Layer::kBehind);
+  Region clear = liquid;
+  clear.material = Material::kLiquidClear;
+  const auto glassy = glass::DiffPlacements(glass::Lay({liquid}, {}, kWindow, 1).placements,
+                                            glass::Lay({clear}, {}, kWindow, 1).placements, true);
+  CHECK(glassy.update.size() == 1 && glass::GlassStyle(glassy.update[0].material) == 1);
+  CHECK(glass::GlassStyle(Material::kLiquid) == 0);
+}
+
+TEST(liquid_glass_keeps_square_corners_on_clipped_edges) {
+  Region region = Make("c", {0, 0, 100, 40}, Layer::kBehind);
+  region.radii = {0, 12, 12, 0};
+  const auto layout = glass::Lay({region}, {}, kWindow, 1);
+  const auto shape = glass::ShapeFor(layout.placements[0].radius, layout.placements[0].corners);
+  CHECK(!shape.uniform);
+  CHECK(shape.radii == (glass::Radii{0, 12, 12, 0}));
+  CHECK(glass::ShapeFor(12, glass::kAllCorners).uniform);
+  CHECK(glass::ShapeFor(0, glass::kUpperLeft).uniform);
+  CHECK(glass::ShapeFor(std::numeric_limits<double>::quiet_NaN(), glass::kUpperLeft).uniform);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

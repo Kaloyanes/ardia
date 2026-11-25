@@ -2229,20 +2229,21 @@
   {
    "id": "mac-webui-bridge:ardiaRequest",
    "source": "frame",
-   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host",
+   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#ShellBridge::Request",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#PopoverBridge::Trusted",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#PopoverBridge::Request",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#ShellHostView::Trusted",
-    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#AllowedPageUrl"
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#AllowedPageUrl",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#bridge_documents"
    ],
    "detected": false
   },
   {
    "id": "mac-webui-glass:regions",
    "source": "frame",
-   "guard": "Mac WebUI host: shell.glassRegions and shell.backdropRegions come only through the trusted shell bridge; at most 64 regions; ids are 1-128 of [A-Za-z0-9._:-] and unique; rects must be finite, non-negative and within +/-1e6, radii finite (scaled down like CSS), opacity finite and clamped to 0-1, blur 0-200, layer and material from fixed lists, else the region is refused (Lay, ValidRect, SanitizedRadii, RegionOf); a generation is echoed as ArdiaGlass presented only when it is a whole number in 0..INT_MAX (PresentableGeneration); tests/glass_layout_test.cc hostile_sinks runs NaN, infinities, 1e20, 1e308 and hostile ids through the layout and checks every placement is finite and bounded",
+   "guard": "Mac WebUI host: shell.glassRegions and shell.backdropRegions come only through the trusted shell bridge; at most 64 regions; ids are 1-128 of [A-Za-z0-9._:-] and unique; rects must be finite, non-negative and within +/-1e6, radii finite (scaled down like CSS), opacity finite and clamped to 0-1, blur 0-200, layer and material from fixed lists, else the region is refused (Lay, ValidRect, SanitizedRadii, RegionOf); a generation is echoed as ArdiaGlass presented only when it is a whole number in 0..INT_MAX (PresentableGeneration); tests/glass_layout_test.cc hostile_sinks runs NaN, infinities, 1e20, 1e308 and hostile ids through the layout and checks every placement is finite and bounded. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass_layout.h#Lay",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass_layout.h#ValidRect",
@@ -2250,58 +2251,81 @@
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass_layout.h#PresentableGeneration",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass.mm#RegionOf",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass.mm#ApplyBackdrops",
-    "scripts/mac/webui-engine/tests/glass_layout_test.cc#hostile_sinks"
+    "scripts/mac/webui-engine/tests/glass_layout_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#glass_names_and_ids",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#glass_geometry"
    ],
    "detected": false
   },
   {
    "id": "mac-webui-popover:calls",
    "source": "frame",
-   "guard": "Mac WebUI host: shell.popover.open, shell.popover.update and shell.popover.close come only through the trusted shell bridge for this window's windowId; ids are 1-128 of [A-Za-z0-9_-], at most 8 popovers are open, a content route is 1-128 of [A-Za-z0-9/_.-] with no .. or //, close reasons come from a fixed list; rects must be finite within +/-1e5 and are mapped with a sane zoom and clamped to the anchor screen's visible frame, or to the window unless beyondWindow, which an update keeps from open (ValidId, ValidRoute, WindowToScreen, ClampToScreen, ResolveBeyondWindow); a panel never activates the app and is never shown in background mode; tests/popover_policy_test.cc hostile_sinks runs non-finite and huge geometry and hostile ids and routes through each guard",
+   "guard": "Mac WebUI host: shell.popover.open, shell.popover.update and shell.popover.close come only through the trusted shell bridge for this window's windowId; ids are 1-128 of [A-Za-z0-9_-], at most 8 popovers are open, a content route is 1-128 of [A-Za-z0-9/_.-] with no .. or //, close reasons come from a fixed list; rects must be finite within +/-1e5 and are mapped with a sane zoom and clamped to the anchor screen's visible frame, or to the window unless beyondWindow, which an update keeps from open (ValidId, ValidRoute, WindowToScreen, ClampToScreen, ResolveBeyondWindow); a panel never activates the app and is never shown in background mode; tests/popover_policy_test.cc hostile_sinks runs non-finite and huge geometry and hostile ids and routes through each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ValidRoute",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ClampToScreen",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover_policy.h#ResolveBeyondWindow",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_popover.mm#PopoverHost::Open",
-    "scripts/mac/webui-engine/tests/popover_policy_test.cc#hostile_sinks"
+    "scripts/mac/webui-engine/tests/popover_policy_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#popover_guards"
    ],
    "detected": false
   },
   {
    "id": "mac-webui-menus:menus",
    "source": "frame",
-   "guard": "Mac WebUI host: ArdiaShell.setMainMenu and shell.showContextMenu come only through the trusted shell bridge; a menu is at most 400 items and 4 deep, titles at most 200 bytes without control characters, commands at most 96 of [A-Za-z0-9._:-], arguments at most 2 KiB, keys from a fixed set, modifiers from four bits, roles from a fixed list, and any problem refuses the whole menu (ParseMenu, Validate); only setMainMenu may install the Services, Window and Help menus (InstallsAppMenu); a context menu point must be finite and is clamped to +/-1e6 before it becomes an integer (ClampToInt); in background mode the menu is logged, never shown; tests/menu_window_test.cc hostile_sinks checks each guard",
+   "guard": "Mac WebUI host: ArdiaShell.setMainMenu and shell.showContextMenu come only through the trusted shell bridge; a menu is at most 400 items and 4 deep, titles at most 200 bytes without control characters, commands at most 96 of [A-Za-z0-9._:-], arguments at most 2 KiB, keys from a fixed set, modifiers from four bits, roles from a fixed list, and any problem refuses the whole menu (ParseMenu, Validate); only setMainMenu may install the Services, Window and Help menus (InstallsAppMenu); a context menu point must be finite and is clamped to +/-1e6 before it becomes an integer (ClampToInt); in background mode the menu is logged, never shown; tests/menu_window_test.cc hostile_sinks checks each guard. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_menu_model.h#Validate",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_menu_model.h#InstallsAppMenu",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_menu.mm#ParseMenu",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#ShowShellContextMenu",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_glass_layout.h#ClampToInt",
-    "scripts/mac/webui-engine/tests/menu_window_test.cc#hostile_sinks"
+    "scripts/mac/webui-engine/tests/menu_window_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#menu_construction"
    ],
    "detected": false
   },
   {
    "id": "mac-webui-window:trafficLights",
    "source": "frame",
-   "guard": "Mac WebUI host: shell.trafficLights comes only through the trusted shell bridge; a centre must be finite and is clamped inside the window (LightsFrom), otherwise the call is refused; tests/menu_window_test.cc hostile_sinks runs NaN, infinities and 1e20",
+   "guard": "Mac WebUI host: shell.trafficLights and ArdiaShell.captionDoubleClick come only through the trusted shell bridge; captionDoubleClick takes no arguments and only zooms or minimizes this window as the AppleActionOnDoubleClick default says, doing nothing in background mode (CaptionActionFor); a centre must be finite and is clamped inside the window (LightsFrom), otherwise the call is refused; tests/menu_window_test.cc hostile_sinks runs NaN, infinities and 1e20. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_window_layout.h#LightsFrom",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#SetTrafficLights",
-    "scripts/mac/webui-engine/tests/menu_window_test.cc#hostile_sinks"
+    "scripts/mac/webui-engine/tests/menu_window_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#window_guards",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_window_layout.h#CaptionActionFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#CaptionDoubleClick"
    ],
    "detected": false
   },
   {
    "id": "mac-webui-launch:environment",
    "source": "other-app",
-   "guard": "Mac WebUI host: the launch environment (ARDIA_SHELL, ARDIA_BACKGROUND, ARDIA_DATA_DIR) the React Native app or open --env hands over is read only for exact values: the shell starts only for exactly webui and never in an official build (Decide), background mode only for exactly 1 or true (Background, ArdiaBackgroundValue), and a data directory longer than 4 KiB is ignored (ArdiaBuildLaunchArgs); tests/webui_policy_test.cc and tests/launch_args_test.cc hostile_sinks run NUL bytes, control characters, near misses and huge values",
+   "guard": "Mac WebUI host: the launch environment (ARDIA_SHELL, ARDIA_BACKGROUND, ARDIA_DATA_DIR) the React Native app or open --env hands over is read only for exact values: the shell starts only for exactly webui and never in an official build (Decide), background mode only for exactly 1 or true (Background, ArdiaBackgroundValue), and a data directory longer than 4 KiB is ignored (ArdiaBuildLaunchArgs); tests/webui_policy_test.cc and tests/launch_args_test.cc hostile_sinks run NUL bytes, control characters, near misses and huge values. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_webui_policy.h#Decide",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_webui_policy.h#Background",
     "scripts/mac/webui-engine/launcher/launch_args.h#ArdiaBuildLaunchArgs",
     "scripts/mac/webui-engine/tests/webui_policy_test.cc#hostile_sinks",
-    "scripts/mac/webui-engine/tests/launch_args_test.cc#hostile_sinks"
+    "scripts/mac/webui-engine/tests/launch_args_test.cc#hostile_sinks",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#launch_environment"
+   ],
+   "detected": false
+  },
+  {
+   "id": "mac-webui-documents:documentStore",
+   "source": "frame",
+   "guard": "Mac WebUI host: session.read, session.write, ArdiaShell.readDocument, ArdiaShell.writeDocument, ArdiaShell.saveDocument and ArdiaShell.removeDocument come only through the trusted shell bridge; a document name is 1-200 of [A-Za-z0-9._-], never starts with a dot and is never session.json in any ASCII case, so a document call can't overwrite or delete the session on a case-insensitive volume (ValidDocumentName); document text is at most 8 MiB; a session is serialized and refused before any write when it is over 64 MiB, leaving the existing file untouched (SessionFits), and is read with the same limit; tests/shell_policy_test.cc covers both. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) also runs through ValidDocumentName in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#ValidDocumentName",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#SessionFits",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_calls.mm#WriteSessionFile",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_calls.mm#ReadSessionFile",
+    "scripts/mac/webui-engine/tests/shell_policy_test.cc#session_json_is_reserved_in_every_ascii_case",
+    "scripts/mac/webui-engine/tests/shell_policy_test.cc#oversized_sessions_are_refused_before_writing",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#bridge_documents"
    ],
    "detected": false
   }

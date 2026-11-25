@@ -29,6 +29,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `g_ardia_win_hosts_normal_windows` does. `BrowserFrameViewMac::OnPaint` stops painting the frame colour. The
   window is non-opaque, with a clear background, a full-size content view and a transparent, untitled titlebar
   (`ac_mac_window`).
+- **Window drag.** `ArdiaShell.startWindowMove` drags the window and `ArdiaShell.captionDoubleClick` zooms or
+  minimizes it as the system's `AppleActionOnDoubleClick` setting says, so `apps/desktop`'s window drag regions work.
 - **Traffic lights** sit at Ardia's position: 18 pt inset, centred 20 pt down. They come from Chrome's own
   `_titlebarHeight` and `_minXTitlebarWidgetInset`, overridden per window. `shell.trafficLights {center, hidden}`
   moves or hides them.
@@ -73,6 +75,10 @@ that branch). It is a development tool and never runs in a release. Like Windows
   `bootstrap.js`, `generate_bootstrap.py` and the desktop route table come in from `dev-copies.tsv`.
 - `apps/browser/src/boundaries.json` has a `mac-webui-*` row for each bridge handler and for the launch environment;
   each cites the guard and its `hostile_sinks` test.
+- The shared hostile corpus (`scripts/security/hostile-inputs.mjs`) is exported byte-exact by
+  `tests/hostile-corpus.mjs` and run through every guard by `tests/hostile_corpus_test.cc`.
+- Documents never use the name `session.json` in any ASCII case, and a session over 64 MiB is refused before it is
+  written (`ac_mac_shell_policy.h`).
 - `tests/mac-layer.test.mjs` runs `tests/test_mac_layer.py` in `node --run test:root` (Linux CI), and the Mac
   workflow's `webui-engine` job runs it with Clang on macOS.
 
