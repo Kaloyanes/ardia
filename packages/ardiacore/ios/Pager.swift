@@ -351,7 +351,7 @@ final class Pager {
 
   fileprivate func frame(generation: Int, fromLink: Bool = false) -> Bool {
     guard generation == self.generation, spring != nil else { return false }
-    if fromLink { lastLinkFrame = CACurrentMediaTime() } else { noteFrame(interval: 0, generation: generation) }
+    if fromLink { lastLinkFrame = CACurrentMediaTime() } else { noteFrame(interval: 1.0 / 60, generation: generation) }
     step()
     return generation == self.generation
   }

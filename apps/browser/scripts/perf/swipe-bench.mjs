@@ -469,6 +469,15 @@ const logLine = (name, label, i, g) =>
 
 async function launchSides(apps, seeded, profiles, tabsEach, layout, tag) {
   const instances = [];
+  try {
+    return await prepareSides(instances, apps, seeded, profiles, tabsEach, layout, tag);
+  } catch (e) {
+    for (const { inst } of instances) await inst.quit().catch(() => {});
+    throw e;
+  }
+}
+
+async function prepareSides(instances, apps, seeded, profiles, tabsEach, layout, tag) {
   for (const side of apps) {
     const data = join(scratch, "data", `${side.label}-p${profiles}-t${tabsEach}-${layout}${tag}`);
     rmSync(data, { recursive: true, force: true });
@@ -527,13 +536,19 @@ async function runTour(apps, c, seeded, profiles, tabsEach, layout, out, save, c
   for (let i = 0; i < reps; i++) {
     const ordered = i % 2 ? [...apps].reverse() : apps;
     const instances = await launchSides(ordered, seeded, profiles, tabsEach, layout, "-tour");
-    const films = filmDir ? instances.map(({ side, inst }) => filmStart(inst, join(filmDir, `${side.label}-${i + 1}.mov`))) : [];
     try {
+      const films = filmDir ? instances.map(({ side, inst }) => filmStart(inst, join(filmDir, `${side.label}-${i + 1}.mov`))) : [];
+      const offTour = new Set();
       for (const st of steps)
         for (const { side, inst } of instances) {
+          if (offTour.has(side.label)) continue;
           const g = await gesture(inst, side.win, c, seeded.ids[0], seeded.tabIds, { reset: false, reverse: st.reverse });
           g.expected = seeded.ids[st.to];
-          if (g.from !== seeded.ids[st.from] || g.to !== seeded.ids[st.to]) console.log(`  ! ${side.label} ${st.name}: went ${g.from}>${g.to}`);
+          if (g.from !== seeded.ids[st.from] || g.to !== seeded.ids[st.to]) {
+            console.log(`  ! ${side.label} ${st.name}: went ${g.from}>${g.to}; the rest of this lap is dropped for ${side.label}`);
+            offTour.add(side.label);
+            continue;
+          }
           out[st.name][side.label].push(g);
           logLine(`${config} ${st.name}`, side.label, i, g);
         }
