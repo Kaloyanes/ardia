@@ -1106,6 +1106,16 @@
           "desktop": "route",
           "windows": "service"
         },
+        "diagnostics": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "input": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
         "reportCommits": {
           "mac": "custom",
           "desktop": "custom",
@@ -1495,8 +1505,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "61009063b512da80275f0dd04c37f6e1ab06ce3fb7961d131e2f6144186b2d71",
-        "swift": "773af59f99fcfcd683bae21adf1264389e72a599959bab51833bff2b70d8bc8a"
+        "types": "32eb981fb6594e111b5a6383f84b3c42fc7c6ac3216560d128fa1b6139762734",
+        "swift": "d7ccd40486db41fd385218b0597b67a356976c0fb2306bf01332f9cd2c4d2f72"
       },
       "modules": {
         "ArdiaShell": {
@@ -4414,6 +4424,17 @@
                 "id",
                 "progress",
                 "still"
+              ],
+              "async": false,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "pulse": {
+              "args": [
+                "id",
+                "period",
+                "low"
               ],
               "async": false,
               "mac": "custom",
