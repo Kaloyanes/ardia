@@ -38,6 +38,7 @@ export function afterFirstRoot(task: () => void) {
 }
 
 export function firstWindowCommitted() {
+  (globalThis as { __ardiaFirstWindowAt?: number }).__ardiaFirstWindowAt ??= Date.now();
   if (rootWaiting) {
     const tasks = rootWaiting;
     rootWaiting = null;
