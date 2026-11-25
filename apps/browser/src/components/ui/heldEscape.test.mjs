@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 globalThis.require ??= (id) => ({ asset: id });
-const { ESCAPE_RELEASED, HELD_ESCAPE_GAP_MS, escapeDown } = await import("./fieldKeys.ts");
+const { ESCAPE_RELEASED, HELD_ESCAPE_GAP_MS, createHeldEscape, escapeDown, heldEscapeKeyDown, useHeldEscape } = await import("./fieldKeys.ts");
 const { barKeyDown } = await import("../omnibox/omniboxKeys.ts");
 
 const latch = () => {
@@ -67,4 +67,40 @@ test("the search field and the command bar field both run Esc through the held-E
   assert.match(field, /\{\.\.\.heldEscape\.upProps\}\s+onKeyDown=\{\(e\) => \{\s+const \{ key, shiftKey \} = e\.nativeEvent;\s+if \(heldEscape\.down\(e\)\) return;/);
   const bar = read("../omnibox/BarField.tsx");
   assert.match(bar, /\{\.\.\.heldEscape\.upProps\}\s+onKeyDown=\{\(e\) => heldEscape\.down\(e\) \|\| events\.onKeyDown\?\.\(e\)\}/);
+});
+
+test("two fields share one held-Escape latch, so holding Esc across focus handoff to a second field suppresses its auto-repeats until key-up", () => {
+  const firstField = useHeldEscape();
+  const secondField = useHeldEscape();
+  firstField.release();
+  try {
+    assert.equal(firstField, secondField, "both fields use the shared latch");
+    assert.equal(firstField.down({ nativeEvent: { key: "Escape" } }), false, "first Esc in the newest blank pane acts");
+    assert.equal(secondField.down({ nativeEvent: { key: "Escape" } }), true, "auto-repeat after focus moves to the next blank pane is suppressed");
+    secondField.upProps.onKeyUp({ nativeEvent: { key: "Escape" } });
+    assert.equal(secondField.down({ nativeEvent: { key: "Escape" } }), false, "a fresh Esc after key-up acts on the second pane");
+  } finally {
+    firstField.release();
+  }
+});
+
+test("modifier-only key-downs while Esc is held never rearm Esc, while a typed key does", () => {
+  let now = 0;
+  const esc = createHeldEscape(() => now);
+  const winKey = (key) => ({ nativeEvent: { key } });
+  assert.equal(esc.down(winKey("Escape")), false, "first Esc clears the field");
+  for (const modifier of ["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "NumLock", "ScrollLock"]) {
+    now += 40;
+    assert.equal(esc.down(winKey(modifier)), false, `${modifier} itself is not blocked`);
+    now += 40;
+    assert.equal(esc.down(winKey("Escape")), true, `auto-repeat Esc after ${modifier} is still held`);
+  }
+  now += 40;
+  assert.equal(esc.down(winKey("a")), false, "typing a character resets the latch");
+  now += 40;
+  assert.equal(esc.down(winKey("Escape")), false, "a fresh Esc after typing acts");
+  let state = ESCAPE_RELEASED;
+  state = heldEscapeKeyDown(state, "Escape", 0).state;
+  assert.deepEqual(heldEscapeKeyDown(state, "Shift", 100), { state, held: false });
+  assert.equal(heldEscapeKeyDown(state, "Escape", 500).held, true);
 });

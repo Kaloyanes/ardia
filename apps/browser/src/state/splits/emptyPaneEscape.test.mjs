@@ -64,3 +64,38 @@ test("Esc on a blank third pane of a pinned split removes only that pane: both p
   assert.equal(S().closedTabs.some((c) => c.id === empty), false, "a blank pane leaves nothing in Recently Closed");
 });
 
+test("holding Esc on Windows with two blank panes beside a page closes only the newest blank pane even if Shift is pressed during the hold", async () => {
+  const { useHeldEscape } = await import("../../components/ui/fieldKeys.ts");
+  S().hydrate({});
+  const windowId = S().createWindow({ url: "https://a.example/" });
+  const page = activeTabId(S(), windowId);
+  const firstBlank = openSplitPane(windowId);
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [firstBlank]: { ...s.tabs[firstBlank], lastActiveAt: s.tabs[page].lastActiveAt + 1 } } }));
+  const secondBlank = openSplitPane(windowId);
+  assert.ok(firstBlank && secondBlank && splitOf(S(), firstBlank) && splitOf(S(), secondBlank));
+  assert.equal(activeTabId(S(), windowId), secondBlank);
+  const newestField = useHeldEscape();
+  const earlierField = useHeldEscape();
+  newestField.release();
+  const press = (field, tabId, key) => {
+    const e = { nativeEvent: { key } };
+    if (field.down(e)) return false;
+    return key === "Escape" ? closeEmptySplitPaneOnEscape(tabId) : false;
+  };
+  try {
+    assert.equal(press(newestField, secondBlank, "Escape"), true, "first Esc closes the newest blank pane");
+    assert.equal(S().tabs[secondBlank], undefined);
+    assert.equal(activeTabId(S(), windowId), firstBlank, "focus hands off to the remaining blank pane");
+    assert.equal(press(earlierField, firstBlank, "Shift"), false, "pressing Shift while holding Esc does not close or rearm");
+    assert.equal(press(earlierField, firstBlank, "Escape"), false, "held-Esc auto-repeat in the second blank pane is suppressed");
+    assert.ok(S().tabs[firstBlank], "the second blank pane stays open");
+    earlierField.up({ nativeEvent: { key: "Escape" } });
+    assert.equal(press(earlierField, firstBlank, "Escape"), true, "releasing and pressing Esc again closes the second blank pane");
+    await settle();
+    assert.equal(S().tabs[firstBlank], undefined);
+    assert.ok(S().tabs[page], "the loaded page beside them stays");
+  } finally {
+    newestField.release();
+  }
+});
+
