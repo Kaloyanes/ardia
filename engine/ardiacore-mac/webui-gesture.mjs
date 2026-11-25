@@ -31,8 +31,8 @@ const CATEGORIES = [
 ].join(",");
 
 async function browser() {
-  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const socket = new WebSocket(version.webSocketDebuggerUrl);
+  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+  const socket = new WebSocket(targets.find((t) => t.url.startsWith("chrome://ardia")).webSocketDebuggerUrl);
   await new Promise((resolve, reject) => ((socket.onopen = resolve), (socket.onerror = reject)));
   let next = 0;
   const pending = new Map();
@@ -79,6 +79,7 @@ for (const r of reporters) {
   const state = r.args?.chrome_frame_reporter?.state ?? r.args?.data?.state ?? "unknown";
   states[state] = (states[state] ?? 0) + 1;
 }
+if (process.env.MAC_WEBUI_DUMP) writeFileSync(process.env.MAC_WEBUI_DUMP, JSON.stringify(reporters.slice(0, 3).concat(cdp.events.filter((e) => /Frame/.test(e.name)).slice(0, 10))));
 const origin = moving?.ts ?? shots[0]?.ts ?? 0;
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
