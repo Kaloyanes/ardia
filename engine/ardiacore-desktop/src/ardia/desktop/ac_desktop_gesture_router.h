@@ -119,21 +119,21 @@ class GestureRouter {
       result.verdict = Verdict::kStale;
       return result;
     }
-    momentum_ = MomentumState();
+    if (phase == TouchPhase::kBegan || window == momentum_.window) momentum_ = MomentumState();
     if (phase == TouchPhase::kMayBegin) {
       Prepare(hit, now, window, result);
       return result;
     }
     if (phase == TouchPhase::kBegan) Begin(hit, now, window, result);
     if (gesture_.state == State::kIdle || gesture_.state == State::kIgnored) {
-      if (finishing && window == gesture_.window) ReleasePrepared(now, window, result);
+      if (finishing) ReleasePrepared(now, window, result);
       return result;
     }
     if (!gesture_.target) {
       Reject(Verdict::kTargetGone, result);
       return result;
     }
-    if (content) gesture_.content = *content;
+    if (content) MergeContent(*content);
     gesture_.dx += step_x;
     gesture_.dy += step_y;
     gesture_.time = now;
@@ -153,7 +153,7 @@ class GestureRouter {
     if (gesture_.state == State::kPending) {
       if (!ShouldTrack(result)) return result;
       gesture_.state = State::kTracking;
-      if (prepared_ && prepared_->id == gesture_.target->id) prepared_.reset();
+      if (prepared_ && prepared_window_ == gesture_.window && prepared_->id == gesture_.target->id) prepared_.reset();
       result.verdict = Verdict::kTracking;
       Emit(desktop_pager::PagerInput::kBegan, 0, result);
       result.swallow = true;
@@ -175,9 +175,10 @@ class GestureRouter {
   bool Momentum(MomentumPhase phase, double timestamp_s, int64_t window = 0) {
     if (!momentum_.armed) return false;
     if (!momentum_.flowing) {
+      if (window != momentum_.window) return false;
       const double elapsed = timestamp_s - momentum_.ended_at;
-      momentum_.flowing = window == momentum_.window && phase == MomentumPhase::kBegan && std::isfinite(elapsed) &&
-                          elapsed >= 0 && elapsed <= kMomentumStartWait;
+      momentum_.flowing = phase == MomentumPhase::kBegan && std::isfinite(elapsed) && elapsed >= 0 &&
+                          elapsed <= kMomentumStartWait;
       if (!momentum_.flowing) {
         momentum_ = MomentumState();
         return false;
@@ -276,10 +277,10 @@ class GestureRouter {
     gesture_.window = window;
     if (!hit) {
       gesture_.state = State::kIgnored;
-      ReleasePrepared(timestamp_s, prepared_window_, result);
+      ReleasePrepared(timestamp_s, window, result);
       return;
     }
-    if (!prepared_ || prepared_->id != hit->id) ReleasePrepared(timestamp_s, prepared_window_, result);
+    if (!prepared_ || prepared_->id != hit->id) ReleasePrepared(timestamp_s, window, result);
     gesture_.state = State::kPending;
     gesture_.target = *hit;
   }
@@ -287,7 +288,16 @@ class GestureRouter {
   void Reject(Verdict verdict, Result& result) {
     gesture_.state = State::kIgnored;
     result.verdict = verdict;
-    ReleasePrepared(gesture_.time, prepared_window_, result);
+    ReleasePrepared(gesture_.time, gesture_.window, result);
+  }
+
+  void MergeContent(const ContentState& next) {
+    ContentState& content = gesture_.content;
+    if (content.ack == ContentAck::kPending) content.ack = next.ack;
+    if (next.overscrolled) {
+      content.overscroll_allowed = (content.overscrolled ? content.overscroll_allowed : true) && next.overscroll_allowed;
+      content.overscrolled = true;
+    }
   }
 
   bool Wait(Result& result) {

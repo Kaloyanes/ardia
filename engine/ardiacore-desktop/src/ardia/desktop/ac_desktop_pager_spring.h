@@ -112,36 +112,8 @@ struct Frame {
 class PagerSpring {
  public:
   void Configure(int count, int selected, int64_t ack, const std::vector<std::string>* order = nullptr) {
-    const int clamped = std::max(1, count);
-    prop_selected_ = std::clamp(selected, 0, clamped - 1);
-    prop_ack_ = std::max(prop_ack_, ack);
-    if (!configured_) {
-      configured_ = true;
-      count_ = clamped;
-      SetOrder(order);
-      selected_ = prop_selected_;
-      position_ = selected_;
-      sequence_ = Next();
-      moved_ = true;
-      return;
-    }
-    const bool reordered = order && (!has_order_ || *order != order_);
-    if (clamped != count_ || reordered) {
-      int index = prop_selected_;
-      const bool had_order = has_order_;
-      const std::vector<std::string> old = order_;
-      count_ = clamped;
-      SetOrder(order);
-      if (prop_ack_ < selection_sequence_ && had_order && has_order_ && selected_ >= 0 &&
-          static_cast<std::size_t>(selected_) < old.size()) {
-        const auto moved = std::find(order_.begin(), order_.end(), old[static_cast<std::size_t>(selected_)]);
-        if (moved != order_.end()) index = static_cast<int>(moved - order_.begin());
-      }
-      CancelMotion();
-      Jump(std::clamp(index, 0, count_ - 1));
-      return;
-    }
-    Reconcile();
+    ApplyConfiguration(count, selected, ack, order);
+    if (pending_selection_ && !PendingSelectionHolds()) pending_selection_.reset();
   }
 
   void Input(PagerInput input, double distance, int direction, double page_width, double timestamp_s) {
@@ -289,6 +261,39 @@ class PagerSpring {
   };
 
   int64_t Next() { return ++counter_; }
+
+  void ApplyConfiguration(int count, int selected, int64_t ack, const std::vector<std::string>* order) {
+    const int clamped = std::max(1, count);
+    prop_selected_ = std::clamp(selected, 0, clamped - 1);
+    prop_ack_ = std::max(prop_ack_, ack);
+    if (!configured_) {
+      configured_ = true;
+      count_ = clamped;
+      SetOrder(order);
+      selected_ = prop_selected_;
+      position_ = selected_;
+      sequence_ = Next();
+      moved_ = true;
+      return;
+    }
+    const bool reordered = order && (!has_order_ || *order != order_);
+    if (clamped != count_ || reordered) {
+      int index = prop_selected_;
+      const bool had_order = has_order_;
+      const std::vector<std::string> old = order_;
+      count_ = clamped;
+      SetOrder(order);
+      if (prop_ack_ < selection_sequence_ && had_order && has_order_ && selected_ >= 0 &&
+          static_cast<std::size_t>(selected_) < old.size()) {
+        const auto moved = std::find(order_.begin(), order_.end(), old[static_cast<std::size_t>(selected_)]);
+        if (moved != order_.end()) index = static_cast<int>(moved - order_.begin());
+      }
+      CancelMotion();
+      Jump(std::clamp(index, 0, count_ - 1));
+      return;
+    }
+    Reconcile();
+  }
 
   void SetOrder(const std::vector<std::string>* order) {
     has_order_ = order != nullptr;

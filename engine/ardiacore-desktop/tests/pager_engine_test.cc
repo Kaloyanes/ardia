@@ -1063,6 +1063,133 @@ void MomentumNeverPrecedesTheTouchEnd() {
   EXPECT(edge.router.Momentum(gesture::MomentumPhase::kBegan, edge.t + gesture::kMomentumStartWait));
 }
 
+void RouterReleasesAPagerPreparedBeforeItBegan() {
+  const gesture::Target pager_target = NativePager();
+  for (const gesture::TouchPhase finish : {gesture::TouchPhase::kCancelled, gesture::TouchPhase::kEnded}) {
+    PagerSpring spring = Configured(3, 0);
+    EXPECT(spring.SwitchTo(2));
+    double now = 0;
+    for (int i = 0; i < 4; ++i) spring.StepFrame(now += kFrame);
+    RouterHarness h;
+    const auto feed = [&](const gesture::Result& result) {
+      for (const gesture::Action& action : result.actions) gesture::ApplyToPager(spring, action, kWidth);
+    };
+    feed(h.Send(gesture::TouchPhase::kMayBegin, 0, 0, &pager_target, nullptr, 42));
+    EXPECT(spring.phase() == PagerPhase::kHolding);
+    EXPECT(h.Send(finish, 0, 0, nullptr, nullptr, 7).actions.empty());
+    EXPECT(spring.phase() == PagerPhase::kHolding);
+    const gesture::Result released = h.Send(finish, 0, 0, nullptr, nullptr, 42);
+    EXPECT(released.actions.size() == 1 && released.actions[0].input == PagerInput::kAbandon);
+    feed(released);
+    EXPECT(spring.phase() == PagerPhase::kSettling);
+    RunFrames(spring, now);
+    EXPECT(spring.position() == 2);
+    EXPECT(!h.router.prepared());
+  }
+}
+
+void RouterKeepsEachWindowsStateApart() {
+  const gesture::Target a = NativePager(1);
+  const gesture::Target b = NativePager(2);
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, 0, 0, &a, nullptr, 1);
+    EXPECT(h.router.pending());
+    h.Send(gesture::TouchPhase::kMayBegin, 0, 0, &b, nullptr, 2);
+    EXPECT(h.router.prepared() == 2);
+    const gesture::Result rejected = h.Send(gesture::TouchPhase::kChanged, 0, 20, nullptr, nullptr, 1);
+    EXPECT(rejected.verdict == gesture::Verdict::kVerticalIntent);
+    EXPECT(rejected.actions.empty());
+    EXPECT(h.router.prepared() == 2);
+    EXPECT(h.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 1).actions.empty());
+    const gesture::Result own = h.Send(gesture::TouchPhase::kCancelled, 0, 0, nullptr, nullptr, 2);
+    EXPECT(own.actions.size() == 1 && own.actions[0].target == 2 && own.actions[0].input == PagerInput::kAbandon);
+  }
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, -10, 0, &b, nullptr, 2);
+    h.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 2);
+    h.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 1);
+    h.Send(gesture::TouchPhase::kMayBegin, 0, 0, nullptr, nullptr, 1);
+    EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t, 1));
+    EXPECT(h.router.Momentum(gesture::MomentumPhase::kBegan, h.t + 0.01, 2));
+    EXPECT(h.router.Momentum(gesture::MomentumPhase::kEnded, h.t + 0.2, 2));
+  }
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, -10, 0, &b, nullptr, 2);
+    h.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 2);
+    h.Send(gesture::TouchPhase::kBegan, 0, 0, &a, nullptr, 1);
+    EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t, 2));
+  }
+}
+
+void ContentRefusalLatchesForTheGesture() {
+  gesture::Target page = NativePager();
+  page.page_hit = true;
+  const gesture::ContentState consumed{gesture::ContentAck::kConsumed, false, true};
+  const gesture::ContentState unconsumed{gesture::ContentAck::kUnconsumed, false, true};
+  const gesture::ContentState overscrolled{gesture::ContentAck::kUnconsumed, true, true};
+  const gesture::ContentState blocked{gesture::ContentAck::kUnconsumed, true, false};
+  {
+    RouterHarness h;
+    EXPECT(h.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &consumed).verdict == gesture::Verdict::kWaiting);
+    EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &overscrolled).verdict ==
+           gesture::Verdict::kContentConsumed);
+    EXPECT(!h.router.tracking());
+  }
+  {
+    RouterHarness h;
+    EXPECT(h.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &blocked).verdict == gesture::Verdict::kWaiting);
+    EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &overscrolled).verdict ==
+           gesture::Verdict::kOverscrollBlocked);
+    EXPECT(!h.router.tracking());
+  }
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &unconsumed);
+    EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &consumed).verdict == gesture::Verdict::kWaiting);
+    EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &overscrolled).verdict ==
+           gesture::Verdict::kTracking);
+  }
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &consumed);
+    h.Send(gesture::TouchPhase::kEnded, 0, 0);
+    h.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &overscrolled);
+    EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0).verdict == gesture::Verdict::kTracking);
+  }
+}
+
+void ARemovedProfileDoesNotReviveItsSelectionEvent() {
+  const std::vector<std::string> abc = {"a", "b", "c"};
+  const std::vector<std::string> ac = {"a", "c"};
+  for (const bool by_select : {true, false}) {
+    PagerSpring spring;
+    spring.Configure(3, 0, 0, &abc);
+    spring.StepFrame(0);
+    if (by_select) {
+      EXPECT(spring.Select("b", abc));
+    } else {
+      EXPECT(spring.SwitchTo(1));
+    }
+    const int64_t picked = spring.selection_sequence();
+    spring.Configure(2, 0, 0, &ac);
+    spring.Configure(3, 1, picked, &abc);
+    EXPECT(spring.selected_id() == "b");
+    EXPECT(!spring.StepFrame(0.01).selected_changed);
+  }
+  PagerSpring kept;
+  kept.Configure(3, 0, 0, &abc);
+  kept.StepFrame(0);
+  EXPECT(kept.Select("b", abc));
+  const std::vector<std::string> cba = {"c", "b", "a"};
+  kept.Configure(3, 2, 0, &cba);
+  kept.Configure(3, 1, 0, &abc);
+  EXPECT(kept.selected_id() == "b");
+  EXPECT(kept.StepFrame(0.01).selected_changed);
+}
+
 struct Case {
   const char* name;
   void (*run)();
@@ -1099,6 +1226,10 @@ int main() {
       {"reconfiguring drops a superseded selection event", ReconfiguringDropsASupersededSelectionEvent},
       {"detent crossings are counted within a frame", DetentCrossingsAreCountedWithinAFrame},
       {"momentum never precedes the touch end", MomentumNeverPrecedesTheTouchEnd},
+      {"router releases a pager prepared before it began", RouterReleasesAPagerPreparedBeforeItBegan},
+      {"router keeps each window's state apart", RouterKeepsEachWindowsStateApart},
+      {"content refusal latches for the gesture", ContentRefusalLatchesForTheGesture},
+      {"a removed profile does not revive its selection event", ARemovedProfileDoesNotReviveItsSelectionEvent},
   });
   for (const Case& test : cases) {
     current = test.name;
