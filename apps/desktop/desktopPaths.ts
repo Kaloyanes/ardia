@@ -11,3 +11,7 @@ export const posixFilePath = (url: URL | string, windows?: boolean): string => t
 export const keyedPaths = <V>(entries: Iterable<readonly [string, V]>): Map<string, V> => new Map([...entries].map(([path, value]) => [pathKey(path), value]));
 
 export const pathKeys = (paths: Iterable<string>): Set<string> => new Set([...paths].map(pathKey));
+
+export const HOST_ASSET_PATH = /^[A-Za-z0-9._/-]+$/;
+
+export const hostSafeFileName = (name: string): string => name.replace(/[^A-Za-z0-9._/-]/g, "-");
