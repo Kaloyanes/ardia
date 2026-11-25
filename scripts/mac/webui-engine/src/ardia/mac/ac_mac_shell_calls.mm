@@ -71,6 +71,11 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    "ArdiaShell.openWindow",
+    "ArdiaShell.closeWindow",
+    "ArdiaShell.focusWindow",
+    "ArdiaShell.windowIds",
+    "ArdiaShell.utilityReady",
 };
 
 scoped_refptr<base::SequencedTaskRunner> FileRunner() {
@@ -183,15 +188,21 @@ std::string ShellHostView::BootstrapJson() const {
   }
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
-  bootstrap.Set("startup", true);
+  bootstrap.Set("startup", startup_);
   bootstrap.Set("profileId", "default");
   bootstrap.Set("nativeModules",
                 base::DictValue().Set(
                     "ArdiaApp", base::DictValue().Set("systemInfo", std::move(info))));
   bootstrap.Set("capabilities", std::move(capabilities));
   bootstrap.Set("glassPanels", true);
-  bootstrap.Set("pageProfile", "");
-  bootstrap.Set("windowKind", "browser");
+  bootstrap.Set("pageProfile", page_profile_);
+  bootstrap.Set("windowKind", kind_);
+  if (!title_.empty()) {
+    bootstrap.Set("title", title_);
+  }
+  if (is_utility()) {
+    bootstrap.Set("utility", utility_.Clone());
+  }
   bootstrap.Set("shellZoom", 1.0);
   return base::WriteJson(bootstrap).value_or("{}");
 }
@@ -385,7 +396,23 @@ void ShellHostView::Invoke(const std::string& method,
                                       base::NumberToString(renderer_generation_))));
   }
   if (method == "ArdiaShell.windowIds") {
-    return Reply(std::move(done), base::Value(base::ListValue().Append(window_id_)));
+    base::ListValue ids;
+    for (ShellHostView* host : Hosts()) {
+      if (host->browser()) {
+        ids.Append(host->window_id());
+      }
+    }
+    return Reply(std::move(done), base::Value(std::move(ids)));
+  }
+  if (method == "ArdiaShell.openWindow") {
+    return OpenWindow(values, std::move(done));
+  }
+  if (method == "ArdiaShell.utilityReady") {
+    if (!is_utility() || (!first_string().empty() && first_string() != window_id_)) {
+      return std::move(done).Run(false, base::Value("No such utility renderer"));
+    }
+    utility_ready_ = true;
+    return Reply(std::move(done), base::Value(utility_.Clone()));
   }
   if (method == "ArdiaShell.windowFrame") {
     const gfx::Rect bounds = browser_ ? browser_->GetWindow()->GetBounds()
@@ -407,7 +434,7 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.windowButtonLayout") {
     return Reply(std::move(done),
                  base::Value(base::DictValue()
-                                 .Set("layout", "close,minimize,maximize:")
+                                 .Set("layout", "")
                                  .Set("desktop", "macos")));
   }
   if (method == "ArdiaShell.isDarkAppearance") {
@@ -447,9 +474,12 @@ void ShellHostView::Invoke(const std::string& method,
     return;
   }
   if (method == "ArdiaShell.focusWindow") {
-    if (browser_ && !BackgroundInstance()) {
-      browser_->GetWindow()->Activate();
+    ShellHostView* target =
+        first_string().empty() ? this : HostForWindow(first_string());
+    if (!target) {
+      return std::move(done).Run(false, base::Value("No such native window"));
     }
+    target->ActivateWindow();
     return Reply(std::move(done), base::Value(true));
   }
   if (method == "ArdiaShell.setActiveProfile") {
@@ -468,7 +498,10 @@ void ShellHostView::Invoke(const std::string& method,
                     GetWeakPtr(), std::move(done)));
     return;
   }
-  if (method == "ArdiaShell.quit" || method == "ArdiaShell.closeWindow") {
+  if (method == "ArdiaShell.closeWindow") {
+    return CloseWindowCall(first_string(), std::move(done));
+  }
+  if (method == "ArdiaShell.quit") {
     Reply(std::move(done), base::Value());
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&chrome::AttemptExit));

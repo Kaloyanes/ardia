@@ -65,8 +65,21 @@ void WithProfile(std::string_view name,
 std::string ProfileName(const Profile* profile);
 base::FilePath DataDirectory();
 base::FilePath AssetDirectory();
+struct WindowSpec {
+  std::string id = "main";
+  std::string kind = "browser";
+  std::string title;
+  std::string page_profile;
+  bool startup = true;
+  base::DictValue utility;
+};
+
 std::vector<ShellHostView*>& Hosts();
 ShellHostView* HostForShell(content::WebContents* contents);
+ShellHostView* HostForWindow(std::string_view id);
+ShellHostView* OpenShellWindow(Profile* profile,
+                               WindowSpec spec,
+                               std::optional<gfx::Rect> frame);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
 bool BackgroundInstance();
@@ -126,7 +139,7 @@ class ShellHostView : public views::View,
   ShellHostView(BrowserWindowInterface* browser,
                 BrowserView* browser_view,
                 Profile* app_profile,
-                std::string window_id);
+                WindowSpec spec);
   ShellHostView(const ShellHostView&) = delete;
   ShellHostView& operator=(const ShellHostView&) = delete;
   ~ShellHostView() override;
@@ -135,6 +148,10 @@ class ShellHostView : public views::View,
   void DetachBrowser();
 
   const std::string& window_id() const { return window_id_; }
+  bool is_utility() const { return shell_policy::UtilityKind(kind_); }
+  void NavigateUtility(base::DictValue utility);
+  void ActivateWindow();
+  void CloseWindow();
   BrowserWindowInterface* browser() const { return browser_; }
   Profile* app_profile() const { return app_profile_; }
   content::WebContents* shell_contents() const;
@@ -220,6 +237,8 @@ class ShellHostView : public views::View,
   void SetMainMenu(const base::DictValue& args, Done done);
   void ShowShellContextMenu(const base::DictValue& args, Done done);
   void SetTrafficLights(const base::DictValue& args, Done done);
+  void OpenWindow(const base::ListValue* values, Done done);
+  void CloseWindowCall(const std::string& id, Done done);
   void StartWindowMove(Done done);
   void CaptionDoubleClick(Done done);
   void WatchWindowDrag();
@@ -241,11 +260,18 @@ class ShellHostView : public views::View,
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<Profile> app_profile_;
   std::string window_id_;
+  std::string kind_;
+  std::string title_;
+  std::string page_profile_;
+  bool startup_ = true;
+  base::DictValue utility_;
+  bool utility_ready_ = false;
   bool closing_ = false;
   bool painted_ = false;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
 
   raw_ptr<views::WebView> shell_ = nullptr;
+  raw_ptr<views::View> under_shell_ = nullptr;
   std::vector<glass::Rect> pass_;
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;

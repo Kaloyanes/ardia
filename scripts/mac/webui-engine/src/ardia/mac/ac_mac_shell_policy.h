@@ -7,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace ardia_mac::shell_policy {
@@ -105,8 +106,88 @@ inline ShortcutAction ShortcutActionFor(bool suppressed) {
   return suppressed ? ShortcutAction::kConsume : ShortcutAction::kDispatch;
 }
 
+inline constexpr int kShiftDown = 1 << 1;
+inline constexpr int kControlDown = 1 << 2;
+inline constexpr int kAltDown = 1 << 3;
+inline constexpr int kCommandDown = 1 << 4;
+inline constexpr int kShortcutModifiers = kShiftDown | kControlDown | kAltDown | kCommandDown;
+
 inline bool ShortcutAccepted(int key_code, int modifiers, bool has_command, bool suppressed) {
-  return key_code >= 1 && key_code <= 255 && modifiers >= 0 && (has_command || suppressed);
+  return key_code >= 1 && key_code <= 255 && modifiers >= 0 && (modifiers & ~kShortcutModifiers) == 0 &&
+         (has_command || suppressed);
+}
+
+enum class ShortcutTiming { kBeforePage, kAfterPage };
+
+inline ShortcutTiming ShortcutTimingFor(bool not_in_text) {
+  return not_in_text ? ShortcutTiming::kAfterPage : ShortcutTiming::kBeforePage;
+}
+
+inline constexpr std::size_t kWindowIdLimit = 256;
+inline constexpr std::string_view kSettingsWindow = "settings";
+inline constexpr std::string_view kImportWindow = "import";
+inline constexpr std::string_view kBrowserWindowKind = "browser";
+inline constexpr std::string_view kSmallWindowKind = "small";
+
+inline bool UtilityKind(std::string_view kind) {
+  return kind == kSettingsWindow || kind == kImportWindow;
+}
+
+inline bool ValidWindowId(std::string_view id) {
+  if (id.empty() || id.size() > kWindowIdLimit) return false;
+  return std::all_of(id.begin(), id.end(), [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+           c == ':' || c == '.';
+  });
+}
+
+inline bool ValidProfileId(std::string_view name) {
+  if (name.empty() || name.size() > 128) return false;
+  const char first = name.front();
+  if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z'))) return false;
+  return std::all_of(name.begin(), name.end(), [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+  });
+}
+
+inline std::string_view WindowKindFor(std::string_view kind) {
+  if (UtilityKind(kind)) return kind;
+  return kind == kSmallWindowKind ? kSmallWindowKind : kBrowserWindowKind;
+}
+
+enum class WindowRefusal { kNone, kInvalid, kPrivateUnavailable, kProfile };
+
+struct WindowRequest {
+  std::string_view id;
+  std::string_view kind;
+  std::string_view profile;
+  bool incognito = false;
+  bool private_seed = false;
+};
+
+inline WindowRefusal CheckWindowRequest(const WindowRequest& request) {
+  if (!ValidWindowId(request.id)) return WindowRefusal::kInvalid;
+  const bool utility = UtilityKind(request.kind);
+  if (utility && request.id != request.kind) return WindowRefusal::kInvalid;
+  if (!utility && UtilityKind(request.id)) return WindowRefusal::kInvalid;
+  if (request.incognito || request.private_seed) return WindowRefusal::kPrivateUnavailable;
+  if (!request.profile.empty() && request.profile != "default" && !ValidProfileId(request.profile)) {
+    return WindowRefusal::kProfile;
+  }
+  return WindowRefusal::kNone;
+}
+
+inline std::string_view PageProfileFor(std::string_view kind, std::string_view profile) {
+  if (UtilityKind(kind) || profile == "default") return std::string_view();
+  return profile;
+}
+
+enum class CloseAction { kRefuse, kCloseWindow, kQuit };
+
+inline CloseAction CloseActionFor(bool found, bool utility, std::size_t browser_windows) {
+  if (!found) return CloseAction::kRefuse;
+  if (utility) return CloseAction::kCloseWindow;
+  return browser_windows > 1 ? CloseAction::kCloseWindow : CloseAction::kQuit;
 }
 
 inline std::string_view OfferedProfile(std::string_view profile_name) {

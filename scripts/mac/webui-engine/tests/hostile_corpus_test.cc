@@ -206,6 +206,22 @@ TEST(window_guards) {
   CHECK(ardia_mac::window::LightsFrom(25, 20, false, {1280, 800}).has_value());
 }
 
+TEST(window_requests) {
+  namespace policy = ardia_mac::shell_policy;
+  for (const std::string& text : Load().strings) {
+    for (const std::string_view kind : {std::string_view(), std::string_view("settings"), std::string_view(text)}) {
+      if (policy::CheckWindowRequest({text, kind, text, false, false}) == policy::WindowRefusal::kNone) {
+        CHECK(!text.empty() && text.size() <= policy::kWindowIdLimit && Charset(text, "_-:."));
+        CHECK(!policy::UtilityKind(text) || text == kind);
+        CHECK(text == "default" || policy::ValidProfileId(text));
+        CHECK(policy::PageProfileFor(kind, text).empty() || policy::ValidProfileId(policy::PageProfileFor(kind, text)));
+      }
+      CHECK(policy::CheckWindowRequest({text, kind, "", true, false}) != policy::WindowRefusal::kNone);
+    }
+  }
+  CHECK(policy::CheckWindowRequest({"settings", "settings", "", false, false}) == policy::WindowRefusal::kNone);
+}
+
 TEST(bridge_documents) {
   for (const std::string& text : Load().strings) {
     if (ardia_mac::shell_policy::ValidDocumentName(text)) {

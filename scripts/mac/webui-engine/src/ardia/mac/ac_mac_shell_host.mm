@@ -29,6 +29,7 @@
 #include "components/zoom/zoom_controller.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -56,6 +57,7 @@
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/views/controls/webview/webview.h"
@@ -204,20 +206,11 @@ void Trace(const std::string& line) {
   LOG(WARNING) << "Ardia Mac WebUI: " << line;
 }
 
-bool ValidProfileId(std::string_view name) {
-  if (name.empty() || name.size() > 128 || !base::IsAsciiAlpha(name[0])) {
-    return false;
-  }
-  return std::ranges::all_of(name, [](char c) {
-    return base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '_' || c == '-';
-  });
-}
-
 void WithProfile(std::string_view name,
                  base::OnceCallback<void(Profile*)> callback) {
   ProfileManager* manager = g_browser_process->profile_manager();
   const bool app_profile = name.empty() || name == "default";
-  if (!app_profile && !ValidProfileId(name)) {
+  if (!app_profile && !shell_policy::ValidProfileId(name)) {
     std::move(callback).Run(nullptr);
     return;
   }
@@ -259,6 +252,15 @@ std::string ProfileName(const Profile* profile) {
 std::vector<ShellHostView*>& Hosts() {
   static base::NoDestructor<std::vector<ShellHostView*>> hosts;
   return *hosts;
+}
+
+ShellHostView* HostForWindow(std::string_view id) {
+  for (ShellHostView* host : Hosts()) {
+    if (host->window_id() == id) {
+      return host;
+    }
+  }
+  return nullptr;
 }
 
 ShellHostView* HostForShell(content::WebContents* contents) {
@@ -403,11 +405,16 @@ struct ShellHostView::WindowDrag {
 ShellHostView::ShellHostView(BrowserWindowInterface* browser,
                              BrowserView* browser_view,
                              Profile* app_profile,
-                             std::string window_id)
+                             WindowSpec spec)
     : browser_(browser),
       browser_view_(browser_view),
       app_profile_(app_profile),
-      window_id_(std::move(window_id)) {
+      window_id_(std::move(spec.id)),
+      kind_(std::move(spec.kind)),
+      title_(std::move(spec.title)),
+      page_profile_(std::move(spec.page_profile)),
+      startup_(spec.startup),
+      utility_(std::move(spec.utility)) {
   Hosts().push_back(this);
 }
 
@@ -419,12 +426,16 @@ ShellHostView::~ShellHostView() {
 void ShellHostView::Initialize() {
   view_observation_.Observe(browser_view_.get());
   focus_manager_ = GetFocusManager();
+  under_shell_ = AddChildView(std::make_unique<views::View>());
+  under_shell_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+  under_shell_->layer()->SetFillsBoundsOpaquely(false);
+  under_shell_->SetCanProcessEventsWithinSubtree(false);
   shell_ = AddChildView(std::make_unique<views::WebView>(app_profile_.get()));
   content::WebContents* shell = shell_->GetWebContents();
   shell->SetDelegate(this);
   Transparencies()[shell] = std::make_unique<ShellTransparency>(shell);
   glass_ = std::make_unique<GlassRegions>(
-      browser_view_->GetWidget(),
+      browser_view_->GetWidget(), under_shell_.get(),
       base::BindRepeating(
           [](base::WeakPtr<ShellHostView> host, int generation) {
             if (host) {
@@ -685,6 +696,9 @@ void ShellHostView::LayoutOverlay() {
   if (shell_) {
     shell_->SetBoundsRect(GetLocalBounds());
   }
+  if (under_shell_) {
+    under_shell_->SetBoundsRect(GetLocalBounds());
+  }
   if (views::WebView* chrome_view = browser_view_->GetActiveContentsWebView()) {
     chrome_view->SetVisible(false);
   }
@@ -697,6 +711,9 @@ void ShellHostView::Restack() {
     return;
   }
   browser_view_->ReorderChildView(this, browser_view_->children().size());
+  if (under_shell_) {
+    ReorderChildView(under_shell_, children().size());
+  }
   ReorderChildView(shell_, children().size());
 }
 
@@ -1341,8 +1358,131 @@ void ShellHostView::SetTrafficLights(const base::DictValue& args, Done done) {
     return std::move(done).Run(false,
                                base::Value("Traffic light centers must be finite"));
   }
-  ardia_mac::SetTrafficLights(widget, *lights);
+  ardia_mac::SetTrafficLights(widget, window::ScaledLights(*lights, ShellZoom()));
   std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::NavigateUtility(base::DictValue utility) {
+  utility_ = std::move(utility);
+  if (utility_ready_) {
+    Emit("ArdiaShell", "onUtilityNavigation", base::Value(utility_.Clone()));
+  }
+}
+
+void ShellHostView::ActivateWindow() {
+  if (browser_ && !BackgroundInstance()) {
+    browser_->GetWindow()->Activate();
+  }
+}
+
+void ShellHostView::CloseWindow() {
+  if (browser_) {
+    browser_->GetWindow()->Close();
+  }
+}
+
+void ShellHostView::OpenWindow(const base::ListValue* values, Done done) {
+  const std::string id = values && !values->empty() && (*values)[0].is_string()
+                             ? (*values)[0].GetString()
+                             : std::string();
+  const base::DictValue* options =
+      values && values->size() > 1 ? (*values)[1].GetIfDict() : nullptr;
+  const std::string kind = options ? Text(*options, "kind") : std::string();
+  const std::string profile = options ? Text(*options, "profile") : std::string();
+  const shell_policy::WindowRefusal refusal = shell_policy::CheckWindowRequest(
+      {id, kind, profile,
+       options && options->FindBool("incognito").value_or(false),
+       options && options->FindDict("privateWindow")});
+  if (refusal == shell_policy::WindowRefusal::kInvalid) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_REQUEST", "Invalid native window request"));
+  }
+  if (refusal == shell_policy::WindowRefusal::kPrivateUnavailable) {
+    return std::move(done).Run(
+        false, Failure("ERR_PROFILE_UNAVAILABLE",
+                       "Private windows are not in the Mac WebUI shell yet"));
+  }
+  if (refusal == shell_policy::WindowRefusal::kProfile) {
+    return std::move(done).Run(
+        false, Failure("ERR_PROFILE_INVALID", "Invalid profile"));
+  }
+  const bool utility = shell_policy::UtilityKind(kind);
+  base::DictValue place;
+  if (utility && options) {
+    if (const base::DictValue* settings = options->FindDict("settings")) {
+      place = settings->Clone();
+    }
+    if (const std::string* source = options->FindString("importSource")) {
+      place.Set("importSource", *source);
+    }
+  }
+  if (ShellHostView* existing = HostForWindow(id)) {
+    if (existing->is_utility() && !place.empty()) {
+      existing->NavigateUtility(std::move(place));
+    }
+    if (!options || options->FindBool("focus").value_or(true)) {
+      existing->ActivateWindow();
+    }
+    return std::move(done).Run(true, base::Value());
+  }
+  if (!app_profile_ || !browser_ || closing_) {
+    return std::move(done).Run(
+        false, Failure("ERR_PROFILE_UNAVAILABLE", "No window to open from"));
+  }
+  const gfx::Rect bounds = browser_->GetWindow()->GetBounds();
+  const window::Frame opener{static_cast<double>(bounds.x()),
+                             static_cast<double>(bounds.y()),
+                             static_cast<double>(bounds.width()),
+                             static_cast<double>(bounds.height())};
+  const window::Frame frame =
+      utility ? window::UtilityFrameOver(opener, kind) : window::CascadedFrom(opener);
+  WindowSpec spec;
+  spec.id = id;
+  spec.kind = std::string(shell_policy::WindowKindFor(kind));
+  spec.title = options ? Text(*options, "title") : std::string();
+  spec.page_profile = std::string(shell_policy::PageProfileFor(kind, profile));
+  spec.startup = false;
+  spec.utility = std::move(place);
+  if (!OpenShellWindow(app_profile_, std::move(spec),
+                       gfx::Rect(glass::ClampToInt(frame.x, 1e5),
+                                 glass::ClampToInt(frame.y, 1e5),
+                                 std::max(1, glass::ClampToInt(frame.width, 1e5)),
+                                 std::max(1, glass::ClampToInt(frame.height, 1e5))))) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_OPEN", "The window could not open"));
+  }
+  std::move(done).Run(true, base::Value());
+}
+
+void ShellHostView::CloseWindowCall(const std::string& id, Done done) {
+  ShellHostView* target = HostForWindow(id.empty() ? window_id_ : id);
+  const std::size_t browser_windows = static_cast<std::size_t>(
+      std::ranges::count_if(Hosts(), [](ShellHostView* host) {
+        return host->browser() && !host->is_utility();
+      }));
+  switch (shell_policy::CloseActionFor(target != nullptr,
+                                       target && target->is_utility(),
+                                       browser_windows)) {
+    case shell_policy::CloseAction::kRefuse:
+      return std::move(done).Run(false, base::Value("No such native window"));
+    case shell_policy::CloseAction::kCloseWindow: {
+      std::move(done).Run(true, base::Value());
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<ShellHostView> host) {
+                           if (host) {
+                             host->CloseWindow();
+                           }
+                         },
+                         target->GetWeakPtr()));
+      return;
+    }
+    case shell_policy::CloseAction::kQuit:
+      std::move(done).Run(true, base::Value());
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&chrome::AttemptExit));
+      return;
+  }
 }
 
 void ShellHostView::CaptionDoubleClick(Done done) {
@@ -1626,7 +1766,13 @@ void ShellHostView::SetKeyboardShortcuts(const base::ListValue* values,
   shortcuts_ = std::move(shortcuts);
   for (const auto& [accelerator, binding] : shortcuts_) {
     focus_manager_->RegisterAccelerator(
-        accelerator, ui::AcceleratorManager::kNormalPriority, this);
+        accelerator,
+        shell_policy::ShortcutTimingFor(
+            binding.FindBool("notInText").value_or(false)) ==
+                shell_policy::ShortcutTiming::kBeforePage
+            ? ui::AcceleratorManager::kHighPriority
+            : ui::AcceleratorManager::kNormalPriority,
+        this);
   }
   std::move(done).Run(true, base::Value());
 }

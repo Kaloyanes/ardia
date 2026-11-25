@@ -434,6 +434,81 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_open_window_is_served_advertised_and_checked_first(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        for method in ('ArdiaShell.openWindow', 'ArdiaShell.closeWindow', 'ArdiaShell.focusWindow',
+                       'ArdiaShell.windowIds', 'ArdiaShell.utilityReady'):
+            self.assertIn(f'"{method}"', listed)
+        self.assertIn('return OpenWindow(values, std::move(done));', calls)
+        self.assertIn('return CloseWindowCall(first_string(), std::move(done));', calls)
+        self.assertNotIn('method == "ArdiaShell.quit" || method == "ArdiaShell.closeWindow"', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        opening = host.split('void ShellHostView::OpenWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(opening.index('shell_policy::CheckWindowRequest('), opening.index('HostForWindow(id)'))
+        self.assertLess(opening.index('HostForWindow(id)'), opening.index('OpenShellWindow('))
+        self.assertIn('existing->NavigateUtility(std::move(place));', opening)
+        self.assertIn('existing->ActivateWindow();', opening)
+        closing = host.split('void ShellHostView::CloseWindowCall(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::CloseActionFor(', closing)
+        self.assertLess(closing.index('host->CloseWindow();'), closing.index('chrome::AttemptExit'))
+        self.assertIn('Emit("ArdiaShell", "onUtilityNavigation"', host)
+        entry = self.read('ac_mac_webui.mm')
+        self.assertIn('ShellHostView* OpenShellWindow(Profile* profile,', entry)
+        self.assertIn('OpenShellWindow(profile, std::move(spec), launch.frame);', entry)
+
+    def test_each_window_boots_as_its_own_kind(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        boot = calls.split('std::string ShellHostView::BootstrapJson() const {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('bootstrap.Set("startup", startup_);', boot)
+        self.assertIn('bootstrap.Set("windowKind", kind_);', boot)
+        self.assertIn('bootstrap.Set("pageProfile", page_profile_);', boot)
+        self.assertIn('bootstrap.Set("utility", utility_.Clone());', boot)
+        desktop = (REPO / 'apps/desktop/src/utilityNavigation.ts').read_text()
+        self.assertIn('"ArdiaShell.utilityReady"', desktop)
+        self.assertIn('event !== "onUtilityNavigation"', desktop)
+
+    def test_shortcuts_beat_chromiums_own_table_but_leave_caret_keys_to_text(self):
+        host = self.read('ac_mac_shell_host.mm')
+        table = host.split('void ShellHostView::SetKeyboardShortcuts(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('shell_policy::ShortcutTimingFor(', table)
+        self.assertIn('binding.FindBool("notInText")', table)
+        self.assertIn('ui::AcceleratorManager::kHighPriority', table)
+        self.assertIn('ui::AcceleratorManager::kNormalPriority', table)
+        mac = (REPO / 'apps/desktop/src/platform/shortcutKeys.mac.ts').read_text()
+        self.assertIn('command: 16, control: 4', mac)
+        self.assertIn('export const COMMAND_PRESSED = (event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">) => event.metaKey;', mac)
+        desktop = (REPO / 'apps/desktop/src/platform/shortcutKeys.desktop.ts').read_text()
+        self.assertIn('command: 4, control: 16', desktop)
+
+    def test_page_glass_sits_between_the_pages_and_the_shell(self):
+        glass = self.read('ac_mac_glass.mm')
+        self.assertNotIn('page_slots', glass)
+        self.assertNotIn('[host addSubview:', glass)
+        mount = glass.split('bool GlassRegions::MountUnderShell(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('under_shell_->layer()', mount)
+        self.assertIn('SetBackgroundBlur(', mount)
+        self.assertIn('SetMasksToBounds(true)', mount)
+        relayout = glass.split('glass::Layout GlassRegions::Relayout() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('glass::MountsUnderShell(placement.plane)', relayout)
+        self.assertIn('[frame addSubview:views_->behind positioned:NSWindowBelow relativeTo:content];', relayout)
+        host = self.read('ac_mac_shell_host.mm')
+        restack = host.split('void ShellHostView::Restack() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(restack.index('ReorderChildView(under_shell_, children().size());'),
+                        restack.index('ReorderChildView(shell_, children().size());'))
+        self.assertIn('under_shell_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);', host)
+        self.assertIn('browser_view_->GetWidget(), under_shell_.get(),', host)
+
+    def test_native_traffic_lights_replace_drawn_window_buttons(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('.Set("layout", "")', calls)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('window::ScaledLights(*lights, ShellZoom())', host)
+        chrome = (REPO / 'apps/browser/src/lib/platformChrome.mac.ts').read_text()
+        self.assertIn('export { applyWindowButtonStyle, WINDOW_BUTTON_STYLES, WINDOW_CHROME } from "./platformChrome.ts";', chrome)
+        lights = (REPO / 'apps/desktop/src/nativeTrafficLights.ts').read_text()
+        self.assertIn('export const NATIVE_TRAFFIC_LIGHTS = "shell.trafficLights";', lights)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -449,7 +524,8 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
-                       'session.write', 'ArdiaShell.writeDocument'):
+                       'session.write', 'ArdiaShell.writeDocument', 'ArdiaShell.openWindow',
+                       'ArdiaShell.closeWindow'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',

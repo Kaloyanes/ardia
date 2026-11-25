@@ -269,6 +269,23 @@ TEST(the_whole_traffic_light_group_stays_inside_the_window) {
   CHECK(defaults && defaults->center == (window::Point{25, 20}));
 }
 
+TEST(new_windows_cascade_and_utility_windows_center_over_their_opener) {
+  const window::Frame opener{100, 80, 1280, 800};
+  CHECK(window::CascadedFrom(opener) == (window::Frame{122, 102, 1280, 800}));
+  CHECK(window::CascadedFrom(window::Frame{0, 0, 0, 0}) == (window::Frame{22, 22, 1, 1}));
+  CHECK(window::UtilityFrameOver(opener, "settings") == (window::Frame{330, 160, 820, 640}));
+  CHECK(window::UtilityFrameOver(opener, "import") == (window::Frame{420, 180, 640, 600}));
+}
+
+TEST(traffic_lights_follow_the_shell_zoom) {
+  const window::Lights lights{window::Point{25, 27}, false};
+  CHECK(window::ScaledLights(lights, 1).center == (window::Point{25, 27}));
+  CHECK(window::ScaledLights(lights, 1.25).center == (window::Point{31.25, 33.75}));
+  CHECK(window::ScaledLights(lights, std::numeric_limits<double>::quiet_NaN()).center == (window::Point{25, 27}));
+  CHECK(window::ScaledLights(lights, 0).center == (window::Point{25, 27}));
+  CHECK(window::ScaledLights(window::Lights{window::Point{25, 27}, true}, 2).hidden);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

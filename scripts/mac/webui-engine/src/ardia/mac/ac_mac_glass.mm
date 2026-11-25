@@ -11,6 +11,14 @@
 
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_solid_color.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
 @interface ArdiaMacGlassSlotView : NSView
@@ -198,13 +206,17 @@ bool LiquidGlassAvailable() {
 
 struct GlassRegions::Views {
   ArdiaMacGlassSlotView* behind = nil;
-  std::map<int, ArdiaMacGlassSlotView*> page_slots;
-  std::map<int, NSView* __weak> page_views;
   std::map<glass::SlotKey, NSView*> effects;
+  std::map<int, std::unique_ptr<ui::LayerNotDrawn>> page_clips;
+  std::map<glass::SlotKey, std::unique_ptr<ui::LayerSolidColor>> under_shell;
+  std::map<std::string, double> blur;
 };
 
-GlassRegions::GlassRegions(views::Widget* widget, Presented presented)
+GlassRegions::GlassRegions(views::Widget* widget,
+                           views::View* under_shell,
+                           Presented presented)
     : widget_(widget),
+      under_shell_(under_shell),
       views_(std::make_unique<Views>()),
       presented_(std::move(presented)) {}
 
@@ -217,11 +229,9 @@ void GlassRegions::Clear() {
     [view removeFromSuperview];
   }
   views_->effects.clear();
-  for (auto& [id, slot] : views_->page_slots) {
-    [slot removeFromSuperview];
-  }
-  views_->page_slots.clear();
-  views_->page_views.clear();
+  views_->under_shell.clear();
+  views_->page_clips.clear();
+  views_->blur.clear();
   [views_->behind removeFromSuperview];
   views_->behind = nil;
   placed_.clear();
@@ -313,6 +323,45 @@ void GlassRegions::SetSurface(const glass::Rect& shell_in_window,
   Relayout();
 }
 
+bool GlassRegions::MountUnderShell(const glass::Placement& placement,
+                                   const glass::Rect& page) {
+  ui::Layer* parent = under_shell_ ? under_shell_->layer() : nullptr;
+  if (!parent) {
+    return false;
+  }
+  auto& clip = views_->page_clips[placement.page];
+  if (!clip) {
+    clip = std::make_unique<ui::LayerNotDrawn>();
+    clip->SetFillsBoundsOpaquely(false);
+    clip->SetMasksToBounds(true);
+    parent->Add(clip.get());
+  }
+  clip->SetBounds(gfx::ToEnclosingRect(
+      gfx::RectF(page.x, page.y, page.width, page.height)));
+  auto& layer = views_->under_shell[glass::KeyOf(placement)];
+  if (!layer) {
+    layer = std::make_unique<ui::LayerSolidColor>();
+    layer->SetFillsBoundsOpaquely(false);
+    clip->Add(layer.get());
+  }
+  const auto found = views_->blur.find(placement.id);
+  const double blur = found == views_->blur.end() ? 24 : found->second;
+  layer->SetColor(SkColor4f{1, 1, 1, glass::kUnderShellFill});
+  layer->SetBounds(gfx::ToEnclosingRect(gfx::RectF(
+      placement.frame.x, placement.frame.y, placement.frame.width,
+      placement.frame.height)));
+  layer->SetOpacity(static_cast<float>(placement.opacity));
+  layer->SetBackgroundBlur(static_cast<float>(glass::UnderShellBlur(blur, zoom_)));
+  layer->SetRoundedCornerRadius(gfx::RoundedCornersF(
+      static_cast<float>(placement.radii.upper_left),
+      static_cast<float>(placement.radii.upper_right),
+      static_cast<float>(placement.radii.lower_right),
+      static_cast<float>(placement.radii.lower_left)));
+  layer->SetIsFastRoundedCorner(true);
+  clip->StackAtTop(layer.get());
+  return true;
+}
+
 glass::Layout GlassRegions::Relayout() {
   NSWindow* window =
       widget_ ? widget_->GetNativeWindow().GetNativeNSWindow() : nil;
@@ -321,16 +370,20 @@ glass::Layout GlassRegions::Relayout() {
   if (!content || !frame) {
     return glass::Layout{};
   }
-  std::map<int, NSView*> live_pages;
   std::vector<glass::Page> pages;
   std::set<int> with_native_view;
+  std::map<int, glass::Rect> page_rects;
   pages.reserve(pages_.size());
   for (const GlassPage& page : pages_) {
     pages.push_back(page.page);
-    if (NSView* view = page.view.GetNativeNSView()) {
-      live_pages[page.page.id] = view;
+    page_rects[page.page.id] = page.page.rect;
+    if (page.view.GetNativeNSView()) {
       with_native_view.insert(page.page.id);
     }
+  }
+  views_->blur.clear();
+  for (const glass::Region& region : regions_) {
+    views_->blur[region.id] = region.blur;
   }
   const glass::Layout layout =
       glass::Lay(glass::Mounted(backdrops_, regions_),
@@ -348,54 +401,17 @@ glass::Layout GlassRegions::Relayout() {
       convertRect:NSMakeRect(shell_.x, top, shell_.width, shell_.height)
            toView:frame];
 
-  for (auto it = views_->page_slots.begin(); it != views_->page_slots.end();) {
-    NSView* host = views_->page_views[it->first];
-    if (!live_pages.contains(it->first) || live_pages[it->first] != host) {
-      const int page = it->first;
-      [it->second removeFromSuperview];
-      std::erase_if(views_->effects, [page](const auto& entry) {
-        return entry.first.plane == glass::Plane::kOverPage &&
-               entry.first.page == page;
-      });
-      std::erase_if(placed_, [page](const glass::Placement& placement) {
-        return placement.plane == glass::Plane::kOverPage &&
-               placement.page == page;
-      });
-      views_->page_views.erase(page);
-      it = views_->page_slots.erase(it);
-    } else {
-      ++it;
-    }
-  }
-  const auto slot_for = [&](int page) -> NSView* {
-    auto found = views_->page_slots.find(page);
-    NSView* host = live_pages.contains(page) ? live_pages[page] : nil;
-    if (!host) return nil;
-    if (found == views_->page_slots.end()) {
-      ArdiaMacGlassSlotView* slot =
-          [[ArdiaMacGlassSlotView alloc] initWithFrame:host.bounds];
-      slot.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-      slot.wantsLayer = YES;
-      slot.layer.masksToBounds = YES;
-      [host addSubview:slot positioned:NSWindowAbove relativeTo:nil];
-      found = views_->page_slots.emplace(page, slot).first;
-      views_->page_views[page] = host;
-    }
-    ArdiaMacGlassSlotView* slot = found->second;
-    if (host.subviews.lastObject != slot) {
-      [host addSubview:slot positioned:NSWindowAbove relativeTo:host.subviews.lastObject];
-    }
-    slot.frame = host.bounds;
-    return slot;
-  };
-  const auto parent_for = [&](const glass::SlotKey& key) -> NSView* {
-    return key.plane == glass::Plane::kBehindWindow ? views_->behind
-                                                    : slot_for(key.page);
-  };
+  std::erase_if(views_->under_shell, [&page_rects](const auto& entry) {
+    return !page_rects.contains(entry.first.page);
+  });
+  std::erase_if(views_->page_clips, [&page_rects](const auto& entry) {
+    return !page_rects.contains(entry.first);
+  });
 
   const glass::Diff diff =
       glass::DiffPlacements(placed_, layout.placements, liquid);
   for (const glass::SlotKey& key : diff.remove) {
+    views_->under_shell.erase(key);
     auto found = views_->effects.find(key);
     if (found != views_->effects.end()) {
       [found->second removeFromSuperview];
@@ -403,11 +419,10 @@ glass::Layout GlassRegions::Relayout() {
     }
   }
   for (const glass::Placement& placement : diff.create) {
-    NSView* parent = parent_for(glass::KeyOf(placement));
-    if (!parent) continue;
+    if (placement.plane != glass::Plane::kBehindWindow) continue;
     NSView* effect = MakeEffect(placement, placement.plane);
     Style(effect, placement);
-    [parent addSubview:effect];
+    [views_->behind addSubview:effect];
     views_->effects[glass::KeyOf(placement)] = effect;
   }
   for (const glass::Placement& placement : diff.update) {
@@ -418,16 +433,23 @@ glass::Layout GlassRegions::Relayout() {
   }
   std::set<glass::SlotKey> attached;
   for (const glass::Placement& placement : layout.placements) {
-    auto found = views_->effects.find(glass::KeyOf(placement));
-    NSView* parent = parent_for(glass::KeyOf(placement));
-    if (found == views_->effects.end() || !parent) continue;
-    if (found->second.superview != parent) {
-      [parent addSubview:found->second];
-    } else if (!diff.create.empty()) {
-      [parent addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
+    const glass::SlotKey key = glass::KeyOf(placement);
+    if (glass::MountsUnderShell(placement.plane)) {
+      const auto page = page_rects.find(placement.page);
+      if (page != page_rects.end() && MountUnderShell(placement, page->second)) {
+        attached.insert(key);
+      }
+      continue;
     }
-    if (found->second.superview == parent) {
-      attached.insert(glass::KeyOf(placement));
+    auto found = views_->effects.find(key);
+    if (found == views_->effects.end()) continue;
+    if (found->second.superview != views_->behind) {
+      [views_->behind addSubview:found->second];
+    } else if (!diff.create.empty()) {
+      [views_->behind addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
+    }
+    if (found->second.superview == views_->behind) {
+      attached.insert(key);
     }
   }
   glass::Layout mounted = glass::KeepAttached(layout, attached);

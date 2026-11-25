@@ -12,6 +12,7 @@
 #include "ui/gfx/native_ui_types.h"
 
 namespace views {
+class View;
 class Widget;
 }
 
@@ -28,7 +29,7 @@ class GlassRegions {
  public:
   using Presented = base::RepeatingCallback<void(int generation)>;
 
-  GlassRegions(views::Widget* widget, Presented presented);
+  GlassRegions(views::Widget* widget, views::View* under_shell, Presented presented);
   GlassRegions(const GlassRegions&) = delete;
   GlassRegions& operator=(const GlassRegions&) = delete;
   ~GlassRegions();
@@ -43,9 +44,11 @@ class GlassRegions {
   struct Views;
 
   glass::Layout Relayout();
+  bool MountUnderShell(const glass::Placement& placement, const glass::Rect& page);
   void EmitPresented(glass::PresentedGate::Ticket ticket);
 
   raw_ptr<views::Widget> widget_;
+  raw_ptr<views::View> under_shell_;
   std::unique_ptr<Views> views_;
   std::vector<glass::Region> regions_;
   std::vector<glass::Region> backdrops_;

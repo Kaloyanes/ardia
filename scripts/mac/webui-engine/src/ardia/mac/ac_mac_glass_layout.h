@@ -241,6 +241,18 @@ inline double NativeCornerRadius(const CornerShape& shape) {
   return shape.uniform ? shape.radii.upper_left : 0;
 }
 
+inline constexpr float kUnderShellFill = 0.01f;
+
+inline bool MountsUnderShell(Plane plane) {
+  return plane == Plane::kOverPage;
+}
+
+inline double UnderShellBlur(double css_blur, double shell_scale) {
+  const double scale = Finite(shell_scale) && shell_scale > 0.05 && shell_scale < 20 ? shell_scale : 1;
+  const double blur = Finite(css_blur) ? std::clamp(css_blur, 0.0, kMaxBlur) : 0;
+  return blur * scale;
+}
+
 inline int GlassStyle(Material material) {
   return material == Material::kLiquidClear ? 1 : 0;
 }

@@ -134,6 +134,38 @@ struct Translucency {
   bool hide_title = false;
 };
 
+struct Frame {
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  bool operator==(const Frame&) const = default;
+};
+
+inline constexpr double kCascadeStep = 22;
+inline constexpr double kSettingsWidth = 820;
+inline constexpr double kSettingsHeight = 640;
+inline constexpr double kImportWidth = 640;
+inline constexpr double kImportHeight = 600;
+
+inline Frame CascadedFrom(const Frame& opener) {
+  return Frame{opener.x + kCascadeStep, opener.y + kCascadeStep, std::max(1.0, opener.width),
+               std::max(1.0, opener.height)};
+}
+
+inline Frame UtilityFrameOver(const Frame& opener, std::string_view kind) {
+  const bool settings = kind == "settings";
+  const double width = settings ? kSettingsWidth : kImportWidth;
+  const double height = settings ? kSettingsHeight : kImportHeight;
+  return Frame{std::round(opener.x + (opener.width - width) / 2), std::round(opener.y + (opener.height - height) / 2),
+               width, height};
+}
+
+inline Lights ScaledLights(const Lights& lights, double scale) {
+  const double safe = std::isfinite(scale) && scale > 0.05 && scale < 20 ? scale : 1;
+  return Lights{Point{lights.center.x * safe, lights.center.y * safe}, lights.hidden};
+}
+
 inline Translucency TranslucencyFor(bool webui_shell) {
   if (!webui_shell) return Translucency{};
   return Translucency{false, true, true, true, true};
