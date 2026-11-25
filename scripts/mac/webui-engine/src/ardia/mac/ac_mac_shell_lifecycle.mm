@@ -340,6 +340,7 @@ void ShellHostView::RetireLifecycle() {
     focus_manager_->set_shortcut_handling_suspended(false);
   }
   shortcut_recording_ = false;
+  SetMenuKeysSuppressed(window_id_, false);
   switcher_capture_ = false;
   switcher_source_.reset();
   edge_.Stop();
@@ -808,6 +809,7 @@ void ShellHostView::KeyboardCall(const std::string& method, const base::ListValu
   if (method == "ArdiaShell.setShortcutRecording") {
     shortcut_recording_ = on;
     focus_manager_->set_shortcut_handling_suspended(on);
+    SetMenuKeysSuppressed(window_id_, on);
     WatchRecordedKeys(on);
     return std::move(done).Run(true, base::Value());
   }

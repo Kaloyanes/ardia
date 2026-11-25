@@ -48,6 +48,53 @@ Class GlassEffectClass() {
   return NSClassFromString(@"NSGlassEffectView");
 }
 
+Class GlassContainerClass() {
+  return NSClassFromString(@"NSGlassEffectContainerView");
+}
+
+NSString* const kTintLayer = @"ardia.tint";
+
+NSColor* ColorOf(const std::optional<glass::Color>& color) {
+  if (!color) return nil;
+  return [NSColor colorWithSRGBRed:color->red green:color->green blue:color->blue alpha:color->alpha];
+}
+
+NSAppearance* AppearanceOf(glass::Appearance appearance) {
+  switch (appearance) {
+    case glass::Appearance::kLight:
+      return [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+    case glass::Appearance::kDark:
+      return [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    case glass::Appearance::kAuto:
+      return nil;
+  }
+  return nil;
+}
+
+void ApplyTintLayer(NSView* view, const std::optional<glass::Color>& tint, double radius) {
+  view.wantsLayer = YES;
+  CALayer* found = nil;
+  for (CALayer* layer in view.layer.sublayers) {
+    if ([layer.name isEqualToString:kTintLayer]) {
+      found = layer;
+      break;
+    }
+  }
+  if (!tint) {
+    [found removeFromSuperlayer];
+    return;
+  }
+  if (!found) {
+    found = [CALayer layer];
+    found.name = kTintLayer;
+    [view.layer addSublayer:found];
+  }
+  found.frame = view.layer.bounds;
+  found.cornerRadius = radius;
+  found.cornerCurve = kCACornerCurveContinuous;
+  found.backgroundColor = ColorOf(tint).CGColor;
+}
+
 NSVisualEffectMaterial VibrancyMaterial(glass::Material material) {
   switch (material) {
     case glass::Material::kHeader:
@@ -119,14 +166,38 @@ void ApplyCornerMask(NSView* view, const glass::CornerShape& shape) {
   view.layer.mask = mask;
 }
 
+void ApplySliceMask(NSView* view, const glass::SliceMask& mask) {
+  view.wantsLayer = YES;
+  const glass::Rect& outline = mask.outline;
+  const NSRect shape =
+      NSMakeRect(outline.x, view.isFlipped ? outline.y : NSHeight(view.bounds) - outline.y - outline.height,
+                 outline.width, outline.height);
+  CAShapeLayer* layer = [CAShapeLayer layer];
+  layer.frame = view.bounds;
+  CGPathRef path = CornerPath(shape, mask.radii, view.isFlipped);
+  layer.path = path;
+  CGPathRelease(path);
+  view.layer.mask = layer;
+}
+
+void ApplyMask(NSView* view, const glass::CornerShape& shape, const glass::SliceMask& slice) {
+  if (slice.active) {
+    ApplySliceMask(view, slice);
+  } else {
+    ApplyCornerMask(view, shape);
+  }
+}
+
 void Style(NSView* view, const glass::Placement& placement) {
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   view.frame = NSMakeRect(placement.frame.x, placement.frame.y,
                           placement.frame.width, placement.frame.height);
   view.alphaValue = placement.opacity;
+  view.appearance = AppearanceOf(placement.appearance);
   const glass::CornerShape shape = glass::ShapeFor(placement.radii);
-  const double native = glass::NativeCornerRadius(shape);
+  const glass::SliceMask slice = glass::MaskFor(placement);
+  const double native = slice.active ? 0 : glass::NativeCornerRadius(shape);
   if ([view isKindOfClass:GlassEffectClass()]) {
     if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
       [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
@@ -134,14 +205,18 @@ void Style(NSView* view, const glass::Placement& placement) {
     if ([view respondsToSelector:NSSelectorFromString(@"setCornerRadius:")]) {
       [view setValue:@(native) forKey:@"cornerRadius"];
     }
-    ApplyCornerMask(view, shape);
+    if ([view respondsToSelector:NSSelectorFromString(@"setTintColor:")]) {
+      [view setValue:ColorOf(placement.tint) forKey:@"tintColor"];
+    }
+    ApplyMask(view, shape, slice);
   } else if ([view isKindOfClass:NSVisualEffectView.class]) {
     NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
     vibrancy.material = VibrancyMaterial(placement.material);
     view.layer.cornerRadius = native;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.masksToBounds = native > 0;
-    ApplyCornerMask(view, shape);
+    ApplyMask(view, shape, slice);
+    ApplyTintLayer(view, placement.tint, native);
   }
   [CATransaction commit];
 }
@@ -192,6 +267,20 @@ std::optional<glass::Region> RegionOf(const base::Value& value, glass::Layer def
   if (!parsed_layer || !parsed_material) return std::nullopt;
   region.layer = *parsed_layer;
   region.material = *parsed_material;
+  if (const base::Value* tint = dict->Find("tint")) {
+    if (!tint->is_string()) return std::nullopt;
+    region.tint = glass::ColorFrom(tint->GetString());
+    if (!region.tint) return std::nullopt;
+  }
+  if (const base::Value* group = dict->Find("group")) {
+    if (!group->is_string() || !glass::ValidGroup(group->GetString())) return std::nullopt;
+    region.group = group->GetString();
+  }
+  const std::string* appearance = dict->FindString("appearance");
+  const std::optional<glass::Appearance> parsed_appearance =
+      glass::AppearanceNamed(appearance ? *appearance : std::string_view());
+  if (!parsed_appearance) return std::nullopt;
+  region.appearance = *parsed_appearance;
   return region;
 }
 
@@ -204,9 +293,19 @@ bool LiquidGlassAvailable() {
   return false;
 }
 
+bool GlassGroupsAvailable() {
+  if (@available(macOS 26, *)) {
+    Class container = GlassContainerClass();
+    return LiquidGlassAvailable() && container &&
+           [container instancesRespondToSelector:NSSelectorFromString(@"setContentView:")];
+  }
+  return false;
+}
+
 struct GlassRegions::Views {
   ArdiaMacGlassSlotView* behind = nil;
   std::map<glass::SlotKey, NSView*> effects;
+  std::map<glass::GroupKey, NSView*> groups;
   std::map<int, std::unique_ptr<ui::LayerNotDrawn>> page_clips;
   std::map<glass::SlotKey, std::unique_ptr<ui::LayerSolidColor>> under_shell;
   std::map<std::string, double> blur;
@@ -229,6 +328,10 @@ void GlassRegions::Clear() {
     [view removeFromSuperview];
   }
   views_->effects.clear();
+  for (auto& [key, group] : views_->groups) {
+    [group removeFromSuperview];
+  }
+  views_->groups.clear();
   views_->under_shell.clear();
   views_->page_clips.clear();
   views_->blur.clear();
@@ -279,7 +382,7 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
                                   weak_factory_.GetWeakPtr(),
                                   gate_.Issue(*presentable)));
   }
-  for (const std::string& id : glass::MountedGlass(mounted.placements)) {
+  for (const std::string& id : glass::MountedGlass(mounted)) {
     accepted.Append(id);
   }
   reply.Set("accepted", std::move(accepted));
@@ -407,6 +510,40 @@ glass::Layout GlassRegions::Relayout() {
   std::erase_if(views_->page_clips, [&page_rects](const auto& entry) {
     return !page_rects.contains(entry.first);
   });
+  const bool groups_glass = GlassGroupsAvailable();
+  const std::set<glass::GroupKey> live_groups =
+      glass::LiveGroups(layout.placements, groups_glass);
+  for (auto it = views_->groups.begin(); it != views_->groups.end();) {
+    if (!live_groups.contains(it->first)) {
+      [it->second removeFromSuperview];
+      it = views_->groups.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  const auto group_for = [&](const glass::GroupKey& key) -> NSView* {
+    NSView* plane = views_->behind;
+    auto found = views_->groups.find(key);
+    if (found == views_->groups.end()) {
+      NSView* container = [[GlassContainerClass() alloc] initWithFrame:plane.bounds];
+      ArdiaMacGlassSlotView* members =
+          [[ArdiaMacGlassSlotView alloc] initWithFrame:plane.bounds];
+      [container setValue:members forKey:@"contentView"];
+      container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      found = views_->groups.emplace(key, container).first;
+    }
+    NSView* container = found->second;
+    if (container.superview != plane) {
+      [plane addSubview:container];
+    }
+    container.frame = plane.bounds;
+    NSView* members = [container valueForKey:@"contentView"];
+    members.frame = container.bounds;
+    return members;
+  };
+  const auto parent_of = [&](const glass::Placement& placement) -> NSView* {
+    return glass::Grouped(placement, groups_glass) ? group_for(glass::GroupOf(placement)) : views_->behind;
+  };
 
   const glass::Diff diff =
       glass::DiffPlacements(placed_, layout.placements, liquid);
@@ -420,9 +557,10 @@ glass::Layout GlassRegions::Relayout() {
   }
   for (const glass::Placement& placement : diff.create) {
     if (placement.plane != glass::Plane::kBehindWindow) continue;
+    NSView* parent = parent_of(placement);
     NSView* effect = MakeEffect(placement, placement.plane);
     Style(effect, placement);
-    [views_->behind addSubview:effect];
+    [parent addSubview:effect];
     views_->effects[glass::KeyOf(placement)] = effect;
   }
   for (const glass::Placement& placement : diff.update) {
@@ -443,12 +581,13 @@ glass::Layout GlassRegions::Relayout() {
     }
     auto found = views_->effects.find(key);
     if (found == views_->effects.end()) continue;
-    if (found->second.superview != views_->behind) {
-      [views_->behind addSubview:found->second];
+    NSView* parent = parent_of(placement);
+    if (found->second.superview != parent) {
+      [parent addSubview:found->second];
     } else if (!diff.create.empty()) {
-      [views_->behind addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
+      [parent addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
     }
-    if (found->second.superview == views_->behind) {
+    if (found->second.superview == parent) {
       attached.insert(key);
     }
   }

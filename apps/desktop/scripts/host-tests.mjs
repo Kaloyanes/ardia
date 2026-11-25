@@ -5,6 +5,7 @@ import { DESKTOP_MODES } from "../desktopModes.ts";
 
 const SHARED_TESTS = [
   "host.test.mjs", "hostContract.test.mjs", "hostTabReplacement.test.mjs", "liveDocuments.test.mjs",
+  "nativeMenuBar.test.mjs", "popoverSurface.test.mjs", "appMenuPlacement.test.mjs", "nativeDownloads.test.mjs",
   "livePersistenceBinding.test.mjs", "liveCompletionPersistence.test.mjs", "hostDocumentTransport.test.mjs",
   "windowCloseLifecycle.test.mjs", "hostSessionMerge.test.mjs", "hostSessionSync.test.mjs",
   "sessionWriterRebase.test.mjs", "session.test.mjs", "sessionShells.test.mjs", "settingsWindows.test.mjs", "hostViewport.test.mjs",

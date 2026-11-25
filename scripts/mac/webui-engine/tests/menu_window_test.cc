@@ -1,9 +1,11 @@
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
 
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_menu_state.h"
 #include "ardia/mac/ac_mac_window_layout.h"
 #include "check.h"
 
@@ -273,6 +275,243 @@ TEST(the_whole_traffic_light_group_stays_inside_the_window) {
   }
   const auto defaults = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
   CHECK(defaults && defaults->center == (window::Point{25, 20}));
+}
+
+TEST(menu_state_resolves_enabled_checked_and_title_by_id_and_command) {
+  menu::State state;
+  CHECK(menu::AddStateEntry(state.disabled, "back"));
+  CHECK(menu::AddStateEntry(state.disabled, "setTabLayout:top"));
+  CHECK(menu::AddStateEntry(state.checked, "setAppearance:dark"));
+  CHECK(menu::AddStateTitle(state, "bookmarkPage", "Edit Bookmark\xE2\x80\xA6"));
+  CHECK(!menu::Resolve("back", false, false, "Back", state).enabled);
+  CHECK(!menu::Resolve("setTabLayout:top", false, false, "Top", state).enabled);
+  CHECK(menu::Resolve("setTabLayout:sidebarLeft", false, false, "Left", state).enabled);
+  CHECK(menu::Resolve("setAppearance:dark", false, false, "Dark", state).checked);
+  CHECK(!menu::Resolve("setAppearance:light", false, false, "Light", state).checked);
+  CHECK(menu::Resolve("bookmarkPage", false, false, "Bookmark This Page", state).title == "Edit Bookmark\xE2\x80\xA6");
+  CHECK(menu::Resolve("bookmarkAllTabs", false, false, "Bookmark All Tabs", state).title == "Bookmark All Tabs");
+  menu::State commandOff;
+  CHECK(menu::AddStateEntry(commandOff.disabled, "moveTabToProfile"));
+  CHECK(!menu::Resolve("moveTabToProfile:work", false, false, "Work", commandOff).enabled);
+}
+
+TEST(fixed_checks_keep_the_current_entry_checked) {
+  const menu::State empty;
+  CHECK(menu::Resolve("switchProfile:p1", true, true, "Personal", empty).checked);
+  CHECK(!menu::Resolve("switchProfile:p2", true, false, "Work", empty).checked);
+  CHECK(!menu::Resolve("switchProfile:p1", false, true, "Personal", empty).checked);
+}
+
+TEST(menu_state_refuses_bad_entries_and_caps_its_size) {
+  menu::State state;
+  CHECK(!menu::AddStateEntry(state.disabled, ""));
+  CHECK(!menu::AddStateEntry(state.disabled, "bad\nid"));
+  CHECK(!menu::AddStateEntry(state.disabled, std::string(menu::kMaxStateId + 1, 'a')));
+  CHECK(!menu::AddStateTitle(state, "ok", "two\nlines"));
+  CHECK(!menu::AddStateTitle(state, "ok", std::string(menu::kMaxTitle + 1, 't')));
+  CHECK(!menu::AddStateTitle(state, "ok", ""));
+  for (std::size_t index = 0; index < menu::kMaxStateEntries + 10; ++index) {
+    menu::AddStateEntry(state.checked, "c" + std::to_string(index));
+  }
+  CHECK(state.checked.size() == menu::kMaxStateEntries);
+  CHECK(state.disabled.empty() && state.titles.empty());
+}
+
+TEST(state_ids_are_validated_with_the_menu) {
+  menu::Item root;
+  menu::Item item;
+  item.title = "Back";
+  item.command = "back";
+  item.state_id = "back";
+  item.default_title = "Back";
+  root.children.push_back(item);
+  CHECK(menu::Validate(root).empty());
+  root.children[0].state_id = "bad\x01";
+  CHECK(!menu::Validate(root).empty());
+  root.children[0].state_id = "back";
+  root.children[0].default_title = "bad\ntitle";
+  CHECK(!menu::Validate(root).empty());
+}
+
+TEST(bookmarks_menu_role_holds_a_submenu_without_a_command) {
+  CHECK(menu::RoleNamed("bookmarksMenu") == menu::Role::kBookmarksMenu);
+  CHECK(menu::HoldsSubmenu(menu::Role::kBookmarksMenu));
+  CHECK(!menu::InstallsAppMenu(menu::Role::kBookmarksMenu, true));
+  CHECK(menu::SelectorFor(menu::Role::kBookmarksMenu).empty());
+  menu::Item root;
+  menu::Item bookmarks;
+  bookmarks.title = "Bookmarks";
+  bookmarks.role = menu::Role::kBookmarksMenu;
+  root.children.push_back(bookmarks);
+  CHECK(menu::Validate(root).empty());
+  root.children[0].command = "openBookmark";
+  CHECK(!menu::Validate(root).empty());
+}
+
+TEST(bookmark_menu_matches_the_desktop_app_menu) {
+  menu::Bookmarks bookmarks;
+  bookmarks.recent.push_back({"b1", "Example", "https://example.com", false, {}});
+  menu::Bookmark work{"f1", "Work", "", true, {}};
+  work.children.push_back({"b2", "", "https://ardia.dev", false, {}});
+  bookmarks.bar.push_back(work);
+  const std::vector<menu::Item> items = menu::BookmarkMenuItems(bookmarks);
+  CHECK(items.size() == 5);
+  CHECK(items[0].title == "Recent Bookmarks" && !items[0].enabled);
+  CHECK(items[1].command == "openBookmark" && items[1].argument == "b1" && items[1].state_id == "openBookmark:b1");
+  CHECK(items[2].role == menu::Role::kSeparator);
+  CHECK(items[3].title == "Bookmarks Bar" && items[3].children.size() == 1);
+  const menu::Item& folder = items[3].children[0];
+  CHECK(folder.title == "Work" && folder.children.size() == 3);
+  CHECK(folder.children[0].title == "https://ardia.dev");
+  CHECK(folder.children[1].role == menu::Role::kSeparator);
+  CHECK(folder.children[2].command == "addFolderToSidebar" && folder.children[2].argument == "f1");
+  CHECK(items[4].title == "Other Bookmarks" && items[4].children.size() == 1);
+  CHECK(items[4].children[0].title == "Empty" && !items[4].children[0].enabled);
+}
+
+TEST(arc_holders_offer_restoring_their_folders) {
+  menu::Bookmarks bookmarks;
+  menu::Bookmark inner{"f2", "Space", "", true, {}};
+  inner.children.push_back({"b3", "Site", "https://example.com", false, {}});
+  menu::Bookmark holder{"f1", "Personal (Arc)", "", true, {}};
+  holder.children.push_back(inner);
+  bookmarks.bar.push_back(holder);
+  const std::vector<menu::Item> items = menu::BookmarkMenuItems(bookmarks);
+  const menu::Item& arc = items[0].children[0];
+  CHECK(arc.children.back().command == "restoreArcFolders" && arc.children.back().argument == "f1");
+  bookmarks.other = bookmarks.bar;
+  const std::vector<menu::Item> other = menu::BookmarkMenuItems(bookmarks);
+  CHECK(other[1].children[0].children.back().command == "addFolderToSidebar");
+}
+
+TEST(bookmark_titles_are_cleaned_and_menus_stay_bounded) {
+  CHECK(menu::CleanTitle("  a\tb\nc  ") == "a b c");
+  CHECK(menu::CleanTitle("\x01\x02") == "");
+  const std::string long_title = std::string(menu::kMaxTitle - 1, 'x') + "\xE2\x80\xA6";
+  const std::string cut = menu::CleanTitle(long_title);
+  CHECK(cut.size() <= menu::kMaxTitle && menu::ValidTitle(cut) && cut == std::string(menu::kMaxTitle - 1, 'x'));
+  menu::Bookmarks many;
+  for (int index = 0; index < 5000; ++index) many.other.push_back({"b" + std::to_string(index), "t", "https://a", false, {}});
+  std::size_t count = 0;
+  std::function<void(const std::vector<menu::Item>&)> walk = [&](const std::vector<menu::Item>& items) {
+    for (const menu::Item& item : items) {
+      ++count;
+      walk(item.children);
+    }
+  };
+  walk(menu::BookmarkMenuItems(many));
+  CHECK(count <= menu::kMaxBookmarkItems + 2);
+  menu::Bookmark deep{"d0", "d", "", true, {}};
+  menu::Bookmark* cursor = &deep;
+  for (int depth = 1; depth < 20; ++depth) {
+    cursor->children.push_back({"d" + std::to_string(depth), "d", "", true, {}});
+    cursor = &cursor->children.back();
+  }
+  menu::Bookmarks nested;
+  nested.bar.push_back(deep);
+  std::size_t levels = 0;
+  const menu::Item* at = nullptr;
+  const std::vector<menu::Item> built = menu::BookmarkMenuItems(nested);
+  at = &built[0];
+  while (!at->children.empty() && !at->children[0].children.empty()) {
+    at = &at->children[0];
+    ++levels;
+  }
+  CHECK(levels <= menu::kMaxBookmarkDepth);
+  menu::Bookmarks nameless;
+  nameless.other.push_back({"b", "", "", false, {}});
+  nameless.other.push_back({"", "No id", "https://a", false, {}});
+  nameless.other.push_back({std::string(menu::kMaxArgument + 1, 'i'), "Long id", "https://a", false, {}});
+  const std::vector<menu::Item> cleaned = menu::BookmarkMenuItems(nameless);
+  CHECK(cleaned[1].children.size() == 1 && cleaned[1].children[0].title == "Untitled");
+}
+
+TEST(group_links_need_web_or_file_urls) {
+  CHECK(menu::GroupLink("https://a") && menu::GroupLink("HTTP://a") && menu::GroupLink("file:///x"));
+  CHECK(!menu::GroupLink("javascript:alert(1)") && !menu::GroupLink("chrome://settings") && !menu::GroupLink(""));
+}
+
+TEST(a_menu_of_exactly_400_items_is_valid_and_401_is_not) {
+  const auto bar = [](std::size_t count) {
+    menu::Item root;
+    menu::Item top;
+    top.title = "File";
+    for (std::size_t index = 1; index < count; ++index) {
+      menu::Item item;
+      item.title = "Item";
+      item.command = "go";
+      top.children.push_back(item);
+    }
+    root.children.push_back(top);
+    return root;
+  };
+  CHECK(menu::Validate(bar(menu::kMaxItems)).empty());
+  const auto problems = menu::Validate(bar(menu::kMaxItems + 1));
+  CHECK(problems.size() == 1 && problems[0].reason == "too many items");
+}
+
+TEST(the_key_window_owns_the_shared_menu_bar) {
+  menu::MenuOwner owner;
+  CHECK(owner.Claims("w1", false, false));
+  CHECK(!owner.Claims("w2", false, false));
+  CHECK(owner.active() == "w1");
+  CHECK(owner.Claims("w2", true, true));
+  CHECK(!owner.Claims("w1", false, true));
+  CHECK(owner.Activate("settings") && owner.active() == "settings");
+  CHECK(!owner.Claims("w2", false, true));
+  CHECK(!owner.Activate("settings"));
+  owner.Forget("w2");
+  CHECK(owner.active() == "settings");
+  owner.Forget("settings");
+  CHECK(owner.active().empty());
+  CHECK(!owner.Claims("w1", false, true));
+  CHECK(owner.active().empty());
+  CHECK(owner.Claims("w3", false, false));
+  CHECK(!owner.Claims("", true, true));
+}
+
+TEST(close_window_maps_to_appkit_perform_close) {
+  CHECK(menu::RoleNamed("close") == menu::Role::kClose);
+  CHECK(menu::SelectorFor(menu::Role::kClose) == "performClose:");
+  menu::Item item;
+  item.title = "Close Window";
+  item.role = menu::Role::kClose;
+  item.key = "w";
+  item.modifiers = menu::kCommand | menu::kShift;
+  CHECK(menu::Selectable(item));
+}
+
+TEST(shortcut_recording_suppresses_menu_keys_only_in_its_key_window) {
+  menu::KeySuppression keys;
+  CHECK(keys.empty() && !keys.Suppresses(std::string("settings")));
+  keys.Set("settings", true);
+  CHECK(keys.Suppresses(std::string("settings")));
+  CHECK(!keys.Suppresses(std::string("main")));
+  CHECK(!keys.Suppresses(std::nullopt));
+  keys.Set("settings", false);
+  CHECK(keys.empty());
+  keys.Set("", true);
+  CHECK(keys.empty());
+}
+
+TEST(a_key_window_without_its_own_menu_gets_a_minimal_system_bar) {
+  const menu::Item root = menu::MinimalMainMenu("Ardia");
+  CHECK(menu::Validate(root).empty());
+  CHECK(root.children.size() == 4);
+  CHECK(root.children[0].title == "Ardia" && root.children[1].title == "Edit");
+  CHECK(root.children[2].role == menu::Role::kWindowMenu && root.children[3].role == menu::Role::kHelpMenu);
+  std::function<bool(const menu::Item&)> commandFree = [&](const menu::Item& item) {
+    if (!item.command.empty() && item.command != "quit") return false;
+    for (const menu::Item& child : item.children) {
+      if (!commandFree(child)) return false;
+    }
+    return true;
+  };
+  CHECK(commandFree(root));
+  CHECK(root.children[0].children.back().command == "quit" && root.children[0].children.back().key == "q");
+  bool closes = false;
+  for (const menu::Item& item : root.children[2].children) closes |= item.role == menu::Role::kClose;
+  CHECK(closes);
 }
 
 TEST(new_windows_cascade_and_utility_windows_center_over_their_opener) {

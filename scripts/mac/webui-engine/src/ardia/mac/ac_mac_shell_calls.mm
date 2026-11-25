@@ -13,6 +13,8 @@
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_pip.h"
+#include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_policy.h"
@@ -71,10 +73,13 @@ constexpr std::string_view kPopoverCapabilities[] = {
 constexpr std::string_view kCapabilities[] = {
     "shell.inputRegions",
     "shell.glassRegions",
+    "shell.glassBehindWindow",
     "shell.backdropRegions",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
+    "ArdiaShell.setMenuState",
+    "ArdiaShell.setMenuBookmarks",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",
@@ -304,9 +309,12 @@ std::string ShellHostView::BootstrapJson() const {
   bootstrap.Set("windowId", window_id_);
   bootstrap.Set("startup", startup_);
   bootstrap.Set("profileId", "default");
-  bootstrap.Set("nativeModules",
-                base::DictValue().Set(
-                    "ArdiaApp", base::DictValue().Set("systemInfo", std::move(info))));
+  bootstrap.Set(
+      "nativeModules",
+      base::DictValue()
+          .Set("ArdiaApp", base::DictValue().Set("systemInfo", std::move(info)))
+          .Set("ArdiaGlassEffect",
+               base::DictValue().Set("isLiquidGlass", LiquidGlassAvailable())));
   bootstrap.Set("capabilities", std::move(capabilities));
   bootstrap.Set("glassPanels", true);
   bootstrap.Set("pageProfile", page_profile_);
@@ -405,7 +413,17 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.setMenuState" ||
       method == "ArdiaShell.setMenuBookmarks") {
-    return std::move(done).Run(true, base::Value());
+    if (!values || values->size() != 1) {
+      return std::move(done).Run(false, base::Value("One menu update is required"));
+    }
+    const std::optional<std::string> error =
+        method == "ArdiaShell.setMenuState"
+            ? SetWindowMenuState(window_id_, (*values)[0])
+            : SetWindowMenuBookmarks(window_id_, (*values)[0]);
+    if (error) {
+      return std::move(done).Run(false, base::Value(*error));
+    }
+    return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));
@@ -540,6 +558,7 @@ void ShellHostView::Invoke(const std::string& method,
                  base::Value([name isEqualToString:NSAppearanceNameDarkAqua]));
   }
   if (method == "ArdiaShell.shellPainted") {
+    shell_ready_generation_ = renderer_generation_;
     if (!painted_) {
       painted_ = true;
       Note("shell painted in window " + window_id_);
