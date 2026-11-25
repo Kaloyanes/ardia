@@ -6,6 +6,11 @@ For the architecture and the test tooling, read `docs/agent-brief.md`.
 - **Move fast.** Don't break work into phases or ask about details you can decide. Ask only when the answer changes what you build.
 - **Be thorough in analysis, bold in suggestions.** Read the real code before you judge it, and propose the
   better design even when it means rewriting what exists, not the smallest patch on top of it.
+- **Standard for every change.** When making changes, make sure it:
+  - Looks right
+  - Runs faster
+  - Fails gracefully
+  - Pipes cleanly
 - **Speed is the point.** Do independent work in parallel: agents, builds, test instances, tool calls. Batch what you
   plan to check into one script or one call instead of one step at a time. Only timing measurements run one at a
   time, interleaved with their control, because sharing the CPU skews them.
