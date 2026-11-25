@@ -29,4 +29,16 @@ export function recentSearches(rows: readonly HistoryRow[], limit = RECENT_SEARC
   return queries;
 }
 
+export function searchesByQuery(rows: readonly HistoryRow[]): Map<string, string[]> {
+  const byQuery = new Map<string, string[]>();
+  for (const row of rows) {
+    const query = searchQuery(row.url)?.toLowerCase();
+    if (!query) continue;
+    const urls = byQuery.get(query);
+    if (urls) urls.push(row.url);
+    else byQuery.set(query, [row.url]);
+  }
+  return byQuery;
+}
+
 export const sourcesKey = (listing: number, historyRevision: number, syncRevision = 0) => `${listing}:${historyRevision}:${syncRevision}`;

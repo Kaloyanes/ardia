@@ -7,6 +7,7 @@ import { trayMaxHeight } from "../../lib/trayMotion";
 import { MaterialSearchBar, type MaterialSearchBarHandle } from "../../platform/completingField";
 import { activateRow, cancelSearch, submitSearch, toggleTrayIncognito } from "../../state/browse/store";
 import { menuOpenedHaptic, trayRowActions } from "../../state/browse/tabMenus";
+import { rowMenuItems, useRowConfirm } from "./rowConfirm";
 import { useSurface } from "../../state/browse/hooks";
 import { useSearchCompletedFor, useSearchCompletion, useSearchFieldVersion, useSearchFromDockedMenu, useSearchInitialText, useSearchOpen, useSearchRows, useSearchSession, useSearchText } from "../../state/search/hooks";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
@@ -197,6 +198,7 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
   const rows = useSearchRows();
   const typed = useSearchText();
   const [menu, setMenu] = useState<{ row: TrayRow; at: Point } | null>(null);
+  const confirm = useRowConfirm();
   const menuOpen = menu !== null;
   useEffect(() => (menuOpen ? coverTray() : undefined), [menuOpen]);
   const refine = useCallback((row: TrayRow) => setSearchText(refinedText(row)), []);
@@ -224,7 +226,7 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
                 testID="materialSearchSegment"
                 style={[styles.segment, materialSegmentCorners(index, rows.length)]}
               >
-                <SuggestionRow row={row} typed={typed} roles={rowRoles} menu={trayRowActions(row)} onActivate={activateRow} onRefine={refine} onMenu={showMenu} />
+                <SuggestionRow row={row} typed={typed} roles={rowRoles} menu={confirm.guarded(trayRowActions(row))} onActivate={activateRow} onRefine={refine} onMenu={showMenu} />
               </View>
             ))}
           </View>
@@ -232,7 +234,7 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
       </Animated.ScrollView>
       {menu ? (
         <FloatingMenu
-          items={trayRowActions(menu.row).map((action) => ({ label: action.label, icon: action.icon, onPress: action.run }))}
+          items={rowMenuItems(trayRowActions(menu.row), confirm.choose)}
           at={menu.at}
           dimmed
           frost={null}
@@ -240,6 +242,7 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
           onDismiss={() => setMenu(null)}
         />
       ) : null}
+      {confirm.dialog}
     </View>
   );
 }

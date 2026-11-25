@@ -122,6 +122,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["tab_writes_stalled", "search_opens_cold"],
       },
       {
+        text: "In the same daily counts: how often you deleted a past search from the search suggestions. A count only, never what you searched for, and never while browsing privately",
+        fields: ["searches_forgotten"],
+      },
+      {
         text: "In the same daily counts, on Android with Material You: how often the tab switcher offered its Archive suggestion again when you came back from your Incognito tabs. Counts only",
         fields: ["archive_card_reoffers"],
       },

@@ -186,6 +186,11 @@ export function deleteVisitsFor(db: SqlDatabase, urls: readonly string[], profil
   else db.run(`DELETE FROM visits WHERE url IN (${marks}) AND profileSyncId = ?`, [...urls, profileSyncId]);
 }
 
+export function deleteVisitsEverywhere(db: SqlDatabase, urls: readonly string[]) {
+  if (!urls.length) return;
+  db.run(`DELETE FROM visits WHERE url IN (${urls.map(() => "?").join(",")})`, [...urls]);
+}
+
 export type ImportRows = {
   tabs: readonly BrowserTab[];
   states: readonly { id: string; data: string }[];
