@@ -97,8 +97,22 @@ inline std::string_view CaptionActionName(CaptionAction action) {
 
 enum class MouseEvent { kLeftDown, kLeftDragged, kOther };
 
-inline bool StartsWindowDrag(MouseEvent event, bool left_button_down) {
-  return event == MouseEvent::kLeftDown || (event == MouseEvent::kLeftDragged && left_button_down);
+struct DragStart {
+  bool start = false;
+  bool use_retained_down = false;
+  bool operator==(const DragStart&) const = default;
+};
+
+inline DragStart WindowDragFor(MouseEvent current,
+                               bool current_in_window,
+                               bool left_held,
+                               bool retained_down_in_window) {
+  if (!left_held) return DragStart{};
+  if (retained_down_in_window) return DragStart{true, true};
+  if (current_in_window && (current == MouseEvent::kLeftDown || current == MouseEvent::kLeftDragged)) {
+    return DragStart{true, false};
+  }
+  return DragStart{};
 }
 
 struct Presentation {

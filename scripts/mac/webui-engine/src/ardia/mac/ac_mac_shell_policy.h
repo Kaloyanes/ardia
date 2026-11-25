@@ -72,24 +72,42 @@ inline AdoptRefusal CheckAdoption(bool parsed, bool offered, bool same_profile, 
   return AdoptRefusal::kNone;
 }
 
-enum class TabRequest { kCreate, kReclaim, kReplace };
-
-inline TabRequest RequestFor(bool key_bound, bool same_profile) {
-  if (!key_bound) return TabRequest::kCreate;
-  return same_profile ? TabRequest::kReclaim : TabRequest::kReplace;
+inline std::string_view OfferedProfile(std::string_view profile_name) {
+  return profile_name == "default" ? std::string_view() : profile_name;
 }
 
-struct Replacement {
-  bool keep_old_binding = true;
-  bool close_old_tab = false;
-  bool bind_new = false;
-  bool succeeded = false;
+enum class AdoptField { kAbsent, kInvalid, kId };
+
+inline AdoptField ClassifyAdoptField(bool present, bool is_string, std::string_view value) {
+  if (!present) return AdoptField::kAbsent;
+  if (!is_string || !ParseAdoptId(value)) return AdoptField::kInvalid;
+  return AdoptField::kId;
+}
+
+enum class CreatePlan { kRefuse, kReclaim, kCreate, kReplace, kAdopt, kAdoptReplacing };
+
+struct CreateRequest {
+  AdoptField adopt = AdoptField::kAbsent;
+  int adopt_id = 0;
+  bool key_bound = false;
+  bool same_profile = false;
+  int bound_id = 0;
+  AdoptRefusal adoption = AdoptRefusal::kNone;
+  bool old_tab_needs_unload = false;
 };
 
-inline Replacement AfterReplacement(bool replacement_opened, bool old_tab_closable) {
-  if (!replacement_opened) return Replacement{true, false, false, false};
-  if (!old_tab_closable) return Replacement{true, false, true, true};
-  return Replacement{false, true, true, true};
+inline CreatePlan PlanCreate(const CreateRequest& request) {
+  if (request.adopt == AdoptField::kInvalid) return CreatePlan::kRefuse;
+  if (request.key_bound && request.same_profile) {
+    if (request.adopt == AdoptField::kAbsent || request.adopt_id == request.bound_id) return CreatePlan::kReclaim;
+    return CreatePlan::kRefuse;
+  }
+  if (request.key_bound && request.old_tab_needs_unload) return CreatePlan::kRefuse;
+  if (request.adopt == AdoptField::kId) {
+    if (request.adoption != AdoptRefusal::kNone) return CreatePlan::kRefuse;
+    return request.key_bound ? CreatePlan::kAdoptReplacing : CreatePlan::kAdopt;
+  }
+  return request.key_bound ? CreatePlan::kReplace : CreatePlan::kCreate;
 }
 
 }

@@ -93,6 +93,7 @@ struct Placement {
   Material material = Material::kLiquid;
   std::size_t order = 0;
   Source source = Source::kGlass;
+  Radii radii;
   bool operator==(const Placement&) const = default;
 };
 
@@ -228,15 +229,16 @@ struct CornerShape {
   Radii radii;
 };
 
-inline CornerShape ShapeFor(double radius, std::uint8_t corners) {
-  const double r = Finite(radius) && radius > 0 ? radius : 0;
-  const auto pick = [&](std::uint8_t corner) { return corners & corner ? r : 0.0; };
-  return CornerShape{r == 0 || (corners & kAllCorners) == kAllCorners,
-                     Radii{pick(kUpperLeft), pick(kUpperRight), pick(kLowerRight), pick(kLowerLeft)}};
+inline CornerShape ShapeFor(const Radii& radii) {
+  const auto clean = [](double value) { return Finite(value) && value > 0 ? value : 0.0; };
+  const Radii safe{clean(radii.upper_left), clean(radii.upper_right), clean(radii.lower_right), clean(radii.lower_left)};
+  const bool uniform = safe.upper_left == safe.upper_right && safe.upper_right == safe.lower_right &&
+                       safe.lower_right == safe.lower_left;
+  return CornerShape{uniform, safe};
 }
 
-inline double NativeCornerRadius(const CornerShape& shape, double radius) {
-  return shape.uniform && Finite(radius) && radius > 0 ? radius : 0;
+inline double NativeCornerRadius(const CornerShape& shape) {
+  return shape.uniform ? shape.radii.upper_left : 0;
 }
 
 inline int GlassStyle(Material material) {
@@ -294,7 +296,7 @@ inline Layout Lay(const std::vector<Region>& regions,
       layout.placements.push_back(Placement{region.id, plane, page, Offset(rect, origin.x, origin.y),
                                             Offset(visible, origin.x, origin.y), UniformRadius(*radii),
                                             CornerMask(*radii), opacity, region.material, order,
-                                            region.source});
+                                            region.source, *radii});
       return true;
     };
     bool on_page = false;

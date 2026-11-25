@@ -428,28 +428,45 @@ TEST(liquid_glass_keeps_square_corners_on_clipped_edges) {
   Region region = Make("c", {0, 0, 100, 40}, Layer::kBehind);
   region.radii = {0, 12, 12, 0};
   const auto layout = glass::Lay({region}, {}, kWindow, 1);
-  const auto shape = glass::ShapeFor(layout.placements[0].radius, layout.placements[0].corners);
+  const auto shape = glass::ShapeFor(layout.placements[0].radii);
   CHECK(!shape.uniform);
   CHECK(shape.radii == (glass::Radii{0, 12, 12, 0}));
-  CHECK(glass::ShapeFor(12, glass::kAllCorners).uniform);
-  CHECK(glass::ShapeFor(0, glass::kUpperLeft).uniform);
-  CHECK(glass::ShapeFor(std::numeric_limits<double>::quiet_NaN(), glass::kUpperLeft).uniform);
+  CHECK(glass::NativeCornerRadius(shape) == 0);
+  CHECK(glass::ShapeFor({12, 12, 12, 12}).uniform);
+  CHECK(glass::ShapeFor({0, 0, 0, 0}).uniform);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(glass::ShapeFor({nan, 0, 0, 0}).uniform);
 }
 
 TEST(corner_shape_transitions_update_native_radius_and_mask) {
   struct Step {
-    std::uint8_t corners;
+    glass::Radii radii;
     double native;
     bool masked;
   };
-  for (const Step& step : {Step{glass::kAllCorners, 12, false}, Step{glass::kUpperRight | glass::kLowerRight, 0, true},
-                           Step{glass::kAllCorners, 12, false}, Step{glass::kUpperLeft, 0, true}}) {
-    const auto shape = glass::ShapeFor(12, step.corners);
-    CHECK(glass::NativeCornerRadius(shape, 12) == step.native);
+  for (const Step& step : {Step{{12, 12, 12, 12}, 12, false}, Step{{0, 12, 12, 0}, 0, true},
+                           Step{{12, 12, 12, 12}, 12, false}, Step{{4, 12, 12, 12}, 0, true},
+                           Step{{8, 8, 8, 8}, 8, false}}) {
+    const auto shape = glass::ShapeFor(step.radii);
+    CHECK(glass::NativeCornerRadius(shape) == step.native);
     CHECK(!shape.uniform == step.masked);
   }
-  CHECK(glass::NativeCornerRadius(glass::ShapeFor(0, glass::kAllCorners), 0) == 0);
-  CHECK(glass::NativeCornerRadius(glass::ShapeFor(12, glass::kAllCorners), std::numeric_limits<double>::infinity()) == 0);
+  CHECK(glass::NativeCornerRadius(glass::ShapeFor({std::numeric_limits<double>::infinity(), 1, 1, 1})) == 0);
+}
+
+TEST(unequal_positive_radii_are_a_layout_change) {
+  Region uniform = Make("r", {0, 0, 100, 40}, Layer::kBehind);
+  uniform.radii = {12, 12, 12, 12};
+  Region uneven = uniform;
+  uneven.radii = {4, 12, 12, 12};
+  const auto before = glass::Lay({uniform}, {}, kWindow, 1);
+  const auto after = glass::Lay({uneven}, {}, kWindow, 1);
+  CHECK(before.placements[0].radius == after.placements[0].radius);
+  CHECK(before.placements[0].corners == after.placements[0].corners);
+  const auto diff = glass::DiffPlacements(before.placements, after.placements, true);
+  CHECK(diff.update.size() == 1 && diff.create.empty() && diff.remove.empty());
+  const auto shape = glass::ShapeFor(diff.update[0].radii);
+  CHECK(!shape.uniform && shape.radii == (glass::Radii{4, 12, 12, 12}));
 }
 
 int main(int argc, char** argv) {

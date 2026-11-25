@@ -341,8 +341,10 @@ class ContractTests(unittest.TestCase):
         style = style.split('\n}\n', 1)[0]
         self.assertIn('vibrancy.material = VibrancyMaterial(placement.material);', style)
         self.assertIn('glass::GlassStyle(placement.material)', style)
-        self.assertIn('view.layer.mask = mask;', style)
-        self.assertIn('view.layer.mask = nil;', style)
+        self.assertEqual(style.count('ApplyCornerMask(view, shape);'), 2)
+        mask = self.read('ac_mac_glass.mm').split('void ApplyCornerMask(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('view.layer.mask = mask;', mask)
+        self.assertIn('view.layer.mask = nil;', mask)
 
     def test_sessions_and_documents_use_the_shell_policy(self):
         calls = self.read('ac_mac_shell_calls.mm')
@@ -353,20 +355,30 @@ class ContractTests(unittest.TestCase):
     def test_cross_profile_replacement_opens_before_it_retires(self):
         host = self.read('ac_mac_shell_host.mm')
         create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
-        self.assertLess(create.index('Navigate(&params);'), create.index('bindings_.erase(replaced_id);'))
-        self.assertLess(create.index('shell_policy::AfterReplacement('), create.index('bindings_.erase(replaced_id);'))
-        self.assertIn('if (outcome.close_old_tab) {', create)
+        self.assertLess(create.index('shell_policy::PlanCreate(request)'), create.index('existing->claim = claim;'))
+        self.assertLess(create.index('NeedToFireBeforeUnloadOrUnloadEvents()'), create.index('shell_policy::PlanCreate(request)'))
+        self.assertLess(create.index('Navigate(&params);'), create.index('CloseWebContentsAt('))
+        after_close = create.split('CloseWebContentsAt(', 1)[1]
+        self.assertIn('NoteUnclaimedTab(closing.get(), false);', after_close)
+        self.assertNotIn('bindings_.erase(replaced_id);', create)
+        self.assertIn('args.Find("adoptId")', create)
 
     def test_nonuniform_liquid_glass_drops_the_native_radius(self):
         style = self.read('ac_mac_glass.mm').split('void Style(NSView* view, const glass::Placement& placement) {', 1)[1]
-        self.assertIn('glass::NativeCornerRadius(shape, placement.radius)', style.split('\n}\n', 1)[0])
+        self.assertIn('glass::NativeCornerRadius(shape)', style.split('\n}\n', 1)[0])
+        self.assertIn('glass::ShapeFor(placement.radii)', style)
 
     def test_window_drag_accepts_a_left_drag(self):
         host = self.read('ac_mac_shell_host.mm')
         move = host.split('void ShellHostView::StartWindowMove(Done done) {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('NSEventTypeLeftMouseDragged', move)
-        self.assertIn('window::StartsWindowDrag(', move)
-        self.assertIn('performWindowDragWithEvent:event', move)
+        self.assertIn('window::WindowDragFor(', move)
+        self.assertIn('current.window == ns_window', move)
+        self.assertIn('start.use_retained_down ? retained : current', move)
+        watch = host.split('void ShellHostView::WatchWindowDrag() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('event.window == watched', watch)
+        self.assertIn('NSWindowDidResignKeyNotification', watch)
+        self.assertIn('StopWatchingWindowDrag();', host.split('void ShellHostView::DetachBrowser() {', 1)[1].split('\n}\n', 1)[0])
 
     def test_browser_created_tabs_are_offered_and_adopted(self):
         host = self.read('ac_mac_shell_host.mm')
@@ -375,8 +387,10 @@ class ContractTests(unittest.TestCase):
         self.assertIn('NoteUnclaimedTab(', changed)
         self.assertIn('Emit("ArdiaTabs", "unclaimed", base::Value(OfferTab(contents, active)));', host)
         self.assertIn('.Set("adoptId", "tab:" + base::NumberToString(TabId(contents)))', host)
+        self.assertIn('shell_policy::OfferedProfile(', host)
         create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(create.index('shell_policy::CheckAdoption('), create.index('Navigate(&params);'))
+        self.assertLess(create.index('shell_policy::CheckAdoption('), create.index('existing->claim = claim;'))
         self.assertIn('return ListUnclaimedTabs(std::move(done));', self.read('ac_mac_shell_calls.mm'))
         desktop = (REPO / 'apps/desktop/src/unclaimedTabs.ts').read_text()
         self.assertIn('/^tab:\\d+$/', desktop)

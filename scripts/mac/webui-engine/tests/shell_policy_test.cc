@@ -31,16 +31,58 @@ TEST(oversized_sessions_are_refused_before_writing) {
   CHECK(policy::kSessionLimit == 64u * 1024u * 1024u);
 }
 
-TEST(cross_profile_replacement_keeps_the_old_binding_until_the_new_tab_exists) {
-  CHECK(policy::RequestFor(false, false) == policy::TabRequest::kCreate);
-  CHECK(policy::RequestFor(true, true) == policy::TabRequest::kReclaim);
-  CHECK(policy::RequestFor(true, false) == policy::TabRequest::kReplace);
-  const auto failed = policy::AfterReplacement(false, true);
-  CHECK(failed.keep_old_binding && !failed.close_old_tab && !failed.bind_new && !failed.succeeded);
-  const auto replaced = policy::AfterReplacement(true, true);
-  CHECK(!replaced.keep_old_binding && replaced.close_old_tab && replaced.bind_new && replaced.succeeded);
-  const auto stuck = policy::AfterReplacement(true, false);
-  CHECK(stuck.keep_old_binding && !stuck.close_old_tab && stuck.bind_new && stuck.succeeded);
+TEST(default_profile_offers_use_the_empty_engine_name) {
+  CHECK(policy::OfferedProfile("default").empty());
+  CHECK(policy::OfferedProfile("work") == "work");
+  CHECK(policy::OfferedProfile("").empty());
+}
+
+TEST(adopt_field_shapes) {
+  using policy::AdoptField;
+  CHECK(policy::ClassifyAdoptField(false, false, "") == AdoptField::kAbsent);
+  CHECK(policy::ClassifyAdoptField(true, false, "") == AdoptField::kInvalid);
+  CHECK(policy::ClassifyAdoptField(true, true, "") == AdoptField::kInvalid);
+  CHECK(policy::ClassifyAdoptField(true, true, "tab:x") == AdoptField::kInvalid);
+  CHECK(policy::ClassifyAdoptField(true, true, "tab:7") == AdoptField::kId);
+}
+
+TEST(create_plans_check_the_adopt_id_before_reclaim_or_create) {
+  using policy::AdoptField;
+  using policy::AdoptRefusal;
+  using policy::CreatePlan;
+  policy::CreateRequest fresh;
+  CHECK(policy::PlanCreate(fresh) == CreatePlan::kCreate);
+  policy::CreateRequest non_string = fresh;
+  non_string.adopt = AdoptField::kInvalid;
+  CHECK(policy::PlanCreate(non_string) == CreatePlan::kRefuse);
+  policy::CreateRequest reclaim{AdoptField::kAbsent, 0, true, true, 9, AdoptRefusal::kNone, false};
+  CHECK(policy::PlanCreate(reclaim) == CreatePlan::kReclaim);
+  policy::CreateRequest invalid_on_existing = reclaim;
+  invalid_on_existing.adopt = AdoptField::kInvalid;
+  CHECK(policy::PlanCreate(invalid_on_existing) == CreatePlan::kRefuse);
+  policy::CreateRequest mismatched = reclaim;
+  mismatched.adopt = AdoptField::kId;
+  mismatched.adopt_id = 4;
+  CHECK(policy::PlanCreate(mismatched) == CreatePlan::kRefuse);
+  policy::CreateRequest matching = mismatched;
+  matching.adopt_id = 9;
+  CHECK(policy::PlanCreate(matching) == CreatePlan::kReclaim);
+  policy::CreateRequest adopt{AdoptField::kId, 4, false, false, 0, AdoptRefusal::kNone, false};
+  CHECK(policy::PlanCreate(adopt) == CreatePlan::kAdopt);
+  adopt.adoption = AdoptRefusal::kNotOffered;
+  CHECK(policy::PlanCreate(adopt) == CreatePlan::kRefuse);
+  policy::CreateRequest move{AdoptField::kAbsent, 0, true, false, 9, AdoptRefusal::kNone, false};
+  CHECK(policy::PlanCreate(move) == CreatePlan::kReplace);
+  policy::CreateRequest adopt_move{AdoptField::kId, 4, true, false, 9, AdoptRefusal::kNone, false};
+  CHECK(policy::PlanCreate(adopt_move) == CreatePlan::kAdoptReplacing);
+}
+
+TEST(a_cross_profile_move_waits_for_a_tab_with_unload_handlers) {
+  using policy::CreatePlan;
+  policy::CreateRequest guarded{policy::AdoptField::kAbsent, 0, true, false, 9, policy::AdoptRefusal::kNone, true};
+  CHECK(policy::PlanCreate(guarded) == CreatePlan::kRefuse);
+  guarded.same_profile = true;
+  CHECK(policy::PlanCreate(guarded) == CreatePlan::kReclaim);
 }
 
 TEST(adopt_ids_are_tab_and_a_positive_int) {

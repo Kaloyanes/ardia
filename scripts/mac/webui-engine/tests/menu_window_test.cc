@@ -236,11 +236,22 @@ TEST(caption_double_click_follows_the_system_setting) {
 }
 
 TEST(window_drag_starts_on_a_left_press_or_a_left_drag) {
-  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDown, true));
-  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDown, false));
-  CHECK(window::StartsWindowDrag(window::MouseEvent::kLeftDragged, true));
-  CHECK(!window::StartsWindowDrag(window::MouseEvent::kLeftDragged, false));
-  CHECK(!window::StartsWindowDrag(window::MouseEvent::kOther, true));
+  using window::DragStart;
+  using window::MouseEvent;
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDown, true, true, false) == (DragStart{true, false}));
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDragged, true, true, false) == (DragStart{true, false}));
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDragged, true, true, true) == (DragStart{true, true}));
+  CHECK(window::WindowDragFor(MouseEvent::kOther, false, true, true) == (DragStart{true, true}));
+}
+
+TEST(window_drag_refuses_a_released_button_or_another_window) {
+  using window::DragStart;
+  using window::MouseEvent;
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDown, true, false, false) == DragStart{});
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDown, true, false, true) == DragStart{});
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDragged, false, true, false) == DragStart{});
+  CHECK(window::WindowDragFor(MouseEvent::kLeftDown, false, true, false) == DragStart{});
+  CHECK(window::WindowDragFor(MouseEvent::kOther, true, true, false) == DragStart{});
 }
 
 int main(int argc, char** argv) {

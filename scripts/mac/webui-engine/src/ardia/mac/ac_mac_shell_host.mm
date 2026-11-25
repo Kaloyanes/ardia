@@ -394,6 +394,12 @@ void PageBinding::WebContentsDestroyed() {
   }
 }
 
+struct ShellHostView::WindowDrag {
+  NSEvent* mouse_down = nil;
+  id monitor = nil;
+  NSMutableArray* observers = [NSMutableArray array];
+};
+
 ShellHostView::ShellHostView(BrowserWindowInterface* browser,
                              BrowserView* browser_view,
                              Profile* app_profile,
@@ -445,6 +451,7 @@ void ShellHostView::Initialize() {
           },
           GetWeakPtr()));
   browser_->GetTabStripModel()->AddObserver(this);
+  WatchWindowDrag();
   LayoutOverlay();
   shell_->LoadInitialURL(GURL(kShellUrl));
   Note("window " + window_id_ + " attached");
@@ -464,6 +471,7 @@ void ShellHostView::DetachBrowser() {
     }
   }
   bindings_.clear();
+  StopWatchingWindowDrag();
   popovers_.reset();
   glass_.reset();
   if (focus_manager_) {
@@ -927,68 +935,81 @@ void ShellHostView::CreateTabIn(base::DictValue args,
                        "The tab's profile has no window to live in"));
   }
   PageBinding* existing = BindingForKey(key);
-  const shell_policy::TabRequest request = shell_policy::RequestFor(
-      existing != nullptr,
-      existing && existing->contents()->GetBrowserContext() == profile);
-  if (request == shell_policy::TabRequest::kReclaim) {
+  const base::Value* adopt_value = args.Find("adoptId");
+  const std::string* adopt_text = adopt_value ? adopt_value->GetIfString() : nullptr;
+  shell_policy::CreateRequest request;
+  request.adopt = shell_policy::ClassifyAdoptField(
+      adopt_value != nullptr, adopt_text != nullptr,
+      adopt_text ? std::string_view(*adopt_text) : std::string_view());
+  content::WebContents* adoptable = nullptr;
+  if (request.adopt == shell_policy::AdoptField::kId) {
+    request.adopt_id = *shell_policy::ParseAdoptId(*adopt_text);
+    const auto offer = offered_.find(request.adopt_id);
+    content::WebContents* offered =
+        offer != offered_.end() ? offer->second.get() : nullptr;
+    content::WebContents* present = MemberTab(request.adopt_id, profile);
+    request.adoption = shell_policy::CheckAdoption(
+        true, offered != nullptr,
+        offered && offered->GetBrowserContext() == profile,
+        present && present == offered, BindsContents(present));
+    adoptable = present;
+  }
+  content::WebContents* old_contents = existing ? existing->contents() : nullptr;
+  request.key_bound = existing != nullptr;
+  request.same_profile =
+      old_contents && old_contents->GetBrowserContext() == profile;
+  request.bound_id = existing ? existing->id() : 0;
+  request.old_tab_needs_unload =
+      old_contents && !request.same_profile &&
+      old_contents->NeedToFireBeforeUnloadOrUnloadEvents();
+  const shell_policy::CreatePlan plan = shell_policy::PlanCreate(request);
+  if (plan == shell_policy::CreatePlan::kRefuse) {
+    return std::move(done).Run(
+        false, base::Value(request.adopt == shell_policy::AdoptField::kInvalid
+                               ? "Invalid tab adoption id"
+                           : request.old_tab_needs_unload
+                               ? "Close the tab before moving it to another profile"
+                               : "This tab can't be adopted"));
+  }
+  if (plan == shell_policy::CreatePlan::kReclaim) {
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
     return std::move(done).Run(true, base::Value(Identity(existing)));
   }
-  const int replaced_id =
-      request == shell_policy::TabRequest::kReplace ? existing->id() : 0;
+  const bool replacing = plan == shell_policy::CreatePlan::kReplace ||
+                         plan == shell_policy::CreatePlan::kAdoptReplacing;
   content::WebContents* contents = nullptr;
-  if (const std::string adopt = Text(args, "adoptId"); !adopt.empty()) {
-    const std::optional<int> wanted = shell_policy::ParseAdoptId(adopt);
-    const auto offer = wanted ? offered_.find(*wanted) : offered_.end();
-    content::WebContents* offered =
-        offer != offered_.end() ? offer->second.get() : nullptr;
-    content::WebContents* present = wanted ? MemberTab(*wanted, profile) : nullptr;
-    const shell_policy::AdoptRefusal refusal = shell_policy::CheckAdoption(
-        wanted.has_value(), offered != nullptr,
-        offered && offered->GetBrowserContext() == profile,
-        present && present == offered, BindsContents(present));
-    if (refusal != shell_policy::AdoptRefusal::kNone) {
-      return std::move(done).Run(
-          false, base::Value(refusal == shell_policy::AdoptRefusal::kMalformed
-                                 ? "Invalid tab adoption id"
-                                 : "This tab can't be adopted"));
-    }
-    offered_.erase(offer);
-    contents = present;
-  }
-  if (!contents) {
+  if (plan == shell_policy::CreatePlan::kAdopt ||
+      plan == shell_policy::CreatePlan::kAdoptReplacing) {
+    offered_.erase(request.adopt_id);
+    contents = adoptable;
+  } else {
     NavigateParams params(member, *url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
     params.disposition = WindowOpenDisposition::kNewBackgroundTab;
     params.window_action = NavigateParams::WindowAction::kNoAction;
     Navigate(&params);
     contents = params.navigated_or_inserted_contents;
   }
-  if (replaced_id) {
-    content::WebContents* old_contents = nullptr;
-    if (auto found = bindings_.find(replaced_id); found != bindings_.end()) {
-      old_contents = found->second->contents();
-    }
+  if (!contents) {
+    return std::move(done).Run(false, base::Value("The tab did not open"));
+  }
+  if (replacing && old_contents) {
     BrowserWindowInterface* old_owner = OwnerOf(old_contents);
     TabStripModel* old_model = old_owner ? old_owner->GetTabStripModel() : nullptr;
     const int old_index = old_model ? old_model->GetIndexOfWebContents(old_contents)
                                     : TabStripModel::kNoTab;
-    const shell_policy::Replacement outcome = shell_policy::AfterReplacement(
-        contents != nullptr, old_index != TabStripModel::kNoTab);
-    if (!outcome.bind_new) {
-      return std::move(done).Run(false, base::Value("The tab did not open"));
+    const int old_id = existing->id();
+    existing->claim.clear();
+    existing->visible = false;
+    if (old_index != TabStripModel::kNoTab) {
+      base::WeakPtr<content::WebContents> closing = old_contents->GetWeakPtr();
+      old_model->CloseWebContentsAt(old_index, TabCloseTypes::CLOSE_NONE);
+      if (closing && OwnerOf(closing.get())) {
+        bindings_.erase(old_id);
+        NoteUnclaimedTab(closing.get(), false);
+      }
     }
-    if (outcome.close_old_tab) {
-      bindings_.erase(replaced_id);
-      old_model->CloseWebContentsAt(old_index, TabCloseTypes::CLOSE_USER_GESTURE);
-    } else if (auto found = bindings_.find(replaced_id); found != bindings_.end()) {
-      found->second->claim.clear();
-      found->second->visible = false;
-    }
-  }
-  if (!contents) {
-    return std::move(done).Run(false, base::Value("The tab did not open"));
   }
   auto binding = std::make_unique<PageBinding>(this, contents, key,
                                                Text(args, "profile"));
@@ -1357,20 +1378,65 @@ void ShellHostView::CaptionDoubleClick(Done done) {
   std::move(done).Run(true, base::Value(window::CaptionActionName(chosen)));
 }
 
+void ShellHostView::WatchWindowDrag() {
+  views::Widget* widget = browser_view_ ? browser_view_->GetWidget() : nullptr;
+  NSWindow* ns_window =
+      widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
+  if (!ns_window || drag_) {
+    return;
+  }
+  drag_ = std::make_unique<WindowDrag>();
+  WindowDrag* state = drag_.get();
+  NSWindow* __weak watched = ns_window;
+  state->monitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp
+                                   handler:^NSEvent*(NSEvent* event) {
+                                     const bool down = event.type == NSEventTypeLeftMouseDown;
+                                     state->mouse_down = down && event.window == watched ? event : nil;
+                                     return event;
+                                   }];
+  for (NSNotificationName name : {NSWindowDidResignKeyNotification, NSWindowWillCloseNotification}) {
+    [state->observers addObject:[NSNotificationCenter.defaultCenter
+                                    addObserverForName:name
+                                                object:ns_window
+                                                 queue:nil
+                                            usingBlock:^(NSNotification*) {
+                                              state->mouse_down = nil;
+                                            }]];
+  }
+}
+
+void ShellHostView::StopWatchingWindowDrag() {
+  if (!drag_) {
+    return;
+  }
+  if (drag_->monitor) {
+    [NSEvent removeMonitor:drag_->monitor];
+  }
+  for (id observer in drag_->observers) {
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+  }
+  drag_.reset();
+}
+
 void ShellHostView::StartWindowMove(Done done) {
   views::Widget* widget = browser_view_ ? browser_view_->GetWidget() : nullptr;
-  NSWindow* window =
+  NSWindow* ns_window =
       widget ? widget->GetNativeWindow().GetNativeNSWindow() : nil;
-  NSEvent* event = [NSApp currentEvent];
+  NSEvent* current = [NSApp currentEvent];
+  NSEvent* retained = drag_ ? drag_->mouse_down : nil;
   const window::MouseEvent kind =
-      event.type == NSEventTypeLeftMouseDown      ? window::MouseEvent::kLeftDown
-      : event.type == NSEventTypeLeftMouseDragged ? window::MouseEvent::kLeftDragged
-                                                  : window::MouseEvent::kOther;
-  if (!window || !event ||
-      !window::StartsWindowDrag(kind, (NSEvent.pressedMouseButtons & 1) != 0)) {
+      current.type == NSEventTypeLeftMouseDown      ? window::MouseEvent::kLeftDown
+      : current.type == NSEventTypeLeftMouseDragged ? window::MouseEvent::kLeftDragged
+                                                    : window::MouseEvent::kOther;
+  const window::DragStart start = window::WindowDragFor(
+      kind, ns_window && current.window == ns_window,
+      (NSEvent.pressedMouseButtons & 1) != 0,
+      ns_window && retained.window == ns_window);
+  if (!ns_window || !start.start) {
     return std::move(done).Run(true, base::Value(false));
   }
-  [window performWindowDragWithEvent:event];
+  [ns_window performWindowDragWithEvent:start.use_retained_down ? retained : current];
   std::move(done).Run(true, base::Value(true));
 }
 
@@ -1412,7 +1478,8 @@ base::DictValue ShellHostView::OfferTab(content::WebContents* contents,
   return base::DictValue()
       .Set("adoptId", "tab:" + base::NumberToString(TabId(contents)))
       .Set("url", contents->GetVisibleURL().spec())
-      .Set("profile", profile ? ProfileName(profile) : std::string())
+      .Set("profile", std::string(shell_policy::OfferedProfile(
+                          profile ? ProfileName(profile) : std::string())))
       .Set("active", active);
 }
 

@@ -2240,7 +2240,7 @@
   {
    "id": "mac-webui-bridge:ardiaRequest",
    "source": "frame",
-   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. Tabs Chromium opens on its own (target=_blank, window.open) are offered to this window's shell as ArdiaTabs unclaimed and listed by ArdiaTabs.unclaimedTabs only after it asks; tab.create adopts one only for an adoptId of exactly tab:<1..INT_MAX> (ParseAdoptId) that this host offered, in the requested profile, still in one of this window's tab strips and not already bound (CheckAdoption); anything else is refused. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
+   "guard": "Mac WebUI host (dev builds only, --ardia-shell=webui; official builds compile only ac_mac_webui_release.mm): ardiaRequest is taken only from the shell WebContents' live primary main frame whose committed origin is chrome://ardia/, by the handler bound to that document's generation (Trusted, OwnsHandler); requests of the wrong shape or with an id over 256 bytes are dropped; tab URLs pass AllowedPageUrl. Tabs Chromium opens on its own (target=_blank, window.open) are offered to this window's shell as ArdiaTabs unclaimed and listed by ArdiaTabs.unclaimedTabs only after it asks; tab.create checks adoptId before anything else: a present adoptId that is not a string of exactly tab:<1..INT_MAX> is refused (ClassifyAdoptField, ParseAdoptId), a reclaim of a key already bound in the same profile succeeds only without adoptId or with that binding's own id, and an adoption needs a tab this host offered, in the requested profile, still in one of this window's tab strips and not bound (CheckAdoption, PlanCreate); a move to another profile is refused while the old tab has unload handlers, and an old tab whose close is deferred is offered again as unclaimed rather than left bound. A popover surface's chrome://ardia/?popover=<id> page gets only PopoverBridge, which re-checks its own primary main frame and origin and accepts only shell.popover.close (its own id) and shell.popover.message; nothing else reaches the host. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#ShellBridge::Request",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_bridge.cc#PopoverBridge::Trusted",
@@ -2251,7 +2251,10 @@
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#ParseAdoptId",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#CheckAdoption",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_host.mm#ListUnclaimedTabs",
-    "scripts/mac/webui-engine/tests/shell_policy_test.cc#only_an_offered_unbound_tab_of_the_same_profile_is_adopted"
+    "scripts/mac/webui-engine/tests/shell_policy_test.cc#only_an_offered_unbound_tab_of_the_same_profile_is_adopted",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#ClassifyAdoptField",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_policy.h#PlanCreate",
+    "scripts/mac/webui-engine/tests/shell_policy_test.cc#create_plans_check_the_adopt_id_before_reclaim_or_create"
    ],
    "detected": false
   },

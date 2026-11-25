@@ -131,8 +131,9 @@ TEST(glass_geometry) {
       const int narrowed = ardia_mac::glass::ClampToInt(a);
       CHECK(narrowed >= -1000000 && narrowed <= 1000000);
       if (const auto generation = ardia_mac::glass::PresentableGeneration(a)) CHECK(*generation >= 0 && *generation == a);
-      const auto shape = ardia_mac::glass::ShapeFor(a, static_cast<std::uint8_t>(5));
+      const auto shape = ardia_mac::glass::ShapeFor({a, b, a, b});
       CHECK(std::isfinite(shape.radii.upper_left) && shape.radii.upper_left >= 0);
+      CHECK(std::isfinite(ardia_mac::glass::NativeCornerRadius(shape)));
     }
   }
 }
@@ -211,6 +212,15 @@ TEST(bridge_documents) {
     }
   }
   CHECK(ardia_mac::shell_policy::ValidDocumentName("notes.json"));
+  for (const std::string& text : Load().strings) {
+    if (const auto id = ardia_mac::shell_policy::ParseAdoptId(text)) {
+      CHECK(*id > 0 && text == "tab:" + std::to_string(*id));
+    }
+    if (ardia_mac::shell_policy::ClassifyAdoptField(true, true, text) == ardia_mac::shell_policy::AdoptField::kId) {
+      CHECK(text.starts_with("tab:") && Charset(text.substr(4), ""));
+    }
+  }
+  CHECK(ardia_mac::shell_policy::ParseAdoptId("tab:12") == 12);
 }
 
 TEST(launch_environment) {

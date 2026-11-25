@@ -62,15 +62,6 @@ NSVisualEffectMaterial VibrancyMaterial(glass::Material material) {
   return NSVisualEffectMaterialSidebar;
 }
 
-CACornerMask LayerCorners(std::uint8_t corners) {
-  CACornerMask mask = 0;
-  if (corners & glass::kUpperLeft) mask |= kCALayerMinXMaxYCorner;
-  if (corners & glass::kUpperRight) mask |= kCALayerMaxXMaxYCorner;
-  if (corners & glass::kLowerRight) mask |= kCALayerMaxXMinYCorner;
-  if (corners & glass::kLowerLeft) mask |= kCALayerMinXMinYCorner;
-  return mask;
-}
-
 NSView* MakeEffect(const glass::Placement& placement, glass::Plane plane) {
   if (glass::EffectFor(placement.material, LiquidGlassAvailable()) ==
       glass::Effect::kLiquidGlass) {
@@ -106,40 +97,43 @@ CGPathRef CornerPath(NSRect bounds, const glass::Radii& radii, bool flipped) {
   return path;
 }
 
+void ApplyCornerMask(NSView* view, const glass::CornerShape& shape) {
+  view.wantsLayer = YES;
+  if (shape.uniform) {
+    view.layer.mask = nil;
+    return;
+  }
+  CAShapeLayer* mask = [CAShapeLayer layer];
+  mask.frame = view.bounds;
+  CGPathRef path = CornerPath(view.bounds, shape.radii, view.isFlipped);
+  mask.path = path;
+  CGPathRelease(path);
+  view.layer.mask = mask;
+}
+
 void Style(NSView* view, const glass::Placement& placement) {
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   view.frame = NSMakeRect(placement.frame.x, placement.frame.y,
                           placement.frame.width, placement.frame.height);
   view.alphaValue = placement.opacity;
-  const glass::CornerShape shape =
-      glass::ShapeFor(placement.radius, placement.corners);
+  const glass::CornerShape shape = glass::ShapeFor(placement.radii);
+  const double native = glass::NativeCornerRadius(shape);
   if ([view isKindOfClass:GlassEffectClass()]) {
     if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
       [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
     }
     if ([view respondsToSelector:NSSelectorFromString(@"setCornerRadius:")]) {
-      [view setValue:@(glass::NativeCornerRadius(shape, placement.radius))
-              forKey:@"cornerRadius"];
+      [view setValue:@(native) forKey:@"cornerRadius"];
     }
-    view.wantsLayer = YES;
-    if (shape.uniform) {
-      view.layer.mask = nil;
-    } else {
-      CAShapeLayer* mask = [CAShapeLayer layer];
-      mask.frame = view.bounds;
-      CGPathRef path = CornerPath(view.bounds, shape.radii, view.isFlipped);
-      mask.path = path;
-      CGPathRelease(path);
-      view.layer.mask = mask;
-    }
+    ApplyCornerMask(view, shape);
   } else if ([view isKindOfClass:NSVisualEffectView.class]) {
     NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
     vibrancy.material = VibrancyMaterial(placement.material);
-    view.layer.cornerRadius = placement.radius;
+    view.layer.cornerRadius = native;
     view.layer.cornerCurve = kCACornerCurveContinuous;
-    view.layer.maskedCorners = LayerCorners(placement.corners);
-    view.layer.masksToBounds = placement.radius > 0;
+    view.layer.masksToBounds = native > 0;
+    ApplyCornerMask(view, shape);
   }
   [CATransaction commit];
 }
