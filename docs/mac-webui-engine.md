@@ -120,6 +120,20 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
   display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 
+- **Trackpad swipes** (`ac_mac_swipe`, rules in `ac_mac_swipe_policy.h`). A local `NSEvent` scroll-wheel monitor per
+  window, scoped to that window and removed with its host, reads AppKit's real `phase`, `momentumPhase` and
+  `hasPreciseScrollingDeltas`, so a live two-finger drag, its momentum and a mouse wheel click are told apart without
+  timers. Each gesture keeps the surface it began on.
+  - Over the shell it sends `ArdiaShell` `onScrollGesture {phase, momentum, dx, dy, x, y, t}` (`mayBegin`, `began`,
+    `changed`, `ended`, `cancelled`, `none` for momentum, `wheel` for a mouse click) and swallows nothing. The shell
+    advertises `shell.scrollGestures`, and `swipe.ts` then drives the profile pager from these phases alone: it ends
+    the drag on the event the fingers lift with, ignores the momentum of a swipe it tracked, and only holds a DOM
+    `wheel` off the shell's scrollers while a swipe or its momentum is its own.
+  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe`, timed by the same phases: it starts
+    only with the system's swipe-between-pages setting on, after the page's first non-momentum touchpad scroll
+    update comes back unconsumed. A page that scrolls, or calls `preventDefault` on the wheel, keeps its gesture
+    (carousels, maps, Figma). A tracked swipe swallows only its horizontal motion and always passes the end to the
+    page. Chrome's own history swiper is turned off for the shell and every hosted page (`HistorySwipingControl`).
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),

@@ -18,6 +18,7 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"

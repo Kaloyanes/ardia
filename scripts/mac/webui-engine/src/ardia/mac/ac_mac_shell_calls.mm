@@ -15,6 +15,7 @@
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "ardia/mac/generated/ac_desktop_window_commands.h"
@@ -202,6 +203,7 @@ std::string ShellHostView::BootstrapJson() const {
   SystemServices::AppendCapabilities(capabilities);
   ExtensionViews::AppendCapabilities(capabilities);
   PipPresenter::AppendCapabilities(capabilities);
+  ScrollGestures::AppendCapabilities(capabilities);
   if (popover::kPopoverRendererShipped) {
     for (std::string_view capability : kPopoverCapabilities) {
       capabilities.Append(capability);

@@ -17,6 +17,12 @@ const MOMENTUM_DROP = 0.85;
 const MOMENTUM_STEP = 0.985;
 const MOMENTUM_FLOOR = 0.45;
 const RESUME_JUMP = 1.35;
+const OWNED_MOMENTUM_WAIT = 0.1;
+const MAX_NATIVE_DELTA = 10_000;
+const MAX_NATIVE_POINT = 1_000_000;
+
+export const SCROLL_GESTURES_CAPABILITY = "shell.scrollGestures";
+export const SCROLL_GESTURE_EVENT = "onScrollGesture";
 
 export type SwipeTarget = {
   node: () => HTMLElement | null;
@@ -52,6 +58,9 @@ let gapTimer: ReturnType<typeof setTimeout> | undefined;
 let magnitudes: { t: number; m: number }[] = [];
 let swallowing = false;
 let lastMagnitude = 0;
+let nativeScroll = false;
+let hostClockOffset = Infinity;
+let ownedMomentum = { armed: false, flowing: false, endedAt: 0 };
 
 function blank(): Gesture {
   return { state: "idle", target: null, hit: null, dx: 0, dy: 0, direction: 0, available: false, times: [], deltas: [], time: 0 };
@@ -297,6 +306,10 @@ function releaseByGap() {
 
 function onWheel(e: WheelEvent) {
   if (e.ctrlKey || !targets.size) return;
+  if (nativeScroll) {
+    if (gesture.state === "tracking" || ownedMomentum.armed) e.preventDefault();
+    return;
+  }
   const t = e.timeStamp / 1000;
   const shiftScrollsSideways = e.shiftKey && e.deltaX === 0;
   const scrollingDx = -(shiftScrollsSideways ? e.deltaY : e.deltaX);
@@ -344,9 +357,17 @@ function onWheel(e: WheelEvent) {
   if (handled) e.preventDefault();
 }
 
-type PageSwipe = { phase: "began" | "changed" | "ended" | "cancelled"; dx: number; dy: number; x?: number; y?: number };
+type PageSwipe = { phase: "began" | "changed" | "ended" | "cancelled"; dx: number; dy: number; x?: number; y?: number; t?: number };
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const bounded = (value: unknown, limit: number): value is number => finite(value) && Math.abs(value) <= limit;
+
+function hostTime(t: unknown) {
+  const now = performance.now() / 1000;
+  if (!finite(t) || t < 0) return now;
+  hostClockOffset = Math.min(hostClockOffset, now - t);
+  return t + hostClockOffset;
+}
 
 function pageSwipe(value: unknown): PageSwipe | null {
   if (!value || typeof value !== "object") return null;
@@ -357,27 +378,95 @@ function pageSwipe(value: unknown): PageSwipe | null {
   return swipe as PageSwipe;
 }
 
-export function onPageSwipe(value: unknown, timestamp = performance.now() / 1000) {
+export function onPageSwipe(value: unknown, timestamp?: number) {
   const swipe = pageSwipe(value);
   if (!swipe) return;
+  const t = timestamp ?? hostTime(swipe.t);
   if (swipe.phase === "began") {
-    if (gesture.state === "pending" || gesture.state === "tracking") end(true, timestamp);
+    if (gesture.state === "pending" || gesture.state === "tracking") end(true, t);
     const hit = typeof document === "undefined" ? null : document.elementFromPoint(swipe.x!, swipe.y!);
-    prepare(swipe.x!, swipe.y!, hit, timestamp);
-    begin(swipe.x!, swipe.y!, hit, timestamp);
-    update(swipe.dx, swipe.dy, timestamp);
+    prepare(swipe.x!, swipe.y!, hit, t);
+    begin(swipe.x!, swipe.y!, hit, t);
+    update(swipe.dx, swipe.dy, t);
   } else if (swipe.phase === "changed") {
-    update(swipe.dx, swipe.dy, timestamp);
+    update(swipe.dx, swipe.dy, t);
   } else {
-    if (swipe.dx || swipe.dy) update(swipe.dx, swipe.dy, timestamp);
-    end(swipe.phase === "cancelled", timestamp);
+    if (swipe.dx || swipe.dy) update(swipe.dx, swipe.dy, t);
+    end(swipe.phase === "cancelled", t);
   }
 }
 
+type GesturePhase = "none" | "mayBegin" | "began" | "changed" | "ended" | "cancelled";
+type ScrollGesture = { phase: GesturePhase | "wheel"; momentum: GesturePhase; dx: number; dy: number; x: number; y: number; t?: number };
+const GESTURE_PHASES: readonly string[] = ["none", "mayBegin", "began", "changed", "ended", "cancelled"];
+
+function scrollGesture(value: unknown): ScrollGesture | null {
+  if (!value || typeof value !== "object") return null;
+  const g = value as Record<string, unknown>;
+  if (typeof g.phase !== "string" || (g.phase !== "wheel" && !GESTURE_PHASES.includes(g.phase))) return null;
+  if (typeof g.momentum !== "string" || !GESTURE_PHASES.includes(g.momentum)) return null;
+  if (!bounded(g.dx, MAX_NATIVE_DELTA) || !bounded(g.dy, MAX_NATIVE_DELTA)) return null;
+  if (!bounded(g.x, MAX_NATIVE_POINT) || !bounded(g.y, MAX_NATIVE_POINT)) return null;
+  if (g.t !== undefined && !finite(g.t)) return null;
+  return g as ScrollGesture;
+}
+
+const hitAt = (x: number, y: number) => (typeof document === "undefined" ? null : document.elementFromPoint(x, y));
+const restingMomentum = () => ({ armed: false, flowing: false, endedAt: 0 });
+
+function followMomentum(momentum: GesturePhase, t: number) {
+  if (!ownedMomentum.armed) return;
+  if (!ownedMomentum.flowing) {
+    ownedMomentum.flowing = momentum === "began" && t - ownedMomentum.endedAt <= OWNED_MOMENTUM_WAIT;
+    if (!ownedMomentum.flowing) {
+      ownedMomentum = restingMomentum();
+      return;
+    }
+  }
+  if (momentum === "ended" || momentum === "cancelled") ownedMomentum = restingMomentum();
+}
+
+export function onScrollGesture(value: unknown, timestamp?: number) {
+  const g = scrollGesture(value);
+  if (!g) return;
+  const t = timestamp ?? hostTime(g.t);
+  if (g.phase === "wheel") {
+    ownedMomentum = restingMomentum();
+    if (Math.abs(g.dx) <= Math.abs(g.dy)) return;
+    const hit = hitAt(g.x, g.y);
+    wheelStep(targetAt(g.x, g.y, hit), hit, g.dx);
+    return;
+  }
+  if (g.phase === "none") {
+    followMomentum(g.momentum, t);
+    return;
+  }
+  ownedMomentum = restingMomentum();
+  if (g.phase === "mayBegin") {
+    prepare(g.x, g.y, hitAt(g.x, g.y), t);
+    return;
+  }
+  if (g.phase === "began") {
+    if (gesture.state === "pending" || gesture.state === "tracking") end(true, t);
+    begin(g.x, g.y, hitAt(g.x, g.y), t);
+  }
+  if (g.phase === "ended" || g.phase === "cancelled") {
+    if (g.dx || g.dy) update(g.dx, g.dy, t);
+    const tracked = end(g.phase === "cancelled", t);
+    if (tracked && g.phase === "ended") ownedMomentum = { armed: true, flowing: false, endedAt: t };
+    return;
+  }
+  update(g.dx, g.dy, t);
+}
+
+const nativeScrollFrom = (host: ArdiaHost | undefined) => !!host?.bootstrap?.capabilities?.includes(SCROLL_GESTURES_CAPABILITY);
+
 function listenForPageSwipes(host: ArdiaHost | undefined = ardiaHost) {
+  nativeScroll = nativeScrollFrom(host);
   return host?.onEvent((module, event, payload) => {
     if (module !== "ArdiaShell") return;
     if (event === "onPageSwipe") onPageSwipe(payload);
+    else if (event === SCROLL_GESTURE_EVENT) onScrollGesture(payload);
     else if (event === PAGER_FRAME_EVENT) onPagerFrame(payload);
   });
 }

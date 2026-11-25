@@ -77,6 +77,9 @@ class PureHeaderTests(unittest.TestCase):
     def test_extension_view_policy(self):
         compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
 
+    def test_swipe_policy(self):
+        compile_and_run(self, TESTS / 'swipe_policy_test.cc', self.out / 'swipe-policy')
+
     def test_pip_policy(self):
         compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
@@ -950,6 +953,66 @@ class ContractTests(unittest.TestCase):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
 
 
+class SwipeContractTests(unittest.TestCase):
+    def setUp(self):
+        self.source = (MAC / 'ac_mac_swipe.mm').read_text()
+
+    def test_the_scroll_monitor_is_scoped_to_its_window_and_removed_with_it(self):
+        self.assertIn('addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel', self.source)
+        self.assertNotIn('addGlobalMonitorForEvents', self.source)
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('event.window != own', handle)
+        teardown = self.source.split('ScrollGestures::~ScrollGestures() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('[NSEvent removeMonitor:state_->monitor]', teardown)
+        self.assertLess(teardown.index('removeMonitor'), teardown.index('InvalidateWeakPtrs'))
+        self.assertIn('state_->watch->Stop()', teardown)
+
+    def test_phases_come_from_appkit_not_timers(self):
+        for needle in ('event.phase', 'event.momentumPhase', 'event.hasPreciseScrollingDeltas',
+                       'event.scrollingDeltaX', 'event.scrollingDeltaY', 'event.timestamp'):
+            self.assertIn(needle, self.source)
+        for banned in ('NSTimer', 'PostDelayedTask', 'dispatch_after', 'performSelector'):
+            self.assertNotIn(banned, self.source)
+
+    def test_chrome_history_swiping_is_off_for_hosted_and_shell_contents(self):
+        self.assertIn('history_swiper::HistorySwipingControl::CreateForWebContents', self.source)
+        hit = self.source.split('Hit HitAt(NSEvent* event) const {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertEqual(hit.count('KeepChromeHistorySwiperOff('), 2)
+        build = (MAC / 'BUILD.gn').read_text()
+        self.assertIn('"//chrome/browser/renderer_host:history_swiping_control"', build)
+
+    def test_page_swipes_follow_the_page_ack_and_system_setting(self):
+        start = self.source.split('void StartPage(const Hit& hit, NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('NSEvent.isSwipeTrackingFromScrollEventsEnabled', 'binding->presented', 'binding->visible',
+                       'watch->Watch(view->GetRenderWidgetHost())'):
+            self.assertIn(needle, start)
+        self.assertIn('blink::mojom::GestureDevice::kTouchpad', self.source)
+        self.assertIn('InertialPhaseState::kMomentum', self.source)
+        self.assertIn('RenderWidgetHostDestroyed', self.source)
+
+    def test_only_tracked_page_motion_is_swallowed(self):
+        gesture = self.source.split('bool PageGesture(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertEqual(gesture.count('return page.Swallows();'), 1)
+        self.assertIn('case sp::Phase::kChanged:\n        Scroll(dx, dy);\n        return page.Swallows();', gesture)
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        shell = handle.split('if (route == sp::Route::kShell) {', 1)[1].split('}', 1)[0]
+        self.assertIn('return false;', shell)
+
+    def test_the_host_builds_tears_down_and_advertises_the_bridge(self):
+        lifecycle = (MAC / 'ac_mac_shell_lifecycle.mm').read_text()
+        start = lifecycle.split('void ShellHostView::StartLifecycle() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_ = std::make_unique<ScrollGestures>(this, widget);', start)
+        stop = lifecycle.split('void ShellHostView::StopLifecycle() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_.reset();', stop)
+        calls = (MAC / 'ac_mac_shell_calls.mm').read_text()
+        self.assertIn('ScrollGestures::AppendCapabilities(capabilities);', calls)
+        policy = (MAC / 'ac_mac_swipe_policy.h').read_text()
+        swipe = (REPO / 'apps/desktop/src/shims/web/motion/swipe.ts').read_text()
+        for name in ('onScrollGesture', 'onPageSwipe', 'shell.scrollGestures'):
+            self.assertIn(f'"{name}"', policy)
+            self.assertIn(f'"{name}"', swipe)
+
+
 class BoundaryTests(unittest.TestCase):
     def test_every_bridge_handler_has_a_boundary_row(self):
         import json
@@ -965,12 +1028,12 @@ class BoundaryTests(unittest.TestCase):
                        'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
                        'application:openURLs:', 'ArdiaShell.listenForOpenURLs', 'extensionView.create',
                        'extensions.resolveInstallPrompt', 'executeExtensionAction', 'pip.command',
-                       'webView.setAutoPictureInPicture'):
+                       'webView.setAutoPictureInPicture', 'onScrollGesture', 'onPageSwipe'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
                      'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc', 'system_policy_test.cc',
-                     'extension_view_policy_test.cc', 'pip_policy_test.cc'):
+                     'extension_view_policy_test.cc', 'pip_policy_test.cc', 'swipe_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

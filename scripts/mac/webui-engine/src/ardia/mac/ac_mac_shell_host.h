@@ -57,6 +57,7 @@ class PageCommands;
 class PageEvents;
 class PipPresenter;
 class PopoverHost;
+class ScrollGestures;
 class SystemServices;
 class ShellBridge;
 class ShellHostView;
@@ -219,6 +220,7 @@ class ShellHostView : public views::View,
   friend class ExtensionViews;
   friend class PageBinding;
   friend class PipPresenter;
+  friend class ScrollGestures;
   friend class SystemServices;
 
   void LayoutOverlay();
@@ -331,6 +333,7 @@ class ShellHostView : public views::View,
 
   std::unique_ptr<DialogSheets> dialogs_;
   std::unique_ptr<WindowEvents> window_events_;
+  std::unique_ptr<ScrollGestures> scroll_gestures_;
   window_policy::CloseBook close_;
   std::uint64_t quit_generation_ = 0;
   std::map<std::string, std::uint64_t> close_dialogs_;

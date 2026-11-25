@@ -2586,6 +2586,25 @@
    "detected": false
   },
   {
+   "id": "mac-webui-swipe:scrollGestures",
+   "source": "page",
+   "guard": "Mac WebUI host (dev builds only): one local NSEvent scroll-wheel monitor per shell window acts only on events whose window is that window and is removed before the host goes away (ScrollGestures). Phases come from AppKit (event.phase, momentumPhase, hasPreciseScrollingDeltas), never from timing (PhaseOf, Classify); deltas, points and times must be finite and bounded (Delta, FinitePoint, FiniteTime). Each gesture keeps the surface it began on and its momentum follows it (RouteLatch). Over the shell the host only reports onScrollGesture and swallows nothing. Over a hosted page a back or forward swipe needs the system's swipe-between-pages setting, a presented and visible binding, a touchpad scroll begin and a first non-momentum scroll update the page leaves unconsumed; a page that scrolls or calls preventDefault on the wheel keeps the gesture, acks without a scroll begin are ignored, only horizontal-dominant motion of a tracked swipe is swallowed and the end is always passed to the page (PageSwipe). Chrome's own history swiper is off for the shell and hosted pages (HistorySwipingControl). In JS onScrollGesture and onPageSwipe accept only known phases with finite deltas and points within bounds (scrollGesture, pageSwipe in apps/desktop/src/shims/web/motion/swipe.ts).",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#PhaseOf",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#Classify",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#Delta",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#RouteLatch",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#PageSwipe",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#AckFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#KeepChromeHistorySwiperOff",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#a_page_that_scrolls_or_prevents_the_wheel_keeps_its_gesture",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#stale_acks_without_a_scroll_begin_never_start_a_swipe",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#deltas_points_and_times_are_finite_and_bounded",
+    "apps/desktop/src/scrollGestures.test.mjs#malformed"
+   ],
+   "detected": false
+  },
+  {
    "id": "pasteboard:addressFieldPaste",
    "source": "other-app",
    "guard": "The address and command bar field editor pastes only text: the pasteboard's plain string or URL, else the first item's file: URL (any other scheme under public.file-url is ignored) or the plain text of its RTFD, RTF or HTML with attachment characters removed; RCTUISingleLinePastedText folds every line terminator (CR, LF, VT, FF, NEL, U+2028, U+2029) into one line before the text reaches the field, an image alone beeps, and nothing is opened until the user presses Return through the omnibox's own resolve",
