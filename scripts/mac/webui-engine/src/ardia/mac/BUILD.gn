@@ -13,6 +13,24 @@ if (is_official_build) {
     defines = [ "ARDIA_MAC_WEBUI_DEV" ]
   }
 
+  config("session_include") {
+    include_dirs = [ "shared" ]
+  }
+
+  config("session_dict_loops") {
+    cflags = [ "-Wno-range-loop-bind-reference" ]
+  }
+
+  source_set("session") {
+    sources = [
+      "shared/ac_linux_session.cc",
+      "shared/ardia/linux/ac_linux_session.h",
+    ]
+    public_configs = [ ":session_include" ]
+    configs += [ ":session_dict_loops" ]
+    deps = [ "//base" ]
+  }
+
   action("bootstrap") {
     script = "generate_bootstrap.py"
     sources = [ "bootstrap.js" ]
@@ -79,6 +97,7 @@ if (is_official_build) {
       "generated/ac_linux_page_operations.h",
     ]
     sources += get_target_outputs(":bootstrap")
+    public_deps = [ ":session" ]
     configs += [ ":webui_dev" ]
     deps = [
       ":bootstrap",
@@ -99,6 +118,7 @@ if (is_official_build) {
       "//components/download/content/public",
       "//components/download/public/common:public",
       "//components/find_in_page",
+      "//components/input",
       "//components/performance_manager",
       "//components/permissions",
       "//components/policy/core/common",

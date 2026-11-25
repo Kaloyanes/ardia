@@ -36,6 +36,7 @@ export { FileDropArea } from "./web/FileDropArea";
 export { PopoverBubble } from "./web/PopoverBubble";
 export { showMenu } from "../menus";
 import { setTrafficLightsCenter } from "./web/windowChrome";
+import { placeNativeTrafficLights } from "../nativeTrafficLights";
 export { setTrafficLightsCenter };
 export { fetchBangList } from "../shellMethods";
 
@@ -122,7 +123,10 @@ const shellLocals: Record<string, unknown> = {
   setAppearance,
   isDarkAppearance,
   windowIds,
-  setTrafficLightsCenter: async (id: string, center: [number, number] | null, trailing = false) => setTrafficLightsCenter(id, center, trailing),
+  setTrafficLightsCenter: async (id: string, center: [number, number] | null, trailing = false) => {
+    await setTrafficLightsCenter(id, center, trailing);
+    await placeNativeTrafficLights(id, center, trailing);
+  },
 };
 provideNativeModuleProvider((module, method) => module === "ArdiaShell" && Object.hasOwn(shellLocals, method) ? shellLocals[method] : undefined);
 

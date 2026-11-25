@@ -2,6 +2,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "ardia/mac/ac_mac_menu_model.h"
 #include "ardia/mac/ac_mac_menu_state.h"
@@ -159,7 +160,7 @@ TEST(titlebar_metrics_center_the_lights_where_ardia_puts_them) {
 
 TEST(traffic_lights_clamp_and_refuse_nan) {
   const auto far = window::LightsFrom(5000, -40, false, {1280, 800});
-  CHECK(far && far->center == (window::Point{1233, 7}));
+  CHECK(far && far->center == (window::Point{1226, 14}));
   const window::Point zoom = window::ButtonOrigin(*far, {14, 14}, 800, 2);
   CHECK(zoom.x + window::kButtonSide <= 1280);
   CHECK(!window::LightsFrom(std::nan(""), 10, false, {1280, 800}));
@@ -268,8 +269,9 @@ TEST(the_whole_traffic_light_group_stays_inside_the_window) {
     CHECK(lights.has_value());
     if (!lights) continue;
     const window::Point zoom = window::ButtonOrigin(*lights, {14, 14}, 800, 2);
-    CHECK(zoom.x + window::kButtonSide <= width || width < 3 * window::kButtonSide + 2 * window::kTrafficLightSpacing);
-    CHECK(lights->center.x >= window::kButtonSide / 2);
+    CHECK(zoom.x + window::kButtonSide <= width ||
+          width < 3 * window::kButtonSide + 2 * window::kTrafficLightSpacing + 2 * window::kLightsEdgeMargin);
+    CHECK(lights->center.x >= window::kMinLightsCenter);
   }
   const auto defaults = window::LightsFrom(std::nullopt, std::nullopt, false, {1280, 800});
   CHECK(defaults && defaults->center == (window::Point{25, 20}));
@@ -510,6 +512,69 @@ TEST(a_key_window_without_its_own_menu_gets_a_minimal_system_bar) {
   bool closes = false;
   for (const menu::Item& item : root.children[2].children) closes |= item.role == menu::Role::kClose;
   CHECK(closes);
+}
+
+TEST(new_windows_cascade_and_utility_windows_center_over_their_opener) {
+  const window::Frame opener{100, 80, 1280, 800};
+  CHECK(window::CascadedFrom(opener) == (window::Frame{122, 102, 1280, 800}));
+  CHECK(window::CascadedFrom(window::Frame{0, 0, 0, 0}) == (window::Frame{22, 22, 1, 1}));
+  CHECK(window::UtilityFrameOver(opener, "settings") == (window::Frame{330, 160, 820, 640}));
+  CHECK(window::UtilityFrameOver(opener, "import") == (window::Frame{420, 180, 640, 600}));
+}
+
+TEST(traffic_lights_scale_by_the_shell_zoom_before_they_clamp_to_the_window) {
+  const window::Size window{1280, 800};
+  CHECK(window::LightsFrom(25, 27, false, window, 1)->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, false, window, 1.25)->center == (window::Point{31.25, 33.75}));
+  CHECK(window::LightsFrom(25, 27, false, window, 0.8)->center == (window::Point{20, 21.6}));
+  CHECK(window::LightsFrom(1500, 27, false, window, 0.8)->center.x == 1200);
+  CHECK(window::LightsFrom(1200, 27, false, window, 1.25)->center.x == 1226);
+  CHECK(window::LightsFrom(1240, 27, false, window, 0.5)->center.x == 620);
+  CHECK(window::LightsFrom(25, 27, false, window, std::numeric_limits<double>::quiet_NaN())->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, false, window, 0)->center == (window::Point{25, 27}));
+  CHECK(window::LightsFrom(25, 27, true, window, 2)->hidden);
+}
+
+TEST(the_close_button_never_leaves_the_window_edge_or_the_top) {
+  const window::Size window{1280, 800};
+  for (double x : {-400.0, -7.0, 0.0, 3.0, 7.0, 13.9}) {
+    const auto lights = window::LightsFrom(x, 27, false, window);
+    CHECK(lights && lights->center.x - window::kButtonSide / 2 >= window::kLightsEdgeMargin);
+    CHECK(window::TitlebarFor(*lights, {14, 14}).min_x_inset >= window::kLightsEdgeMargin);
+  }
+  for (double y : {-50.0, 0.0, 4.0, 13.0}) {
+    const auto lights = window::LightsFrom(25, y, false, window);
+    CHECK(lights && lights->center.y - window::kButtonSide / 2 >= window::kLightsEdgeMargin);
+  }
+  const auto tiny = window::LightsFrom(25, 27, false, {10, 10});
+  CHECK(tiny && tiny->center == (window::Point{window::kMinLightsCenter, window::kMinLightsCenter}));
+}
+
+TEST(settings_windows_center_their_lights_in_the_settings_toolbar_as_the_mac_app_does) {
+  const auto settings = window::LightsFrom(25, 26, false, {820, 640});
+  CHECK(settings && settings->center == (window::Point{25, 26}));
+  CHECK(window::TitlebarFor(*settings, {14, 14}) == (window::TitlebarMetrics{18, 52}));
+  CHECK(settings->center.y - window::kButtonSide / 2 == 19);
+}
+
+TEST(a_requested_frame_lands_on_the_screen_it_overlaps_most_and_stays_inside_it) {
+  const std::vector<window::Frame> screens{{0, 0, 1512, 982}, {1512, 0, 2560, 1440}};
+  CHECK(window::PlacedOnScreens({100, 80, 1280, 800}, screens) == (window::Frame{100, 80, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1400, 100, 1280, 800}, screens) == (window::Frame{1512, 100, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1000, 600, 1280, 800}, screens) == (window::Frame{1512, 600, 1280, 800}));
+  CHECK(window::PlacedOnScreens({1000, 600, 400, 600}, screens) == (window::Frame{1000, 382, 400, 600}));
+  CHECK(window::PlacedOnScreens({100, 80, 4000, 3000}, screens) == (window::Frame{1512, 0, 2560, 1440}));
+  CHECK(window::PlacedOnScreens({100, 80, 1400, 3000}, screens) == (window::Frame{100, 0, 1400, 982}));
+  CHECK(!window::PlacedOnScreens({9000, 9000, 800, 600}, screens));
+  CHECK(!window::PlacedOnScreens({100, 80, 800, 600}, {}));
+}
+
+TEST(new_windows_honor_focus_behind_and_maximized_and_background_shows_nothing) {
+  CHECK(window::PresentationForOpen(false, true, false, false) == (window::OpenPresentation{true, true, false, false}));
+  CHECK(window::PresentationForOpen(false, false, false, false) == (window::OpenPresentation{true, false, false, false}));
+  CHECK(window::PresentationForOpen(false, true, true, false) == (window::OpenPresentation{true, false, true, false}));
+  CHECK(window::PresentationForOpen(false, true, false, true) == (window::OpenPresentation{true, true, false, true}));
+  CHECK(window::PresentationForOpen(true, true, true, true) == window::OpenPresentation{});
 }
 
 int main(int argc, char** argv) {

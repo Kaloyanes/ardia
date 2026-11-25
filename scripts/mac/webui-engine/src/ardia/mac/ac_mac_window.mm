@@ -140,4 +140,16 @@ void SetTrafficLights(views::Widget* widget, const window::Lights& lights) {
   [frame layoutSubtreeIfNeeded];
 }
 
+void ShowWithoutActivating(views::Widget* widget, views::Widget* behind) {
+  if (!widget) {
+    return;
+  }
+  widget->ShowInactive();
+  NSWindow* ns_window = widget->GetNativeWindow().GetNativeNSWindow();
+  NSWindow* behind_window = behind ? behind->GetNativeWindow().GetNativeNSWindow() : nil;
+  if (ns_window && behind_window) {
+    [ns_window orderWindow:NSWindowBelow relativeTo:behind_window.windowNumber];
+  }
+}
+
 }
