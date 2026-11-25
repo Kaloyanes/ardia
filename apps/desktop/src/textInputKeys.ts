@@ -11,7 +11,9 @@ const IME_PROCESS_KEY = 229;
 const matches = (e: FieldKey, wanted: KeyMatch) =>
   e.key === wanted.key && MODIFIERS.every((m) => wanted[m] === undefined || !!e[m] === wanted[m]);
 
-export const isComposingKey = (e: FieldKey) => !!e.nativeEvent.isComposing || e.keyCode === IME_PROCESS_KEY;
+export const isImeKey = (e: Pick<KeyboardEvent, "isComposing" | "keyCode">) => !!e.isComposing || e.keyCode === IME_PROCESS_KEY;
+
+const isComposingKey = (e: FieldKey) => isImeKey({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode });
 
 export function routeFieldKey<E extends FieldKey>(e: E, keyDownEvents: KeyMatch[] | undefined, onKeyDown: ((e: E) => void) | undefined) {
   if (isComposingKey(e)) return;

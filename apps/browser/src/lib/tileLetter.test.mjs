@@ -114,3 +114,16 @@ test("tile letters made only of characters that draw nothing, Braille Blank, the
   assert.equal(cleanTileLetters("⠁"), "⠁", "a Braille pattern with dots still counts");
   assert.equal(cleanTileLetters("가"), "가", "real jamo still join");
 });
+
+test("a Hangul filler inside a jamo syllable stays part of it, and an explicit non-joiner keeps two Indic letters apart (#4197)", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  assert.equal(cleanTileLetters("\u1100\u1160\u1102\u1160B"), "\u1100\u1160\u1102\u1160", "two jamo syllables with a vowel filler are the two letters, B stays off");
+  assert.equal(cleanTileLetters("\u0915\u094D\u200C\u0915B"), "\u0915\u094D\u200C\u0915", "an explicit non-joiner keeps two letters, not the conjunct");
+  assert.equal(cleanTileLetters("\u0915\u094D\u0915B"), "\u0915\u094D\u0915B", "without it the conjunct is one letter and B follows");
+  for (const value of ["\u1100\u1160\u1102\u1160B", "\u0915\u094D\u200C\u0915B", "\u115F\u1160x"]) assert.equal(cleanTileLetters(cleanTileLetters(value)), cleanTileLetters(value));
+});
+
+test("a site's default letter skips a Hangul filler that draws nothing", () => {
+  assert.equal(tileLetterOf("https://127.0.0.1/", "\u3164News"), "N");
+  assert.equal(tileLetterOf("", "\uFFA0\u115F\u1160Ok"), "O");
+});

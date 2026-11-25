@@ -3,6 +3,7 @@ import { useBrowser } from "../../browser/src/state/browser/store";
 import { consentEpoch } from "../../browser/src/state/telemetry/client";
 import { emitNativeEvent, provideNativeModuleProvider } from "./shims/expo-modules-core";
 import { ardiaHost, reportHostError, type ArdiaHost } from "./host";
+import { isImeKey } from "./textInputKeys";
 import { keyboardCombo, linuxBindings, linuxNativeBindings, recordableShortcut, utilityBindings, type Binding } from "./shortcuts";
 
 let capturing = false;
@@ -91,6 +92,7 @@ export async function startLinuxShortcuts(host: ArdiaHost) {
       void host.invoke("ArdiaShell.setShortcutRecording", { args: [false] }).then(() => current.resolve({ key: combo.key, modifiers: combo.modifiers }), (error) => { reportHostError(error); current.resolve(null); });
       return;
     }
+    if (isImeKey(event)) return;
     const binding = bindings.find((b) => b.keyCode === combo.keyCode && b.modifiers === combo.flags);
     if (capturing && binding?.command !== "tabSwitcher") {
       const closes = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && !event.repeat;

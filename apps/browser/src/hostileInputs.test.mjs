@@ -745,7 +745,7 @@ test("a synced pinned tile's letters are at most two visible characters, whateve
     const letters = S().tabs[id].tileLetters;
     if (letters === undefined) continue;
     assert.equal(typeof letters, "string");
-    assert.ok(!/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}\s]/u.test(letters.replace(/[\u200D\u{E0020}-\u{E007F}]/gu, "")) && !/(?![\u200D\u{E0020}-\u{E007F}])\p{Cf}/u.test(letters), JSON.stringify(letters));
+    assert.ok(!/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}\s]/u.test(letters.replace(/[\u200C\u200D\u{E0020}-\u{E007F}]/gu, "")) && !/(?![\u200C\u200D\u{E0020}-\u{E007F}])\p{Cf}/u.test(letters), JSON.stringify(letters));
     assert.equal(cleanTileLetters(letters), letters, "what lands is already clean, so it doesn't change on the next sync");
   }
 });
