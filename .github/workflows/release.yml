@@ -618,7 +618,7 @@ jobs:
           if [ "$DRY_RUN" = true ]; then
             echo "- Windows: build $BUILD, signed and packed for windows-alpha, not published" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- Windows: build $BUILD is the signed update on windows-alpha" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Windows: build $BUILD (WebUI shell) is the signed update on windows-alpha" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   aur:

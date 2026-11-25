@@ -16,7 +16,7 @@ const SHARED_TESTS = [
   "settingsCapabilities.test.mjs", "appServices.test.mjs", "browserCommandRoute.test.mjs", "hostPageEvents.test.mjs",
   "hostPagePrompts.test.mjs", "hostTabPage.test.mjs", "hostCredentials.test.mjs", "hostExtensions.test.mjs",
   "hostSiteControls.test.mjs", "hostImport.test.mjs", "importUnlock.test.mjs", "hostPageStatus.test.mjs",
-  "hostMedia.test.mjs", "windowSweep.test.mjs", "typeahead.test.mjs", "mountLayout.test.mjs", "webShims.test.mjs",
+  "hostMedia.test.mjs", "windowSweep.test.mjs", "typeahead.test.mjs", "mountLayout.test.mjs", "webShims.test.mjs", "fieldKeys.test.mjs",
   "profilePaging.test.mjs", "shellMethods.test.mjs", "hostFolders.test.mjs", "extensionPrompts.test.mjs",
   "hostSync.test.mjs", "syncToggles.test.mjs", "pageOperations.test.mjs", "hostPolicies.test.mjs", "quit.test.mjs", "hostLive.test.mjs",
   "hostExtensionScripts.test.mjs", "installRequestSheet.test.mjs", "utilityExtensions.test.mjs",
@@ -28,7 +28,8 @@ const SHARED_TESTS = [
   "bookmarksHtml.test.mjs", "hostBookmarksExport.test.mjs", "openUrls.test.mjs", "pageSwipe.test.mjs",
   "hostReport.test.mjs", "engineCapabilities.test.mjs", "hostAppearance.test.mjs", "tabSwitchAhead.test.mjs",
   "shellPainted.test.mjs", "introMusic.test.mjs", "hostCrashReports.test.mjs", "windowControls.test.mjs",
-  "readerService.test.mjs", "hostKillSwitches.test.mjs"
+  "readerService.test.mjs", "hostKillSwitches.test.mjs", "fieldTiming.test.mjs", "launchMeasure.test.mjs",
+  "keyringTelemetry.test.mjs"
 ];
 
 const root = fileURLToPath(new URL("../", import.meta.url));
