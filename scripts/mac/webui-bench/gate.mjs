@@ -190,6 +190,10 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
     const missed = Object.fromEntries(SIDES.map((side) => [side, runs.filter((r) => r.side === side && r.phase === "large").reduce((n, r) => n + SWIPES_BY_SIDE[side].filter((d) => r.swipe?.[d]?.arrived !== true || r.swipe?.[d]?.error).length, 0)]));
     rows.push(row("integrity.arrived", "Integrity: swipes that did not reach the other profile", missed, SIDES.every((s) => missed[s] === 0), 0, "a swipe did not arrive"));
   }
+  if (measures.includes("memory")) {
+    const gaps = per((mine) => mine.filter((r) => r.status === "ok" && !(isCount(r.memory?.rssMb) && r.memory.rssMb > 0 && isCount(r.memory?.footprintMb) && r.memory.footprintMb > 0)).length);
+    rows.push(row("integrity.memory", "Integrity: finished runs without an RSS and footprint sample", gaps, SIDES.every((s) => gaps[s] === 0), 0, "a run is missing its RSS or phys_footprint"));
+  }
   if (measures.includes("peek")) {
     const missed = per((mine) => mine.filter((r) => r.phase === "large" && !(r.peek?.opened === true && r.peek?.dismissed === true && !r.peek?.error)).length);
     rows.push(row("integrity.peek", "Integrity: Peek runs that did not open and dismiss", missed, SIDES.every((s) => missed[s] === 0), 0, "a Peek did not open or go away"));

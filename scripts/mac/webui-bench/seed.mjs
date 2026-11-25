@@ -21,7 +21,8 @@ export const SECOND_WINDOW_TABS = 8;
 export const DEFAULT_ORIGIN = "http://127.0.0.1:9600";
 export const SESSION_VERSION = 11;
 export const COLORS = ["plum", "blue", "green"];
-export const SETTINGS = { searchSuggestions: false, warnBeforeClosingLastTab: false, warnBeforeClosingWindow: false, restoreSession: true };
+export const SIDEBAR_WIDTH = 260;
+export const SETTINGS = { sidebarWidth: SIDEBAR_WIDTH, searchSuggestions: false, warnBeforeClosingLastTab: false, warnBeforeClosingWindow: false, restoreSession: true };
 
 const tabsOf = (origin, profile, count, windowId = "main", prefix = "t") =>
   Array.from({ length: count }, (_, n) => ({

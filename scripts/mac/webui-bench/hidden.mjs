@@ -238,14 +238,56 @@ export function parseRss(text) {
   return new Map(text.trim().split("\n").map((l) => l.trim().split(/\s+/).map(Number)).filter((r) => r.length === 2 && r.every(Number.isFinite)));
 }
 
+export function footprintResult(fp) {
+  if (fp.error) return { footprintMb: null, error: `footprint failed: ${fp.error.code ?? fp.error.message}` };
+  if (fp.status !== 0) return { footprintMb: null, error: `footprint exited ${fp.status ?? fp.signal}` };
+  const footprintMb = parseFootprint(fp.stdout ?? "");
+  return footprintMb == null ? { footprintMb: null, error: "footprint printed no total" } : { footprintMb };
+}
+
 export function memoryOf(identity) {
   const tree = trackOwned(identity, readProcessRows());
-  if (!tree.length) return { rssMb: null, footprintMb: null, processes: 0 };
+  if (!tree.length) return { rssMb: null, footprintMb: null, processes: 0, error: "no owned processes to measure" };
   const pids = tree.map((r) => r.pid);
   const rss = parseRss(execFileSync("ps", ["-o", "pid=,rss=", "-p", pids.join(",")], { encoding: "utf8", timeout: PS_TIMEOUT_MS }));
   const rssKb = pids.reduce((sum, p) => sum + (rss.get(p) ?? 0), 0);
-  const fp = spawnSync("footprint", pids.flatMap((p) => ["-p", String(p)]), { encoding: "utf8", timeout: 60000 });
-  return { rssMb: Math.round(rssKb / 1024), footprintMb: fp.status === 0 ? parseFootprint(fp.stdout) : null, processes: pids.length };
+  const fp = footprintResult(spawnSync("footprint", pids.flatMap((p) => ["-p", String(p)]), { encoding: "utf8", timeout: 60000 }));
+  return { rssMb: rssKb > 0 ? Math.round(rssKb / 1024) : null, ...fp, processes: pids.length, ...(rssKb > 0 ? {} : { error: fp.error ?? "ps reported no resident memory" }) };
+}
+
+export const isMainWindow = (w) => (w?.layer ?? 0) === 0 && w?.w >= 300 && w?.h >= 200;
+
+export function ownerRootPid(identity) {
+  const tag = `${OWNER_SWITCH}=${identity.owner}`;
+  return [...(identity.seen?.values() ?? [])].find((r) => r.command.includes(tag))?.pid ?? null;
+}
+
+export function watchFirstWindow({ rootPid, listWindows, everyMs = 25, now = Date.now }) {
+  let at = null;
+  let stopped = false;
+  let busy = false;
+  const tick = async () => {
+    if (stopped || busy || at != null) return;
+    busy = true;
+    try {
+      const pid = rootPid();
+      if (pid && (await listWindows(pid)).some(isMainWindow) && !stopped) at ??= now();
+    } catch {
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(tick, everyMs);
+  void tick();
+  return {
+    get at() {
+      return at;
+    },
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

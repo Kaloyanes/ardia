@@ -5,15 +5,15 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { MEASURES, blockScript, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
+import { DRAG_EDGE_OFFSETS, MEASURES, PAIRED_PROFILE, blockScript, dragChanged, firstWindowTiming, instanceName, scenarioOrder, waitGone, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
 import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { LATE_120_MS, analyze, windowGaps, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
 import { RULES, evaluate, fixtureProblem, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
 import {
-  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, startTracker, withTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
+  ACSWIPE, OWNED_MARKER, OWNER_SWITCH, footprintResult, isMainWindow, ownerRootPid, startTracker, watchFirstWindow, withTracker, assertBuild, assertHidden, assertScratch, canonicalPath, cleanupRegistry, fileProbe, hiddenOpenArgs, isInside, isOwnedDir, trackOwned,
   makeOwnedDir, makeOwnedRoot, ownedTree, parseFootprint, parseProcessRows, parseRss, processIdentity, readProcessRows, removeOwnedDir, sameProcess, stopOwned,
 } from "./hidden.mjs";
-import { PROFILES, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
+import { PROFILES, SETTINGS, SESSION_VERSION, benchSession, expectedFixture, multiSession, selectedUrl, smallSession, tableSession, validateSession } from "./seed.mjs";
 import { median, percentile, summarize } from "./stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -496,7 +496,7 @@ test("summary: a failed swipe is never counted as zero blank frames", () => {
 test("gate: a WebUI at parity with clean integrity passes every rule", () => {
   const result = evaluate(report());
   assert.equal(result.verdict, "PASS", JSON.stringify(Object.values(failing(result))));
-  assert.equal(result.rows.length, RULES.length + 8);
+  assert.equal(result.rows.length, RULES.length + 9);
 });
 
 test("gate: integrity fails on missing, errored or partial reps", () => {
@@ -602,7 +602,7 @@ test("gate: markdown table lists every row with a verdict", () => {
   assert.ok(lines.includes("| Metric | RN | WebUI | Limit | Verdict |"));
   assert.ok(lines.includes("| --- | ---: | ---: | ---: | --- |"));
   const rows = lines.filter((l) => l.startsWith("| ") && !l.startsWith("| Metric") && !l.startsWith("| ---"));
-  assert.equal(rows.length, RULES.length + 8);
+  assert.equal(rows.length, RULES.length + 9);
   assert.ok(rows.every((l) => l.split(" | ").length === 5));
   assert.ok(md.includes("| Swipe Work → Personal, motion → rest (ms) | 490 | 470 | 590 | ✅ PASS |"));
   assert.ok(md.includes("| Integrity: launch clock | commitMark | commitMark | — | ✅ PASS |"));
@@ -947,4 +947,86 @@ test("round 5: divider drag and Peek pacing run, summarize and gate against RN",
   assert.deepEqual(subErrors({ peek: { error: "no" }, drag: { error: "still" } }), ["peek: no", "drag: still"]);
   const missing = edit((r) => r.side === "webui" && r.phase === "large", (r) => (delete r.drag, r));
   assert.match(failing(evaluate(report(missing)))["drag.p95GapMs"].why, /WebUI value missing/);
+});
+
+test("round 6: the fallback launch clock is when the window appeared, not when readiness or DevTools finished", async () => {
+  const identity = processIdentity({ owner: "tok-r6", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const T = "Tue Nov 24 05:06:18 2026";
+  trackOwned(identity, parseProcessRows(`2147483200 1 ${T} /tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-r6`));
+  assert.equal(ownerRootPid(identity), 2147483200);
+  const t0 = Date.now();
+  const watch = watchFirstWindow({ rootPid: () => ownerRootPid(identity), everyMs: 5, listWindows: async () => (Date.now() - t0 >= 40 ? [{ layer: 0, w: 1360, h: 820 }] : [{ layer: 25, w: 1360, h: 820 }]) });
+  assert.ok(await waitFor(() => watch.at != null, 1000));
+  const timing = await firstWindowTiming({ t0, commitMark: () => null, windowAt: () => watch.at, timeoutMs: 100 });
+  watch.stop();
+  assert.equal(timing.launchClock, "fallback");
+  assert.ok(timing.launchMs >= 40 && timing.launchMs < 150, `launchMs ${timing.launchMs}`);
+  assert.equal(timing.windowMs, timing.launchMs);
+  const marked = await firstWindowTiming({ t0: 1000, commitMark: () => 1514, windowAt: () => 1600, timeoutMs: 100 });
+  assert.deepEqual(marked, { launchMs: 514, launchClock: "commitMark", windowMs: 600 });
+  assert.deepEqual(await firstWindowTiming({ t0: 0, commitMark: () => { throw new Error("no page"); }, windowAt: () => null, timeoutMs: 30, everyMs: 5 }), { launchMs: null, launchClock: null, windowMs: null });
+  assert.equal(isMainWindow({ layer: 0, w: 1360, h: 820 }), true);
+  assert.equal(isMainWindow({ layer: 25, w: 1360, h: 820 }), false);
+  assert.equal(isMainWindow({ layer: 0, w: 40, h: 40 }), false);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.equal(source.match(/this\.watchWindow\(identity\)/g)?.length, 2);
+});
+
+test("round 6: paired scenarios run on Personal and the blocked swipe runs after them", () => {
+  assert.equal(PAIRED_PROFILE, "default");
+  assert.deepEqual(scenarioOrder("webui", MEASURES), ["scroll", "typing", "peek", "drag", "blocked"]);
+  assert.deepEqual(scenarioOrder("rn", MEASURES), ["scroll", "typing", "peek", "drag"]);
+  assert.deepEqual(scenarioOrder("webui", ["swipe"]), ["blocked"]);
+  assert.deepEqual(scenarioOrder("webui", ["typing", "scroll"]), ["scroll", "typing"]);
+  assert.deepEqual(subErrors({ phase: "large", pairedProfile: "work" }), ["paired scenarios ran on work, not default"]);
+  assert.deepEqual(subErrors({ phase: "large", pairedProfile: null }), ["paired scenarios ran on an unknown profile, not default"]);
+  assert.deepEqual(subErrors({ phase: "large", pairedProfile: "default" }), []);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const measure = source.slice(source.indexOf("  async measure("), source.indexOf("  async slot("));
+  assert.ok(measure.indexOf("run.pairedProfile = await side.js(PROFILE)") < measure.indexOf("for (const step of scenarioOrder"));
+  assert.ok(!/run\.swipe\.blocked = await sample\(\(\) => this\.swipe\(side, win, "blocked"\)\);\n\s*if \(o\.only\.includes\("typing"\)\)/.test(measure));
+});
+
+test("round 6: the drag aims at the seeded sidebarWidth and must change it", () => {
+  assert.equal(SETTINGS.sidebarWidth, 260);
+  for (const make of [benchSession, smallSession, multiSession]) assert.equal(make().settings.sidebarWidth, 260);
+  assert.deepEqual(DRAG_EDGE_OFFSETS, [0, 4, 8, 12]);
+  assert.equal(dragChanged(260, 380), true);
+  assert.equal(dragChanged(260, 320), true);
+  assert.equal(dragChanged(260, 319), false);
+  assert.equal(dragChanged(260, 260), false);
+  assert.equal(dragChanged(null, 380), false);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const drag = source.slice(source.indexOf("  async drag("), source.indexOf("  async peek("));
+  assert.match(drag, /const x0 = bounds\.x \+ before \+ offset;/);
+  assert.match(drag, /if \(dragChanged\(before, after\)\)/);
+  assert.ok(!drag.includes("SIDEBAR_FALLBACK"));
+});
+
+test("round 6: Peek is dismissed with Esc, the animated path, and timed until it is gone", async () => {
+  let checks = 0;
+  const gone = await waitGone(async () => ++checks < 4, { timeoutMs: 1000, everyMs: 5 });
+  assert.ok(Number.isFinite(gone));
+  assert.equal(checks, 4);
+  assert.equal(await waitGone(async () => true, { timeoutMs: 30, everyMs: 5 }), null);
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  const peek = source.slice(source.indexOf("  async peek("), source.indexOf("  async typing("));
+  const dismiss = peek.slice(peek.indexOf('"peek-dismiss"'));
+  assert.match(dismiss, /"postkeys", String\(side\.pid\), "0", "esc"/);
+  assert.match(dismiss, /await waitGone\(\(\) => exists\(peekId\)/);
+  assert.ok(dismiss.indexOf("closePeek") > dismiss.indexOf("if (!result.dismissed)"));
+});
+
+test("round 6: a missing footprint fails the run and the gate", () => {
+  assert.deepEqual(footprintResult({ status: 0, stdout: "  12 MB  TOTAL\n" }), { footprintMb: 12 });
+  assert.match(footprintResult({ status: null, error: { code: "ETIMEDOUT" } }).error, /ETIMEDOUT/);
+  assert.match(footprintResult({ status: 1, stdout: "" }).error, /exited 1/);
+  assert.match(footprintResult({ status: 0, stdout: "garbage" }).error, /no total/);
+  assert.deepEqual(subErrors({ memory: { rssMb: 900, footprintMb: null, error: "footprint exited 1" } }), ["memory: footprint exited 1"]);
+  assert.deepEqual(subErrors({ memory: { rssMb: 900, footprintMb: null } }), ["memory: incomplete sample"]);
+  const twoOfThree = edit((r) => r.side === "webui" && r.phase === "small" && r.rep !== 2, (r) => ((r.memory = { rssMb: 770, footprintMb: null }), r));
+  const f = failing(evaluate(report(twoOfThree)));
+  assert.ok(f["integrity.memory"]);
+  assert.equal(f["integrity.memory"].webui, 2);
+  assert.equal(failing(evaluate(report()))["integrity.memory"], undefined);
 });

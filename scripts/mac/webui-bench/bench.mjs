@@ -10,9 +10,9 @@ import { connect, epochOffset, marksOf, screenshotsOf, traced } from "./cdp.mjs"
 import { analyze, decode, restFromFrames, settleMs } from "./frames.mjs";
 import {
   ACFRAMES, ACSWIPE, OPEN_TIMEOUT_MS, OWNER_SWITCH, assertBuild, assertHidden, assertScratch, cleanupRegistry, fileProbe, hiddenOpenArgs,
-  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, execFileAsync, startTracker, stopOwned, trackOwned,
+  makeOwnedDir, makeOwnedRoot, memoryOf, ownedTree, processIdentity, readProcessRows, removeOwnedDir, execFileAsync, ownerRootPid, startTracker, stopOwned, trackOwned, watchFirstWindow,
 } from "./hidden.mjs";
-import { SESSIONS, expectedFixture, selectedUrl, validateSession } from "./seed.mjs";
+import { PROFILES, SESSIONS, expectedFixture, selectedUrl, validateSession } from "./seed.mjs";
 import { percentile, summarize } from "./stats.mjs";
 
 const HELP = `React Native vs WebUI on the Mac: an interleaved shootout, one hidden instance at a time, the same seeded sessions.
@@ -30,8 +30,9 @@ descend from one, and waits for the whole tree to exit before it removes the dat
 Sides alternate per slot: abab runs RN, WebUI, RN, WebUI...; abba flips the order every rep to cancel order effects.
 
 Per rep and side:
-  launch   open → first window committed (the app's __ardiaFirstWindowAt, clock "commitMark"; else the first on-screen
-           window, clock "fallback"), the restored fixture, and how many 25 ms polls after it still show a tab other
+  launch   open → first window committed (the app's __ardiaFirstWindowAt, clock "commitMark"; else, clock "fallback",
+           when acperf first saw the owned window on screen, polled every 25 ms from before open, alongside the launch,
+           so neither side's readiness or DevTools setup is counted), the restored fixture, and how many 25 ms polls after it still show a tab other
            than the seeded selection (a lingering New Tab); failed polls are counted, never skipped
   memory   RSS and phys_footprint summed over the instance's process tree after --idle seconds, for 3 profiles × 1 tab
            (small), 150 + 15 + 5 tabs (large), and two windows with a Peek open (multi)
@@ -43,10 +44,14 @@ Per rep and side:
            has no page to block, so it skips it
   scroll   a trackpad flick up the 150-tab sidebar: frame gaps p50/p95/max
   typing   the command bar opened with ⌘T and "github" typed 150 ms apart: keystroke → next new frame
-  drag     the sidebar's divider dragged 120 pt wider over 600 ms at 120 events/s (acperf postdrag): frame gaps
-           p50/p95/max and late120 (gaps over 1.5 frames at 120 Hz) over the drag, on the whole window
-  peek     a Peek opened over the selected tab, then dismissed: the same 120 Hz pacing for each 600 ms transition;
-           the sample fails unless the Peek tab appears and then goes away
+  drag     the sidebar's resize handle (at the seeded sidebarWidth, 260 pt, trying +0/+4/+8/+12 pt for the dock's
+           inset) dragged 120 pt wider over 600 ms at 120 events/s (acperf postdrag): frame gaps p50/p95/max and
+           late120 (gaps over 1.5 frames at 120 Hz) over the drag, on the whole window; the sample fails unless the
+           app's sidebarWidth setting grows by at least 60 pt
+  peek     a Peek opened over the selected tab (600 ms), then dismissed with Esc, the animated dismissPeek path,
+           timed until the Peek tab is gone: the same 120 Hz pacing; fails unless it opens and then goes away
+The paired scenarios (scroll, typing, peek, drag) run on Personal's 150-tab sidebar on both sides, checked before they
+start; the WebUI-only blocked swipe runs after them.
 Gestures come from acswipe.m and acframes.m and keys from acperf postkeys (apps/browser/scripts/perf); frames come
 from selfrec.m for React Native and from Chrome's screenshot trace for the WebUI, both measured by frames.mjs.
 Writes <out>/bench.json after every instance (meta, every run with its status and errors, summary). Ctrl-C stops every
@@ -189,11 +194,44 @@ export function runStatus(run) {
 
 export function subErrors(run) {
   const errors = [];
+  if (run.memory && (run.memory.error || run.memory.rssMb == null || run.memory.footprintMb == null)) errors.push(`memory: ${run.memory.error ?? "incomplete sample"}`);
+  if (run.phase === "large" && "pairedProfile" in run && run.pairedProfile !== PAIRED_PROFILE) errors.push(`paired scenarios ran on ${run.pairedProfile ?? "an unknown profile"}, not ${PAIRED_PROFILE}`);
   if (run.peek?.error) errors.push(`peek: ${run.peek.error}`);
   for (const d of SWIPES) if (run.swipe?.[d]?.error) errors.push(`swipe ${d}: ${run.swipe[d].error}`);
   for (const k of ["scroll", "typing", "drag"]) if (run[k]?.error) errors.push(`${k}: ${run[k].error}`);
   if (run.newTabPollFailures) errors.push(`${run.newTabPollFailures} New Tab polls failed`);
   return errors;
+}
+
+export async function firstWindowTiming({ t0, commitMark, windowAt, timeoutMs = 30000, everyMs = 25 }) {
+  const windowMs = () => (windowAt() == null ? null : windowAt() - t0);
+  for (const end = Date.now() + timeoutMs; Date.now() < end; await sleep(everyMs)) {
+    const at = await Promise.resolve().then(commitMark).catch(() => null);
+    if (at) return { launchMs: at - t0, launchClock: "commitMark", windowMs: windowMs() };
+    if (windowAt() != null) return { launchMs: windowMs(), launchClock: "fallback", windowMs: windowMs() };
+  }
+  return { launchMs: null, launchClock: null, windowMs: windowMs() };
+}
+
+export function scenarioOrder(kind, only) {
+  const steps = ["scroll", "typing", "peek", "drag"].filter((m) => only.includes(m));
+  if (only.includes("swipe") && swipesFor(kind).includes("blocked")) steps.push("blocked");
+  return steps;
+}
+
+export const PAIRED_PROFILE = PROFILES[0].id;
+export const DRAG_EDGE_OFFSETS = [0, 4, 8, 12];
+export const PEEK_CLOSE_MS = 3000;
+
+export const dragChanged = (before, after) => Number.isFinite(before) && Number.isFinite(after) && after - before >= DRAG_PT / 2;
+
+export async function waitGone(exists, { timeoutMs = PEEK_CLOSE_MS, everyMs = 16, now = Date.now } = {}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    if (!(await exists())) return now();
+    await sleep(everyMs);
+  }
+  return (await exists()) ? null : now();
 }
 
 export function validWindow(win) {
@@ -230,6 +268,7 @@ function originServer() {
 const STORE = "(globalThis.ac?.store ?? globalThis.ardiaLinux?.store)";
 const TAB_OF = "((s, id) => (Array.isArray(s.tabs) ? s.tabs.find((x) => x.id === id) : s.tabs[id]))";
 const ACTIVE_URL = `(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; const t = ${TAB_OF}(s, w.activeTabIds?.[w.profileId]); return t?.url ?? ""; })()`;
+const SIDEBAR_WIDTH_OF = `(${STORE}.getState().settings?.sidebarWidth ?? null)`;
 const PROFILE = `(() => { const s = ${STORE}.getState(); return s.windows[s.windowOrder[0]].profileId; })()`;
 const FIXTURE = `(() => { const s = ${STORE}.getState(); return { profiles: s.profileOrder.length, tabs: Array.isArray(s.tabs) ? s.tabs.length : Object.keys(s.tabs).length, windows: s.windowOrder.length }; })()`;
 export const blockScript = (delayMs = BLOCK_DELAY_MS, blockMs = BLOCK_MS) => `(() => {
@@ -349,6 +388,7 @@ class Bench {
     const port = await freePort();
     let inst;
     const stopTracking = startTracker(identity);
+    const windowWatch = this.watchWindow(identity);
     try {
       inst = await launch(this.rnApp, {
         data, session, onboarded: true, port, js: "none", files: { "perf-probe": "" }, args: [`${OWNER_SWITCH}=${owner}`], startTimeout: 60000,
@@ -362,6 +402,7 @@ class Bench {
         },
       });
     } catch (e) {
+      windowWatch.stop();
       await teardownAfter(e, () => this.finish({ identity, forget, data, forgetDir }));
     } finally {
       stopTracking();
@@ -369,7 +410,7 @@ class Bench {
     mkdirSync(join(data, "selfrec"), { recursive: true });
     this.track({ identity });
     return {
-      kind: "rn", t0: inst.launchedAt, pid: inst.pid, data, port, identity, forget, forgetDir,
+      kind: "rn", t0: inst.launchedAt, pid: inst.pid, data, port, identity, forget, forgetDir, windowWatch,
       js: (expression) => inst.eval(`return (${expression});`, { timeout: 15000 }),
       quit: async () => {
         await inst.quit().catch(() => {});
@@ -383,6 +424,7 @@ class Bench {
     const forget = this.cleanup.instance(identity);
     const side = { kind: "webui", data, identity, forget, forgetDir };
     const stopTracking = startTracker(identity);
+    side.windowWatch = this.watchWindow(identity);
     try {
       mkdirSync(join(data, "Chromium"));
       writeFileSync(join(data, "session.json"), JSON.stringify(session));
@@ -405,6 +447,7 @@ class Bench {
       if (!side.cdp) throw new Error(`no chrome://ardia shell target on port ${port}`);
     } catch (e) {
       side.cdp?.close();
+      side.windowWatch.stop();
       await teardownAfter(e, () => this.finish(side));
     } finally {
       stopTracking();
@@ -421,20 +464,21 @@ class Bench {
     };
   }
 
+  watchWindow(identity) {
+    const watch = watchFirstWindow({
+      rootPid: () => ownerRootPid(identity),
+      listWindows: async (pid) => JSON.parse((await execFileAsync(this.acperf, ["windows", String(pid)], { timeout: 5000 })).stdout),
+    });
+    this.cleanup.closer(() => watch.stop());
+    return watch;
+  }
+
   async firstWindow(side) {
-    const { onScreenWindows } = this.instance;
-    const end = Date.now() + 30000;
-    while (Date.now() < end) {
-      const at = await side.js("globalThis.__ardiaFirstWindowAt ?? null").catch(() => null);
-      if (at) return { launchMs: at - side.t0, launchClock: "commitMark" };
-      let windows = [];
-      try {
-        windows = onScreenWindows(side.pid);
-      } catch {}
-      if (windows.length) return { launchMs: Date.now() - side.t0, launchClock: "fallback" };
-      await sleep(25);
+    try {
+      return await firstWindowTiming({ t0: side.t0, commitMark: () => side.js("globalThis.__ardiaFirstWindowAt ?? null"), windowAt: () => side.windowWatch.at });
+    } finally {
+      side.windowWatch.stop();
     }
-    return { launchMs: null, launchClock: null };
   }
 
   async newTabPolls(side, expected) {
@@ -592,40 +636,55 @@ class Bench {
   async drag(side, win) {
     validWindow(win);
     const bounds = this.windowBounds(side, win);
-    const rect = side.kind === "rn" ? SIDEBAR_FALLBACK : await this.sidebarCrop(side);
-    const edge = (Array.isArray(rect) ? SIDEBAR_FALLBACK.x + SIDEBAR_FALLBACK.width : rect.x + rect.width) - 1;
-    const [x0, y] = [bounds.x + edge, bounds.y + 400];
-    const cap = await this.capture(side, "drag", async () => {
-      const { stdout } = await execFileAsync(this.acperf, ["postdrag", String(side.pid), String(win), String(x0), String(y), String(x0 + DRAG_PT), String(y), String(bounds.x), String(bounds.y), String(DRAG_MS), "120"], { timeout: 10000 });
-      return JSON.parse(stdout.trim().split("\n").at(-1));
-    });
-    const result = { events: cap.value.events, ...this.pacing(cap, cap.value.startAt, cap.value.endAt + 100) };
-    if (!result.moved) throw Object.assign(new Error("the divider drag changed nothing on screen"), { result });
-    return result;
+    const widthOf = () => side.js(SIDEBAR_WIDTH_OF);
+    const before = await widthOf();
+    if (!Number.isFinite(before)) throw new Error("the app has no sidebarWidth setting to drag");
+    const y = bounds.y + 400;
+    const attempts = [];
+    for (const offset of DRAG_EDGE_OFFSETS) {
+      const x0 = bounds.x + before + offset;
+      const cap = await this.capture(side, `drag-${offset}`, async () => {
+        const { stdout } = await execFileAsync(this.acperf, ["postdrag", String(side.pid), String(win), String(x0), String(y), String(x0 + DRAG_PT), String(y), String(bounds.x), String(bounds.y), String(DRAG_MS), "120"], { timeout: 10000 });
+        return JSON.parse(stdout.trim().split("\n").at(-1));
+      });
+      await sleep(300);
+      const after = await widthOf();
+      attempts.push({ offset, after });
+      if (dragChanged(before, after)) {
+        return { events: cap.value.events, offset, widthBefore: before, widthAfter: after, attempts: attempts.length, ...this.pacing(cap, cap.value.startAt, cap.value.endAt + 100) };
+      }
+    }
+    throw Object.assign(new Error(`the drag never moved sidebarWidth off ${before} (edge offsets ${DRAG_EDGE_OFFSETS.join(", ")} pt)`), { result: { widthBefore: before, attempts } });
   }
 
   async peek(side) {
     const source = await side.js(`(() => { const s = ${STORE}.getState(); const w = s.windows[s.windowOrder[0]]; return w.activeTabIds[w.profileId]; })()`);
     const url = JSON.stringify(`${this.server.origin}/peek-bench`);
     const exists = (id) => side.js(`!!${TAB_OF}(${STORE}.getState(), ${JSON.stringify(id)})`);
-    const transition = async (label, expression) => {
-      let at = 0;
-      const cap = await this.capture(side, `peek-${label}`, async () => {
-        at = Date.now();
-        const value = await side.js(expression);
-        await sleep(TRANSITION_MS);
-        return value;
-      });
-      return { value: cap.value, pacing: this.pacing(cap, at, at + TRANSITION_MS) };
-    };
-    const open = await transition("open", `${STORE}.getState().openPeek(${JSON.stringify(source)}, ${url})`);
-    const peekId = open.value;
+    let openAt = 0;
+    const openCap = await this.capture(side, "peek-open", async () => {
+      openAt = Date.now();
+      const id = await side.js(`${STORE}.getState().openPeek(${JSON.stringify(source)}, ${url})`);
+      await sleep(TRANSITION_MS);
+      return id;
+    });
+    const peekId = openCap.value;
     const opened = !!peekId && (await exists(peekId));
-    const dismiss = await transition("dismiss", `(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`);
-    const dismissed = opened && !(await exists(peekId));
-    const result = { opened, dismissed, open: open.pacing, dismiss: dismiss.pacing };
+    const result = { opened, dismissed: false, dismissedBy: "escape", open: this.pacing(openCap, openAt, openAt + TRANSITION_MS) };
     if (!opened) throw Object.assign(new Error("the Peek did not open"), { result });
-    if (!dismissed) throw Object.assign(new Error("the Peek did not go away"), { result });
+    const dismissCap = await this.capture(side, "peek-dismiss", async () => {
+      const escAt = JSON.parse(execFileSync(this.acperf, ["postkeys", String(side.pid), "0", "esc"], { encoding: "utf8", timeout: 5000 }).trim().split("\n").at(-1)).at;
+      const goneAt = await waitGone(() => exists(peekId), { timeoutMs: PEEK_CLOSE_MS });
+      return { escAt, goneAt };
+    });
+    const { escAt, goneAt } = dismissCap.value;
+    result.dismissed = goneAt != null;
+    result.closeMs = goneAt == null ? null : Math.round(goneAt - escAt);
+    result.dismiss = this.pacing(dismissCap, escAt, (goneAt ?? escAt + PEEK_CLOSE_MS) + 100);
+    if (!result.dismissed) {
+      await side.js(`(${STORE}.getState().closePeek(${JSON.stringify(source)}), 1)`).catch(() => {});
+      throw Object.assign(new Error(`Esc did not dismiss the Peek within ${PEEK_CLOSE_MS} ms`), { result });
+    }
     return result;
   }
 
@@ -673,11 +732,14 @@ class Bench {
       run.swipe = {};
       for (const direction of ["fwd", "back"]) run.swipe[direction] = await sample(() => this.swipe(side, win, direction));
     }
-    if (o.only.includes("scroll")) run.scroll = await sample(() => this.scroll(side, win));
-    if (o.only.includes("swipe") && swipesFor(side.kind).includes("blocked")) run.swipe.blocked = await sample(() => this.swipe(side, win, "blocked"));
-    if (o.only.includes("typing")) run.typing = await sample(() => this.typing(side));
-    if (o.only.includes("peek")) run.peek = await sample(() => this.peek(side));
-    if (o.only.includes("drag")) run.drag = await sample(() => this.drag(side, win));
+    run.pairedProfile = await side.js(PROFILE).catch(() => null);
+    for (const step of scenarioOrder(side.kind, o.only)) {
+      if (step === "scroll") run.scroll = await sample(() => this.scroll(side, win));
+      else if (step === "typing") run.typing = await sample(() => this.typing(side));
+      else if (step === "peek") run.peek = await sample(() => this.peek(side));
+      else if (step === "drag") run.drag = await sample(() => this.drag(side, win));
+      else if (step === "blocked") run.swipe.blocked = await sample(() => this.swipe(side, win, "blocked"));
+    }
   }
 
   async slot({ rep, side: kind }) {
