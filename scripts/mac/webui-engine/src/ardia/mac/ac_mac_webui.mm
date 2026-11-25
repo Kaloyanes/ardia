@@ -16,6 +16,7 @@
 #include "ardia/mac/ac_mac_popover.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_shell_host.h"
+#include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/host_bootstrap.h"
@@ -27,6 +28,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -95,7 +97,7 @@ bool ValidAssetPath(std::string_view path) {
 std::optional<std::string> ReadAsset(base::FilePath directory,
                                      std::string path,
                                      std::string bootstrap_json) {
-  if (path == "host-bootstrap.js") {
+  if (path == webui_policy::kBootstrapAsset) {
     return BootstrapScript(bootstrap_json, ardia::kArdiaHostBootstrap);
   }
   if (!ValidAssetPath(path) || MimeType(path).empty()) {
@@ -173,10 +175,15 @@ class ShellDataSource : public content::URLDataSource {
     if (!host || !bootstrap || url.scheme() != "chrome" || url.host() != "ardia") {
       return std::move(callback).Run(nullptr);
     }
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-        base::BindOnce(&ReadAsset, AssetDirectory(), AssetPath(url),
-                       std::move(*bootstrap)),
+    const std::string path = AssetPath(url);
+    const scoped_refptr<base::TaskRunner> reader =
+        webui_policy::ReadsSession(path)
+            ? scoped_refptr<base::TaskRunner>(SessionFiles())
+            : base::ThreadPool::CreateTaskRunner(
+                  {base::MayBlock(), base::TaskPriority::USER_BLOCKING});
+    reader->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&ReadAsset, AssetDirectory(), path, std::move(*bootstrap)),
         base::BindOnce(
             [](GotDataCallback callback, std::optional<std::string> contents) {
               std::move(callback).Run(
@@ -291,44 +298,15 @@ LaunchWindow ReadLaunchWindow() {
   return launch;
 }
 
-void OpenWindow(Profile* profile) {
+void OpenLaunchWindow(Profile* profile) {
   if (!profile) {
     Trace("the app profile did not load");
     return;
   }
   const LaunchWindow launch = ReadLaunchWindow();
-  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL, *profile,
-                                   false);
-  params.omit_from_session_restore = true;
-  params.should_trigger_session_restore = false;
-  params.initial_bounds = launch.frame;
-  params.initial_show_state = ui::mojom::WindowShowState::kNormal;
-  BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
-  BrowserView* view = browser ? BrowserView::GetBrowserViewForBrowser(browser)
-                              : nullptr;
-  if (!view) {
-    Trace("no BrowserView for the shell window");
-    return;
-  }
-  ApplyShellWindowStyle(view->GetWidget());
-  ShellHostView* host = view->AddChildView(
-      std::make_unique<ShellHostView>(browser, view, profile, launch.id));
-  host->Initialize();
-  ardia_mac::SetTrafficLights(view->GetWidget(), window::Lights{});
-  const window::Presentation presentation =
-      window::PresentationFor(BackgroundInstance());
-  NSWindow* ns_window = view->GetWidget()->GetNativeWindow().GetNativeNSWindow();
-  if (presentation.lowest_level) {
-    [ns_window setLevel:kBackgroundLevel];
-  }
-  if (presentation.order_out) {
-    [ns_window orderOut:nil];
-  }
-  if (presentation.show) {
-    browser->GetWindow()->Show();
-  }
-  Trace("window " + launch.id +
-        (presentation.show ? " shown" : " kept off screen (background)"));
+  WindowSpec spec;
+  spec.id = launch.id;
+  OpenShellWindow(profile, std::move(spec), launch.frame);
 }
 
 webui_policy::Decision ShellDecision() {
@@ -345,6 +323,64 @@ webui_policy::Decision ShellDecision() {
       environment ? std::optional<std::string_view>(environment) : std::nullopt);
 }
 
+}
+
+ShellHostView* OpenShellWindow(Profile* profile,
+                               WindowSpec spec,
+                               std::optional<gfx::Rect> frame,
+                               const OpenPlacement& placement) {
+  if (!profile || profile->ShutdownStarted() ||
+      GetBrowserWindowCreationStatusForProfile(*profile) !=
+          BrowserWindowInterface::CreationStatus::kOk) {
+    Trace("no profile to open window " + spec.id + " in");
+    return nullptr;
+  }
+  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL, *profile,
+                                   false);
+  params.omit_from_session_restore = true;
+  params.should_trigger_session_restore = false;
+  if (frame) {
+    params.initial_bounds = *frame;
+  }
+  params.initial_show_state = ui::mojom::WindowShowState::kNormal;
+  BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
+  BrowserView* view = browser ? BrowserView::GetBrowserViewForBrowser(browser)
+                              : nullptr;
+  if (!view) {
+    Trace("no BrowserView for the shell window");
+    return nullptr;
+  }
+  const std::string id = spec.id;
+  ApplyShellWindowStyle(view->GetWidget());
+  ShellHostView* host = view->AddChildView(
+      std::make_unique<ShellHostView>(browser, view, profile, std::move(spec)));
+  host->Initialize();
+  ardia_mac::SetTrafficLights(view->GetWidget(), window::Lights{});
+  const window::Presentation presentation =
+      window::PresentationFor(BackgroundInstance());
+  NSWindow* ns_window = view->GetWidget()->GetNativeWindow().GetNativeNSWindow();
+  if (presentation.lowest_level) {
+    [ns_window setLevel:kBackgroundLevel];
+  }
+  if (presentation.order_out) {
+    [ns_window orderOut:nil];
+  }
+  ShellHostView* behind = placement.behind.empty() ? nullptr : HostForWindow(placement.behind);
+  views::Widget* behind_widget =
+      behind && behind->browser() ? behind->GetWidget() : nullptr;
+  const window::OpenPresentation opening = window::PresentationForOpen(
+      BackgroundInstance(), placement.focus, behind_widget != nullptr, placement.maximized);
+  if (presentation.show && opening.activate) {
+    browser->GetWindow()->Show();
+  } else if (presentation.show && opening.show) {
+    ShowWithoutActivating(view->GetWidget(), opening.order_behind ? behind_widget : nullptr);
+  }
+  if (presentation.show && opening.maximize) {
+    browser->GetWindow()->Maximize();
+  }
+  Trace("window " + id +
+        (presentation.show ? " shown" : " kept off screen (background)"));
+  return host;
 }
 
 bool WebUIShellRequested() {
@@ -379,7 +415,8 @@ void StartWebUIShell() {
   content::WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<ShellConfig>());
   InstallDefaultMainMenu(MainMenuHandler());
-  WithProfile("", base::BindOnce(&OpenWindow));
+  InstallOpenUrlsHook();
+  WithProfile("", base::BindOnce(&OpenLaunchWindow));
 }
 
 }

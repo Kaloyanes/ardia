@@ -8,7 +8,7 @@ const SHARED_TESTS = [
   "livePersistenceBinding.test.mjs", "liveCompletionPersistence.test.mjs", "hostDocumentTransport.test.mjs",
   "windowCloseLifecycle.test.mjs", "hostSessionMerge.test.mjs", "hostSessionSync.test.mjs",
   "sessionWriterRebase.test.mjs", "session.test.mjs", "sessionShells.test.mjs", "settingsWindows.test.mjs", "hostViewport.test.mjs",
-  "pageFocus.test.mjs", "shortcuts.test.mjs", "hostDialogs.test.mjs", "hostDialogConsumers.test.mjs",
+  "pageFocus.test.mjs", "hostDialogs.test.mjs", "hostDialogConsumers.test.mjs",
   "hostProfiles.test.mjs", "windowLifecycle.test.mjs", "hostDownloads.test.mjs", "hostPrivateWindows.test.mjs",
   "hostSmallWindows.test.mjs", "windowMenu.test.mjs", "hostFiles.test.mjs", "fileDrop.test.mjs",
   "hostPageCommands.test.mjs", "suggestionCsp.test.mjs", "hostSuggestions.test.mjs", "hostCapabilities.test.mjs",
@@ -30,8 +30,10 @@ const SHARED_TESTS = [
   "shellPainted.test.mjs", "introMusic.test.mjs", "hostCrashReports.test.mjs", "windowControls.test.mjs",
   "readerService.test.mjs", "hostKillSwitches.test.mjs", "fieldTiming.test.mjs", "launchMeasure.test.mjs",
   "keyringTelemetry.test.mjs", "textInputCaret.test.mjs", "peekStageMotion.test.mjs", "popoverPlacement.test.mjs",
-  "popoverHost.test.mjs"
+  "popoverHost.test.mjs", "nativeTrafficLights.test.mjs"
 ];
+
+const MODE_TESTS = { linux: ["shortcuts.test.mjs"], win: ["shortcuts.test.mjs"], mac: [] };
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const platformTests = (mode) =>
@@ -46,7 +48,7 @@ for (const mode of modes) if (!DESKTOP_MODES.includes(mode)) throw new Error(`un
 
 let failed = false;
 for (const mode of modes) {
-  const files = [...SHARED_TESTS, ...platformTests(mode)].map((file) => `src/${file}`);
+  const files = [...SHARED_TESTS, ...MODE_TESTS[mode], ...platformTests(mode)].map((file) => `src/${file}`);
   console.log(`# test:host --mode ${mode}: ${files.length} files`);
   const run = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./scripts/host-test-loader.mjs", "--test", ...files], {
     cwd: root,

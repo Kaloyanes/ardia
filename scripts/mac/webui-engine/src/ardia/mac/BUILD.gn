@@ -13,6 +13,24 @@ if (is_official_build) {
     defines = [ "ARDIA_MAC_WEBUI_DEV" ]
   }
 
+  config("session_include") {
+    include_dirs = [ "shared" ]
+  }
+
+  config("session_dict_loops") {
+    cflags = [ "-Wno-range-loop-bind-reference" ]
+  }
+
+  source_set("session") {
+    sources = [
+      "shared/ac_linux_session.cc",
+      "shared/ardia/linux/ac_linux_session.h",
+    ]
+    public_configs = [ ":session_include" ]
+    configs += [ ":session_dict_loops" ]
+    deps = [ "//base" ]
+  }
+
   action("bootstrap") {
     script = "generate_bootstrap.py"
     sources = [ "bootstrap.js" ]
@@ -30,6 +48,9 @@ if (is_official_build) {
       "ac_mac_dialog.h",
       "ac_mac_dialog.mm",
       "ac_mac_dialog_policy.h",
+      "ac_mac_extension_view.h",
+      "ac_mac_extension_view.mm",
+      "ac_mac_extension_view_policy.h",
       "ac_mac_glass.h",
       "ac_mac_glass.mm",
       "ac_mac_glass_layout.h",
@@ -44,6 +65,9 @@ if (is_official_build) {
       "ac_mac_page_events.h",
       "ac_mac_page_events.mm",
       "ac_mac_page_policy.h",
+      "ac_mac_pip.h",
+      "ac_mac_pip.mm",
+      "ac_mac_pip_policy.h",
       "ac_mac_popover.h",
       "ac_mac_popover.mm",
       "ac_mac_popover_policy.h",
@@ -54,6 +78,9 @@ if (is_official_build) {
       "ac_mac_shell_host.mm",
       "ac_mac_shell_lifecycle.mm",
       "ac_mac_shell_policy.h",
+      "ac_mac_system.h",
+      "ac_mac_system.mm",
+      "ac_mac_system_policy.h",
       "ac_mac_webui.h",
       "ac_mac_webui.mm",
       "ac_mac_webui_policy.h",
@@ -69,10 +96,12 @@ if (is_official_build) {
       "generated/ac_linux_page_operations.h",
     ]
     sources += get_target_outputs(":bootstrap")
+    public_deps = [ ":session" ]
     configs += [ ":webui_dev" ]
     deps = [
       ":bootstrap",
       "//base",
+      "//cc",
       "//chrome/browser",
       "//chrome/browser/devtools",
       "//chrome/browser/media/webrtc",
@@ -84,8 +113,11 @@ if (is_official_build) {
       "//chrome/common",
       "//components/blocked_content",
       "//components/content_settings/core/browser",
+      "//components/content_settings/core/common",
+      "//components/download/content/public",
       "//components/download/public/common:public",
       "//components/find_in_page",
+      "//components/input",
       "//components/performance_manager",
       "//components/permissions",
       "//components/policy/core/common",
@@ -94,19 +126,26 @@ if (is_official_build) {
       "//components/security_state/core",
       "//components/sessions",
       "//components/version_info",
+      "//components/viz/common",
       "//components/web_modal",
       "//components/zoom",
       "//content/public/browser",
       "//crypto",
+      "//extensions/browser",
+      "//extensions/common",
+      "//media",
       "//mojo/public/cpp/bindings",
       "//net",
       "//printing/buildflags",
+      "//services/media_session/public/cpp",
       "//services/media_session/public/mojom",
       "//services/network/public/mojom",
       "//skia",
       "//third_party/blink/public/common",
+      "//ui/accelerated_widget_mac",
       "//ui/base",
       "//ui/compositor",
+      "//ui/display",
       "//ui/gfx",
       "//ui/views",
       "//url",
@@ -114,6 +153,8 @@ if (is_official_build) {
     frameworks = [
       "AppKit.framework",
       "QuartzCore.framework",
+      "ServiceManagement.framework",
+      "UniformTypeIdentifiers.framework",
     ]
   }
 }

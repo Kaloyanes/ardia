@@ -7,25 +7,25 @@ test("glass behind the window follows the backdrop's vibrancy and theme as they 
   const log = [];
   const toggle = behindWindowGlassSwitch({ watch: (element) => (log.push(["watch", element.id]), () => log.push(["stop", element.id])) });
   const layer = { id: "a" };
-  toggle(layer, wantsBehindWindowGlass(false, false, true));
+  toggle(layer, wantsBehindWindowGlass(false, true));
   assert.deepEqual(log, [], "plain backdrops draw in CSS");
-  toggle(layer, wantsBehindWindowGlass(true, false, true));
-  toggle(layer, wantsBehindWindowGlass(true, false, true));
+  toggle(layer, wantsBehindWindowGlass(true, true));
+  toggle(layer, wantsBehindWindowGlass(true, true));
   assert.deepEqual(log, [["watch", "a"]], "turning vibrancy on asks for glass once");
-  toggle(layer, wantsBehindWindowGlass(true, true, true));
-  assert.deepEqual(log.at(-1), ["stop", "a"], "a theme takes the glass away");
-  toggle(layer, wantsBehindWindowGlass(true, false, true));
+  toggle(layer, wantsBehindWindowGlass(false, true));
+  assert.deepEqual(log.at(-1), ["stop", "a"], "turning vibrancy off takes the glass away");
+  toggle(layer, wantsBehindWindowGlass(true, true));
   const replaced = { id: "b" };
   toggle(replaced, true);
   assert.deepEqual(log.slice(-3), [["watch", "a"], ["stop", "a"], ["watch", "b"]], "a new layer element moves the glass");
   toggle(null, false);
   assert.deepEqual(log.at(-1), ["stop", "b"], "unmounting lets go");
-  assert.equal(wantsBehindWindowGlass(true, false, false), false, "a host without backdrop glass keeps CSS vibrancy");
+  assert.equal(wantsBehindWindowGlass(true, false), false, "a host without backdrop glass keeps CSS vibrancy");
 });
 
 test("WindowBackdrop decides on glass every render instead of freezing its first answer", () => {
   const source = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
-  assert.match(source, /const behindGlass = wantsBehindWindowGlass\(vibrancy, !!themed, glassAvailable\);/);
+  assert.match(source, /const behindGlass = wantsBehindWindowGlass\(vibrancy, glassAvailable\);/);
   assert.match(source, /useLayoutEffect\(\(\) => switchGlass\(layer\.current, behindGlass\)\);/);
   assert.doesNotMatch(source, /useState\(\(\) => !!vibrancy/);
 });
@@ -41,8 +41,8 @@ test("over native glass the backdrop draws the Mac app's WindowTreatmentView: a 
   assert.equal(glassTreatment(true, undefined).gradient, glassTreatment(true, WINDOW_TREATMENT.tintColor, 0.36, 0.25).gradient, "no profile tint keeps the Mac's neutral grey tint");
   assert.match(glassTreatment(true, "rgba(10, 20, 30, 0.5)", 2).gradient, / \/ 1\)/, "the tint's alpha is the treatment's, clamped, as withAlphaComponent sets it");
   const source = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
-  assert.match(source, /if \(behindGlass\) \{\n\s+const treatment = glassTreatment\(dark, tintColor, tintAlpha, tintLightness\);/);
-  assert.match(source, /<div data-ardia-glass-base="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.base \}\} \/>\n\s+<div data-ardia-glass-tint="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.gradient, opacity: treatment\.gradientOpacity \}\} \/>/);
+  assert.match(source, /if \(behindGlass\) \{\n\s+const treatment = themed \? null : glassTreatment\(dark, tintColor, tintAlpha, tintLightness\);/);
+  assert.match(source, /\{treatment \? <div data-ardia-glass-base="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.base \}\} \/> : null\}\n\s+\{treatment \? <div data-ardia-glass-tint="" style=\{\{ \.\.\.UNDERLAY_FILL, background: treatment\.gradient, opacity: treatment\.gradientOpacity \}\} \/> : null\}/);
 });
 
 test("a window draws one backdrop: the shared base gives way while the profile pages draw theirs", () => {
@@ -51,4 +51,13 @@ test("a window draws one backdrop: the shared base gives way while the profile p
   assert.match(app, /\{paging \? null : <WindowBackdrop vibrancy /);
   const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
   assert.match(tint, /if \(!paging\) return null;/);
+});
+
+test("a themed profile keeps native glass behind the window and lays its theme over it, as the Mac app does", () => {
+  assert.equal(wantsBehindWindowGlass(true, true), true);
+  const source = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
+  const start = source.indexOf("if (behindGlass) {");
+  const glassBranch = source.slice(start, source.indexOf("\n  return (", start));
+  assert.match(glassBranch, /themed \? <ThemedVibrancy /);
+  assert.match(glassBranch, /const treatment = themed \? null : glassTreatment\(dark, tintColor, tintAlpha, tintLightness\);/);
 });

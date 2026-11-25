@@ -64,15 +64,16 @@ export function WindowBackdrop({
   usePageHoleLayer(layer);
   const [glassAvailable] = useState(behindWindowGlassAvailable);
   const [switchGlass] = useState(() => behindWindowGlassSwitch({ watch: watchBehindWindowGlass }));
-  const behindGlass = wantsBehindWindowGlass(vibrancy, !!themed, glassAvailable);
+  const behindGlass = wantsBehindWindowGlass(vibrancy, glassAvailable);
   useLayoutEffect(() => switchGlass(layer.current, behindGlass));
   useEffect(() => () => switchGlass(null, false), [switchGlass]);
   if (behindGlass) {
-    const treatment = glassTreatment(dark, tintColor, tintAlpha, tintLightness);
+    const treatment = themed ? null : glassTreatment(dark, tintColor, tintAlpha, tintLightness);
     return (
       <View ref={layer} pointerEvents="none" style={style}>
-        <div data-ardia-glass-base="" style={{ ...UNDERLAY_FILL, background: treatment.base }} />
-        <div data-ardia-glass-tint="" style={{ ...UNDERLAY_FILL, background: treatment.gradient, opacity: treatment.gradientOpacity }} />
+        {themed ? <ThemedVibrancy colors={themeColors!} opacity={themeOpacity ?? 1} underlayAlpha={themeBaseAlpha ?? 0} grain={themeGrain} texture={themeTexture} angle={themeAngle} dark={dark} /> : null}
+        {treatment ? <div data-ardia-glass-base="" style={{ ...UNDERLAY_FILL, background: treatment.base }} /> : null}
+        {treatment ? <div data-ardia-glass-tint="" style={{ ...UNDERLAY_FILL, background: treatment.gradient, opacity: treatment.gradientOpacity }} /> : null}
       </View>
     );
   }
