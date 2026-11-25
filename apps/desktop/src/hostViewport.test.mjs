@@ -466,3 +466,52 @@ test("an older viewport the host acknowledges after a newer one was queued or re
     s.restore();
   }
 });
+
+test("a show coalesced away by a hide never opens the cutout when the hide is acknowledged, even with a later show refused", async () => {
+  const { watchPageBelowShell } = await import("./shims/web/HostWebView.tsx");
+  const { HostTab } = await import("./hostTab.ts");
+  const viewportCalls = [];
+  const host = {
+    bootstrap: { windowId: "main", profileId: "default" },
+    call: async () => "null",
+    invoke: (method, args) => {
+      if (method === "tab.create") return Promise.resolve({ browserId: 41, chromeTabId: 41 });
+      if (method === "tab.viewport") return new Promise((resolve, reject) => viewportCalls.push({ args, resolve, reject }));
+      return Promise.resolve(null);
+    },
+    onEvent: () => () => {},
+  };
+  const tab = new HostTab(host, { key: "coalesced", url: "https://example.test/" }, () => {});
+  await tab.ready;
+  let x = 310;
+  let wanted = true;
+  const page = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(x, 50, 600, 500), contains: (node) => node === page };
+  const s = stage({ elementFromPoint: () => page });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    const recorded = [];
+    const shown = [];
+    const regions = { setPage: (_slot, visible) => shown.push(visible), refresh() {}, dropPage() {}, pageViewport: (_slot, rect) => recorded.push(rect), ...cover() };
+    const stop = watchPageBelowShell(page, regions, () => wanted, () => tab);
+    wanted = false;
+    s.mutate();
+    await flush();
+    assert.equal(viewportCalls.length, 1);
+    assert.equal(viewportCalls[0].args.visible, false, "the queued show was coalesced into the hide");
+    wanted = true;
+    x = 320;
+    s.mutate();
+    viewportCalls[0].resolve();
+    await flush();
+    assert.equal(viewportCalls.length, 2);
+    assert.equal(viewportCalls[1].args.visible, true);
+    viewportCalls[1].reject(new Error("refused"));
+    await flush();
+    await flush();
+    assert.deepEqual(recorded, [], "no rect is recorded for a viewport the host never applied");
+    assert.equal(shown.includes(true), false, "the cutout stays closed over the hidden page");
+    stop();
+  } finally {
+    s.restore();
+  }
+});
