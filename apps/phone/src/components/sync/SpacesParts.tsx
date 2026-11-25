@@ -2,7 +2,7 @@ import { useRef, type RefObject } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ViewInstance } from "react-native";
 import { sfSymbol } from "../../lib/sfSymbols";
 import { openSettings } from "../../state/settings/nav";
-import { openRemote } from "../../state/sync/actions";
+import { openRemote, opensRemotely } from "../../state/sync/actions";
 import { remoteTitle } from "../../state/sync/spaces";
 import type { PinnedTile, SyncedProfile } from "../../state/sync/store";
 import { copyLink, shareUrl } from "../../state/browse/tabMenus";
@@ -19,11 +19,17 @@ export type PinOpener = (url: string, title: string, pinnedKey: string | null) =
 
 const opensRemote = (profileId: string): PinOpener => (url, title, pinnedKey) => openRemote(url, title, profileId, pinnedKey);
 
-export function pinnedLinkMenu(url: string, title: string, profileId: string, pinnedKey: string | null = null, open: PinOpener = opensRemote(profileId)): MenuItem[] {
-  const sharing: MenuItem[] = /^https?:\/\//i.test(url)
+export type PinLink = { url: string; title: string };
+
+export function pinnedLinkMenu(url: string, title: string, profileId: string, pinnedKey: string | null = null, open: PinOpener = opensRemote(profileId), current: () => PinLink | null = () => ({ url, title })): MenuItem[] {
+  const shared = (use: (link: PinLink) => void) => () => {
+    const link = current();
+    if (link && opensRemotely(link.url)) use(link);
+  };
+  const sharing: MenuItem[] = opensRemotely(url)
     ? [
-        { label: actionWords.copyLink, icon: iconRoles.copyLink, onPress: () => copyLink(url) },
-        { label: actionWords.share, icon: iconRoles.share, onPress: () => shareUrl(url, title) },
+        { label: actionWords.copyLink, icon: iconRoles.copyLink, onPress: shared((link) => copyLink(link.url)) },
+        { label: actionWords.share, icon: iconRoles.share, onPress: shared((link) => shareUrl(link.url, link.title)) },
       ]
     : [];
   return [{ label: actionWords.open, icon: "arrowUpForward", onPress: () => open(url, title, pinnedKey) }, ...sharing];

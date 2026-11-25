@@ -1,4 +1,4 @@
-import { Dimensions, Keyboard, Platform, StyleSheet } from "react-native";
+import { AppState, Dimensions, Keyboard, Platform, StyleSheet } from "react-native";
 import { act } from "react-test-renderer";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, FloatingMenu } from "../components/ui";
@@ -12,6 +12,7 @@ import { OFF_STATUS, useSync, type PinnedTile, type SyncedProfile } from "../sta
 import { currentTabs, updateTabById, useTabs } from "../state/tabs/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import * as focusReturn from "../components/ui/focusReturn";
+import * as tabMenus from "../state/browse/tabMenus";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const mockFaceTaken = { then: (taken: () => void) => taken() };
@@ -397,5 +398,133 @@ onIPhone("when the stage's first present is refused because its native view isn'
   act(() => jest.advanceTimersByTime(20));
   expect(mockStage.present.mock.calls.length).toBeGreaterThanOrEqual(2);
   expect(pins(root)).toBeDefined();
+  unmount(root);
+});
+
+type Thenable = { then: (presented: () => void, refused: (error: Error) => void) => void };
+const refusedOnce = () => mockStage.present.mockImplementationOnce((() => ({ then: (_presented: () => void, refused: (error: Error) => void) => refused(new Error("Unable to find the 'SearchStageView' view")) })) as never);
+
+function holdFrames() {
+  const queued: { id: number; run: (time: number) => void }[] = [];
+  let next = 1;
+  jest.spyOn(globalThis, "requestAnimationFrame").mockImplementation((run) => {
+    const id = next++;
+    queued.push({ id, run });
+    return id;
+  });
+  jest.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+    const at = queued.findIndex((frame) => frame.id === id);
+    if (at >= 0) queued.splice(at, 1);
+  });
+  return {
+    pending: () => queued.length,
+    run: () => act(() => queued.splice(0).forEach((frame) => frame.run(0))),
+  };
+}
+
+function watchAppState() {
+  const listeners: ((state: string) => void)[] = [];
+  jest.spyOn(AppState, "addEventListener").mockImplementation(((_type: string, listener: (state: string) => void) => {
+    listeners.push(listener);
+    return { remove: () => undefined };
+  }) as never);
+  const set = (state: string) => {
+    Object.defineProperty(AppState, "currentState", { value: state, configurable: true, writable: true });
+    act(() => listeners.forEach((listener) => listener(state)));
+  };
+  return { set };
+}
+
+onIPhone("a refused present queued for the next frame is dropped when the panel is dismissed, so it can't reopen the tray", () => {
+  const frames = holdFrames();
+  refusedOnce();
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  expect(frames.pending()).toBeGreaterThan(0);
+  const asked = mockStage.present.mock.calls.length;
+  act(() => dismissSearch());
+  frames.run();
+  expect(mockStage.present.mock.calls.length).toBe(asked);
+  unmount(root);
+});
+
+onIPhone("a retry from an earlier open does nothing once a newer open has presented", () => {
+  const frames = holdFrames();
+  refusedOnce();
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  act(() => dismissSearch());
+  act(() => browse.newTab());
+  const asked = mockStage.present.mock.calls.length;
+  frames.run();
+  expect(mockStage.present.mock.calls.length).toBe(asked);
+  expect(pins(root)).toBeDefined();
+  unmount(root);
+});
+
+onIPhone("a retry waiting while the app is in the background asks again only once it's active, and the tiles then come", () => {
+  const appState = watchAppState();
+  const frames = holdFrames();
+  refusedOnce();
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const root = tray();
+  const asked = mockStage.present.mock.calls.length;
+  appState.set("background");
+  frames.run();
+  expect(mockStage.present.mock.calls.length).toBe(asked);
+  expect(pins(root)).toBeUndefined();
+  appState.set("active");
+  expect(mockStage.present.mock.calls.length).toBe(asked + 1);
+  expect(pins(root)).toBeDefined();
+  unmount(root);
+});
+
+onIPhone("a launch present that completes after its panel was dismissed records no launch timing", () => {
+  const launchMarks = jest.spyOn(telemetry, "reportLaunchTray").mockImplementation((() => undefined) as never);
+  let complete: (() => void) | null = null;
+  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const stale = tray();
+  act(() => dismissSearch());
+  act(() => complete!());
+  expect(launchMarks).not.toHaveBeenCalled();
+  unmount(stale);
+  act(() => jest.runOnlyPendingTimers());
+  mockStage.present.mockImplementationOnce((() => ({ then: (presented: () => void) => (complete = presented) }) as Thenable) as never);
+  act(() => presentSearch("home", "", false, null, "atRest"));
+  const live = tray();
+  act(() => complete!());
+  expect(launchMarks).toHaveBeenCalledTimes(1);
+  unmount(live);
+});
+
+test("a pin menu's Copy Link and Share read the pin when chosen: a moved pin copies its new address, a removed one shares nothing", () => {
+  const copied = jest.spyOn(tabMenus, "copyLink").mockImplementation((() => undefined) as never);
+  const shared = jest.spyOn(tabMenus, "shareUrl").mockImplementation((() => undefined) as never);
+  act(() => browse.newTab());
+  const root = tray();
+  longPress(root, "Pin 1");
+  const copy = itemsOf(root).find((item) => item.label === "Copy Link")!.onPress;
+  const share = itemsOf(root).find((item) => item.label === "Share")!.onPress;
+  pinsWith((tiles) => tiles.map((pin) => (pin.key === "k1" ? { ...pin, url: "https://moved.example/" } : pin)));
+  act(() => copy());
+  expect(copied).toHaveBeenCalledWith("https://moved.example/");
+  pinsWith((tiles) => tiles.filter((pin) => pin.key !== "k1"));
+  act(() => share());
+  expect(shared).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+test("a pin whose address Ardia can't open, such as chrome://, opens nothing, counts nothing and leaves search open", () => {
+  const counted = jest.spyOn(telemetry, "countUsage");
+  act(() => withSpace([tile(0), { key: "kc", title: "Flags", url: "chrome://flags", icon: null, folder: null }]));
+  act(() => browse.newTab());
+  const root = tray();
+  const tabs = currentTabs().open.length;
+  tap(root, "Flags");
+  expect(counted).not.toHaveBeenCalledWith("new_tab_pins_opened");
+  expect(searchState().open).toBe(true);
+  expect(searchState().ending).not.toBe("submitted");
+  expect(currentTabs().open.length).toBe(tabs);
   unmount(root);
 });

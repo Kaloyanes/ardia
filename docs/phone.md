@@ -2878,7 +2878,9 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       render, with no exit fade, so nothing outgoing takes a touch. Every open (tile, long-press Open, a folder's
       row) checks again at the press, against the pin as sync has it now: search still open in the same session,
       the field empty counting a keystroke still waiting for its frame (`searchFieldText`), not Incognito, the same
-      space, and the pin or folder row still there, whose current address is what opens. A pin open leaves search
+      space, and the pin or folder row still there, whose current address is what opens, and only an address
+      `openRemote` accepts (`opensRemotely`, http and https): a `chrome://` pin opens, counts and exits nothing.
+      Copy Link and Share read the pin the same way when chosen. A pin open leaves search
       with the submitted exit (`settleSearchAsSubmitted`, and the Android panel departs), as a row does, not the
       cancel morph.
     - **Menus:** a long-press or folder menu is built from the current pins each render, so a pin the Mac moves shows
@@ -2891,7 +2893,10 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
     - **At launch with Auto-Open Keyboard:** the stage's first `present()` can reach the main queue before Fabric has
       mounted its native view, and Expo refuses it ("Unable to find the 'SearchStageView' view"). The refusal went
       unseen, so the launch panel never counted as presented: no tiles, and none of `launchTrayUp`,
-      `stagePresented` or `searchPresented` ran. The open now asks again on each of the next three frames.
+      `stagePresented` or `searchPresented` ran. The open now asks again on each of the next three frames, only for
+      the presentation that is still current (not dismissed, no newer open): the queued frame is cancelled on close
+      and on a newer open, waits while the app is in the background and resumes when it's active, and a present that
+      completes for a panel no longer current records no launch timing.
     - **Android:** beside the panel with the panel's own lift transform in the redesign, and above the rows in the
       Material You search sheet. A space with more pins than fit above the panel scrolls.
     - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened` on iPhone, filtered by the envelope's `platform`; `new_tab_search_opened` isn't counted on Android.

@@ -6,7 +6,7 @@ import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useSearchEditsPage, useSearchOpen, useSearchSession } from "../../state/search/hooks";
 import { searchFieldText, searchState, settleSearchAsSubmitted, useSearch } from "../../state/search/store";
 import { coverTray } from "../../state/search/trayBack";
-import { openRemote } from "../../state/sync/actions";
+import { openRemote, opensRemotely } from "../../state/sync/actions";
 import { useSelectedProfile } from "../../state/sync/hooks";
 import { useSync, type PinnedTile } from "../../state/sync/store";
 import { shownProfile } from "../../state/sync/syncRules";
@@ -36,6 +36,12 @@ export function pinEntry(tiles: readonly PinnedTile[], key: string | null): PinE
   return null;
 }
 
+function currentPin(profileId: string, key: string): PinEntry | null {
+  const { view, status } = useSync.getState();
+  const profile = shownProfile(view, status);
+  return profile?.syncId === profileId ? pinEntry(profile.pinned.tiles, key) : null;
+}
+
 function offeredPin(session: number, profileId: string, key: string | null): PinEntry | null {
   const search = searchState();
   if (!search.open || search.session !== session || search.editsPage || searchFieldText().trim() !== "" || useTabs.getState().incognito) return null;
@@ -48,7 +54,7 @@ const opensOfferedPin =
   (session: number, profileId: string, onLeave: () => void): PinOpener =>
   (_url, _title, key) => {
     const entry = offeredPin(session, profileId, key);
-    if (!entry) return;
+    if (!entry || !opensRemotely(entry.url)) return;
     countUsage("new_tab_pins_opened");
     openRemote(entry.url, entry.title, profileId, key);
     settleSearchAsSubmitted();
@@ -59,7 +65,7 @@ function menuItems(menu: PinsMenu, tiles: readonly PinnedTile[], open: PinOpener
   const tile = tiles.find((candidate) => candidate.key === menu.pinKey);
   if (!tile) return [];
   if (menu.kind === "folder") return tile.folder?.length ? pinnedFolderMenu(tile, menu.profileId, open) : [];
-  return tile.folder?.length ? [] : pinnedLinkMenu(tile.url, tile.title, menu.profileId, tile.key, open);
+  return tile.folder?.length ? [] : pinnedLinkMenu(tile.url, tile.title, menu.profileId, tile.key, open, () => currentPin(menu.profileId, tile.key));
 }
 
 const leavesNothing = () => undefined;

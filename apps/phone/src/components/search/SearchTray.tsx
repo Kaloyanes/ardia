@@ -749,27 +749,67 @@ function StagedTray() {
     heldRelease.current = null;
   };
 
+  const presentRetry = useRef<{ frame: number | null; resume: (() => void) | null }>({ frame: null, resume: null });
+  const dropPresentRetry = () => {
+    const retry = presentRetry.current;
+    if (retry.frame !== null) cancelAnimationFrame(retry.frame);
+    retry.frame = null;
+    retry.resume = null;
+  };
+  useEffect(() => {
+    const watching = AppState.addEventListener("change", (next) => {
+      const retry = presentRetry.current;
+      if (next === "background") {
+        if (retry.frame !== null) cancelAnimationFrame(retry.frame);
+        retry.frame = null;
+        return;
+      }
+      if (next !== "active" || retry.frame !== null || !retry.resume) return;
+      const resume = retry.resume;
+      retry.resume = null;
+      resume();
+    });
+    return () => {
+      watching.remove();
+      dropPresentRetry();
+    };
+  }, []);
+
   const presentStage = (presentation: number) => {
     markSearchPhase("present");
     live.current.presentation = presentation;
     setPresentation(presentation);
     if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
     setPresented(false);
+    dropPresentRetry();
     const launch = searchState().arrival === "atRest";
-    const stillThisOne = () => live.current.presentation === presentation && !live.current.closing;
+    const isCurrent = () => live.current.presentation === presentation && !live.current.closing && searchState().open;
     const presented = () => {
-      if (!stillThisOne()) return;
-      if (launch) launchTrayUp();
+      if (!isCurrent()) return;
+      if (launch && AppState.currentState !== "background") launchTrayUp();
       markSearchPhase("presented");
       setPresented(true);
       stagePresented();
       searchPresented(searchState().session);
     };
     const tryPresent = (triesLeft: number) => {
+      if (!isCurrent()) return;
+      const retry = presentRetry.current;
+      if (AppState.currentState === "background") {
+        retry.resume = () => tryPresent(triesLeft);
+        return;
+      }
       const asked = stage.current?.present();
       if (!asked) return;
       asked.then(presented, () => {
-        if (triesLeft > 0 && stillThisOne()) requestAnimationFrame(() => tryPresent(triesLeft - 1));
+        if (triesLeft <= 0 || !isCurrent()) return;
+        retry.resume = () => tryPresent(triesLeft - 1);
+        retry.frame = requestAnimationFrame(() => {
+          retry.frame = null;
+          const next = retry.resume;
+          retry.resume = null;
+          next?.();
+        });
       });
     };
     tryPresent(STAGE_PRESENT_RETRIES);
@@ -803,6 +843,7 @@ function StagedTray() {
       return;
     }
     if (now.mounted === null || now.closing) return;
+    dropPresentRetry();
     now.closing = true;
     markSearchClosePhase("closing");
     clearHeldRelease();
