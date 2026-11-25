@@ -1,5 +1,5 @@
 import { ardiaHost, hostSupports, invokeHost, reportHostError } from "../host";
-import { BACKDROP_METHOD, createMacBackdrops, measureBackdrop } from "./mac/macGlass.ts";
+import { animationMovesBackdrop, BACKDROP_METHOD, createMacBackdrops, measureBackdrop, type AnimationLike } from "./mac/macGlass.ts";
 
 const MOTION_EVENTS = ["transitionrun", "transitionend", "transitioncancel", "animationstart", "animationend", "animationcancel", "scroll"] as const;
 
@@ -19,7 +19,7 @@ function watchMotion(changed: () => void): () => void {
   };
 }
 
-const runningAnimations = () => document.getAnimations().some((animation) => animation.playState === "running");
+const runningAnimations = (layers: readonly Element[]) => animationMovesBackdrop(document.getAnimations() as unknown as readonly AnimationLike[], layers);
 
 export function watchBehindWindowGlass(element: HTMLElement): () => void {
   backdrops ??= createMacBackdrops({
@@ -28,7 +28,7 @@ export function watchBehindWindowGlass(element: HTMLElement): () => void {
         reportHostError(error);
         throw error;
       }),
-    measure: measureBackdrop,
+    measure: (element) => measureBackdrop(element),
     frame: (run) => requestAnimationFrame(run),
     timeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),

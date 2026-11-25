@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,6 +197,15 @@ test("run-webui-dev.sh refuses any data dir inside the installed app's profile, 
       assert.equal(result.status, 0, `${safe}: ${result.stderr}`);
     }
     assert.equal(run().status, 0, "the default dir is fine");
+    mkdirSync(join(home, "hosts/Ardia WebUI.app"), { recursive: true });
+    symlinkSync(join(home, "hosts/Ardia WebUI.app"), join(home, "host-link.app"));
+    const linkedHost = run("--webui-app", `${home}/hosts/../host-link.app`);
+    assert.equal(linkedHost.status, 0, linkedHost.stderr);
+    const resolvedHost = realpathSync(join(home, "hosts/Ardia WebUI.app")).replaceAll(" ", "\\ ");
+    assert.ok(linkedHost.stdout.includes(`ARDIA_WEBUI_APP=${resolvedHost} `), `--webui-app goes on resolved: ${linkedHost.stdout}`);
+    const relative = spawnSync(repo("scripts/mac/run-webui-dev.sh"), ["--dry-run", "--no-build", "--app", "/tmp/Ardia Dev.app", "--webui-app", "host-link.app"], { encoding: "utf8", cwd: home, env: { ...process.env, HOME: home } });
+    assert.equal(relative.status, 0, relative.stderr);
+    assert.match(relative.stdout, /ARDIA_WEBUI_APP=\//, "a relative --webui-app becomes absolute, so open's app finds it");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

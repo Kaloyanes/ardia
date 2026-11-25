@@ -11,7 +11,8 @@
 # it looked and stays on the React Native shell.
 #
 # --app PATH         the Debug Ardia.app to open (default: $ARDIA_APP, else the newest apps/browser/build-*/ Debug app).
-# --webui-app PATH   the WebUI host app engine/ardiacore-mac builds (sets ARDIA_WEBUI_APP).
+# --webui-app PATH   the dev-only WebUI host app scripts/mac/webui-engine assembles (sets ARDIA_WEBUI_APP to its
+#                    resolved path). Without it the app looks for "Ardia WebUI Dev.app" beside itself.
 # --data-dir PATH    the profile to use (default: ~/Library/Application Support/Ardia WebUI Dev). Anything inside the
 #                    installed app's profile (Application Support/com.ardia.browser or Application Support/Ardia, by
 #                    any case, symlink or alias) is refused; point it at a copy instead.
@@ -91,6 +92,10 @@ app_identifier=$([ -f "$app/Contents/Info.plist" ] && /usr/libexec/PlistBuddy -c
 data_dir=$(canonical_path "$data_dir") || die "can't resolve $data_dir"
 refuse_live_profile "$data_dir"
 [ "$dry_run" = 1 ] || mkdir -p "$data_dir" || die "can't create $data_dir"
+
+if [ -n "$webui_app" ]; then
+  webui_app=$(canonical_path "$webui_app") || die "can't resolve $webui_app"
+fi
 
 bundle="$root/apps/desktop/dist/mac"
 build_cmd=(pnpm -C "$root/apps/desktop" build:mac)

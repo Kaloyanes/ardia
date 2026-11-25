@@ -6,9 +6,16 @@ script builds or ships the bundle (`packages/shell/scripts/webUIShellHost.test.m
 
 ## Running it
 
+First build the WebUI host, the Chromium `.app` that serves the bundle. It is dev-only and lives in
+`scripts/mac/webui-engine/`, not `engine/`, so the Mac Release engine key never changes. Build and assemble it with the
+scripts in that folder. Then either put the `.app` beside the Debug app as `Ardia WebUI Dev.app`, with bundle identifier
+`com.ardia.browser.webui-dev`, or pass its path with `--webui-app`. With no host the Debug app logs why and stays on
+React Native.
+
 ```sh
 scripts/mac/run-webui-dev.sh                       # build the bundle, open the newest Debug app as the WebUI shell
 scripts/mac/run-webui-dev.sh --background --port 9333 --data-dir /tmp/webui-scratch
+scripts/mac/run-webui-dev.sh --webui-app /path/to/Ardia\ WebUI.app
 scripts/mac/run-webui-dev.sh --help
 ```
 
@@ -43,7 +50,7 @@ Or by hand, on a Debug app: `ARDIA_SHELL=webui` or `--ardia-shell=webui`.
 
 ## What the WebUI host provides
 
-The host (`engine/ardiacore-mac`) is the Chromium `.app` that serves the bundle:
+The host (`scripts/mac/webui-engine`) is the Chromium `.app` that serves the bundle:
 
 - It loads the bundle from `ARDIA_WEBUI_BUNDLE` (`run-webui-dev.sh` sets it to `apps/desktop/dist/mac`).
 - It starts with `ARDIA_WEBUI_HANDED_OFF=1`, `ARDIA_SHELL=webui`, `ARDIA_DATA_DIR` and `--ardia-shell=webui`. A Mac

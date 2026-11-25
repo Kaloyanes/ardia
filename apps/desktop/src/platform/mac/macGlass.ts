@@ -14,11 +14,22 @@ type BackdropDeps = {
   clearTimeout: (handle: unknown) => void;
   watch: (element: Element, changed: () => void) => () => void;
   watchMotion: (changed: () => void) => () => void;
-  animating: () => boolean;
+  animating: (layers: readonly Element[]) => boolean;
 };
 
-export function measureBackdrop(element: Element): BackdropRect | null {
+export type AnimationLike = { playState: string; effect: { target?: Element | null } | null };
+
+export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[]): boolean =>
+  animations.some((animation) => {
+    const target = animation.playState === "running" ? animation.effect?.target : null;
+    return !!target && layers.some((layer) => target === layer || target.contains(layer));
+  });
+
+const HIDDEN_VISIBILITY = new Set(["hidden", "collapse"]);
+
+export function measureBackdrop(element: Element, style: (element: Element) => { visibility: string } | null = (target) => (typeof getComputedStyle === "function" ? getComputedStyle(target) : null)): BackdropRect | null {
   if (!element.isConnected) return null;
+  if (HIDDEN_VISIBILITY.has(style(element)?.visibility ?? "")) return null;
   const r = element.getBoundingClientRect();
   if (r.width < 1 || r.height < 1) return null;
   return { x: r.x, y: r.y, width: r.width, height: r.height };
@@ -76,7 +87,7 @@ export function createMacBackdrops(deps: BackdropDeps) {
   const flush = () => {
     frameQueued = false;
     transmit();
-    if (layers.size && deps.animating()) schedule();
+    if (layers.size && deps.animating([...layers.keys()])) schedule();
   };
 
   function schedule() {

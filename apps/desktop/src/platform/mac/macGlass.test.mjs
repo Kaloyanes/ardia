@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops } from "./macGlass.ts";
+import { animationMovesBackdrop, BACKDROP_METHOD, BACKDROP_RETRY_MS, createMacBackdrops, measureBackdrop } from "./macGlass.ts";
 
 function harness({ fail = () => false } = {}) {
   const sent = [];
@@ -149,4 +149,56 @@ test("a hidden or removed backdrop takes its glass away, and the material follow
   await runFrames();
   assert.deepEqual(sent.at(-1), []);
   assert.equal(backdrops.size(), 0);
+});
+
+const fakeElement = (rect, { connected = true, children = [] } = {}) => ({
+  isConnected: connected,
+  getBoundingClientRect: () => rect,
+  contains(other) {
+    return other === this || children.some((child) => child === other || child.contains?.(other));
+  },
+});
+
+test("a connected backdrop with a size but visibility hidden or collapse gets no glass", () => {
+  const rect = { x: 10, y: 20, width: 240, height: 800 };
+  const element = fakeElement(rect);
+  assert.deepEqual(measureBackdrop(element, () => ({ visibility: "visible" })), { x: 10, y: 20, width: 240, height: 800 });
+  assert.equal(measureBackdrop(element, () => ({ visibility: "hidden" })), null);
+  assert.equal(measureBackdrop(element, () => ({ visibility: "collapse" })), null);
+  assert.deepEqual(measureBackdrop(element, () => null), { x: 10, y: 20, width: 240, height: 800 }, "without computed styles the rect decides");
+  assert.equal(measureBackdrop(fakeElement(rect, { connected: false }), () => ({ visibility: "visible" })), null);
+  assert.equal(measureBackdrop(fakeElement({ x: 0, y: 0, width: 0, height: 10 }), () => ({ visibility: "visible" })), null);
+});
+
+test("only animations on a backdrop or one of its ancestors keep glass following every frame", () => {
+  const backdrop = fakeElement({ x: 0, y: 0, width: 1, height: 1 });
+  const sidebar = fakeElement({ x: 0, y: 0, width: 1, height: 1 }, { children: [backdrop] });
+  const spinner = fakeElement({ x: 0, y: 0, width: 1, height: 1 });
+  const running = (target) => ({ playState: "running", effect: { target } });
+  assert.equal(animationMovesBackdrop([running(spinner)], [backdrop]), false, "a spinner elsewhere doesn't");
+  assert.equal(animationMovesBackdrop([running(backdrop)], [backdrop]), true, "the backdrop itself does");
+  assert.equal(animationMovesBackdrop([running(sidebar)], [backdrop]), true, "an ancestor sliding does");
+  assert.equal(animationMovesBackdrop([{ playState: "finished", effect: { target: sidebar } }], [backdrop]), false, "a finished slide doesn't");
+  assert.equal(animationMovesBackdrop([{ playState: "running", effect: null }], [backdrop]), false);
+  assert.equal(animationMovesBackdrop([running(spinner)], []), false);
+});
+
+test("the frame loop passes the registered backdrops, so an unrelated animation doesn't keep it running", async () => {
+  const seen = [];
+  const frames = [];
+  const sidebar = {};
+  const backdrops = createMacBackdrops({
+    send: async () => {},
+    measure: () => ({ x: 0, y: 0, width: 1, height: 1 }),
+    frame: (run) => frames.push(run),
+    timeout: () => 0,
+    clearTimeout: () => {},
+    watch: () => () => {},
+    watchMotion: () => () => {},
+    animating: (layers) => (seen.push(layers), false),
+  });
+  backdrops.add(sidebar);
+  frames.splice(0).forEach((run) => run());
+  assert.deepEqual(seen, [[sidebar]]);
+  assert.equal(frames.length, 0);
 });

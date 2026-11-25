@@ -68,7 +68,7 @@ public enum WebUIShellHost {
       if let executable = hostExecutable(bundle: candidate.bundle, requiredIdentifier: candidate.identifier) { return .handOff(executable: executable) }
     }
     let looked = candidates.map(\.bundle).joined(separator: " or ")
-    return .stay(reason: "no usable WebUI host at \(looked) (a host's executable must sit inside its own Contents/MacOS, and the one beside the app must be \(devHostBundleIdentifier)); build one with engine/ardiacore-mac and set \(hostAppVariable), or see scripts/mac/run-webui-dev.sh --help. Staying on the React Native shell")
+    return .stay(reason: "no usable WebUI host at \(looked) (a host's executable must sit inside its own Contents/MacOS, and the one beside the app must be \(devHostBundleIdentifier)); build one with scripts/mac/webui-engine and set \(hostAppVariable), or see scripts/mac/run-webui-dev.sh --help. Staying on the React Native shell")
   }
 
   public static func handOffArguments(_ arguments: [String]) -> [String] {

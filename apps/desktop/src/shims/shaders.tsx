@@ -15,7 +15,7 @@ import { mountMeadow, type MeadowScene } from "./web/gl/meadow";
 import { baseLine, baseStops, GRAIN_POINTS, GRAIN_SIDE, grainAlpha, overlayLine, overlayStops, padLayers, stopCss, swatchColors, type SwatchLine, type SwatchStop } from "./web/gl/themeSwatch";
 import { usePageHoleLayer } from "../shellAbove";
 import { behindWindowGlassAvailable, watchBehindWindowGlass } from "@platform/windowGlass";
-import { behindWindowGlassSwitch, wantsBehindWindowGlass } from "../behindWindowGlass";
+import { behindWindowGlassSwitch, glassTint, wantsBehindWindowGlass } from "../behindWindowGlass";
 import { useSurfaceDark } from "./web/chrome";
 
 export * from "@ardia-real/shaders";
@@ -67,7 +67,14 @@ export function WindowBackdrop({
   const behindGlass = wantsBehindWindowGlass(vibrancy, !!themed, glassAvailable);
   useLayoutEffect(() => switchGlass(layer.current, behindGlass));
   useEffect(() => () => switchGlass(null, false), [switchGlass]);
-  if (behindGlass) return <View ref={layer} pointerEvents="none" style={style} />;
+  if (behindGlass) {
+    const tint = glassTint(tintColor, tintAlpha);
+    return (
+      <View ref={layer} pointerEvents="none" style={style}>
+        {tint ? <div data-ardia-glass-tint="" style={{ ...UNDERLAY_FILL, background: tint }} /> : null}
+      </View>
+    );
+  }
   return (
     <View ref={layer} pointerEvents="none" style={style}>
       {themed ? (
