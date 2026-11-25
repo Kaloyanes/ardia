@@ -2,29 +2,47 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-const { colorRoles } = await import("./tokens.ts");
-const { caretColor, quietBarGlyph, contrastTheme, profileTheme } = await import("./theme.ts");
+import { fileURLToPath } from "node:url";
+const { colorRoles, fieldInk } = await import("./tokens.ts");
+const { caretColor, quietBarGlyph, quietGoLabel, contrastTheme, profileTheme } = await import("./theme.ts");
 const { contrastRatio, over } = await import("../../lib/color.ts");
 
-const shown = (color, backdrop) => contrastRatio(over(color, backdrop), backdrop);
+const shown = (color, surface) => contrastRatio(over(color, surface), surface);
+const stock = (dark) => profileTheme({ color: "plum" }, dark);
+const barOf = (theme) => theme.ntpBarSolid;
+const idleGoOf = (theme) => over(theme.goButtonIdle, theme.ntpBarSolid);
 
-test("the caret is opaque and readable on the bar in both modes, not the selection wash", () => {
+test("on the stock bar the caret is Dia's opaque ink and reads at 4:1 in both modes, not the selection wash", () => {
   for (const dark of [false, true]) {
-    const theme = profileTheme({ color: "plum" }, dark), caret = caretColor(theme);
-    assert.match(caret, /^#[0-9A-F]{6}$/i, `${dark ? "dark" : "light"} caret is opaque`);
+    const theme = stock(dark), caret = caretColor(theme);
+    assert.equal(caret, fieldInk.caret[dark ? "dark" : "light"]);
     assert.notEqual(caret, theme.selection);
-    assert.ok(shown(caret, theme.panel) >= 4, `${dark ? "dark" : "light"} caret on the bar: ${shown(caret, theme.panel).toFixed(2)}`);
+    assert.ok(shown(caret, barOf(theme)) >= 4, `${dark ? "dark" : "light"} caret on the bar fill: ${shown(caret, barOf(theme)).toFixed(2)}`);
   }
 });
 
-test("the bar's quiet glyphs (Dictate, a disabled Go) reach 3:1 in light and are never weaker than in dark", () => {
-  const light = profileTheme({ color: "plum" }, false), dark = profileTheme({ color: "plum" }, true);
-  const ratio = (theme) => shown(quietBarGlyph(theme), theme.panel);
-  assert.ok(ratio(light) >= 3, `light: ${ratio(light).toFixed(2)}`);
-  assert.ok(ratio(light) >= ratio(dark), "light reads at least as well as dark");
-  assert.equal(quietBarGlyph(dark), dark.textTertiary, "dark keeps its look");
-  assert.ok(ratio(contrastTheme(light)) >= ratio(light), "Increase Contrast only strengthens it");
+test("on the stock bar the quiet glyphs keep their measured inks: 3:1 in light on the bar and on a disabled Go's fill, dark unchanged", () => {
+  const light = stock(false), dark = stock(true);
+  assert.equal(quietBarGlyph(light), fieldInk.quietGlyphLight);
+  assert.equal(quietGoLabel(light), fieldInk.quietGlyphLight);
+  assert.ok(shown(quietBarGlyph(light), barOf(light)) >= 3, `Dictate on the light bar: ${shown(quietBarGlyph(light), barOf(light)).toFixed(2)}`);
+  assert.ok(shown(quietGoLabel(light), idleGoOf(light)) >= 3, `disabled Go on its light fill: ${shown(quietGoLabel(light), idleGoOf(light)).toFixed(2)}`);
+  assert.ok(shown(quietBarGlyph(light), barOf(light)) >= shown(quietBarGlyph(dark), barOf(dark)), "light reads at least as well as dark");
+  assert.equal(quietBarGlyph(dark), dark.textTertiary, "dark keeps its look on the bar");
+  assert.equal(quietGoLabel(dark), dark.textTertiary, "and on a disabled Go");
+  assert.ok(shown(quietBarGlyph(contrastTheme(light)), barOf(light)) >= shown(quietBarGlyph(light), barOf(light)), "Increase Contrast only strengthens it");
   assert.equal(colorRoles.light.textTertiary, "#00000059", "the shared tertiary role is unchanged");
+});
+
+test("a custom light palette whose bar matches the caret ink gets a readable caret and quiet glyphs, never a 1:1 one", () => {
+  const custom = { ...stock(false), ntpBarSolid: "#787D86", textPrimary: "#FFFFFF", goButtonIdle: "rgba(0,0,0,0.06)" };
+  assert.ok(shown(fieldInk.caret.light, custom.ntpBarSolid) < 1.1, "the stock caret would vanish on it");
+  assert.ok(shown(caretColor(custom), barOf(custom)) >= 3, `caret: ${caretColor(custom)} at ${shown(caretColor(custom), barOf(custom)).toFixed(2)}`);
+  assert.ok(shown(quietBarGlyph(custom), barOf(custom)) >= 3, `Dictate: ${quietBarGlyph(custom)}`);
+  assert.ok(shown(quietGoLabel(custom), idleGoOf(custom)) >= 3, `disabled Go: ${quietGoLabel(custom)}`);
+  const dim = { ...stock(true), ntpBarSolid: "#F2F2F2", panel: "#F2F2F2" };
+  assert.ok(shown(caretColor(dim), barOf(dim)) >= 3, `a light bar in dark mode: ${caretColor(dim)}`);
+  assert.ok(shown(caretColor(dim, dim.panel), dim.panel) >= 3, "a field on another surface is checked against that surface");
 });
 
 test("every text field that sets a selection colour sets its caret too", () => {
@@ -36,10 +54,11 @@ test("every text field that sets a selection colour sets its caret too", () => {
       else if (name.endsWith(".tsx")) files.push(path);
     }
   };
-  walk(new URL("..", import.meta.url).pathname);
+  walk(fileURLToPath(new URL("..", import.meta.url)));
   const missing = files.filter((file) => {
     const source = readFileSync(file, "utf8");
     return (source.match(/selectionColor=/g) ?? []).length > (source.match(/cursorColor=/g) ?? []).length;
   });
+  assert.ok(files.length > 50, `walked the components: ${files.length}`);
   assert.deepEqual(missing, []);
 });

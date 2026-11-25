@@ -22,7 +22,6 @@ public final class InlineCompletionModule: Module, InlineCompletionNative {
       editor.didChangeText()
       result = 2
     }
-    paintSelectionInTextColour(editor)
     editor.setSelectedRange(NSRange(location: typedLength, length: (completion as NSString).length))
     editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
     editor.scrollRangeToVisible(NSRange(location: typedLength, length: 0))
@@ -61,14 +60,6 @@ enum FieldCopy {
     else { return nil }
     return target.url
   }
-}
-
-private func paintSelectionInTextColour(_ editor: NSTextView) {
-  guard let storage = editor.textStorage, storage.length > 0,
-        let colour = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
-  else { return }
-  if editor.selectedTextAttributes[.foregroundColor] as? NSColor == colour { return }
-  editor.selectedTextAttributes[.foregroundColor] = colour
 }
 
 private func textField(in view: NSView) -> NSTextField? {

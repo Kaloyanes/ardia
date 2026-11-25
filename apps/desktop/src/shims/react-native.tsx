@@ -44,6 +44,7 @@ type KeyMatch = { key: string; metaKey?: boolean; shiftKey?: boolean; altKey?: b
 type MacTextInputProps = ComponentProps<typeof WebTextInput> & {
   keyDownEvents?: KeyMatch[];
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
+  cursorColor?: string | null;
 };
 
 const MODIFIERS = ["metaKey", "shiftKey", "altKey", "ctrlKey"] as const;
@@ -57,7 +58,7 @@ function assignRef<T>(ref: ForwardedRef<T>, value: T | null) {
 
 export const NATIVE_CHANGE = Symbol("ardiaNativeChange");
 
-export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacTextInput({ keyDownEvents, onKeyDown, ...props }, ref) {
+export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacTextInput({ keyDownEvents, onKeyDown, cursorColor, ...props }, ref) {
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (!keyDownEvents) return onKeyDown?.(e);
     if (!keyDownEvents.some((wanted) => matches(e, wanted))) return;
@@ -89,5 +90,6 @@ export const TextInput = forwardRef<unknown, MacTextInputProps>(function MacText
     if (field && props.onSelectionChange) props.onSelectionChange({ nativeEvent: { selection: { start: field.selectionStart ?? 0, end: field.selectionEnd ?? 0 } } } as never);
     (props.onChange as ((event: unknown) => void) | undefined)?.(e);
   };
-  return <Input {...props} onLayout={undefined} ref={attach} onChange={onChange} onKeyPress={onKeyDown || keyDownEvents ? handleKeyDown : props.onKeyPress} />;
+  const style = cursorColor && !props.caretHidden ? [props.style, { caretColor: cursorColor }] : props.style;
+  return <Input {...props} style={style} onLayout={undefined} ref={attach} onChange={onChange} onKeyPress={onKeyDown || keyDownEvents ? handleKeyDown : props.onKeyPress} />;
 });

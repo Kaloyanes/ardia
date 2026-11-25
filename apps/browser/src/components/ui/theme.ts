@@ -2,7 +2,7 @@ import { createContext, use } from "react";
 import { opaqueThemeTint, PRESET_BACKDROP, resolveTheme, requestedDarkFor, shownLook, themeAccent, themeBackdrop, themePalette, type LookSource, type ProfileColor, type ProfileLookFields, type ProfileTheme } from "../../lib/profileLook";
 import type { ThemeBackdropProps } from "@ardia/core";
 import { backdropTint, opaqueTint, tintForHue, type BackdropTint } from "../../lib/windowTint";
-import { isRgbFunction, luminance, mix, over, parseColor, rgbToHsl, toHex } from "../../lib/color";
+import { contrastRatio, isRgbFunction, luminance, mix, over, parseColor, rgbToHsl, toHex } from "../../lib/color";
 import { CARD_INSET, DEFAULT_SIDEBAR_WIDTH } from "../../lib/windowLayout";
 import { SIDEBAR_ROW } from "../../lib/sidebarMetrics";
 import { WINDOW_CHROME } from "../../lib/windowChrome";
@@ -116,9 +116,29 @@ export function contrastTheme(theme: Theme): Theme {
   return strong;
 }
 
-export const caretColor = (theme: Theme): string => fieldInk.caret[theme.dark ? "dark" : "light"];
+const MIN_FIELD_INK_CONTRAST = 3;
 
-export const quietBarGlyph = (theme: Theme): string => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
+const stockRoles = (theme: Theme) => colorRoles[theme.dark ? "dark" : "light"];
+const opaqueSurface = (theme: Theme, surface: string) => over(surface, theme.dark ? ink.black : ink.white);
+const shownContrast = (color: string, surface: string) => contrastRatio(over(color, surface), surface);
+
+function readableInk(theme: Theme, preferred: string, surface: string, stockSurface: string): string {
+  const shownOn = opaqueSurface(theme, surface);
+  const floor = Math.min(MIN_FIELD_INK_CONTRAST, shownContrast(preferred, opaqueSurface(theme, stockSurface)));
+  if (shownContrast(preferred, shownOn) >= floor) return preferred;
+  return [theme.textPrimary, ink.black, ink.white].reduce((best, color) => (shownContrast(color, shownOn) > shownContrast(best, shownOn) ? color : best), preferred);
+}
+
+export const caretColor = (theme: Theme, surface: string = theme.ntpBarSolid): string =>
+  readableInk(theme, fieldInk.caret[theme.dark ? "dark" : "light"], surface, stockRoles(theme).ntpBarSolid);
+
+const quietInk = (theme: Theme) => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
+
+export const quietBarGlyph = (theme: Theme): string => readableInk(theme, quietInk(theme), theme.ntpBarSolid, stockRoles(theme).ntpBarSolid);
+
+export const idleGoFill = (theme: Theme): string => over(theme.goButtonIdle, theme.ntpBarSolid);
+
+export const quietGoLabel = (theme: Theme): string => readableInk(theme, quietInk(theme), idleGoFill(theme), over(stockRoles(theme).goButtonIdle, stockRoles(theme).ntpBarSolid));
 
 export function surfaceTheme(theme: Theme): Theme {
   return windowThemes.get(theme) ?? theme;

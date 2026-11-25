@@ -95,7 +95,7 @@ function FindBarPanel({ tabId, find }: { tabId: string; find: FindState }) {
             placeholder="Find on Page"
             placeholderTextColor={theme.placeholder}
             selectionColor={theme.selection}
-            cursorColor={caretColor(theme)}
+            cursorColor={caretColor(theme, theme.panel)}
             enableFocusRing={false}
             onSubmitEditing={() => {
               if (!submitRepeatsKey(enterAt.current, Date.now())) run(false);
@@ -141,7 +141,7 @@ function FindBarPanel({ tabId, find }: { tabId: string; find: FindState }) {
               placeholder="Replace"
               placeholderTextColor={theme.placeholder}
               selectionColor={theme.selection}
-              cursorColor={caretColor(theme)}
+              cursorColor={caretColor(theme, theme.panel)}
               enableFocusRing={false}
               onSubmitEditing={() => void replace(false)}
               keyDownEvents={[{ key: "Escape" }]}
