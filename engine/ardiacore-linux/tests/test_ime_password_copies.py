@@ -170,7 +170,7 @@ int main() {
   }
   {
     std::u16string target;
-    std::u16string short_text(u"QQQQQQQQ");
+    std::u16string short_text(u"QQQQQ");
     target = std::move(short_text);
     ui::WipeText(short_text);
     const char16_t* units = short_text.data();
