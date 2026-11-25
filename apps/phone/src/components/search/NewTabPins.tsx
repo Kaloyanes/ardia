@@ -24,18 +24,18 @@ export type NewTabPinsShown = { profileId: string; tiles: PinnedTile[] };
 
 export const holdsPin = (tiles: readonly PinnedTile[], key: string | null) => key !== null && tiles.some((tile) => tile.key === key || (tile.folder ?? []).some((tab) => tab.key === key));
 
-function pinStillOffered(profileId: string, key: string | null): boolean {
+function pinStillOffered(session: number, profileId: string, key: string | null): boolean {
   const search = searchState();
-  if (!search.open || search.editsPage || search.text.trim() !== "" || useTabs.getState().incognito) return false;
+  if (!search.open || search.session !== session || search.editsPage || search.text.trim() !== "" || useTabs.getState().incognito) return false;
   const { view, status } = useSync.getState();
   const profile = shownProfile(view, status);
   return profile?.syncId === profileId && holdsPin(profile.pinned.tiles, key);
 }
 
 const opensOfferedPin =
-  (profileId: string): PinOpener =>
+  (session: number, profileId: string): PinOpener =>
   (url, title, key) => {
-    if (!pinStillOffered(profileId, key)) return;
+    if (!pinStillOffered(session, profileId, key)) return;
     countUsage("new_tab_pins_opened");
     openRemote(url, title, profileId, key);
   };
@@ -64,7 +64,7 @@ export function NewTabPins({ style, maxHeight, plate = null, inset = 0 }: { styl
   }, [menuStale]);
   useEffect(() => (menuShown ? coverTray() : undefined), [menuShown]);
   if (!shown) return null;
-  const opener = opensOfferedPin(pins.profileId);
+  const opener = opensOfferedPin(session, pins.profileId);
   const tiles = (
     <Tiles
       tiles={pins.tiles}

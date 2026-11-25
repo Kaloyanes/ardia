@@ -306,3 +306,18 @@ test("a pin opened from its menu keeps its key, so after its page moves on the t
   expect(counted).toHaveBeenCalledWith("pinned_tabs_refound");
   unmount(second);
 });
+
+test("a tap held from an earlier panel opens nothing in the next one, even with the same space and pin", () => {
+  const opened = jest.spyOn(syncActions, "openRemote").mockImplementation(() => undefined);
+  act(() => browse.newTab());
+  const root = tray();
+  const staleTap = pressOf(root, "Pin 1");
+  act(() => dismissSearch());
+  act(() => jest.runOnlyPendingTimers());
+  act(() => browse.newTab());
+  act(() => staleTap());
+  expect(opened).not.toHaveBeenCalled();
+  act(() => pressOf(root, "Pin 1")());
+  expect(opened).toHaveBeenCalledWith("https://pin1.example/", "Pin 1", "work", "k1");
+  unmount(root);
+});
