@@ -35,6 +35,14 @@ The acceptance suite is in [linux-acceptance.md](linux-acceptance.md) and CI in 
 - **Assets.** These come from `lib/ardia/ardia-ui` beside the executable, or from `--ardia-ui-dir` during development.
   The data source serves them only to a host's own shell `WebContents`. An ordinary tab that navigates to
   `chrome://ardia/` gets nothing.
+- **One shell renderer.** Every window's shell document shares one renderer process per profile instead of one
+  each: `chromium-linux-webui-process-per-site.patch` makes `ShouldUseProcessPerSite` answer yes for exactly
+  `chrome://ardia/` in a regular profile (`SharesShellProcess`, `ac_desktop_webui_process_policy.h`); web pages, other
+  WebUI, extensions, guests and off-the-record profiles keep Chromium's answer, and Chromium never shares a process
+  across profiles. Each window still has its own document, `WebUI` and bridge (`Trusted`, `OwnsHandler` and the renderer
+  generation are per `WebContents`), so sharing changes no trust. A crash now blanks every window at once, so each
+  window reloads its shell after an abnormal exit (`ShellRecovery`), at most 3 times a minute (`ShellReloadBudget`),
+  and never while it closes or the app quits; the first reload starts the new renderer and the rest join it.
 - **Code cache.** `chromium-linux-auto-pip.patch` turns on Chromium's `WebUICodeCache`, so V8 keeps the shell's
   compiled scripts between launches. Chromium keys each entry by the script's URL and a hash of its source, so an
   updated bundle never runs old code. On an existing profile (Xvfb, llvmpipe, a shared box, median of 5 interleaved

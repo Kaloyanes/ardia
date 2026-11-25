@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ardia/desktop/ac_desktop_platform.h"
+#include "ardia/desktop/ac_desktop_webui_process_policy.h"
 #include "ardia/desktop/ac_desktop_window_state.h"
 #include "ardia/desktop/generated/ac_desktop_routes.h"
 #include "ardia/win/main.h"
@@ -28,6 +29,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/process/kill.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -81,7 +83,6 @@ WindowConfig::~WindowConfig() = default;
 namespace {
 
 constexpr size_t kUnhandledLimit = 400;
-constexpr char kShellUrl[] = "chrome://ardia/";
 
 class ShellTargeter : public aura::WindowTargeter {
  public:
@@ -157,6 +158,41 @@ class ShellTransparency : public content::WebContentsObserver {
       view->SetBackgroundColor(SK_ColorTRANSPARENT);
     }
   }
+};
+
+class ShellRecovery : public content::WebContentsObserver {
+ public:
+  ShellRecovery(content::WebContents* shell,
+                base::RepeatingCallback<bool()> may_reload)
+      : content::WebContentsObserver(shell),
+        may_reload_(std::move(may_reload)) {}
+
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override {
+    const bool normal_exit =
+        status == base::TERMINATION_STATUS_NORMAL_TERMINATION ||
+        status == base::TERMINATION_STATUS_STILL_RUNNING;
+    if (!budget_.Allow((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(),
+                       normal_exit)) {
+      return;
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ShellRecovery::Reload,
+                                  weak_factory_.GetWeakPtr()));
+  }
+
+ private:
+  void Reload() {
+    if (!web_contents() || browser_shutdown::IsTryingToQuit() ||
+        !may_reload_.Run()) {
+      return;
+    }
+    web_contents()->GetController().Reload(content::ReloadType::NORMAL, false);
+  }
+
+  base::RepeatingCallback<bool()> may_reload_;
+  ardia::desktop_webui_process::ShellReloadBudget budget_;
+  base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
 std::string Text(const base::DictValue& value, std::string_view key) {
@@ -414,6 +450,13 @@ void ShellHostView::Initialize() {
   shell_ = AddChildView(std::make_unique<views::WebView>(app_profile_.get()));
   shell_->GetWebContents()->SetDelegate(this);
   transparency_ = std::make_unique<ShellTransparency>(shell_->GetWebContents());
+  recovery_ = std::make_unique<ShellRecovery>(
+      shell_->GetWebContents(),
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host) {
+            return host && host->browser_ && !host->closing();
+          },
+          weak_factory_.GetWeakPtr()));
   ObserveMember(browser_);
   if (views::Widget* frame = widget()) {
     original_targeter_ = frame->GetNativeWindow()->SetEventTargeter(
@@ -422,7 +465,7 @@ void ShellHostView::Initialize() {
   caption_->Attach(Hwnd());
   documents_ = DocumentsFor(SessionDirectory());
   LayoutOverlay();
-  shell_->LoadInitialURL(GURL(kShellUrl));
+  shell_->LoadInitialURL(GURL(ardia::desktop_webui_process::kShellUrl));
   Decorate();
   if (config_.chrome_made) {
     TabStripModel* model = browser_->GetTabStripModel();
@@ -848,7 +891,7 @@ bool ShellHostView::Trusted(content::WebUI* ui) const {
   return frame && frame->IsRenderFrameLive() &&
          ui->GetRenderFrameHost() == frame && frame->GetWebUI() == ui &&
          frame->GetLastCommittedOrigin() ==
-             url::Origin::Create(GURL(kShellUrl)) &&
+             url::Origin::Create(GURL(ardia::desktop_webui_process::kShellUrl)) &&
          shell->GetLastCommittedURL().host() == "ardia";
 }
 

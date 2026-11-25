@@ -62,6 +62,7 @@ namespace ardia_win::webui {
 class FilePicker;
 class ShellBridge;
 class ShellHostView;
+class ShellRecovery;
 class ShellTransparency;
 
 struct WindowConfig {
@@ -351,6 +352,7 @@ class ShellHostView : public views::View,
 
   raw_ptr<views::WebView> shell_ = nullptr;
   std::unique_ptr<ShellTransparency> transparency_;
+  std::unique_ptr<ShellRecovery> recovery_;
   std::vector<gfx::Rect> pass_;
   size_t logged_pass_regions_ = static_cast<size_t>(-1);
   std::map<int, std::unique_ptr<PageBinding>> bindings_;

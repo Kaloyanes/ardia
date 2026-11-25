@@ -1,0 +1,35 @@
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -57,6 +57,9 @@
+ #include "build/android_buildflags.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
++#include "ardia/desktop/ac_desktop_webui_process_policy.h"  // nogncheck
++#endif
+ #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
+ #include "chrome/browser/accessibility/caption_settings_dialog.h"
+ #include "chrome/browser/accessibility/page_colors_controller.h"
+@@ -1998,6 +2001,22 @@
+     return false;
+   }
+ 
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
++  if (ardia::desktop_webui_process::SharesShellProcess({
++          .has_profile = true,
++          .off_the_record = profile->IsOffTheRecord(),
++          .scheme_is_shell = security_principal.SchemeIs(
++              ardia::desktop_webui_process::kShellScheme),
++          .host = security_principal.GetHost(),
++          .site = security_principal.GetDeprecatedSiteURL().spec(),
++          .webui = security_principal.IsWebUI(),
++          .guest = security_principal.IsGuest(),
++          .sandboxed = security_principal.IsSandboxed(),
++      })) {
++    return true;
++  }
++#endif
++
+   // NTP should use process-per-site.  This is a performance optimization to
+   // reduce process count associated with NTP tabs.
+   if (security_principal.SchemeIs(content::kChromeUIScheme)) {

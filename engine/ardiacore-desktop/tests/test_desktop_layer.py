@@ -165,5 +165,116 @@ class PathTextTests(unittest.TestCase):
             self.assertEqual(ran.returncode, 0, ran.stderr)
 
 
+
+PATCH = REPO / 'engine/patches/chromium-linux-webui-process-per-site.patch'
+HOSTS = (LINUX / 'ac_linux_host.cc', WIN / 'webui/webui_host_view.cc')
+
+PRINCIPAL_PROGRAM = r"""
+#include <cassert>
+#include <string>
+#include <string_view>
+
+#include "ardia/desktop/ac_desktop_webui_process_policy.h"
+
+struct Url {
+  std::string text;
+  const std::string& spec() const { return text; }
+};
+
+struct Principal {
+  std::string scheme;
+  std::string host;
+  Url site;
+  bool webui = false;
+  bool guest = false;
+  bool sandboxed = false;
+  bool SchemeIs(std::string_view wanted) const { return scheme == wanted; }
+  std::string_view GetHost() const { return host; }
+  const Url& GetDeprecatedSiteURL() const { return site; }
+  bool IsWebUI() const { return webui; }
+  bool IsGuest() const { return guest; }
+  bool IsSandboxed() const { return sandboxed; }
+};
+
+struct Profile {
+  bool off_the_record = false;
+  bool IsOffTheRecord() const { return off_the_record; }
+};
+
+bool ShouldUseProcessPerSite(const Profile* profile, const Principal& security_principal) {
+@CALL@
+  return false;
+}
+
+int main() {
+  const Profile regular;
+  const Profile incognito{true};
+  const Principal shell{"chrome", "ardia", {"chrome://ardia/"}, true};
+  assert(ShouldUseProcessPerSite(&regular, shell));
+  assert(!ShouldUseProcessPerSite(&incognito, shell));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "settings", {"chrome://settings/"}, true}));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"https", "ardia", {"https://ardia/"}, false}));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome-extension", "ardia", {"chrome-extension://ardia/"}, false}));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, true, true}));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, true, false, true}));
+  assert(!ShouldUseProcessPerSite(&regular, Principal{"chrome", "ardia", {"chrome://ardia/"}, false}));
+  return 0;
+}
+"""
+
+
+def patch_call():
+    added = [line[1:] for line in PATCH.read_text().splitlines() if line.startswith('+') and not line.startswith('+++')]
+    start = next(i for i, line in enumerate(added) if 'SharesShellProcess(' in line)
+    end = next(i for i in range(start, len(added)) if added[i].strip() == '#endif')
+    return '\n'.join(added[start:end])
+
+
+class WebUIProcessPolicyTests(unittest.TestCase):
+    def test_the_patch_asks_the_policy_only_on_linux_and_windows(self):
+        text = PATCH.read_text()
+        self.assertIn('+++ b/chrome/browser/chrome_content_browser_client.cc', text)
+        self.assertEqual(text.count('+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)'), 2)
+        self.assertIn('+#include "ardia/desktop/ac_desktop_webui_process_policy.h"  // nogncheck', text)
+        self.assertRegex((REPO / 'engine/patches/series').read_text(),
+                         r'(?m)^chromium chromium-linux-webui-process-per-site\.patch linux$')
+        self.assertRegex((REPO / 'scripts/windows/engine/series-win').read_text(),
+                         r'(?m)^take chromium-linux-webui-process-per-site\.patch$')
+
+    def test_each_host_loads_the_shell_site_the_policy_shares(self):
+        for host in HOSTS:
+            text = host.read_text()
+            with self.subTest(host=host.name):
+                self.assertIn('#include "ardia/desktop/ac_desktop_webui_process_policy.h"', text)
+                self.assertEqual(text.count('"chrome://ardia/"'), 0)
+                self.assertRegex(text, r'LoadInitialURL\(GURL\((ardia::)?desktop_webui_process::kShellUrl\)\)')
+                self.assertRegex(text, r'class ShellRecovery : public content::WebContentsObserver')
+                self.assertRegex(text, r'desktop_webui_process::ShellReloadBudget budget_;')
+                self.assertRegex(text, r'std::make_unique<ShellRecovery>\(')
+        for config in (LINUX / 'ac_linux_host.cc', WIN / 'webui/webui_shell.cc'):
+            with self.subTest(config=config.name):
+                self.assertRegex(config.read_text(), r'DefaultWebUIConfig\((ardia::)?desktop_webui_process::kShellScheme,'
+                                                     r'\s*(ardia::)?desktop_webui_process::kShellHost\)')
+
+    @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
+    def test_the_policy_program_passes(self):
+        self.compile_and_run((ROOT / 'tests/webui_process_policy_test.cc').read_text())
+
+    @unittest.skipUnless(shutil.which(os.environ.get('CXX', 'c++')), 'no C++ compiler')
+    def test_the_patched_chromium_call_compiles_and_answers_as_the_policy(self):
+        self.compile_and_run(PRINCIPAL_PROGRAM.replace('@CALL@', patch_call()))
+
+    def compile_and_run(self, program):
+        compiler = os.environ.get('CXX', 'c++')
+        with tempfile.TemporaryDirectory(prefix='ardia-desktop-webui-process-') as scratch:
+            unit = pathlib.Path(scratch, 'program.cc')
+            unit.write_text(program)
+            binary = pathlib.Path(scratch, 'program')
+            built = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', str(SOURCE), str(unit),
+                                    '-o', str(binary)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
 if __name__ == '__main__':
     unittest.main()

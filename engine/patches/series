@@ -122,6 +122,7 @@ chromium chromium-linux-page-agent.patch linux
 chromium chromium-linux-page-prompts.patch linux
 chromium chromium-linux-navigation-hold-hook.patch linux
 chromium chromium-linux-autoplay-policy.patch linux
+chromium chromium-linux-webui-process-per-site.patch linux
 chromium chromium-linux-web-store-uninstall.patch linux
 chromium chromium-linux-media-player-pip.patch linux
 chromium chromium-linux-shell-above-input.patch linux

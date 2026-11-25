@@ -108,6 +108,7 @@
 #include "ardia/linux/ac_linux_tab_bindings.h"
 #include "ardia/linux/ac_linux_telemetry.h"
 #include "ardia/desktop/ac_desktop_telemetry_policy.h"
+#include "ardia/desktop/ac_desktop_webui_process_policy.h"
 #include "ardia/linux/ac_linux_self_update.h"
 #include "ardia/linux/ac_linux_updates.h"
 #include "ardia/linux/ac_linux_system_signals.h"
@@ -405,6 +406,30 @@ class ShellTransparency : public content::WebContentsObserver {
     web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
     if (auto* view = web_contents()->GetRenderWidgetHostView()) view->SetBackgroundColor(SK_ColorTRANSPARENT);
   }
+};
+
+class ShellRecovery : public content::WebContentsObserver {
+ public:
+  ShellRecovery(content::WebContents* shell, base::RepeatingCallback<bool()> may_reload)
+      : content::WebContentsObserver(shell), may_reload_(std::move(may_reload)) {}
+
+  void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override {
+    const bool normal_exit =
+        status == base::TERMINATION_STATUS_NORMAL_TERMINATION || status == base::TERMINATION_STATUS_STILL_RUNNING;
+    if (!budget_.Allow((base::TimeTicks::Now() - base::TimeTicks()).InSecondsF(), normal_exit)) return;
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ShellRecovery::Reload, weak_factory_.GetWeakPtr()));
+  }
+
+ private:
+  void Reload() {
+    if (!web_contents() || browser_shutdown::IsTryingToQuit() || !may_reload_.Run()) return;
+    web_contents()->GetController().Reload(content::ReloadType::NORMAL, false);
+  }
+
+  base::RepeatingCallback<bool()> may_reload_;
+  desktop_webui_process::ShellReloadBudget budget_;
+  base::WeakPtrFactory<ShellRecovery> weak_factory_{this};
 };
 
 constexpr base::TimeDelta kShellCurtainSettle = base::Milliseconds(100);
@@ -1863,6 +1888,7 @@ class ShellHostView : public views::View,
   std::vector<std::unique_ptr<views::ViewTracker>> under_glass_;
   std::vector<gfx::Rect> shell_pass_;
   std::unique_ptr<ShellTransparency> shell_transparency_;
+  std::unique_ptr<ShellRecovery> shell_recovery_;
   raw_ptr<views::View> curtain_ = nullptr;
   std::optional<desktop_window_corners::Corners> window_corners_;
   std::optional<std::pair<bool, desktop_window_corners::DecorationAnswer>> followed_decorations_;
@@ -2792,7 +2818,7 @@ class ShellController : public content::WebUIController {
 
 class ShellConfig : public content::DefaultWebUIConfig<ShellController> {
  public:
-  ShellConfig() : DefaultWebUIConfig("chrome", "ardia") {}
+  ShellConfig() : DefaultWebUIConfig(desktop_webui_process::kShellScheme, desktop_webui_process::kShellHost) {}
   bool IsWebUIEnabled(content::BrowserContext* context) override {
     return !Profile::FromBrowserContext(context)->IsOffTheRecord();
   }
@@ -2937,8 +2963,14 @@ void ShellHostView::Initialize() {
     }
     if (startup_ && !small_ && private_window_.empty() && unclaimed_.empty()) StartStartupTab();
   }
-  shell_->LoadInitialURL(GURL("chrome://ardia/"));
+  shell_->LoadInitialURL(GURL(desktop_webui_process::kShellUrl));
   shell_transparency_ = std::make_unique<ShellTransparency>(shell());
+  shell_recovery_ = std::make_unique<ShellRecovery>(
+      shell(), base::BindRepeating(
+                   [](base::WeakPtr<ShellHostView> host) {
+                     return host && !host->closing() && host->GetWidget() && !host->GetWidget()->IsClosed();
+                   },
+                   GetWeakPtr()));
   curtain_timer_.Start(FROM_HERE, kShellCurtainLimit,
                        base::BindOnce(&ShellHostView::LiftCurtain, base::Unretained(this)));
   ApplyShellInput();
@@ -3432,7 +3464,7 @@ bool ShellHostView::Trusted(content::WebUI* ui) const {
   if (!browser_ || !ui || ui->GetWebContents() != shell()) return false;
   auto* frame = shell()->GetPrimaryMainFrame();
   return frame && frame->IsRenderFrameLive() && ui->GetRenderFrameHost() == frame && frame->GetWebUI() == ui && frame->GetLastCommittedOrigin() ==
-                      url::Origin::Create(GURL("chrome://ardia/")) &&
+                      url::Origin::Create(GURL(desktop_webui_process::kShellUrl)) &&
          shell()->GetLastCommittedURL().host() == "ardia";
 }
 

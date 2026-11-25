@@ -100,6 +100,7 @@ chromium-linux-companion-browsers.patch
 chromium-linux-page-agent.patch
 chromium-linux-page-prompts.patch
 chromium-linux-navigation-hold-hook.patch
+chromium-linux-webui-process-per-site.patch
 chromium-linux-web-store-uninstall.patch
 chromium-linux-media-player-pip.patch
 chromium-linux-shell-above-input.patch
