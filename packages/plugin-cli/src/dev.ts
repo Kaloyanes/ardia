@@ -67,6 +67,29 @@ export function removeDevLink(paths: DevPaths): boolean {
   }
 }
 
+function refusalReason(error: unknown): string {
+  if (error && typeof error === "object") {
+    const { message, code } = error as { message?: unknown; code?: unknown };
+    if (typeof message === "string" && message.trim()) return message;
+    if (typeof code === "string" && code.trim()) return code;
+  }
+  if (typeof error === "string" && error.trim()) return error;
+  return "Ardia refused the reload";
+}
+
+function reloadReplyError(reply: unknown): string | undefined {
+  if (!reply || typeof reply !== "object") return "Ardia answered with something unexpected";
+  const record = reply as { ok?: unknown; error?: unknown; result?: unknown };
+  if (record.error !== undefined && record.error !== null && record.error !== false) return refusalReason(record.error);
+  if (record.ok === false) return "Ardia refused the reload";
+  if (record.result && typeof record.result === "object") {
+    const result = record.result as { ok?: unknown; error?: unknown; message?: unknown };
+    if (result.error !== undefined && result.error !== null && result.error !== false) return refusalReason(result.error);
+    if (result.ok === false) return typeof result.message === "string" && result.message.trim() ? result.message : "Ardia refused the reload";
+  }
+  return undefined;
+}
+
 export function pingArdia(socketPath: string, params: Record<string, unknown>, timeoutMs = 1500): Promise<{ reached: boolean; reply?: unknown; error?: string }> {
   if (process.platform === "win32" || !existsSync(socketPath)) return Promise.resolve({ reached: false, error: "Ardia's control socket isn't there" });
   return new Promise((done) => {
@@ -85,8 +108,9 @@ export function pingArdia(socketPath: string, params: Record<string, unknown>, t
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       try {
-        const reply = JSON.parse(buffer.slice(0, newline)) as { result?: unknown; error?: { code?: string; message?: string } };
-        finish(reply.error ? { reached: true, error: (typeof reply.error.message === "string" && reply.error.message.trim() ? reply.error.message : typeof reply.error.code === "string" && reply.error.code.trim() ? reply.error.code : "Ardia refused the reload") } : { reached: true, reply: reply.result });
+        const reply = JSON.parse(buffer.slice(0, newline)) as { result?: unknown };
+        const error = reloadReplyError(reply);
+        finish(error !== undefined ? { reached: true, error } : { reached: true, reply: reply.result });
       } catch {
         finish({ reached: true, error: "Ardia answered with something that isn't JSON" });
       }

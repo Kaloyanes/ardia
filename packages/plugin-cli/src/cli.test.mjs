@@ -470,7 +470,17 @@ describe("round 1 fixes", () => {
       socket.setEncoding("utf8");
       socket.on("data", (line) => {
         const request = JSON.parse(line);
-        socket.write(`${JSON.stringify(refuse === "empty" ? { id: request.id, error: { code: "refused", message: "" } } : refuse ? { id: request.id, error: { code: "refused", message: "dev plugins are off" } } : { id: request.id, result: { ok: true } })}\n`);
+        const body =
+          refuse === "empty"
+            ? { id: request.id, error: { code: "refused", message: "" } }
+            : refuse === "bare-false"
+              ? { id: request.id, ok: false }
+              : refuse === "result-false"
+                ? { id: request.id, result: { ok: false, error: { message: "" } } }
+                : refuse
+                  ? { id: request.id, error: { code: "refused", message: "dev plugins are off" } }
+                  : { id: request.id, result: { ok: true } };
+        socket.write(`${JSON.stringify(body)}\n`);
       });
     });
     await new Promise((resolve) => server.listen(join(data, "ArdiaControl.sock"), resolve));
@@ -481,11 +491,13 @@ describe("round 1 fixes", () => {
       assert.match(q.out.stderr, /Ardia refused to reload @acme\/refused/);
       assert.match(q.out.stderr, /dev plugins are off/);
       assert.equal(existsSync(link), false);
-      refuse = "empty";
-      const empty = quiet();
-      assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], empty.streams), 1);
-      assert.match(empty.out.stderr, /Ardia refused to reload @acme\/refused/);
-      assert.equal(existsSync(link), false);
+      for (const mode of ["empty", "bare-false", "result-false"]) {
+        refuse = mode;
+        const refused = quiet();
+        assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], refused.streams), 1, mode);
+        assert.match(refused.out.stderr, /Ardia refused to reload @acme\/refused/, mode);
+        assert.equal(existsSync(link), false, mode);
+      }
       refuse = false;
       const ok = quiet();
       assert.equal(await mainWith(["dev", dir, "--once", "--json", "--data-dir", data], ok.streams), 0);

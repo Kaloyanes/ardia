@@ -404,6 +404,17 @@ describe("channel edge cases", () => {
     socket.onMessage((data) => seen.push(`msg:${data}`));
     await Promise.resolve();
     assert.deepEqual(seen, ["msg:hello", "close:1000:bye"]);
+    const full = await channels.connect("wss://full.com/");
+    const events = [];
+    full.onError((m) => events.push(`error:${m}`));
+    for (let i = 0; i < 256; i++) channels.deliver("net.ws.message", { socket: full.id, data: String(i) });
+    channels.deliver("net.ws.error", { socket: full.id, message: "boom" });
+    channels.deliver("net.ws.close", { socket: full.id, code: 1000, reason: "" });
+    full.onClose(() => events.push("close"));
+    full.onMessage((d) => events.push(`msg:${d}`));
+    await Promise.resolve();
+    assert.equal(events.length, 258);
+    assert.deepEqual(events.slice(-3), ["msg:255", "error:boom", "close"]);
   });
 
   test("a failed activation closes the channels it opened", async () => {

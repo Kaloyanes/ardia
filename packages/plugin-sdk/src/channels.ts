@@ -240,7 +240,16 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     const emit = (event: SocketEvent) => {
       pending.push(event);
       drain(false);
-      if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
+      if (pending[pending.length - 1] !== event) return;
+      if (event.kind === "message") {
+        let messages = 0;
+        for (const item of pending) if (item.kind === "message") messages++;
+        if (messages > MAX_HELD_MESSAGES) pending.pop();
+      } else if (event.kind === "error") {
+        let errors = 0;
+        for (const item of pending) if (item.kind === "error") errors++;
+        if (errors > 16) pending.pop();
+      }
     };
     const attach = <K extends keyof typeof listeners>(kind: K, listener: Parameters<(typeof listeners)[K]["add"]>[0]): Disposable => {
       const added = addTo(listeners[kind] as Set<typeof listener>, listener);

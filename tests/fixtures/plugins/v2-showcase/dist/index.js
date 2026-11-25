@@ -1318,7 +1318,16 @@
       const emit = (event) => {
         pending.push(event);
         drain(false);
-        if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
+        if (pending[pending.length - 1] !== event) return;
+        if (event.kind === "message") {
+          let messages = 0;
+          for (const item of pending) if (item.kind === "message") messages++;
+          if (messages > MAX_HELD_MESSAGES) pending.pop();
+        } else if (event.kind === "error") {
+          let errors = 0;
+          for (const item of pending) if (item.kind === "error") errors++;
+          if (errors > 16) pending.pop();
+        }
       };
       const attach = (kind, listener) => {
         const added = addTo(listeners[kind], listener);
