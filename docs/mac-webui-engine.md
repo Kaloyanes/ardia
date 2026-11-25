@@ -41,8 +41,9 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - A glass region over no page falls back behind the window.
   - After a `shell.glassRegions` call's regions are committed, the host posts `ArdiaGlass` `presented {generation}`
     on a later main-thread turn, which `shellGlass.ts` waits for before dropping its opaque fallback. A reload clears
-    the glass and drops any `presented` still pending. `accepted` lists only the regions actually mounted, after
-    backdrops and glass share the 64-region cap.
+    the glass and drops any `presented` still pending. `accepted` lists only the glass regions that
+    actually mounted on a native surface, after backdrops and glass share the 64-region cap. Backdrops and glass keep
+    separate ids, so a glass region may reuse a backdrop's id.
   - Liquid materials use `NSGlassEffectView` on macOS 26+ (corner radius and `style`, as in
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
