@@ -655,3 +655,29 @@ test("the tint uses a ScrollTimeline only with a track, the constructor and elem
   assert.equal(track.seededPosition(undefined, 2), 2);
   assert.equal(track.seededPosition(() => Number.NaN, 2), 2);
 });
+
+test("a fast flick released just short of the target settles without overshoot", () => {
+  const s = configured();
+  s.input("began", 0, -1, WIDTH, 0);
+  s.input("changed", 1.8 * WIDTH * 0.5, -1, WIDTH, 0.04);
+  s.input("changed", 1.8 * WIDTH, -1, WIDTH, 0.08);
+  assert.ok(Math.abs(s.position - 0.9) < 1e-9);
+  s.input("ended", 1.8 * WIDTH, -1, WIDTH, 0.08);
+  assert.equal(s.selected, 1);
+  assert.ok(s.velocity > 0 && s.velocity <= OMEGA * 0.1 + 1e-9, `released at ${s.velocity}`);
+  const { positions } = settleFrames(s, 0.08);
+  assert.ok(positions.every((p) => p <= 1), `overshot to ${Math.max(...positions)}`);
+  for (let i = 1; i < positions.length; i++) assert.ok(positions[i] >= positions[i - 1] - 1e-12);
+});
+
+test("the release velocity bound keeps the closed-form spring on one side of the target", () => {
+  assert.equal(spring.overshootFreeVelocity(-0.1, 22.5), OMEGA * 0.1);
+  assert.equal(spring.overshootFreeVelocity(-0.1, 1), 1);
+  assert.equal(spring.overshootFreeVelocity(0.1, 3), 0);
+  assert.equal(spring.overshootFreeVelocity(0, 3), 0);
+  assert.equal(spring.overshootFreeVelocity(-0.1, Number.NaN), 0);
+  for (const [x0, v] of [[-0.1, 22.5], [-0.5, 40], [0.3, -40], [-1, 3]]) {
+    const bounded = spring.overshootFreeVelocity(x0, v);
+    for (let t = 0; t <= 2; t += 0.0005) assert.ok(Math.sign(spring.springDisplacement(x0, bounded, t)) !== -Math.sign(x0), `${x0}, ${v} crossed at ${t}`);
+  }
+});

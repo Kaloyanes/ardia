@@ -407,9 +407,10 @@ export class PagerSpring {
       this.rest(target);
       return;
     }
+    const bounded = overshootFreeVelocity(this.positionValue - target, v);
     this.phaseValue = "settling";
-    this.velocityValue = v;
-    this.spring = { from: this.positionValue, target, velocity: v, start: null };
+    this.velocityValue = bounded;
+    this.spring = { from: this.positionValue, target, velocity: bounded, start: null };
   }
 
   private advanceSpring(t: number) {
@@ -444,6 +445,12 @@ export class PagerSpring {
     this.phaseValue = "idle";
     this.velocityValue = 0;
   }
+}
+
+export function overshootFreeVelocity(displacement: number, velocity: number) {
+  if (!(velocity * displacement < 0) || !Number.isFinite(velocity * displacement)) return 0;
+  const bound = OMEGA * Math.abs(displacement);
+  return Math.sign(velocity) * Math.min(Math.abs(velocity), bound);
 }
 
 export function springDisplacement(from: number, velocity: number, t: number) {
