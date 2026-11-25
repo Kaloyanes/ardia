@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { blockScript, blockedMotion, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow } from "./bench.mjs";
+import { blockScript, instanceName, judgeBlock, overlapMs, parseBenchArgs, phasesFor, planBench, rnCopyDir, runStatus, schedule, subErrors, summarizeRuns, swipeBlankFrames, swipesFor, teardownAfter, validWindow, pagerMotion } from "./bench.mjs";
 import { epochOffset, marksOf, openSocket, screenshotsOf, traced } from "./cdp.mjs";
 import { analyze, differs, freshFrames, inputLatencies, isBlank, restFromFrames, settleMs, splitFrames } from "./frames.mjs";
 import { RULES, evaluate, integrity, judge, limitFor, markdown, parseGateArgs, regressed, validateReport, validateRules } from "./gate.mjs";
@@ -701,14 +701,14 @@ test("round 2: the block arms on the gesture itself and fires after the delay", 
 });
 
 test("round 2: blocked-swipe overlap needs a measured motion interval", () => {
-  assert.equal(blockedMotion({ fresh: [], origin: 1000 }), null);
-  assert.equal(blockedMotion({ movingAt: 1000 }), null);
-  assert.deepEqual(blockedMotion({ movingAt: 1000, restAt: 1500 }), { start: 1000, end: 1500, source: "mark" });
-  assert.deepEqual(blockedMotion({ fresh: [20, 40, 300], origin: 1000, framesRestAt: 300 }), { start: 1020, end: 1300, source: "frames" });
-  assert.equal(blockedMotion({ fresh: [20, 40], origin: 1000, framesRestAt: null }), null);
+  const mark = (name, at) => ({ name, at });
+  assert.equal(pagerMotion([]), null);
+  assert.equal(pagerMotion([mark("ardia-pager-moving", 1000)]), null);
+  assert.equal(pagerMotion([mark("ardia-pager-rest", 1500)]), null);
+  assert.deepEqual(pagerMotion([mark("ardia-pager-moving", 1000), mark("ardia-pager-rest", 1500)]), { start: 1000, end: 1500, source: "pager" });
   const ran = { armedBy: "wheel", start: 1100, end: 1600 };
   assert.deepEqual(judgeBlock(ran, { start: 1000, end: 1400 }), { overlapMs: 300 });
-  assert.match(judgeBlock(ran, null).error, /no measured motion/);
+  assert.match(judgeBlock(ran, null).error, /no paired ardia-pager-moving/);
   assert.match(judgeBlock({ ...ran, armedBy: null }, { start: 1000, end: 1400 }).error, /never armed/);
   assert.match(judgeBlock({ armedBy: "wheel", start: null, end: null }, { start: 1, end: 2 }).error, /never ran/);
   assert.match(judgeBlock({ armedBy: "pager", start: 2000, end: 2500 }, { start: 1000, end: 1400 }).error, /did not overlap/);
@@ -720,7 +720,7 @@ test("round 2: the gate wants each rep exactly once and the same fixture in ever
   assert.equal(evaluate(report(fixed)).verdict, "PASS", JSON.stringify(Object.values(failing(evaluate(report(fixed))))));
   const twice = fixed.map((r) => (r.side === "webui" && r.phase === "large" && r.rep === 2 ? { ...r, rep: 1 } : r));
   const row = failing(evaluate(report(twice)))["integrity.runs"];
-  assert.match(row.why, /webui large has reps \[1,1,3\], wants \[1,2,3\]/);
+  assert.match(row.why, /webui large has reps \[1,1,3\], wants each of 1..3 once/);
   const third = fixed.map((r) => (r.side === "rn" && r.phase === "large" && r.rep === 3 ? { ...r, fixture: { expected: { profiles: 3, tabs: 20, windows: 1 }, restored: { profiles: 3, tabs: 20, windows: 1 } } } : r));
   assert.match(failing(evaluate(report(third)))["integrity.fixture"].why, /runs seeded differently: large/);
   const stray = [...fixed, { ...fixed[0], phase: "huge" }];
@@ -753,4 +753,71 @@ test("round 2: null runs and bad rule types are rejected with exit 64", () => {
   assert.equal(node("gate.mjs", file("nullrun.json", { ...good, runs: [...good.runs, null] })).status, 64);
   assert.equal(node("gate.mjs", file("g.json", good), "--rules", file("r.json", [{ key: "a", label: "a", stat: "p99" }])).status, 64);
   assert.equal(node("gate.mjs", file("g2.json", good), "--rules", file("r2.json", [{ key: "a", label: "a", vsRn: 1 }])).status, 64);
+});
+
+test("round 3: launch routes a failed readiness check to the teardown hook and snapshots owners early", () => {
+  const source = readFileSync(join(here, "../../lib/instance.mjs"), "utf8");
+  assert.match(source, /if \(opts\.teardown\) \{\s*opts\.track\?\.\(\);\s*await opts\.teardown\(\);\s*\} else await instance\.quit\(\{ graceful: false \}\);/);
+  assert.match(source, /; await sleep\(100\)\) \{\s*opts\.track\?\.\(\);/);
+  assert.match(source, /within \$\{\(opts\.startTimeout \?\? 60000\) \/ 1000\} s \(log: \$\{log\}\)`\);\s*opts\.track\?\.\(\);/);
+  const bench = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.match(bench, /track: \(\) => this\.track\(\{ identity \}\),\s*teardown:/);
+});
+
+test("round 3: a snapshot taken at startup keeps a helper that is reparented before teardown", async () => {
+  const identity = processIdentity({ owner: "tok-r3", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const T = "Tue Nov 24 05:06:18 2026";
+  const startup = parseProcessRows([`2147481100 1 ${T} /tmp/b/W.app/Contents/MacOS/W --ardia-bench-owner=tok-r3`, `2147481101 2147481100 ${T} /tmp/b/W.app/Contents/Frameworks/Helper --type=gpu`].join("\n"));
+  const afterQuit = parseProcessRows(`2147481101 1 ${T} /tmp/b/W.app/Contents/Frameworks/Helper --type=gpu`);
+  trackOwned(identity, startup);
+  const signals = [];
+  let reads = 0;
+  assert.equal(await stopOwned(identity, { graceMs: 300, killMs: 300, read: () => (++reads <= 4 ? afterQuit : []), kill: (pid, sig) => signals.push([pid, sig]) }), true);
+  assert.deepEqual(signals, [[2147481101, "SIGTERM"]]);
+  const blind = processIdentity({ owner: "tok-r3", binary: "/tmp/b/W.app/Contents/MacOS/W" });
+  const missed = [];
+  await stopOwned(blind, { graceMs: 50, killMs: 50, read: () => afterQuit, kill: (pid, sig) => missed.push(sig) });
+  assert.deepEqual(missed, []);
+});
+
+test("round 3: unrelated sidebar repaints cannot prove the block overlapped the swipe", () => {
+  const block = { armedBy: "wheel", start: 1200, end: 1700 };
+  const repaintsOnly = [];
+  assert.equal(pagerMotion(repaintsOnly, 1000), null);
+  assert.match(judgeBlock(block, pagerMotion(repaintsOnly, 1000)).error, /no paired ardia-pager-moving/);
+  const stoppedEarly = [{ name: "ardia-pager-moving", at: 1000 }, { name: "ardia-pager-rest", at: 1050 }];
+  assert.deepEqual(pagerMotion(stoppedEarly, 1000), { start: 1000, end: 1050, source: "pager" });
+  assert.match(judgeBlock(block, pagerMotion(stoppedEarly, 1000)).error, /did not overlap/);
+  const stale = [{ name: "ardia-pager-moving", at: 400 }, { name: "ardia-pager-rest", at: 1500 }];
+  assert.equal(pagerMotion(stale, 1000), null);
+  const paired = [{ name: "ardia-pager-rest", at: 900 }, { name: "ardia-pager-moving", at: 1100 }, { name: "ardia-pager-rest", at: 1600 }, { name: "ardia-pager-rest", at: 2400 }];
+  assert.deepEqual(pagerMotion(paired, 1000), { start: 1100, end: 1600, source: "pager" });
+  assert.deepEqual(judgeBlock(block, pagerMotion(paired, 1000)), { overlapMs: 400 });
+  const source = readFileSync(join(here, "bench.mjs"), "utf8");
+  assert.match(source, /const motion = pagerMotion\(cap\.marks, cap\.value\);/);
+});
+
+test("round 3: launch clocks, huge rep counts and empty fixtures are rejected", () => {
+  const good = report();
+  const withRun = (patch) => ({ ...good, runs: [{ ...good.runs[0], ...patch }, ...good.runs.slice(1)] });
+  assert.ok(validateReport(withRun({ launchClock: { kind: "commitMark" } })).some((p) => p.includes("launchClock")));
+  assert.ok(validateReport(withRun({ launchClock: "wallclock" })).some((p) => p.includes("launchClock")));
+  assert.deepEqual(validateReport(withRun({ launchClock: "fallback" })), []);
+  assert.ok(validateReport({ ...good, meta: { ...good.meta, reps: 4294967296 } }).some((p) => p.includes("meta.reps")));
+  assert.ok(validateReport({ ...good, meta: { ...good.meta, reps: 10001 } }).some((p) => p.includes("meta.reps")));
+  assert.ok(validateReport({ ...good, meta: { ...good.meta, reps: 2.5 } }).some((p) => p.includes("meta.reps")));
+  const huge = { ...good, meta: { ...good.meta, reps: 4294967296 } };
+  const result = evaluate(huge);
+  assert.equal(result.rows.find((r) => r.key === "integrity.runs").verdict, "FAIL");
+  assert.ok(validateReport(withRun({ fixture: { expected: {}, restored: {} } })).some((p) => p.includes("fixture.expected")));
+  assert.ok(validateReport(withRun({ fixture: { expected: { profiles: 3, tabs: 3, windows: 1 }, restored: { profiles: 3, tabs: -1, windows: 1 } } })).some((p) => p.includes("fixture.restored")));
+  assert.ok(validateReport(withRun({ fixture: "yes" })).some((p) => p.includes("fixture is not an object")));
+  const empty = good.runs.map((r) => ({ ...r, fixture: { expected: {}, restored: {} } }));
+  assert.ok(failing(evaluate({ ...good, runs: empty }))["integrity.fixture"]);
+  const dir = scratch();
+  const file = (name, value) => (writeFileSync(join(dir, name), JSON.stringify(value)), join(dir, name));
+  assert.equal(node("gate.mjs", file("clock.json", withRun({ launchClock: {} }))).status, 64);
+  assert.equal(node("gate.mjs", file("reps.json", { ...good, meta: { ...good.meta, reps: 4294967296 } })).status, 64);
+  assert.equal(node("gate.mjs", file("fixture.json", withRun({ fixture: { expected: {}, restored: {} } }))).status, 64);
+  assert.equal(node("gate.mjs", file("ok.json", good)).status, 0);
 });

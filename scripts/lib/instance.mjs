@@ -383,11 +383,13 @@ export async function launch(app, opts = {}) {
   let owned = null;
   try {
     for (const end = Date.now() + (opts.startTimeout ?? 60000); !owned && Date.now() < end; await sleep(100)) {
+      opts.track?.();
       let info;
       const pid = ownedCandidate(listenerPids(port), before, (p) => (info = processInfo(p))?.command, binary);
       if (pid && info) owned = { pid, started: info.started };
     }
     if (!owned) throw new Error(`the app didn't listen on DevTools port ${port} within ${(opts.startTimeout ?? 60000) / 1000} s (log: ${log})`);
+    opts.track?.();
   } catch (e) {
     if (opts.teardown) {
       await opts.teardown();
@@ -404,7 +406,10 @@ export async function launch(app, opts = {}) {
     try {
       await instance.ready(typeof opts.ready === "string" ? { test: opts.ready } : typeof opts.ready === "object" ? opts.ready : {});
     } catch (e) {
-      await instance.quit({ graceful: false });
+      if (opts.teardown) {
+        opts.track?.();
+        await opts.teardown();
+      } else await instance.quit({ graceful: false });
       throw e;
     }
   return instance;

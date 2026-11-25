@@ -83,13 +83,25 @@ export function judge(rule, report, { baseline = null, regressionPct = 10, allow
 }
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+export const MAX_REPS = 10000;
+export const LAUNCH_CLOCKS = ["commitMark", "fallback"];
+export const validReps = (reps) => Number.isSafeInteger(reps) && reps >= 1 && reps <= MAX_REPS;
+const isCount = (v) => Number.isSafeInteger(v) && v >= 0;
+export const validFixture = (f) => isObject(f) && isCount(f.profiles) && isCount(f.tabs) && isCount(f.windows);
+
+export function fixtureProblem(fixture) {
+  if (fixture == null) return null;
+  if (!isObject(fixture)) return "fixture is not an object";
+  for (const side of ["expected", "restored"]) if (fixture[side] != null && !validFixture(fixture[side])) return `fixture.${side} needs integer profiles, tabs and windows ≥ 0`;
+  return null;
+}
 
 export function validateReport(report, name = "report") {
   if (!isObject(report)) return [`${name} is not a JSON object`];
   const problems = [];
   if (!isObject(report.meta)) problems.push(`${name} has no meta object`);
   else {
-    if (!Number.isInteger(report.meta.reps) || report.meta.reps < 1) problems.push(`${name} meta.reps is not a positive integer`);
+    if (!validReps(report.meta.reps)) problems.push(`${name} meta.reps is not an integer 1..${MAX_REPS}`);
     if (!Array.isArray(report.meta.phases) || !report.meta.phases.length) problems.push(`${name} meta.phases is not a list`);
     if (!Array.isArray(report.meta.measures)) problems.push(`${name} meta.measures is not a list`);
   }
@@ -97,7 +109,12 @@ export function validateReport(report, name = "report") {
   else
     report.runs.forEach((r, i) => {
       if (!isObject(r)) problems.push(`${name} runs[${i}] is not an object`);
-      else if (!["rn", "webui"].includes(r.side) || typeof r.phase !== "string" || !Number.isInteger(r.rep) || r.rep < 1) problems.push(`${name} runs[${i}] needs side rn|webui, a phase and a rep ≥ 1`);
+      else {
+        if (!["rn", "webui"].includes(r.side) || typeof r.phase !== "string" || !Number.isSafeInteger(r.rep) || r.rep < 1) problems.push(`${name} runs[${i}] needs side rn|webui, a phase and a rep ≥ 1`);
+        if (r.launchClock != null && !LAUNCH_CLOCKS.includes(r.launchClock)) problems.push(`${name} runs[${i}] launchClock is not ${LAUNCH_CLOCKS.join(" or ")}`);
+        const bad = fixtureProblem(r.fixture);
+        if (bad) problems.push(`${name} runs[${i}] ${bad}`);
+      }
     });
   if (!isObject(report.summary) || !isObject(report.summary.rn) || !isObject(report.summary.webui)) problems.push(`${name} has no summary.rn and summary.webui`);
   return problems;
@@ -119,23 +136,25 @@ export function validateRules(rules) {
 export const STATS = ["median", "p95", "max"];
 const SIDES = ["rn", "webui"];
 const SWIPES_BY_SIDE = { rn: ["fwd", "back"], webui: ["fwd", "back", "blocked"] };
-const sameFixture = (a, b) => !!a && !!b && a.profiles === b.profiles && a.tabs === b.tabs && a.windows === b.windows;
+const sameFixture = (a, b) => validFixture(a) && validFixture(b) && a.profiles === b.profiles && a.tabs === b.tabs && a.windows === b.windows;
 
 export function integrity(report, { allowFallbackClock = false } = {}) {
   const meta = report?.meta ?? {};
   const runs = Array.isArray(report?.runs) ? report.runs : [];
   const phases = Array.isArray(meta.phases) ? meta.phases : [];
   const measures = Array.isArray(meta.measures) ? meta.measures : [];
-  const expected = (Number.isInteger(meta.reps) ? meta.reps : 0) * phases.length;
+  const reps = validReps(meta.reps) ? meta.reps : 0;
+  const expected = reps * phases.length;
   const per = (fn) => Object.fromEntries(SIDES.map((side) => [side, fn(runs.filter((r) => r.side === side))]));
   const row = (key, label, values, ok, limit, why) => ({ key, label, stat: "integrity", rn: values.rn, webui: values.webui, limit, baseline: null, verdict: ok ? "PASS" : "FAIL", why: ok ? "" : why });
   const rows = [];
   const done = per((mine) => mine.filter((r) => r.status === "ok").length);
-  const wanted = Array.from({ length: Number.isInteger(meta.reps) ? meta.reps : 0 }, (_, i) => i + 1).join(",");
   const repProblems = SIDES.flatMap((side) =>
     phases.flatMap((phase) => {
-      const reps = runs.filter((r) => r.side === side && r.phase === phase && r.status === "ok").map((r) => r.rep).sort((a, b) => a - b).join(",");
-      return reps === wanted ? [] : [`${side} ${phase} has reps [${reps}], wants [${wanted}]`];
+      const got = runs.filter((r) => r.side === side && r.phase === phase && r.status === "ok").map((r) => r.rep);
+      const seen = new Set(got);
+      const covered = reps > 0 && got.length === reps && seen.size === reps && got.every((n) => Number.isSafeInteger(n) && n >= 1 && n <= reps);
+      return covered ? [] : [`${side} ${phase} has reps [${[...got].sort((a, b) => a - b).join(",")}], wants each of 1..${reps || "?"} once`];
     }),
   );
   const strays = runs.filter((r) => !phases.includes(r.phase)).length;
@@ -165,7 +184,7 @@ export function integrity(report, { allowFallbackClock = false } = {}) {
   }
   const clocks = per((mine) => [...new Set(mine.map((r) => r.launchClock ?? "none"))].sort().join("+") || "none");
   const all = new Set(SIDES.flatMap((s) => clocks[s].split("+")));
-  const clockOk = !all.has("none") && (all.size === 1 || allowFallbackClock);
+  const clockOk = !all.has("none") && [...all].every((c) => LAUNCH_CLOCKS.includes(c)) && (all.size === 1 || allowFallbackClock);
   rows.push(row("integrity.clock", "Integrity: launch clock", clocks, clockOk, null, all.has("none") ? "a run has no launch clock" : "the sides used different launch clocks (--allow-fallback-clock to accept)"));
   return rows;
 }

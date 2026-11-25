@@ -38,8 +38,9 @@ Per rep and side:
   swipe    Personal → Work, Work → Personal (selected tab 130 rows down): frame gaps p50/p95/max, motion → rest, deep
            row arrival, blank sidebar frames. On the WebUI, a third swipe blocks the shell's main thread for 500 ms,
            armed in the page by the gesture itself (its first wheel event or the pager's moving mark) and fired
-           150 ms later; the sample fails unless the block overlaps the measured motion (pager marks, else frame
-           differences), never the time the command was sent. React Native has no page to block, so it skips it
+           150 ms later; the sample fails unless the block overlaps the pager's own motion, from its
+           ardia-pager-moving mark to the next ardia-pager-rest mark (no marks, no pass). React Native
+           has no page to block, so it skips it
   scroll   a trackpad flick up the 150-tab sidebar: frame gaps p50/p95/max
   typing   the command bar opened with ⌘T and "github" typed 150 ms apart: keystroke → next new frame
 Gestures come from acswipe.m and acframes.m and keys from acperf postkeys (apps/browser/scripts/perf); frames come
@@ -249,10 +250,11 @@ export const blockScript = (delayMs = BLOCK_DELAY_MS, blockMs = BLOCK_MS) => `((
   return 1;
 })()`;
 
-export function blockedMotion({ movingAt = null, restAt = null, fresh = [], origin = 0, framesRestAt = null }) {
-  const start = movingAt ?? (fresh.length ? origin + fresh[0] : null);
-  const end = restAt ?? (framesRestAt != null ? origin + framesRestAt : null);
-  return start != null && end != null && end > start ? { start, end, source: movingAt != null ? "mark" : "frames" } : null;
+export function pagerMotion(marks, after = -Infinity) {
+  const moving = marks.filter((m) => m.name === "ardia-pager-moving" && Number.isFinite(m.at) && m.at >= after).sort((a, b) => a.at - b.at)[0];
+  if (!moving) return null;
+  const rest = marks.filter((m) => m.name === "ardia-pager-rest" && Number.isFinite(m.at) && m.at > moving.at).sort((a, b) => a.at - b.at)[0];
+  return rest ? { start: moving.at, end: rest.at, source: "pager" } : null;
 }
 
 export async function teardownAfter(error, finish) {
@@ -269,7 +271,7 @@ export const rnCopyDir = (runDir) => join(runDir, "apps", "rn");
 export function judgeBlock(block, motion) {
   if (!block?.armedBy) return { error: "the block was never armed by the gesture" };
   if (!Number.isFinite(block.start) || !Number.isFinite(block.end)) return { error: "the block never ran" };
-  if (!motion) return { error: "no measured motion interval for the blocked swipe" };
+  if (!motion) return { error: "no paired ardia-pager-moving → ardia-pager-rest marks for the blocked swipe" };
   const overlap = overlapMs(block, motion);
   return overlap > 0 ? { overlapMs: overlap } : { error: `the ${BLOCK_MS} ms block did not overlap the swipe motion`, overlapMs: overlap };
 }
@@ -338,6 +340,7 @@ class Bench {
     try {
       inst = await launch(this.rnApp, {
         data, session, onboarded: true, port, js: "none", files: { "perf-probe": "" }, args: [`${OWNER_SWITCH}=${owner}`], startTimeout: 60000,
+        track: () => this.track({ identity }),
         teardown: async () => {
           if (!(await stopOwned(identity))) throw Object.assign(new Error(`instance ${owner} did not exit after a failed launch`), { fatal: true });
         },
@@ -374,7 +377,11 @@ class Bench {
       const args = assertHidden(hiddenOpenArgs({ app: this.o.webui, data, port, owner, env, log: join(data, "app.out.log") }));
       side.t0 = Date.now();
       execFileSync("open", args, { timeout: OPEN_TIMEOUT_MS });
-      const root = await until(() => ownedTree(readProcessRows(), identity)[0], 30000, 50);
+      const root = await until(() => {
+        const rows = readProcessRows();
+        trackOwned(identity, rows);
+        return ownedTree(rows, identity)[0];
+      }, 30000, 50);
       if (!root) throw new Error(`no process carrying ${owner} appeared within 30 s (log: ${join(data, "app.out.log")})`);
       side.pid = root.pid;
       side.port = port;
@@ -513,7 +520,6 @@ class Bench {
     let origin = cap.value;
     let rest = null;
     let restSource = null;
-    let movingAt = null;
     if (side.kind === "rn") {
       const s = settleMs(samples);
       if (s.startAt != null) origin = s.startAt;
@@ -521,7 +527,7 @@ class Bench {
     } else {
       const moving = cap.marks.find((m) => m.name === "ardia-pager-moving");
       const restMark = cap.marks.filter((m) => m.name === "ardia-pager-rest").at(-1);
-      if (moving) [origin, movingAt] = [moving.at, moving.at];
+      if (moving) origin = moving.at;
       if (restMark) [rest, restSource] = [restMark.at, "mark"];
     }
     const times = cap.times.map((t) => t - origin);
@@ -535,7 +541,7 @@ class Bench {
     };
     if (blocked) {
       const block = await side.js("globalThis.__ardiaBenchBlock ?? null");
-      const motion = blockedMotion({ movingAt, restAt: restSource === "mark" ? rest : null, fresh, origin, framesRestAt: metrics.restAt });
+      const motion = pagerMotion(cap.marks, cap.value);
       const verdict = judgeBlock(block, motion);
       Object.assign(result, { block, motion, blockOverlapMs: verdict.overlapMs ?? null });
       if (verdict.error) throw Object.assign(new Error(verdict.error), { result });
