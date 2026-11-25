@@ -24,9 +24,15 @@ test(`a tile's letters change in the in-app panel on the ${process.env.ARDIA_DES
   assert.equal(S().tabs[id].tileLetters, undefined, "an empty Done goes back to the site's letter");
 });
 
-test("the letters panel sits under its tile and stays inside the window", () => {
-  const room = { width: 400, height: 600 };
-  assert.deepEqual(placeTileLetters({ x: 10, y: 50, width: 60, height: 34 }, room), { top: 90, left: 8 });
-  assert.equal(placeTileLetters({ x: 380, y: 50, width: 20, height: 34 }, room).left, room.width - 8 - TILE_LETTERS_WIDTH);
-  assert.deepEqual(placeTileLetters(null, room), { top: 14, left: 200 - TILE_LETTERS_WIDTH / 2 });
+test("the letters panel sits under its tile, goes above it near the window's bottom, and always stays inside the window", () => {
+  const room = { width: 400, height: 520 };
+  const height = 140;
+  assert.deepEqual(placeTileLetters({ x: 10, y: 50, width: 60, height: 34 }, room, height), { top: 90, left: 8 });
+  assert.equal(placeTileLetters({ x: 380, y: 50, width: 20, height: 34 }, room, height).left, room.width - 8 - TILE_LETTERS_WIDTH);
+  const low = placeTileLetters({ x: 10, y: 480, width: 60, height: 34 }, room, height);
+  assert.equal(low.top, 480 - 6 - height, "above the tile");
+  assert.ok(low.top + height <= room.height - 8);
+  const tight = placeTileLetters({ x: 10, y: 100, width: 60, height: 34 }, { width: 400, height: 200 }, height);
+  assert.deepEqual(tight, { top: 200 - 8 - height, left: 8 }, "no room above or below: kept inside the window");
+  assert.deepEqual(placeTileLetters(null, room, height), { top: 14, left: 200 - TILE_LETTERS_WIDTH / 2 });
 });

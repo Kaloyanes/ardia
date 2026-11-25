@@ -1,17 +1,25 @@
 import type { Adapter, Extraction } from "../../platform/sync";
 import type { Tab } from "../browser/types";
 import { PIN_TAB, PIN_LETTERS } from "./pinRecords";
-import { commitPinnedEdit, homeWindow, store, windowsHomeFirst } from "./pinnedSyncState";
+import { commitPinnedEdit, homeWindow, store, unpinnedRemotely, windowsHomeFirst } from "./pinnedSyncState";
 import { pinKeyOf } from "../browser/model";
 import { cleanTileLetters } from "../../lib/tileLetter";
 
 const NO_LETTERS = "";
 
+function localPinKeys(profileId: string): Set<string> {
+  const s = store();
+  const keys = new Set<string>();
+  for (const t of Object.values(s.tabs)) if (t.profileId === profileId && t.pin) keys.add(pinKeyOf(t));
+  for (const p of s.parkedPins[profileId]?.tabs ?? []) if (!p.groupId) keys.add(p.id);
+  return keys;
+}
+
 export function pinnedLettersAdapter(profileId: string): Adapter {
   const keyOf = (k: string) => k.slice(PIN_LETTERS.length);
   return {
     prefix: PIN_LETTERS,
-    extract: (base) => {
+    extract: (base, _queued, _now, recorded, remote) => {
       const s = store();
       const values = new Map<string, unknown>();
       const known = new Set<string>();
@@ -29,11 +37,22 @@ export function pinnedLettersAdapter(profileId: string): Adapter {
         }
       }
       for (const p of s.parkedPins[profileId]?.tabs ?? []) if (!p.groupId) offer(p.id, p.tileLetters);
-      return { values, ignore: (k) => !known.has(keyOf(k)) && base(`${PIN_TAB}${keyOf(k)}`) === undefined } satisfies Extraction;
+      const unpinned = unpinnedRemotely(recorded, remote);
+      return {
+        values,
+        ignore: (k) => !known.has(keyOf(k)) && base(`${PIN_TAB}${keyOf(k)}`) === undefined && !unpinned(keyOf(k)),
+      } satisfies Extraction;
     },
-    apply: (visible, changed) => {
+    apply: (visible, changed, base, records) => {
+      const pins = localPinKeys(profileId);
+      const gone = (key: string) => records.known(`${PIN_TAB}${key}`) && base(`${PIN_TAB}${key}`) === undefined;
       const incoming = new Map<string, string | undefined>();
-      for (const k of changed) incoming.set(keyOf(k), cleanTileLetters(visible.get(k)) ?? undefined);
+      for (const k of changed) {
+        const letters = cleanTileLetters(visible.get(k)) ?? undefined;
+        const key = keyOf(k);
+        if (!pins.has(key) && letters && !gone(key)) records.defer(k);
+        else incoming.set(key, letters);
+      }
       if (!incoming.size) return true;
       const s = store();
       let tabs: Record<string, Tab> | null = null;

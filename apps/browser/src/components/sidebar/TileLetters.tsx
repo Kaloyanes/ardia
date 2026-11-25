@@ -19,11 +19,15 @@ export function TileLetters({ windowId }: { windowId: string }) {
   return target ? <LettersPanel key={target.tabId} target={target} /> : null;
 }
 
-export function placeTileLetters(anchor: Target["anchor"], room: Room) {
+export function placeTileLetters(anchor: Target["anchor"], room: Room, height: number) {
   const { anchorGap, windowMargin } = ICON_PICKER;
   const box = anchor ?? { x: room.width / 2, y: windowMargin, width: 0, height: 0 };
   const left = Math.max(windowMargin, Math.min(box.x + box.width / 2 - TILE_LETTERS_WIDTH / 2, room.width - windowMargin - TILE_LETTERS_WIDTH));
-  return { top: box.y + box.height + anchorGap, left };
+  const below = box.y + box.height + anchorGap;
+  const above = box.y - anchorGap - height;
+  const preferred = below + height > room.height - windowMargin && above >= windowMargin ? above : below;
+  const top = Math.max(windowMargin, Math.min(preferred, room.height - windowMargin - height));
+  return { top, left };
 }
 
 function LettersPanel({ target }: { target: Target }) {
@@ -32,13 +36,14 @@ function LettersPanel({ target }: { target: Target }) {
   const siteLetter = useTab(target.tabId, (t) => (t ? tileLetterOf(t.url, t.customTitle ?? t.title) : ""));
   const [draft, setDraft] = useState(own);
   const [room, setRoom] = useState<Room | null>(null);
+  const [height, setHeight] = useState<number | null>(null);
   const done = () => commitTileLetters(target.tabId, draft, consentToken());
-  const place = room ? placeTileLetters(target.anchor, room) : null;
+  const place = room ? placeTileLetters(target.anchor, room, height ?? 0) : null;
   return (
     <>
       <Pressable accessibilityLabel="Cancel" onPress={closeTileLetters} style={StyleSheet.absoluteFill} onLayout={(e) => setRoom({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })} />
       {place ? (
-        <View style={{ position: "absolute", top: place.top, left: place.left, width: TILE_LETTERS_WIDTH }}>
+        <View onLayout={(e) => setHeight(e.nativeEvent.layout.height)} style={{ position: "absolute", top: place.top, left: place.left, width: TILE_LETTERS_WIDTH, opacity: height === null ? 0 : 1 }}>
           <Panel fill={theme.panel} radius={radius.sheet} border={theme.panelBorder} shadow={ICON_PICKER_SHADOW} style={PANEL}>
             <Text size="small" weight="semibold">
               Tile Letters

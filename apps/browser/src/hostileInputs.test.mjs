@@ -734,7 +734,8 @@ test("a synced pinned tile's letters are at most two visible characters, whateve
   const profileId = S().tabs[id].profileId;
   const adapter = pinnedLettersAdapter(profileId);
   const key = `plet:${S().tabs[id].pinKey ?? id}`;
-  const apply = (value) => adapter.apply(new Map([[key, value]]), new Set([key]), () => undefined, new Map());
+  const records = { known: () => true, defer: () => {}, landed: () => {}, held: () => false, now: 0, horizon: 0, joined: true };
+  const apply = (value) => adapter.apply(new Map([[key, value]]), new Set([key]), () => undefined, records);
   apply("Ab");
   assert.equal(S().tabs[id].tileLetters, "AB", "positive control: plain letters land");
   for (const { value } of HOSTILE_VALUES) {

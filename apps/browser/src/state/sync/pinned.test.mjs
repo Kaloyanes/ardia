@@ -324,3 +324,53 @@ test("a tile's letters stay synced while it is a pinned row, so moving it back t
   assert.equal(a.with(() => S().tabs[tabOf("mail")]?.pin?.as), "tile");
   assert.equal(a.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "back in Top Apps with its letters");
 });
+
+class HoldingFolder extends Folder {
+  held = new Set();
+  transport() {
+    const inner = super.transport();
+    return {
+      ...inner,
+      read: async (scope, known) => {
+        const result = await inner.read(scope, known);
+        return { ...result, files: result.files.filter((f) => !this.held.has(f.id)), present: result.present.filter((id) => !this.held.has(id)) };
+      },
+    };
+  }
+}
+
+test("letters that arrive before their pin wait for it, and never come back empty on either Mac", async () => {
+  const folder = new HoldingFolder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  seed(a);
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  await a.sync();
+  const pinsFile = [...folder.files.keys()].at(-1);
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await a.sync();
+  folder.held.add(pinsFile);
+  await b.sync();
+  await b.sync();
+  assert.equal(b.with(() => tabOf("mail")), undefined, "B has the letters' record but not the pin yet");
+  folder.held.clear();
+  await syncAll([b, a, b, a]);
+  assert.equal(b.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "the waiting letters land on the pin");
+  assert.equal(a.with(() => S().tabs[tabOf("mail")]?.tileLetters), "MA", "and A keeps them");
+});
+
+test("unpinning a tile with letters removes its letters' record on both Macs", async () => {
+  const folder = new Folder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  seed(a);
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await syncAll([a, b]);
+  const key = a.with(() => `plet:${S().tabs[tabOf("mail")].pinKey ?? tabOf("mail")}`);
+  assert.equal(b.scope.records[key]?.v, "MA");
+  a.with(() => S().togglePin(tabOf("mail")));
+  await syncAll([a, b, a]);
+  assert.equal(a.scope.records[key]?.v, null, "A tombstones the letters with the pin");
+  assert.equal(b.scope.records[key]?.v, null, "and so does B");
+});

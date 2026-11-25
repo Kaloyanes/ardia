@@ -49,3 +49,30 @@ test("tile letters count what you see: a letter that upper-cases to two counts a
     assert.equal(cleanTileLetters(once ?? ""), once, `cleaning ${JSON.stringify(s)} twice`);
   }
 });
+
+test("tile letters stay at two graphemes and a bounded length whatever is typed or synced, and cleaning twice changes nothing", async () => {
+  const { cleanTileLetters, TILE_LETTERS_MAX_LENGTH } = await import("./tileLetter.ts");
+  assert.equal(cleanTileLetters("a‍b‍c"), "AB", "a joiner between letters joins nothing");
+  const marked = cleanTileLetters("a" + "́".repeat(4096));
+  assert.ok(marked.length <= TILE_LETTERS_MAX_LENGTH && [...marked].length <= 3, JSON.stringify(marked));
+  assert.equal(cleanTileLetters("a ́"), cleanTileLetters(cleanTileLetters("a ́")));
+  assert.equal(cleanTileLetters("a ́"), "Á");
+  assert.equal(cleanTileLetters("aß"), "AS");
+  assert.equal(cleanTileLetters("👩‍💻"), "👩‍💻");
+  assert.equal(cleanTileLetters("👨‍👩‍👧‍👦👨‍👩‍👧‍👦x"), "👨‍👩‍👧‍👦👨‍👩‍👧‍👦");
+  assert.equal(cleanTileLetters("🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"), "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}", "a subdivision flag is one");
+  assert.equal(cleanTileLetters("\u{1F3FB}a"), "A", "a skin tone with no emoji goes");
+  const samples = ["a‍b‍c", "a" + "́".repeat(4096), "a ́", "aß", "👩‍💻", "x" + "\u{E0067}".repeat(500), "🇫🇷🇩", "ǅx", "ﬀ", "ŉ", "İi", "ậ́̀b"];
+  for (const s of samples) {
+    const once = cleanTileLetters(s);
+    assert.equal(cleanTileLetters(once ?? ""), once, `cleaning ${JSON.stringify(s)} twice`);
+    assert.ok(!once || once.length <= TILE_LETTERS_MAX_LENGTH, JSON.stringify(once));
+  }
+});
+
+test("for ordinary letters, accents, emoji and flags the tile's two graphemes are the ones Intl.Segmenter finds, which Hermes lacks", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+  const firstTwo = (text) => [...segmenter.segment(text.normalize("NFC").toLocaleUpperCase().normalize("NFC"))].slice(0, 2).map((s) => s.segment).join("");
+  for (const text of ["gmail", "éclair", "👩‍💻dev", "👍🏽ok", "🇫🇷🇩🇪", "日本語", "한국어", "ق̈ar", "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}x"]) assert.equal(cleanTileLetters(text), firstTwo(text), text);
+});
