@@ -163,7 +163,7 @@ class RpmTests(unittest.TestCase):
         self.assertIn('%global __requires_exclude_from ^/usr/lib/ardia/(libqt5_shim\\\\.so|libqt6_shim\\\\.so)$\n', spec)
         self.assertIn('%global __provides_exclude_from ^/usr/lib/ardia/.*$\n', spec)
         self.assertIn('%global _build_id_links none\n', spec)
-        for name in ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'xdg-utils', 'curl', 'openssl'):
+        for name in ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'xdg-utils', '(curl or curl-minimal)', 'openssl'):
             self.assertIn(f'Requires: {name}\n', spec)
         self.assertIn('Recommends: /usr/bin/pkexec\n', spec)
         files = spec[spec.index('%files'):spec.index('%changelog')]

@@ -63,7 +63,7 @@ DEB_CLI_INSTALLER = ('curl',)
 DEB_UPDATER = ('openssl',)
 DEB_RECOMMENDS = ('polkitd | policykit-1', 'pkexec | policykit-1', 'libvulkan1')
 BROWSER_ALTERNATIVES = ('x-www-browser', 'gnome-www-browser')
-RPM_REQUIRES = ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'liberation-fonts', 'xdg-utils', '/usr/bin/curl', 'openssl', 'ca-certificates')
+RPM_REQUIRES = ('libgtk-3.so.0()(64bit)', 'libsecret-1.so.0()(64bit)', 'liberation-fonts', 'xdg-utils', '(curl or curl-minimal)', 'openssl', 'ca-certificates')
 RPM_RECOMMENDS = ('polkit', '/usr/bin/pkexec')
 RPM_SHARED_FOLDERS = ('/usr/share/polkit-1', '/usr/share/polkit-1/actions', '/usr/share/icons/hicolor', '/usr/share/icons/hicolor/256x256',
                       '/usr/share/icons/hicolor/256x256/apps', '/usr/share/licenses')

@@ -3,7 +3,7 @@ set -euo pipefail
 usage='usage: scripts/linux/rpm-install-test.sh <Ardia-<version>-linux-x64.rpm> [--older <older .rpm>] [<image>...]
 
 Installs the .rpm in fresh containers (docker or podman) with the distribution'"'"'s
-own package manager, dnf on Fedora and zypper on openSUSE, and checks that its
+own package manager, dnf on Fedora and AlmaLinux and zypper on openSUSE, and checks that its
 dependencies resolve, every library chrome needs is found, ardia --version
 runs, chrome-sandbox is setuid root, the desktop entries validate and run
 /usr/bin/ardia, the icon and the polkit policy are there without the self-update
@@ -19,7 +19,8 @@ stays), and removing it leaves the file system as it was before the install
                 with linux_formats.py rpm in a fedora container; only that
                 made build is checked for its file before and after
 
-The images default to fedora:43 and opensuse/tumbleweed; tumbleweed also gets
+The images default to fedora:43, almalinux:9 (the RHEL family, with curl-minimal
+installed as it ships) and opensuse/tumbleweed; tumbleweed also gets
 apparmor-parser and apparmor-abstractions first, so its run
 covers the profile. dnf retries each download 5
 times, zypper each repository refresh 5 times 30 s apart, from the third try on
@@ -41,7 +42,7 @@ done
 [ -n "$rpm_file" ] || { echo "$usage" >&2; exit 64; }
 [ -f "$rpm_file" ] || { echo "rpm-install-test.sh: no file at $rpm_file" >&2; exit 1; }
 [ -z "$older" ] || [ -f "$older" ] || { echo "rpm-install-test.sh: no file at $older" >&2; exit 1; }
-[ ${#images[@]} -gt 0 ] || images=(fedora:43 opensuse/tumbleweed)
+[ ${#images[@]} -gt 0 ] || images=(fedora:43 almalinux:9 opensuse/tumbleweed)
 engine=$(command -v docker || command -v podman || true)
 [ -n "$engine" ] || { echo "rpm-install-test.sh: docker or podman is required" >&2; exit 1; }
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -119,6 +120,11 @@ snapshot() {
     -o -print | sort
 }
 mapfile -t needs < <({ rpm -qp --requires /pkg/new.rpm; rpm -qp --recommends /pkg/new.rpm; } 2>/dev/null | grep -v "^rpmlib(" | sort -u)
+if [ "$family" = zypper ]; then
+  for i in "${!needs[@]}"; do
+    [[ ${needs[$i]} =~ ^\(([^\ ]+)\ or\  ]] && needs[$i]=${BASH_REMATCH[1]}
+  done
+fi
 install "${needs[@]}" >/tmp/deps.log 2>&1 || { cat /tmp/deps.log; fail "the dependencies do not resolve on $family"; }
 echo "ok   dependencies resolve ($family)"
 snapshot >/tmp/before

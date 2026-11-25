@@ -736,7 +736,8 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   - `%post` installs and loads the AppArmor profile where `/etc/apparmor.d/abi/4.0` exists and refreshes the desktop
     and icon caches; `%postun` takes the profile away only on removal (`$1` is 0), not on an upgrade.
 
-  `scripts/linux/rpm-install-test.sh <rpm>` installs it in `fedora:43` with dnf and `opensuse/tumbleweed` with
+  `scripts/linux/rpm-install-test.sh <rpm>` installs it in `fedora:43` and `almalinux:9` with dnf (AlmaLinux
+  keeps its `curl-minimal`, so a `curl` requirement would conflict there) and `opensuse/tumbleweed` with
   zypper (Tumbleweed with AppArmor's parser and ABI files, so its run covers the profile): the dependencies resolve,
   an older build made from this one (`--older`, by default the version before it with a file only it carries)
   upgrades to it and its own file goes, `rpm --verify` passes, `ldd` finds every library, `ardia --version` runs,
