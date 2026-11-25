@@ -138,6 +138,16 @@ export const caretColor = (theme: Theme, surface: FieldSurface = "ntpBarSolid"):
 
 const quietInk = (theme: Theme) => (theme.dark || theme.highContrastText ? theme.textTertiary : fieldInk.quietGlyphLight);
 
+export const popoverFieldSurface = (roles: ColorRoles): string => over(roles.popoverTint, roles.popoverFill);
+
+export function caretColorOnRow(theme: Theme, fill: string, stockFill: string = fill): string {
+  const worstOn = (rowFill: string, color: string) => Math.min(...theme.windowTint.map((tint) => shownContrast(color, over(rowFill, tint))));
+  const preferred = fieldInk.caret[theme.dark ? "dark" : "light"];
+  const floor = Math.min(MIN_FIELD_INK_CONTRAST, worstOn(stockFill, preferred));
+  if (worstOn(fill, preferred) >= floor) return preferred;
+  return [theme.textPrimary, ink.black, ink.white].reduce((best, color) => (worstOn(fill, color) > worstOn(fill, best) ? color : best), preferred);
+}
+
 export const quietBarGlyph = (theme: Theme): string => readableInk(theme, quietInk(theme), theme.ntpBarSolid, stockRoles(theme).ntpBarSolid);
 
 export const idleGoFill = (theme: Theme): string => over(theme.goButtonIdle, theme.ntpBarSolid);

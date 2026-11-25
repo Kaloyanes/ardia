@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-const { colorRoles, fieldInk } = await import("./tokens.ts");
-const { caretColor, quietBarGlyph, quietGoLabel, contrastTheme, profileTheme } = await import("./theme.ts");
+const { arcSelectedFill, colorRoles, fieldInk } = await import("./tokens.ts");
+const { caretColor, caretColorOnRow, popoverFieldSurface, quietBarGlyph, quietGoLabel, contrastTheme, profileTheme } = await import("./theme.ts");
 const { contrastRatio, over } = await import("../../lib/color.ts");
 
 const shown = (color, surface) => contrastRatio(over(color, surface), surface);
@@ -86,7 +86,7 @@ test("a bare search field's caret is resolved against the surface it sits on: th
   const onRow = caretColor(rowHover, emptyPaneFieldSurface);
   assert.ok(shown(onRow, emptyPaneFieldSurface(rowHover)) >= 3, `caret on the empty pane's row: ${onRow}`);
   assert.equal(caretColor(stock(false), emptyPaneFieldSurface), fieldInk.caret.light, "the stock empty pane keeps the stock ink");
-  const callers = { "../sidebar/SearchTabs.tsx": /look="bare"\s+surface="panel"/, "../sidebar/GroupPanel.tsx": /look="bare"\s+surface="panel"/, "../split/SplitEmptyState.tsx": /look="bare"\s+surface=\{emptyPaneFieldSurface\}/ };
+  const callers = { "../sidebar/SearchTabs.tsx": /look="bare"\s+surface="panel"/, "../sidebar/GroupPanel.tsx": /look="bare"\s+surface=\{popoverFieldSurface\}/, "../split/SplitEmptyState.tsx": /look="bare"\s+surface=\{emptyPaneFieldSurface\}/ };
   for (const [file, pattern] of Object.entries(callers)) assert.match(readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"), pattern, file);
   const bareCallers = [];
   const walk = (dir) => {
@@ -98,4 +98,32 @@ test("a bare search field's caret is resolved against the surface it sits on: th
   };
   walk(fileURLToPath(new URL("..", import.meta.url)));
   assert.equal(bareCallers.length, 3, `every bare SearchField is one of the three above: ${bareCallers}`);
+});
+
+test("the group search sits on the popover's own material: a #787D86 popover tint gets a readable caret, and the stock popover keeps the stock ink", async () => {
+  const { PROFILE_COLOR_NAMES } = await import("../../lib/profileLook.ts");
+  for (const dark of [false, true]) for (const color of PROFILE_COLOR_NAMES) {
+    assert.equal(caretColor(profileTheme({ color }, dark), popoverFieldSurface), fieldInk.caret[dark ? "dark" : "light"], `${color} ${dark ? "dark" : "light"}`);
+  }
+  const tinted = { ...stock(false), popoverTint: "#787D86", panel: "#FFFFFF", textPrimary: "#FFFFFF" };
+  const caret = caretColor(tinted, popoverFieldSurface);
+  assert.ok(shown(caret, popoverFieldSurface(tinted)) >= 3, `caret on a #787D86 popover tint: ${caret} at ${shown(caret, popoverFieldSurface(tinted)).toFixed(2)}`);
+});
+
+test("a sidebar rename field reads its caret against the row it sits in: a #787D86 selected tab gets a readable caret, and every stock row keeps the stock ink", async () => {
+  const { PROFILE_COLOR_NAMES } = await import("../../lib/profileLook.ts");
+  for (const dark of [false, true]) for (const color of PROFILE_COLOR_NAMES) {
+    const theme = profileTheme({ color }, dark), mode = dark ? "dark" : "light";
+    assert.equal(caretColorOnRow(theme, theme.tabSelected, arcSelectedFill[mode]), fieldInk.caret[mode], `${color} ${mode}: the selected row`);
+    assert.equal(caretColorOnRow(theme, "#00000000"), fieldInk.caret[mode], `${color} ${mode}: a plain row`);
+    assert.equal(caretColorOnRow(theme, theme.tabPressed), fieldInk.caret[mode], `${color} ${mode}: a folder taking a drop`);
+  }
+  const custom = { ...stock(false), tabSelected: "#787D86", textPrimary: "#FFFFFF" };
+  const caret = caretColorOnRow(custom, custom.tabSelected, arcSelectedFill.light);
+  const worst = Math.min(...custom.windowTint.map((tint) => shown(caret, over(custom.tabSelected, tint))));
+  assert.ok(worst >= 3, `caret on a #787D86 selected tab: ${caret} at ${worst.toFixed(2)}`);
+  const tabRow = readFileSync(fileURLToPath(new URL("../sidebar/TabRow.tsx", import.meta.url)), "utf8");
+  assert.match(tabRow, /surface=\{fill\}\s+stockSurface=\{active && !quiet \? arcSelectedFill\[theme\.dark \? "dark" : "light"\] : fill\}/, "the tab row passes the fill it paints");
+  assert.match(tabRow, /cursorColor=\{caretColorOnRow\(theme, surface, stockSurface\)\}/);
+  assert.match(readFileSync(fileURLToPath(new URL("../sidebar/GroupBlock.tsx", import.meta.url)), "utf8"), /<RenameField[^>]*surface=\{dropInto \? theme\.tabPressed : ink\.clear\}/s, "the group header passes its fill");
 });

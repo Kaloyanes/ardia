@@ -222,6 +222,7 @@ const GroupHeader = memo(function GroupHeader({ groupId, windowId, collapsed, op
                   initial={group.name}
                   placeholder={label}
                   color={tokens.groupTitle}
+                  surface={dropInto ? theme.tabPressed : ink.clear}
                   weight={weight.medium}
                   onDone={(text) => (text === null ? endRename(target) : commitRename(target, text))}
                 />
