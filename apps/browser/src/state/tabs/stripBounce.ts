@@ -11,7 +11,6 @@ const TRIGGER_KEYS = {
   didRemoveTab: "did_remove_tab",
   attach: "attach",
   groupObserver: "group_observer",
-  profileSwitch: "profile_switch",
   none: "none",
   other: "other",
 } as const;

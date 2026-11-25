@@ -42,7 +42,6 @@
 
 @implementation ArdiaCoreWindow {
   std::unique_ptr<ardiacore::WindowHost> _host;
-  BOOL _activationDeferred;
 }
 
 + (NSView*)embeddedRootOfWindow:(NSWindow*)window {
@@ -131,15 +130,9 @@
   }
 }
 
-- (BOOL)activationDeferred {
-  return _activationDeferred;
-}
-
 - (void)activateTab:(ArdiaCoreTab*)tab {
   if (ardiacore::DeferWhileTabStripNotifies(^{
-        self->_activationDeferred = YES;
         [self activateTab:tab];
-        self->_activationDeferred = NO;
       })) {
     return;
   }

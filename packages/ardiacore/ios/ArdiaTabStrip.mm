@@ -150,22 +150,22 @@ NSArray<ArdiaCoreProfile *> *ProfilesWithTabs(ArdiaWindowController *controller)
                         for (ArdiaWindowController *c in ArdiaWindowController.all)
                           for (ArdiaCoreProfile *p in ardia_host::LoadedProfiles())
                             if ([c.coreWindow chromeWindowIdForProfile:p] == window.intValue)
-                              [ArdiaTabStrip changedInWindow:c profile:p cause:c.hostChanges > 0 ? @(-1) : NSNull.null trigger:@"groupObserver" deferredTab:nil];
+                              [ArdiaTabStrip changedInWindow:c profile:p cause:c.hostChanges > 0 ? @(-1) : NSNull.null trigger:@"groupObserver" activatedTab:nil];
                       }];
   [ArdiaServices call:@"ac_tabs_watch" profile:@"" args:nil completion:^(NSDictionary *) {}];
 }
 
 + (void)changedInWindow:(ArdiaWindowController *)controller profile:(ArdiaCoreProfile *)profile trigger:(NSString *)trigger {
-  [self changedInWindow:controller profile:profile cause:nil trigger:trigger deferredTab:nil];
+  [self changedInWindow:controller profile:profile cause:nil trigger:trigger activatedTab:nil];
 }
 
 + (void)changedInWindow:(ArdiaWindowController *)controller
                 profile:(ArdiaCoreProfile *)profile
                   cause:(id)cause
                 trigger:(NSString *)trigger
-            deferredTab:(ArdiaCoreTab *)deferredTab {
-  NSNumber *asked = deferredTab ? [Activations() objectForKey:deferredTab] : nil;
-  if (deferredTab) [Activations() removeObjectForKey:deferredTab];
+           activatedTab:(ArdiaCoreTab *)activatedTab {
+  NSNumber *asked = activatedTab ? [Activations() objectForKey:activatedTab] : nil;
+  if (asked) [Activations() removeObjectForKey:activatedTab];
   if (![ArdiaEvents listens:@"tabs"] || !controller || !profile || controller.standalone) return;
   if (gCommand && controller == gCommandWindow && profile == gCommandProfile) return;
   cause = cause ?: (gCommand ?: (controller.hostChanges > 0 ? @(-1) : NSNull.null));
@@ -176,8 +176,10 @@ NSArray<ArdiaCoreProfile *> *ProfilesWithTabs(ArdiaWindowController *controller)
   if (unattributed) {
     if (trigger.length) tx[@"trigger"] = trigger;
     if (ActiveFallback(controller, profile)) tx[@"activeFallback"] = @YES;
-    if (deferredTab) tx[@"deferred"] = @YES;
-    if (deferredTab && asked) tx[@"deferredCmd"] = asked;
+    if (asked) {
+      tx[@"deferred"] = @YES;
+      tx[@"deferredCmd"] = asked;
+    }
   }
   Send(tx);
 }
@@ -240,6 +242,7 @@ NSArray<ArdiaCoreProfile *> *ProfilesWithTabs(ArdiaWindowController *controller)
   if (found && [op isEqualToString:@"activate"]) {
     ArdiaCoreTab *tab = byKey[command[@"key"]];
     if (tab) {
+      for (ArdiaCoreTab *other in [found.coreWindow tabsForProfile:profile]) [Activations() removeObjectForKey:other];
       [Activations() setObject:@(commandId) forKey:tab];
       [found.coreWindow activateTab:tab];
       if ([ActiveTabs(found) objectForKey:profile] == tab) [Activations() removeObjectForKey:tab];

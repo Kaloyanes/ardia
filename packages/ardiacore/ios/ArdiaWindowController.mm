@@ -321,7 +321,7 @@ NSMapTable<ArdiaCoreProfile *, ArdiaWindowController *> *StandaloneWindows() {
 - (void)window:(ArdiaCoreWindow *)window didActivateTab:(ArdiaCoreTab *)tab {
   if (_awaitingApp) _chromeActive = tab;
   [ArdiaTabStrip activated:tab inWindow:self];
-  [ArdiaTabStrip changedInWindow:self profile:tab.profile cause:nil trigger:@"didActivateTab" deferredTab:window.activationDeferred ? tab : nil];
+  [ArdiaTabStrip changedInWindow:self profile:tab.profile cause:nil trigger:@"didActivateTab" activatedTab:tab];
   [[self viewFor:tab] tabActivatedByChrome:!self.appChanging];
 }
 

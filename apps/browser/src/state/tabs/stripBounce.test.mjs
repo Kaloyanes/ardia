@@ -39,7 +39,6 @@ const counts = (over = {}) => ({
   strip_bounces_back_did_remove_tab: 0,
   strip_bounces_back_attach: 0,
   strip_bounces_back_group_observer: 0,
-  strip_bounces_back_profile_switch: 0,
   strip_bounces_back_none: 0,
   strip_bounces_back_other: 0,
   ...over,
@@ -105,7 +104,7 @@ test("a report that says nothing logs the new fields as unknown, not as absent",
 
 test("each bounce is counted under its trigger; a trigger the app doesn't know is other, none is none", () => {
   sharing();
-  for (const trigger of ["didActivateTab", "didInsertTab", "didRemoveTab", "attach", "groupObserver", "profileSwitch", "groupObserver"]) bounce({ trigger });
+  for (const trigger of ["didActivateTab", "didInsertTab", "didRemoveTab", "attach", "groupObserver", "groupObserver"]) bounce({ trigger });
   bounce({ trigger: "somethingNew" });
   bounce({ trigger: "constructor" });
   bounce({ trigger: 7 });
@@ -114,13 +113,12 @@ test("each bounce is counted under its trigger; a trigger the app doesn't know i
   assert.deepEqual(
     takeStripBounceCounts(),
     counts({
-      strip_bounces_back: 12,
+      strip_bounces_back: 11,
       strip_bounces_back_did_activate_tab: 1,
       strip_bounces_back_did_insert_tab: 1,
       strip_bounces_back_did_remove_tab: 1,
       strip_bounces_back_attach: 1,
       strip_bounces_back_group_observer: 2,
-      strip_bounces_back_profile_switch: 1,
       strip_bounces_back_none: 2,
       strip_bounces_back_other: 3,
     }),

@@ -85,7 +85,7 @@ ArdiaCoreTab *_Nullable PasswordPromptTab(ArdiaWebView *view, ArdiaCoreTab *_Nul
                 profile:(ArdiaCoreProfile *)profile
                   cause:(nullable id)cause
                 trigger:(nullable NSString *)trigger
-            deferredTab:(nullable ArdiaCoreTab *)deferredTab;
+            activatedTab:(nullable ArdiaCoreTab *)activatedTab;
 + (void)windowClosed:(ArdiaWindowController *)controller;
 + (void)activated:(ArdiaCoreTab *)tab inWindow:(ArdiaWindowController *)controller;
 + (nullable ArdiaCoreTab *)activeTabInWindow:(ArdiaWindowController *)controller profile:(ArdiaCoreProfile *)profile;
