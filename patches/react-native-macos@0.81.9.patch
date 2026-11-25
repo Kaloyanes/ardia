@@ -1455,7 +1455,7 @@ index 37027e5da92b30d4c8c8f72235890c4e6dfbf043..5b3fb284b52ee9e9150d53a4530eb40a
    directEventTypes: {
      topTextLayout: {
 diff --git a/React/Base/RCTTouchHandler.m b/React/Base/RCTTouchHandler.m
-index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490aa305a38c 100644
+index b85ee3dd203f88bf2daaa47e912031ea200ff910..7cfb6ef470087501e0d485991f8e4e5383424913 100644
 --- a/React/Base/RCTTouchHandler.m
 +++ b/React/Base/RCTTouchHandler.m
 @@ -7,6 +7,8 @@
@@ -1478,7 +1478,7 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
  #if !TARGET_OS_OSX // [macOS]
      // `cancelsTouchesInView` and `delaysTouches*` are needed in order to be used as a top level
      // event delegated recognizer. Otherwise, lower-level components not built
-@@ -100,6 +106,114 @@ - (void)detachFromView:(RCTPlatformView *)view // [macOS]
+@@ -100,6 +106,129 @@ - (void)detachFromView:(RCTPlatformView *)view // [macOS]
  
  #pragma mark - Bookkeeping for touch indices
  
@@ -1590,10 +1590,25 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
 +}
 +#endif // Ardia]
 +
++#if TARGET_OS_OSX
++static CALayer *RCTArdiaRootLayer(CALayer *layer)
++{
++  while (layer.superlayer) {
++    layer = layer.superlayer;
++  }
++  return layer;
++}
++
++static BOOL RCTArdiaLayersShareTree(CALayer *a, CALayer *b)
++{
++  return a && b && RCTArdiaRootLayer(a) == RCTArdiaRootLayer(b);
++}
++#endif
++
  - (void)_recordNewTouches:(NSSet *)touches
  {
  #if !TARGET_OS_OSX // [macOS]
-@@ -108,7 +222,13 @@ - (void)_recordNewTouches:(NSSet *)touches
+@@ -108,7 +237,13 @@ - (void)_recordNewTouches:(NSSet *)touches
    for (NSEvent *touch in touches) {
  #endif // macOS]
  
@@ -1607,18 +1622,18 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
  
      // Find closest React-managed touchable view
      
-@@ -161,7 +281,9 @@ - (void)_recordNewTouches:(NSSet *)touches
+@@ -161,7 +296,9 @@ - (void)_recordNewTouches:(NSSet *)touches
        targetView = targetView.superview;
      }
  
 -    const CGPoint touchLocationInSelf = [targetView convertPoint:touchLocationInSuperview fromView:self.view.superview];
-+    const CGPoint touchLocationInSelf = superview.layer && targetView.layer
++    const CGPoint touchLocationInSelf = RCTArdiaLayersShareTree(superview.layer, targetView.layer)
 +      ? [targetView.layer convertPoint:touchLocationInSuperview fromLayer:superview.layer]
 +      : [targetView convertPoint:touchLocationInSuperview fromView:superview];
      NSNumber *reactTag = [targetView reactTagAtPoint:touchLocationInSelf];
      BOOL isUserInteractionEnabled = NO;
      if ([((RCTUIView*)targetView) respondsToSelector:@selector(isUserInteractionEnabled)]) { // [macOS]
-@@ -204,19 +326,27 @@ - (void)_recordRemovedTouches:(NSSet *)touches
+@@ -204,19 +341,27 @@ - (void)_recordRemovedTouches:(NSSet *)touches
    for (UITouch *touch in touches) {
      NSInteger index = [_nativeTouches indexOfObject:touch];
  #else // [macOS
@@ -1650,7 +1665,7 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
  }
  
  - (void)_updateReactTouchAtIndex:(NSInteger)touchIndex
-@@ -303,15 +433,17 @@ - (void)_updateAndDispatchTouches:(NSSet<NSEvent *> *)touches eventName:(NSStrin
+@@ -303,15 +448,17 @@ - (void)_updateAndDispatchTouches:(NSSet<NSEvent *> *)touches eventName:(NSStrin
    for (UITouch *touch in touches) {
      NSInteger index = [_nativeTouches indexOfObject:touch];
  #else // [macOS
@@ -1671,7 +1686,7 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
      
  #if TARGET_OS_OSX // [macOS
      _nativeTouches[index] = touch;
-@@ -431,34 +563,34 @@ - (void)interactionsMoved:(NSSet *)touches // [macOS]
+@@ -431,34 +578,34 @@ - (void)interactionsMoved:(NSSet *)touches // [macOS]
  
  - (void)interactionsEnded:(NSSet *)touches withEvent:(UIEvent*)event // [macOS]
  {
@@ -1715,7 +1730,7 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
  }
    
  #if !TARGET_OS_OSX // [macOS]
-@@ -497,6 +629,7 @@ - (BOOL)acceptsFirstMouse:(NSEvent *)event
+@@ -497,6 +644,7 @@ - (BOOL)acceptsFirstMouse:(NSEvent *)event
  - (void)mouseDown:(NSEvent *)event
  {
    [super mouseDown:event];
@@ -1723,7 +1738,7 @@ index b85ee3dd203f88bf2daaa47e912031ea200ff910..84cce2113cea44a4af67bc6e29dc490a
    [self interactionsBegan:[NSSet setWithObject:event]];
    // [macOS
    if (_shouldSendMouseUpOnSystemBehalf) {
-@@ -519,6 +652,7 @@ - (void)mouseDown:(NSEvent *)event
+@@ -519,6 +667,7 @@ - (void)mouseDown:(NSEvent *)event
  - (void)rightMouseDown:(NSEvent *)event
  {
    [super rightMouseDown:event];

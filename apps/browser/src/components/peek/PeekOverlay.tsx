@@ -23,7 +23,7 @@ import { SMALL_BAR_HEIGHT } from "../../state/windows/small";
 import { switchOn } from "../../state/app/switches";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { endPeekToolbarPreview, previewPeekToolbar } from "../../state/peek/toolbarPreview";
-import { notePeekStagePhase, pressPeekChrome } from "../../state/peek/gesturePresses";
+import { forgetPeekStage, notePeekStageState, pressPeekChrome } from "../../state/peek/gesturePresses";
 
 const SIDE_GAP = space.m;
 const BEGIN_RETRIES = 30;
@@ -169,6 +169,7 @@ function PeekCard({
       });
     start(BEGIN_RETRIES);
   }, [known, shown]);
+  useEffect(() => () => forgetPeekStage(peek.tabId), [peek.tabId]);
   useEffect(() => {
     if (!started || !shown || donor) return;
     return registerPeekMotion(windowId, {
@@ -180,7 +181,7 @@ function PeekCard({
 
   const onState = (state: PeekStageState) => {
     if (state.generation !== generation) return;
-    notePeekStagePhase(windowId, state.phase);
+    notePeekStageState(peek.tabId, state.phase, state.chromeShown);
     if (state.phase === "entering" && !seen.current.entered) {
       seen.current.entered = true;
       notePeekEntrance(state.entrance, !!state.fallback && state.entrance !== "fade", state.readyTimedOut);

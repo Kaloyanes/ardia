@@ -551,7 +551,7 @@ try {
       assert.equal(seen.clicks, 1, "the page got one click");
     });
   }
-  if (wanted("chrome-press-mid-pinch") || wanted("chrome-hidden-mid-spread")) {
+  if (wanted("chrome-press-mid-pinch") || wanted("chrome-hidden-mid-spread") || wanted("chrome-press-held-into-spread")) {
     await start({ peekMesh: "unavailable" });
     const closeOf = (s) => s.chromeTargets?.find((t) => t.label.startsWith("Close"));
     const reachableAtRest = (s) => (s.chromeTargets ?? []).filter((t) => t.reaches);
@@ -577,6 +577,22 @@ try {
       await run(`return stage().then((s) => post(s, "cancelled", 0)).then(() => settle(300));`).catch(() => {});
       assert.equal(peekBefore, true);
       assert.equal(record.closed.peek, false, `the press on Close while the pinch is still held closed the Peek: ${JSON.stringify(record.closed)}`);
+    });
+    await check("chrome-press-held-into-spread", async (record) => {
+      await closeAll();
+      await run(`open("ch"); return 0;`);
+      const rest = await waitFor((x) => x.phase === "open");
+      const close = closeOf(rest);
+      assert.ok(close?.reaches, "Close takes a press at rest");
+      record.down = await run(`return ac.shell.devClick("w1", { x: ${close.x}, y: ${close.y}, queued: true, only: "down", wait: 60 });`);
+      const spread = await run(`return stage().then((s) => realSteps(s, [["began", 0], ["changed", 0.12], ["changed", 0.2], ["changed", 0.26], ["changed", 0.28]])).then(() => until((x) => x.phase === "gesture" && x.trace.at(-1).chrome <= 0)).then(summary);`);
+      record.chrome = spread.trace.at(-1).chrome;
+      record.up = await run(`return ac.shell.devClick("w1", { x: ${close.x}, y: ${close.y}, queued: true, only: "up", wait: 60 });`);
+      await sleep(600);
+      record.after = { peek: await store(`!!st().peeks.a`), phase: (await stateOf())?.phase };
+      await run(`return stage().then((s) => post(s, "cancelled", 0)).then(() => settle(600));`).catch(() => {});
+      assert.equal(record.chrome, 0, "the bar had faded out before the release");
+      assert.equal(record.after.peek, true, "a Close pressed before the bar faded and released while it was invisible doesn't close the Peek");
     });
     await check("chrome-hidden-mid-spread", async (record) => {
       await closeAll();

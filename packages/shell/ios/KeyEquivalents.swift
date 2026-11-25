@@ -169,7 +169,9 @@ enum KeyEquivalents {
       "firstResponder": responderName(), "hit": hit.map { String(describing: type(of: $0)) } ?? "nil", "root": [inRoot.x, inRoot.y],
     ]
     let restoreKeyWindow = click["asKey"] as? Bool == false ? nil : standInKeyWindow(window)
-    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let only = click["only"] as? String
+    let types: [NSEvent.EventType] = only == "down" ? [.leftMouseDown] : only == "up" ? [.leftMouseUp] : [.leftMouseDown, .leftMouseUp]
+    for type in types {
       guard let event = NSEvent.mouseEvent(
         with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)

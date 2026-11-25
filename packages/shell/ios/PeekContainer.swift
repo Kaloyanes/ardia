@@ -23,7 +23,7 @@ final class PeekContainer: NSView {
     return super.hitTest(point)
   }
 
-  private static let leastShownOpacity: Float = 0.01
+  static let leastShownOpacity: Float = 0.01
 
   func hold(_ child: NSView?) {
     let wanted = child.map { [$0] } ?? []
