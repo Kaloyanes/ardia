@@ -1,3 +1,6 @@
 engine/ardiacore-linux/src/ardia/linux/bootstrap.js	ardia/mac/bootstrap.js
 engine/ardiacore-linux/src/ardia/linux/generate_bootstrap.py	ardia/mac/generate_bootstrap.py
 engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h	ardia/mac/generated/ac_desktop_routes.h
+engine/ardiacore-linux/src/ardia/linux/ac_linux_page_operations.h	ardia/mac/generated/ac_linux_page_operations.h
+engine/ardiacore-desktop/src/ardia/desktop/ac_desktop_window_commands.h	ardia/mac/generated/ac_desktop_window_commands.h
+engine/ardiacore-desktop/src/ardia/desktop/ac_desktop_favicon_policy.h	ardia/mac/generated/ac_desktop_favicon_policy.h

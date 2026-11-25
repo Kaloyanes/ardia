@@ -76,6 +76,18 @@ class PureHeaderTests(unittest.TestCase):
     def test_window_policy(self):
         compile_and_run(self, TESTS / 'window_policy_test.cc', self.out / 'window-policy')
 
+    def test_page_policy(self):
+        scripts = self.out / 'evaluation-scripts.txt'
+        compile_and_run(self, TESTS / 'page_policy_test.cc', self.out / 'page-policy',
+                        env={'ARDIA_EVALUATION_SCRIPTS': str(scripts)})
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('node is unavailable to run the awaited evaluation scripts')
+        ran = subprocess.run([node, str(TESTS / 'awaited-evaluation.mjs'), str(scripts)],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('awaited evaluation ok', ran.stdout)
+
     def test_shared_hostile_corpus_reaches_no_sink(self):
         node = shutil.which('node')
         if node is None:
@@ -116,7 +128,8 @@ class BuildGraphTests(unittest.TestCase):
         self.assertIn('"ac_mac_webui_release.mm"', official)
         for heavy in ('ac_mac_shell_host.mm', 'ac_mac_glass.mm', 'ac_mac_popover.mm', 'ac_mac_menu.mm',
                       'ac_mac_webui.mm', 'ac_mac_window.mm', 'ac_mac_dialog.mm', 'ac_mac_shell_lifecycle.mm',
-                      'ac_mac_window_events.mm'):
+                      'ac_mac_window_events.mm', 'ac_mac_page_commands.mm', 'ac_mac_page_events.mm',
+                      'ac_mac_page_delegate.mm'):
             self.assertNotIn(heavy, official)
 
     def test_only_development_builds_define_the_dev_macro(self):
@@ -125,8 +138,10 @@ class BuildGraphTests(unittest.TestCase):
         self.assertIn('ARDIA_MAC_WEBUI_DEV', development)
 
     def test_every_listed_source_exists(self):
+        copied = {line.split('\t')[1] for line in (ROOT / 'dev-copies.tsv').read_text().splitlines() if line}
         for name in re.findall(r'"([A-Za-z0-9_./]+\.(?:h|mm|cc))"', self.gn):
             if name.startswith('generated/'):
+                self.assertIn(f'ardia/mac/{name}', copied, name)
                 continue
             self.assertTrue((MAC / name).is_file(), name)
 
@@ -609,6 +624,240 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('OfferTab(contents, false)', listing)
         self.assertIn('offered_.Add(TabId(contents), contents->GetWeakPtr(), active);', host)
 
+    def test_page_commands_are_the_shared_handle_names(self):
+        policy = self.read('ac_mac_page_policy.h')
+        listed = re.findall(r'"([A-Za-z]+)"', policy.split('kPageCommands[] = {', 1)[1].split('};', 1)[0])
+        handle = (REPO / 'packages/ardiacore/src/pageTypes.ts').read_text()
+        handle = handle.split('export type WebViewHandle = {', 1)[1].split('\n};', 1)[0]
+        methods = set(re.findall(r'^\s+(\w+)\??(?:<[^>]*>)?\(', handle, re.M))
+        edit = (REPO / 'engine/ardiacore-desktop/src/ardia/desktop/ac_desktop_window_commands.h').read_text()
+        self.assertIn('kEditCommand[] = "edit"', edit)
+        for command in listed:
+            self.assertTrue(command in methods or command == 'edit', command)
+        linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc').read_text()
+        linux += (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_page_commands.cc').read_text()
+        for command in listed:
+            if command != 'edit':
+                self.assertIn(f'command == "{command}"', linux, command)
+        host = self.read('ac_mac_shell_host.mm')
+        tab = host.split('void ShellHostView::TabCommand(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(tab.index('PageCommands::Handles(command)'), tab.index('"loadUrl"'))
+        self.assertIn('Failure("ERR_PAGE_STALE_TARGET", "No such live tab")', tab)
+
+    def test_page_events_use_the_shared_event_names(self):
+        events = (REPO / 'packages/ardiacore/src/pageEvents.ts').read_text()
+        table = events.split('const PAGE_EVENTS = {', 1)[1].split('} as const', 1)[0]
+        names = set(re.findall(r': "(\w+)"', table))
+        sent = set()
+        for name in ('ac_mac_page_events.mm', 'ac_mac_page_commands.mm', 'ac_mac_shell_host.mm'):
+            text = self.read(name)
+            sent |= set(re.findall(r'(?:Send|Report|PageEvent)\(\s*"(\w+)"', text))
+            sent |= set(re.findall(r'\? "(unresponsive)" : "(responsive)"', text)[0]) if 'unresponsive' in text else set()
+        sent.discard('name')
+        self.assertTrue({'favicon', 'media', 'fullscreen', 'crashed', 'loadError', 'security', 'zoom', 'status',
+                         'popupBlocked', 'find', 'discarded', 'unresponsive', 'responsive'} <= sent, sent)
+        for name in sent:
+            self.assertIn(name, names, name)
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('PageThemeColor(contents)', host)
+        self.assertIn('theme ? base::Value("meta") : base::Value()', host)
+        self.assertIn('void PageBinding::DidChangeThemeColor() {\n  ReportNavigation();', host)
+        self.assertIn('events_->AppendSnapshot(events);', host)
+
+    def test_page_event_payloads_match_linux(self):
+        events = self.read('ac_mac_page_events.mm')
+        for shape in ('.Set("playing", audible).Set("muted", muted)', '.Set("fullscreen", entered)',
+                      '.Set("status", code)', '.Set("reason", page_policy::CrashReason(', '.Set("code", code)',
+                      '.Set("text", net::ErrorToShortString(error))', '.Set("pinchScale", *scale)',
+                      '.Set("isDefault", zoom_->IsAtDefaultZoom())', '.Set("origin", blocked->origin)',
+                      '.Set("urls", std::move(urls))'):
+            self.assertIn(shape, events)
+        commands = self.read('ac_mac_page_commands.mm')
+        for shape in ('.Set("count", std::max(0, count))', '.Set("active", std::max(0, active))',
+                      '.Set("final", final)', '"data:image/png;base64,"'):
+            self.assertIn(shape, commands)
+        theme = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_theme.cc').read_text()
+        self.assertIn('"#%02x%02x%02x"', theme)
+        self.assertIn('"#%02x%02x%02x"', self.read('ac_mac_page_policy.h'))
+
+    def test_evaluate_runs_only_the_linux_allowlist_in_an_isolated_world(self):
+        copies = (ROOT / 'dev-copies.tsv').read_text()
+        self.assertIn('engine/ardiacore-linux/src/ardia/linux/ac_linux_page_operations.h\t'
+                      'ardia/mac/generated/ac_linux_page_operations.h', copies)
+        commands = self.read('ac_mac_page_commands.mm')
+        self.assertIn('page_policy::MatchOperation(code, &Sha256, Operations())', commands)
+        self.assertIn('ardiacore::kLinuxPageOperations', commands)
+        self.assertIn('ISOLATED_WORLD_ID_CHROME_INTERNAL', commands)
+        self.assertIn('"ERR_PAGE_EVALUATION_REFUSED"', commands)
+        for unsafe in ('ExecuteJavaScriptForTests', 'ExecuteJavaScript(', 'ExecuteJavaScriptMethod'):
+            self.assertNotIn(unsafe, commands)
+        for name in MAC.iterdir():
+            if name.suffix in ('.mm', '.cc') and name.name != 'ac_mac_page_commands.mm':
+                self.assertNotIn('ExecuteJavaScript', name.read_text(), name.name)
+
+    def test_background_page_ui_is_logged_not_shown(self):
+        delegate = self.read('ac_mac_page_delegate.mm')
+        for kind in ('" (background run, not shown): "', '"leave-page dialog (background run, not shown): "',
+                     '" file dialog (background run, not shown)"', '"page context menu (background run, not shown) at "',
+                     '"permission prompt (background run, not shown): "'):
+            self.assertIn(kind, delegate)
+        self.assertIn('listener->FileSelectionCanceled();', delegate)
+        self.assertNotIn('message_text)', delegate.split('class BackgroundDialogs', 1)[1].split('};', 1)[0]
+                         .replace('const std::u16string& message_text,', ''))
+        self.assertIn('g_ardia_create_web_contents_delegate = &CreatePageDelegate;', delegate)
+        self.assertIn('InstallPageDelegate();', self.read('ac_mac_webui.mm'))
+        commands = self.read('ac_mac_page_commands.mm')
+        for refused in ('"print dialog (background run, not shown)"', '"save page dialog (background run, not shown)"',
+                        '"DevTools window (background run, not shown)"'):
+            self.assertIn(refused, commands)
+
+    def test_page_capabilities_and_zoom_routes_are_served(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        listed = calls.split('constexpr std::string_view kCapabilities[] = {', 1)[1].split('};', 1)[0]
+        self.assertIn('ardia::desktop_commands::kEditCapability', listed)
+        self.assertIn('for (std::string_view route : page_policy::kZoomRoutes) {', calls)
+        call = calls.split('void ShellHostView::EngineCall(', 1)[1]
+        self.assertLess(call.index('page_policy::IsZoomRoute(name)'), call.index('desktop_routes::FindRoute(name)'))
+        linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_history_zoom.h').read_text()
+        self.assertIn('{"sites.zoomLevels", "sites.setZoom"}', linux)
+        self.assertIn('kZoomRoutes[] = {"sites.zoomLevels",\n                                                   "sites.setZoom"}',
+                      self.read('ac_mac_page_policy.h'))
+        self.assertIn('ac_zoom_set', (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_history_zoom.cc').read_text())
+
+    def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
+        delegate = self.read('ac_mac_page_delegate.mm')
+        prompt = delegate.split('class BackgroundPermissionPrompt', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('weak_factory_.GetWeakPtr()', prompt)
+        self.assertIn('delegate_->GetCurrentPrompt() != this || delegate_->Requests().empty()', prompt)
+        self.assertIn('PermissionPromptDisposition::NONE_VISIBLE', prompt)
+        self.assertNotIn('delegate->GetWeakPtr()', delegate)
+        self.assertIn('return std::make_unique<BackgroundPermissionPrompt>(delegate);', delegate)
+        self.assertIn('page_policy::PromptHandlingFor(BackgroundInstance()', delegate)
+        install = delegate.split('void InstallPageDelegate() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertEqual(install.count('PostTask('), 2)
+        self.assertIn('base::BindOnce(&AssertPageHooks)', install)
+        host = self.read('ac_mac_shell_host.mm')
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('AssertPageHooks();'), create.index('shell_policy::PlanCreate(request)'))
+        engine = (REPO / 'engine/ardiacore/src/ardia/core/ac_main_delegate.cc').read_text()
+        self.assertIn('base::BindOnce(&OnEngineStarted)', engine)
+
+    def test_discard_and_freeze_read_the_real_prompt_and_edit_state(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        protection = commands.split('page_policy::Protection PageCommands::CurrentProtection() const {', 1)[1]
+        protection = protection.split('\n}\n', 1)[0]
+        for check in ('requests->IsRequestInProgress()', 'requests->has_pending_requests()',
+                      'dialogs->IsDialogActive()', 'UnsavedInputOf(contents)', 'IsCapturingUserMedia(contents)',
+                      'PictureInPictureWindowManager::GetInstance()->GetWebContents() == contents',
+                      'content::Visibility::VISIBLE'):
+            self.assertIn(check, protection)
+        self.assertNotIn('pending_prompt = false', commands)
+        unsaved = commands.split('std::optional<bool> UnsavedInputOf(', 1)[1].split('\n}\n', 1)[0]
+        for check in ('ForEachRenderFrameHost', 'HadFormInteraction()', 'HadUserEdits()', 'page_policy::UnsavedInput('):
+            self.assertIn(check, unsaved)
+
+    def test_bindings_follow_replacement_and_leave_with_their_tab(self):
+        host = self.read('ac_mac_shell_host.mm')
+        changed = host.split('void ShellHostView::OnTabStripModelChanged(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('TabStripModelChange::kReplaced', changed)
+        self.assertIn('ReplaceBinding(replace->old_contents, replace->new_contents);', changed)
+        self.assertIn('&ShellHostView::DropDetachedBinding', changed)
+        self.assertIn('TabRemovedReason::kDeleted', changed)
+        replace = host.split('void ShellHostView::ReplaceBinding(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(replace.index('binding->Envelope("pageLifecycle")'), replace.index('binding->Rebind(contents);'))
+        self.assertLess(replace.index('binding->Rebind(contents);'), replace.index('binding->binding_generation = *generation;'))
+        self.assertIn('delivery.Set("action", "rebind");', replace)
+        self.assertIn('Emit("ArdiaWebView", base::NumberToString(old_id)', replace)
+        self.assertNotIn('ReportClosed', replace)
+        self.assertIn('page_policy::RebindAllowed(', replace)
+        drop = host.split('void ShellHostView::DropDetachedBinding(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('page_policy::StripExitFor(false, OwnerOf(contents.get()) != nullptr)', drop)
+        self.assertNotIn('ReportClosed', drop)
+        self.assertIn('.Set("bindingGeneration", base::NumberToString(binding_generation))', host)
+        self.assertNotIn('"bindingGeneration", "1"', host)
+        events = (REPO / 'apps/desktop/src/hostPageEvents.ts').read_text()
+        self.assertIn('if (value.action === "rebind") return rebinding(value.creation);', events)
+
+    def test_blocked_popups_clear_on_cross_document_commits(self):
+        events = self.read('ac_mac_page_events.mm')
+        finish = events.split('void PageEvents::DidFinishNavigation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(finish.index('page_policy::ClearsBlockedPopups('), finish.index('blocked_.clear();'))
+        self.assertIn('page_policy::kSnapshotEventsMax', events)
+
+    def test_history_offsets_are_checked_in_64_bits(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        offset = commands.split('if (command == "goToOffset") {', 1)[1].split('if (command == "evaluate")', 1)[0]
+        self.assertLess(offset.index('page_policy::HistoryTarget('), offset.index('controller.CanGoToOffset('))
+        self.assertIn('static_cast<int64_t>(current) + static_cast<int64_t>(offset)', self.read('ac_mac_page_policy.h'))
+
+    def test_promise_operations_are_polled_with_a_host_token(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        self.assertIn('page_policy::AwaitsResult(*match->operation)', commands)
+        self.assertIn('SendEvaluation(id, page_policy::TakeEvaluation(id));', commands)
+        self.assertIn('base::Milliseconds(page_policy::kEvaluationPollMilliseconds)', commands)
+        self.assertNotIn('kEvaluationPollAttempts', commands)
+        answered = commands.split('void PageCommands::EvaluationAnswered(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(answered.index('evaluations_.find(id)'), answered.index('page_policy::NextEvaluationStep('))
+
+    def test_evaluations_have_a_wall_clock_deadline_and_settle_once(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        evaluate = commands.split('void PageCommands::Evaluate(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('pending->deadline.Start(', evaluate)
+        self.assertIn('base::Milliseconds(page_policy::kEvaluationDeadlineMilliseconds)', evaluate)
+        self.assertLess(evaluate.index('pending->deadline.Start('), evaluate.index('SendEvaluation(id'))
+        settle = commands.split('void PageCommands::SettleEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(settle.index('evaluations_.erase(found);'), settle.index('std::move(pending->done).Run('))
+        self.assertIn('page_policy::ForgetEvaluation(id)', settle)
+        send = commands.split('void PageCommands::SendEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('weak_factory_.GetWeakPtr()', send)
+        policy = self.read('ac_mac_page_policy.h')
+        self.assertIn('kEvaluationSlotTtlMilliseconds = 6000', policy)
+        self.assertIn('setTimeout(() => { if (ardiaSlots.get(', policy)
+        self.assertIn('!ardiaSlot.pending || ardiaSlots.get(', policy)
+
+    def test_evaluations_belong_to_the_binding_that_asked(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        frame = commands.split('content::RenderFrameHost* PageCommands::EvaluationFrame(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('Live() == pending.contents.get()', frame)
+        document = commands.split('content::RenderFrameHost* PageCommands::EvaluationDocument(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotRegex(document, r'\bLive\(\)')
+        settle = commands.split('void PageCommands::SettleEvaluation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('EvaluationDocument(*pending)', settle)
+        reset = commands.split('void PageCommands::Reset() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('CancelEvaluations();', reset)
+        host = self.read('ac_mac_shell_host.mm')
+        release = host.split('void ShellHostView::ReleaseTab(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('binding->commands()->CancelEvaluations();', release)
+        retire = host.split('void ShellHostView::RetireRenderer() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('binding->commands()->CancelEvaluations();', retire)
+        create = host.split('void ShellHostView::CreateTabIn(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(create.index('existing->commands()->CancelEvaluations();'), create.index('existing->claim = claim;'))
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('commands_->Reset();', rebind)
+
+    def test_discard_reads_the_outcome_through_the_surviving_binding(self):
+        commands = self.read('ac_mac_page_commands.mm')
+        discard = commands.split('void PageCommands::Discard(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('alive_factory_.GetWeakPtr()', discard)
+        self.assertIn('alive->binding_->contents()', discard)
+        self.assertIn('page_policy::DiscardSucceeded(', discard)
+        self.assertNotIn('contents->GetWeakPtr()', discard)
+        host = self.read('ac_mac_shell_host.mm')
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertNotIn('commands_.reset()', rebind)
+        self.assertNotIn('commands_ = ', rebind)
+        self.assertIn('base::WeakPtrFactory<PageCommands> alive_factory_{this};', self.read('ac_mac_page_commands.h'))
+
+    def test_playback_protection_reads_the_live_media_session(self):
+        events = self.read('ac_mac_page_events.mm')
+        playing = events.split('bool PageEvents::playing() const {', 1)[1].split('\n}\n', 1)[0]
+        for check in ('content::MediaSession::GetIfExists(contents)', 'GetMediaSessionInfoSync()',
+                      'GetCurrentlyPlayingVideoCount() > 0', 'page_policy::SessionPlaying(',
+                      'MediaPlaybackState::kPlaying', 'SessionState::kInactive'):
+            self.assertIn(check, playing)
+        linux = (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_page_media.cc').read_text()
+        self.assertIn('info->playback_state == media_session::mojom::MediaPlaybackState::kPlaying', linux)
+
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
@@ -624,11 +873,12 @@ class BoundaryTests(unittest.TestCase):
                        'ArdiaTabs.unclaimedTabs', 'adoptId',
                        'shell.popover.update', 'shell.popover.close', 'ArdiaShell.setMainMenu',
                        'shell.showContextMenu', 'ardiaRequest', 'ArdiaShell.captionDoubleClick',
-                       'session.write', 'ArdiaShell.writeDocument'):
+                       'session.write', 'ArdiaShell.writeDocument', 'tab.command', 'evaluate',
+                       'sites.setZoom', 'sites.zoomLevels', 'downloadImage', 'openBlockedPopup', 'background runs'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
-                     'hostile_corpus_test.cc', 'shell_policy_test.cc'):
+                     'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 
