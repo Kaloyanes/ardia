@@ -5,7 +5,6 @@ import { useScopedTheme } from "../../../../../apps/browser/src/components/ui/th
 import { materialFill } from "./materials";
 import type { MiddleClickEvent } from "./MouseArea";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
-import { specularLook, withBlur } from "./glassSpecular";
 
 type Style = ViewStyle & Record<string, unknown>;
 
@@ -245,20 +244,12 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const shape = shapeMask(cornerRadius);
   const clip: React.CSSProperties = shape ? {} : { borderRadius: fallbackRadius(cornerRadius), overflow: "hidden" };
   const shaped = shape ? maskStyle(shape) : {};
-  const rimMask = highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) };
-  const look = specularLook(theme === "dark", clear);
   return (
     <View pointerEvents="none" {...props} style={rest}>
-      <div data-ardia-glass-layers="" style={{ ...layer, ...fade }}>
-        <div style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.shadow }} />
-        <div ref={host} style={{ ...layer, ...clip }}>
-          <div style={backdrop(withBlur(filter, look.blur), shaped)} />
-          {tint ? <div style={{ ...layer, ...shaped, background: tint }} /> : null}
-          <div style={{ ...layer, ...shaped, background: look.sheen }} />
-          <div style={backdrop(`brightness(${1 + peakGain(g.rim)})`, rimMask)} />
-          <div data-ardia-glass-rim="" style={{ ...layer, ...rimMask, background: look.rim, opacity: look.rimOpacity }} />
-          <div data-ardia-glass-ring="" style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.ring, mask: look.ringFade, WebkitMask: look.ringFade, opacity: look.ringOpacity }} />
-        </div>
+      <div ref={host} style={{ ...layer, ...clip }}>
+        <div style={{ ...backdrop(filter, shaped), ...fade }} />
+        {tint ? <div style={{ ...layer, ...shaped, background: tint, ...fade }} /> : null}
+        <div style={{ ...backdrop(`brightness(${1 + peakGain(g.rim)})`, highlight ? maskStyle(highlight) : { mask: fallbackBands(g.rim), WebkitMask: fallbackBands(g.rim) }), ...fade }} />
       </div>
       {children}
     </View>

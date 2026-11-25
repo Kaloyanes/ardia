@@ -288,35 +288,21 @@ test("a bordered view that clips its content draws its border as a ring above th
   }
 });
 
-test("web Liquid Glass adds a luminous specular rim over the brightened edge, a soft sheen and a contact shadow, and the demo and desktop draw it alike", async () => {
-  const { specularLook, withBlur, SPECULAR } = await import("./shims/web/glassSpecular.ts");
+test("web glass keeps the plain backdrop-filter fallback the demo draws, under Wave D's native handoff, with no painted rims", () => {
   const desktop = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
   const demo = (path) => readFileSync(new URL(`../../../packages/demo/src/${path}`, import.meta.url), "utf8");
-  assert.equal(desktop("./shims/web/glassSpecular.ts"), demo("shims/web/glassSpecular.ts"));
   assert.equal(desktop("./shims/web/glassRim.ts"), demo("shims/web/glassRim.ts"));
   const glassOf = (source) => source.slice(source.indexOf("export function GlassEffect("), source.indexOf("\n}\n", source.indexOf("export function GlassEffect(")));
   const shown = glassOf(desktop("./shims/web/chrome.tsx"));
   const web = glassOf(demo("shims/web/chrome.tsx"));
-  const fallbackOf = (body) => body.slice(body.indexOf("<div style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.shadow }} />"), body.indexOf("\n", body.indexOf("data-ardia-glass-ring"))).split("\n").map((line) => line.trim()).join("\n");
-  assert.ok(fallbackOf(shown).includes("data-ardia-glass-rim") && fallbackOf(shown).includes("look.sheen"));
-  assert.equal(fallbackOf(shown), fallbackOf(web), "the desktop fallback draws the demo's specular layers");
+  const layersOf = (body) => body.split("\n").map((line) => line.trim()).filter((line) => /^(<div style=\{|\{tint \? <div style=\{\{ \.\.\.layer, \.\.\.shaped)/.test(line)).map((line) => line.replace(/\{\{ \.\.\.(backdrop\(.*\)), \.\.\.fade \}\}/, "{$1}").replace(/, \.\.\.fade/g, ""));
+  assert.equal(layersOf(shown).length, 3);
+  assert.deepEqual(layersOf(shown), layersOf(web), "the desktop fallback draws the demo's backdrop, tint and brightened edge");
+  for (const body of [shown, web]) assert.doesNotMatch(body, /boxShadow|rgba\(255, ?255, ?255|data-ardia-glass-rim|data-ardia-glass-ring/, "no painted white rim or ring");
   assert.match(shown, /useGlassLook\(frame, \{ material: clear \? "clear" : "regular", tint: glassTint\(tint\), group: group \?\? undefined, appearance: theme \}, !scrolled && nativeGlassFor\(shellOverPages\(\)\)\);/, "native Liquid Glass still takes over on macOS 26");
-  assert.match(shown, /<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>\n\s+<div data-ardia-glass-layers="" style=\{layer\}>\n\s+<div style=\{\{ \.\.\.layer, borderRadius: fallbackRadius\(cornerRadius\), boxShadow: look\.shadow \}\} \/>/, "the CSS shadow and rims sit inside the fallback that native glass hides");
+  assert.match(shown, /<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>\n\s+<div ref=\{host\} data-ardia-glass-layers="" style=\{\{ \.\.\.layer, \.\.\.clip \}\}>/, "the CSS fallback is what the native handoff hides");
   assert.equal(shown.match(/\{children\}/g)?.length, 2, "hosted content renders in the scrolled and the shaped glass");
   assert.match(desktop("./base.css"), /\[data-ardia-glass-effect\]\[data-ardia-glass="on"\] > \[data-ardia-glass-layers\] \{\n\s+visibility: hidden;/);
-  const dark = specularLook(true, false);
-  assert.equal(dark.ring, "inset 0 0 0 1px rgba(255,255,255,1)", "a crisp one-point edge, as Tahoe draws it");
-  assert.match(dark.ringFade, /^linear-gradient\(135deg, rgba\(0,0,0,1\) 0%, rgba\(0,0,0,0\.3\) 40%, rgba\(0,0,0,0\.15\) 60%, rgba\(0,0,0,0\.7\) 100%\)$/);
-  const light = specularLook(false, false);
-  assert.ok(dark.rimOpacity > light.rimOpacity, "the rim reads brighter over dark glass, where brightness alone barely lifts it");
-  assert.ok(light.rimOpacity >= 0.5 && dark.rimOpacity <= 1);
-  assert.match(dark.rim, /^linear-gradient\(135deg, rgba\(255,255,255,1\) 0%, .* rgba\(255,255,255,0\.82\) 100%\)$/, "lit from the top left with a bounce at the bottom right");
-  assert.ok(light.sheen.includes(`rgba(255,255,255,${SPECULAR.light.sheen})`) && dark.sheen.includes(`rgba(255,255,255,${SPECULAR.dark.sheen})`));
-  assert.ok(SPECULAR.dark.sheen < 0.1 && SPECULAR.light.sheen < 0.2, "the sheen stays faint so text on the glass keeps its contrast");
-  assert.equal(specularLook(true, true).rimOpacity, +(SPECULAR.dark.rim * SPECULAR.clearShare).toFixed(4));
-  assert.equal(specularLook(true, true).blur, 0, "clear glass stays unfrosted");
-  assert.equal(withBlur("saturate(2)", dark.blur), "blur(2px) saturate(2)");
-  assert.equal(withBlur("saturate(2)", 0), "saturate(2)");
 });
 
 test("a faded GlassEffect fades only its measured glass layer, and the content it hosts stays opaque", async () => {
