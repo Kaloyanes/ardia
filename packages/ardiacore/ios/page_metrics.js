@@ -67,6 +67,9 @@
     tally = fresh();
     quality = new WeakMap();
     burst = null;
+    if (!generation) return;
+    const videos = apply(byTag, document, ["video"]);
+    for (let i = 0; i < videos.length; i++) if (!videos[i].paused && !videos[i].ended) collect(videos[i], false);
   };
 
   const soon = () => {

@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { createGate, DAILY_KEY, type SharingSource } from "../../lib/telemetryGate";
 import { backdropProps, COUNTED, launchProps, launchTrayProps, legacyImportOutcome, parseDaily, pendingUsage, type Counted } from "../../lib/telemetrySchema";
 import { canPostTelemetry, deviceFacts, JS_STARTED_AT, launchBackdropShownAt, newTelemetryId, postTelemetry, processStartedAt, setUsageConsent, takeExits, takePendingCounts } from "../../platform/telemetry";
-import { crashesToSend, jsErrorReason, MOST_CRASHES_PER_LAUNCH, PENDING_CRASH_KEY, pendingJsCrash, previousSession, readPendingCrash, SESSION_KEY, sessionMark, type PreviousSession } from "../../lib/crashReports";
+import { collectCrashes, jsErrorReason, MOST_CRASHES_PER_LAUNCH, PENDING_CRASH_KEY, pendingJsCrash, previousSession, SESSION_KEY, sessionMark, type PreviousSession } from "../../lib/crashReports";
 import { appearanceTelemetry, chromeStyle, colorChoiceTelemetry, glassRenderTelemetry, macLookOf, offeredInterfaceStyle, offeredScheme } from "../../lib/appearance";
 import { useBoot } from "../app/bootState";
 import { isDemoSession } from "../app/launchFlags";
@@ -36,6 +36,7 @@ const gate = createGate({
   onChange: (sharing) => {
     useUsageSharing.setState({ sharing });
     setUsageConsent(sharing);
+    if (!sharing) writePreference(browserDatabase(), PENDING_CRASH_KEY, null);
     markSession(AppState.currentState === "active");
   },
 });
@@ -53,13 +54,16 @@ function markSession(active: boolean) {
 
 function reportCrashes() {
   const db = browserDatabase();
-  const pending = readPreferences(db)[PENDING_CRASH_KEY] ?? null;
-  if (pending !== null) writePreference(db, PENDING_CRASH_KEY, null);
-  if (!gate.isSharing() || isDemoSession()) return;
-  const exits = takeExits();
-  const now = Date.now();
-  const js = readPendingCrash(pending, now);
-  const crashes = [...(js ? [js.props] : []), ...crashesToSend(exits, now, js?.at ?? null)].slice(0, crashesLeft);
+  const crashes = collectCrashes(
+    {
+      sharing: () => gate.isSharing() && !isDemoSession(),
+      readPending: () => readPreferences(db)[PENDING_CRASH_KEY] ?? null,
+      clearPending: () => writePreference(db, PENDING_CRASH_KEY, null),
+      takeExits,
+    },
+    Date.now(),
+    crashesLeft,
+  );
   crashesLeft -= crashes.length;
   for (const props of crashes) gate.capture("app_crashed", props);
 }

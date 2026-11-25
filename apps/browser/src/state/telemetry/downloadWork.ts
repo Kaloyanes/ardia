@@ -32,6 +32,11 @@ const NO_FLOW = {
 };
 
 let progressUpdates = 0;
+let ownsDownloadFlow: () => boolean = () => true;
+let followed = false;
+let tookOver = false;
+
+export const setDownloadFlowOwner = (owns: () => boolean) => void (ownsDownloadFlow = owns);
 let historyWrites = 0;
 let historyCharacters = 0;
 let flow = { ...NO_FLOW };
@@ -65,12 +70,18 @@ function settleFollowUp(now: number) {
 
 export function noteDownloadSeen(d: DownloadSeen, now = Date.now()) {
   settleFollowUp(now);
+  if (!ownsDownloadFlow()) {
+    followed = true;
+    return void tracked.clear();
+  }
+  if (followed) tookOver = true;
   const before = tracked.get(d.id);
   if (!before) {
     if (d.state !== "downloading") return;
     if (tracked.size >= MAX_TRACKED) tracked.delete(tracked.keys().next().value!);
     const consent = consentOrNow(undefined);
     tracked.set(d.id, { state: d.state, firstSeen: now, consent, interrupted: d.received > 0 });
+    if (tookOver && d.received > 0) return;
     bump("downloads_started", consent);
     const newest = followUps.at(-1);
     if (newest) newest.started++;

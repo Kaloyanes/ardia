@@ -94,9 +94,13 @@ final class PhoneExits: NSObject, MXMetricManagerSubscriber {
 
   static func take() -> [[String: Any]] {
     UsageConsent.lock.withLock {
+      guard UsageConsent.windowLocked() != nil else {
+        clearLocked()
+        return []
+      }
       let taken = storedLocked()
       clearLocked()
-      return UsageConsent.windowLocked() == nil ? [] : taken
+      return taken
     }
   }
 

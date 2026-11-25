@@ -220,7 +220,10 @@ test("frames a video played before the generation began are never counted", () =
   v.paused = true;
   p.media("pause", v);
   p.pagehide();
-  assert.deepEqual(p.posts, []);
+  assert.equal(p.posts.length, 1);
+  const first = JSON.parse(p.posts.shift().json);
+  assert.equal(first.frames, 300, "the frames after consent count, the 1000 before it don't");
+  assert.equal(first.dropped, 1);
   v.paused = false;
   p.media("playing", v);
   v.quality = { totalVideoFrames: 1600, droppedVideoFrames: 53 };

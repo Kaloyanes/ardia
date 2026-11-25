@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { crashesToSend, crashProps, jsErrorReason, MOST_CRASHES_PER_LAUNCH, pendingJsCrash, previousSession, readPendingCrash, sessionMark } from "./crashReports.ts";
+import { collectCrashes, crashesToSend, crashProps, jsErrorReason, MOST_CRASHES_PER_LAUNCH, pendingJsCrash, previousSession, readPendingCrash, sessionMark } from "./crashReports.ts";
 import { buildRecord, recordProblems } from "./telemetrySchema.ts";
 
 const NOW = Date.parse("2026-11-24T12:00:00.000Z");
@@ -60,4 +60,29 @@ test("a fatal JavaScript error says whether Ardia was on screen from the app sta
   assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "inactive"), NOW)?.props.foreground, "no");
   assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, "unknown"), NOW)?.props.foreground, "unknown");
   assert.equal(readPendingCrash(pendingJsCrash("range_error", NOW, null), NOW)?.props.foreground, "unknown");
+});
+
+test("with sharing off nothing is read: no pending JavaScript crash and no native exits", () => {
+  const touched: string[] = [];
+  const io = {
+    sharing: () => false,
+    readPending: () => (touched.push("readPending"), pendingJsCrash("type_error", NOW, "active")),
+    clearPending: () => void touched.push("clearPending"),
+    takeExits: () => (touched.push("takeExits"), [{ kind: "crash", reason: "sigsegv", foreground: "yes", at: NOW }]),
+  };
+  assert.deepEqual(collectCrashes(io, NOW, MOST_CRASHES_PER_LAUNCH), []);
+  assert.deepEqual(touched, []);
+});
+
+test("with sharing on the pending crash is read once and cleared, then native exits are taken within the launch budget", () => {
+  let pending: string | null = pendingJsCrash("type_error", NOW - 1000, "active");
+  const io = {
+    sharing: () => true,
+    readPending: () => pending,
+    clearPending: () => void (pending = null),
+    takeExits: () => [{ kind: "crash", reason: "sigsegv", foreground: "unknown", at: NOW - 5000 }, { kind: "hang", reason: "hang", foreground: "yes", at: NOW - 4000 }],
+  };
+  assert.deepEqual(collectCrashes(io, NOW, 2).map((c) => c.reason), ["type_error", "sigsegv"]);
+  assert.equal(pending, null);
+  assert.deepEqual(collectCrashes(io, NOW, 0), []);
 });

@@ -95,6 +95,7 @@ import { launchCommitted } from "../../browser/src/state/telemetry/journeys";
 import { markFirstWindow } from "../../browser/src/state/telemetry/track";
 import { probeKeyringAfterLaunch } from "./keyringProbe";
 import { deliverLaunch, measureLaunch } from "./launchMeasure";
+import { setDownloadFlowOwner } from "../../browser/src/state/telemetry/downloadWork";
 import { consentToken, stillValid } from "../../browser/src/state/telemetry/choice";
 import type { LeaderLocks } from "./telemetryLeader";
 import { liveOf } from "../../browser/src/state/tabs/tabLive";
@@ -153,6 +154,7 @@ async function start() {
   followMaximizeButtonState(ardiaHost, windowId);
   startConfigFiles(colorRoles, launch);
   startHostTelemetry({ host: ardiaHost, candidate: !utility, locks: navigator.locks as unknown as LeaderLocks });
+  setDownloadFlowOwner(linuxTelemetryHooks.leading);
   countLoginPasswordChecks(linuxTelemetryHooks.leading);
   watchWindowDecorations(ardiaHost, windowId);
   const capabilities = linuxCapabilities(ardiaHost);

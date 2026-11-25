@@ -194,13 +194,10 @@ public final class AppUpdater: NSObject {
   private var firstCheckPending = false
   private var started = false
   private var downloading = false
-  private var updateStamp: ArdiaConsentStamp?
+  private var updateCycle = UpdateCycleStamp<ArdiaConsentStamp>()
 
   private var currentUpdateStamp: ArdiaConsentStamp {
-    if let stamp = updateStamp { return stamp }
-    let stamp = ArdiaConsentStamp.begin()
-    updateStamp = stamp
-    return stamp
+    updateCycle.stamp { ArdiaConsentStamp.begin() }
   }
 
   public var isConfigured: Bool {
@@ -318,7 +315,7 @@ extension AppUpdater: SPUUpdaterDelegate {
     let noUpdate = (error as NSError?).map { $0.domain == SUSparkleErrorDomain && $0.code == Int(SUError.noUpdateError.rawValue) } ?? false
     switchCheck.handle(.finished(failed: error != nil && !noUpdate))
     userDriver.quietCheck = false
-    updateStamp = nil
+    updateCycle.end()
   }
 
   public func feedParameters(for updater: SPUUpdater, sendingSystemProfile sendingProfile: Bool) -> [[String: String]] {
@@ -329,7 +326,6 @@ extension AppUpdater: SPUUpdaterDelegate {
 
   public func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
     downloading = true
-    updateStamp = ArdiaConsentStamp.begin()
     ShellEvents.send(.app, currentUpdateStamp.onto(["type": "updateStep", "step": "downloadStarted"]))
   }
 
@@ -340,7 +336,7 @@ extension AppUpdater: SPUUpdaterDelegate {
 
   public func userDidCancelDownload(_ updater: SPUUpdater) {
     downloading = false
-    updateStamp = nil
+    updateCycle.end()
   }
 
   public func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
@@ -352,7 +348,7 @@ extension AppUpdater: SPUUpdaterDelegate {
     let failure = SparkleFailure.of(domain: nsError.domain, code: nsError.code, downloading: downloading)
     let stamp = currentUpdateStamp
     downloading = false
-    updateStamp = nil
+    updateCycle.end()
     guard let failure else { return }
     NSLog("Ardia: update failed while \(failure.stage == .download ? "downloading" : "installing") (\(failure.reason))")
     ShellEvents.send(.app, stamp.onto(failure.event))

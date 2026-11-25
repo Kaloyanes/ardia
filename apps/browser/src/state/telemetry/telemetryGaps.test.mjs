@@ -197,3 +197,35 @@ test("each approval to download several files keeps its own follow-up", () => {
   const taken = downloads.takeDownloadWork(30_000);
   assert.deepEqual([taken.multiple_download_allows, taken.multiple_download_follow_ups, taken.multiple_download_single_follow_ups], [2, 1, 1]);
 });
+
+test("on Linux one download seen by a leader and a follower window counts once", async () => {
+  const leader = await import("./downloadWork.ts?window=leader");
+  const follower = await import("./downloadWork.ts?window=follower");
+  leader.setDownloadFlowOwner(() => true);
+  follower.setDownloadFlowOwner(() => false);
+  const events = [
+    [{ id: "shared", state: "downloading", received: 0, startTime: 1_000 }, 1_000],
+    [{ id: "shared", state: "downloading", received: 4 * MB, startTime: 1_000 }, 2_000],
+    [{ id: "shared", state: "finished", received: 8 * MB, startTime: 1_000 }, 3_000],
+  ];
+  for (const [d, at] of events) {
+    leader.noteDownloadSeen(d, at);
+    follower.noteDownloadSeen(d, at);
+  }
+  const a = leader.takeDownloadWork(4_000);
+  const b = follower.takeDownloadWork(4_000);
+  const sum = (field) => a[field] + b[field];
+  assert.deepEqual([sum("downloads_started"), sum("downloads_finished"), sum("downloads_timed")], [1, 1, 1]);
+});
+
+test("a window that becomes the leader mid-download doesn't count that download's start again", async () => {
+  const work = await import("./downloadWork.ts?window=handoff");
+  let leading = false;
+  work.setDownloadFlowOwner(() => leading);
+  work.noteDownloadSeen({ id: "h", state: "downloading", received: 0 }, 1_000);
+  leading = true;
+  work.noteDownloadSeen({ id: "h", state: "downloading", received: 2 * MB }, 2_000);
+  work.noteDownloadSeen({ id: "h", state: "finished", received: 4 * MB }, 3_000);
+  const taken = work.takeDownloadWork(4_000);
+  assert.deepEqual([taken.downloads_started, taken.downloads_finished, taken.downloads_timed], [0, 1, 0]);
+});

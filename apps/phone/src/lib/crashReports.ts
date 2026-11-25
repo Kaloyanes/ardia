@@ -85,3 +85,13 @@ export function crashesToSend(raw: unknown, now: number, jsAt: number | null = n
   }
   return out;
 }
+
+export type CrashSources = { sharing(): boolean; readPending(): string | null; clearPending(): void; takeExits(): unknown[] };
+
+export function collectCrashes(io: CrashSources, now: number, left: number): EventProps<"app_crashed">[] {
+  if (!io.sharing() || left <= 0) return [];
+  const pending = io.readPending();
+  if (pending !== null) io.clearPending();
+  const js = readPendingCrash(pending, now);
+  return [...(js ? [js.props] : []), ...crashesToSend(io.takeExits(), now, js?.at ?? null)].slice(0, left);
+}
