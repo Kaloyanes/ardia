@@ -11,9 +11,10 @@ const store = () => useBrowser.getState();
 
 export function closeAllTabs(windowId: string, user?: ByUser) {
   const cleared = store().clearUnpinnedTabs(windowId, user ? userClose(clearedTabIds(store(), windowId), user) : {});
-  if (!cleared?.entries.length) return;
+  const count = (cleared?.entries.length ?? 0) + (cleared?.blankPanes?.length ?? 0);
+  if (!cleared || !count) return;
   if (cleared.selectedTabId) noteClearClosedSelectedTab(user?.consent);
-  showClearUndo(cleared, `Cleared ${plural(cleared.entries.length, "Tab")}`, "arrow.down");
+  showClearUndo(cleared, `Cleared ${plural(count, "Tab")}`, "arrow.down");
 }
 
 export function cleanUpWithUndo(windowId: string) {

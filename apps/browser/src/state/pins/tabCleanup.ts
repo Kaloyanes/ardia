@@ -305,10 +305,11 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
     );
     const renamed = new Map(entries.map((e, i) => [e.tabId, ids[i]]));
     const now = (id: string) => renamed.get(id) ?? id;
-    const back = cleared.tabIds.map(now).filter((id) => restored.tabs[id]?.windowId === windowId);
+    const ofProfile = (id: string) => restored.tabs[id]?.profileId === cleared.profileId;
+    const back = cleared.tabIds.map(now).filter((id) => restored.tabs[id]?.windowId === windowId && ofProfile(id));
     const w = restored.windows[windowId]!;
-    const window = { ...w, tabIds: [...back, ...w.tabIds.filter((id) => !back.includes(id))] };
-    const groups = Object.fromEntries(Object.entries(restored.groups).filter(([, g]) => g.windowId !== windowId));
+    const window = { ...w, tabIds: [...w.tabIds.filter((id) => !ofProfile(id)), ...back, ...w.tabIds.filter((id) => ofProfile(id) && !back.includes(id))] };
+    const groups = Object.fromEntries(Object.entries(restored.groups).filter(([, g]) => g.windowId !== windowId || g.profileId !== cleared.profileId));
     for (const g of cleared.groups) {
       const tabIds = g.tabIds.map(now).filter((id) => restored.tabs[id]);
       const current = restored.groups[g.id];

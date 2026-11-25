@@ -77,7 +77,7 @@ function windowFingerprint(s: BrowserState, windowId: string, profileId: string)
     .sort();
   const splits = Object.values(s.splits)
     .filter((v) => splitTabIds(v).some(inWindow))
-    .map((v) => splitTabIds(v).join(","))
+    .map((v) => [v.id, v.orientation, JSON.stringify(v.slots)].join(" "))
     .sort();
   return [...tabs, "", ...groups, "", ...splits].join("\n");
 }
@@ -87,8 +87,8 @@ export function undoable(before: BrowserState, after: BrowserState, windowId: st
     windowId,
     entries,
     closedEntryIds: newClosedEntryIds(before, after),
-    tabIds: before.windows[windowId]!.tabIds,
-    groups: Object.values(before.groups).filter((g) => g.windowId === windowId),
+    tabIds: before.windows[windowId]!.tabIds.filter((id) => before.tabs[id]?.profileId === profileId),
+    groups: Object.values(before.groups).filter((g) => g.windowId === windowId && g.profileId === profileId),
     fingerprint: windowFingerprint(after, windowId, profileId),
     profileId,
     remoteDeletions: remotePinDeletions.get(profileId) ?? 0,

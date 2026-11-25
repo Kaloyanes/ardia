@@ -812,6 +812,71 @@ for (const [name, arrange] of [
   });
 }
 
+test("Undo of a Clear in one profile leaves a group made since in another profile, and that profile's tab order, alone", () => {
+  reset();
+  const [w, a] = setup("a", "b");
+  S().activate(a);
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.deepEqual(cleared.entries.map((e) => short(e.tab.url)), ["b"]);
+  const p = S().createProfile({ name: "Work" });
+  S().switchProfile(w, p);
+  const x = S().newTab(w, { url: "x.com" });
+  const y = S().newTab(w, { url: "y.com" });
+  S().moveTab(y, 0);
+  const g = S().createGroup([x, y], { name: "Work group" });
+  const workOrder = model.viewTabIds(S(), w, p);
+  assert.equal(clearedTabs.canUndoClear(S(), cleared), true);
+  S().undoClearTabs(cleared);
+  assert.ok(S().groups[g], "Work's group stays");
+  assert.deepEqual([...S().groups[g].tabIds].sort(), [x, y].sort(), "with both its tabs");
+  assert.deepEqual(model.viewTabIds(S(), w, p), workOrder, "Work's order stays");
+  assert.deepEqual(model.viewTabIds(S(), w, "default").map((id) => short(S().tabs[id].url)), ["a", "b"], "Personal gets its tab back in place");
+  assert.equal(S().windows[w].profileId, p);
+});
+
+test("Clear on a split of two empty panes offers Undo, and Undo puts the split back", async () => {
+  reset();
+  const { closeAllTabs } = await import("../sidebar/clearTabs.ts");
+  const { useToasts } = await import("../app/toasts.ts");
+  const [w] = setup("a");
+  const one = S().newTab(w, {});
+  const two = S().newTab(w, {});
+  S().createSplit([one, two]);
+  S().activate(one);
+  S().clearUnpinnedTabs(w);
+  assert.equal(S().windows[w].tabIds.length, 2, "the first Clear closes a and keeps the selected split");
+  closeAllTabs(w);
+  assert.equal(Object.keys(S().splits).length, 0);
+  const toast = useToasts.getState().toasts[w];
+  assert.equal(toast?.title, "Cleared 2 Tabs");
+  toast.action.run();
+  const splits = Object.values(S().splits);
+  assert.equal(splits.length, 1, "the split is back");
+  assert.ok(splitTabIdsOf(splits[0]).every((id) => !S().tabs[id].url));
+  assert.equal(S().windows[w].tabIds.length, 2, "and the blank tab Clear left is gone");
+});
+
+for (const [name, edit] of [
+  ["rotated", (split) => S().toggleSplitOrientation(split.id)],
+  ["resized", (split) => S().updateSplit(split.id, { sizes: [0.7, 0.3] })],
+]) {
+  test(`the split Clear left behind ${name} afterwards ends the Clear's Undo instead of being overwritten`, () => {
+    reset();
+    const [w, p1, p2, u, x] = setup("p1", "p2", "u", "x");
+    S().pinTabs([p1, p2], true);
+    S().createSplit([p1, p2, u]);
+    S().activate(x);
+    const cleared = S().clearUnpinnedTabs(w);
+    assert.equal(clearedTabs.canUndoClear(S(), cleared), true);
+    const survivor = splitWith(p1);
+    edit(survivor);
+    const edited = JSON.stringify(splitWith(p1));
+    assert.equal(clearedTabs.canUndoClear(S(), cleared), false);
+    S().undoClearTabs(cleared);
+    assert.equal(JSON.stringify(splitWith(p1)), edited, "the edit stays");
+  });
+}
+
 test("Clear on a lone selected tab closes it and leaves the window open", () => {
   reset({ newTabPosition: "top" });
   const [w] = setup("a");
