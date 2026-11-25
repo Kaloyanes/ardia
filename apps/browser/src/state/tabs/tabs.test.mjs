@@ -688,6 +688,61 @@ test("a second Clear closes the tab the first one kept, as in Arc, and undo brin
   assert.equal(shown(w), "c");
 });
 
+test("a second Clear keeps the selected tab while it plays sound, as the first does", () => {
+  reset();
+  const [w, a] = setup("a", "b");
+  S().updateLive(a, { playingAudio: true });
+  S().clearUnpinnedTabs(w);
+  assert.deepEqual(hosts(w), ["a"]);
+  assert.equal(S().clearUnpinnedTabs(w), null, "the playing selected tab stays");
+  assert.deepEqual(hosts(w), ["a"]);
+});
+
+test("Undo of a second Clear puts the selected split back together", () => {
+  reset();
+  const [w, a, b] = setup("a", "b");
+  S().createSplit([a, b], "vertical");
+  S().activate(a);
+  const cleared = S().clearUnpinnedTabs(w);
+  assert.deepEqual(cleared.entries.map((x) => short(x.tab.url)), ["a", "b"]);
+  assert.equal(Object.keys(S().splits).length, 0);
+  S().undoClearTabs(cleared);
+  const splits = Object.values(S().splits);
+  assert.equal(splits.length, 1, "one split again");
+  assert.deepEqual(splitTabIdsOf(splits[0]).map((id) => short(S().tabs[id].url)), ["a", "b"]);
+  assert.equal(splits[0].orientation, "vertical");
+  assert.equal(shown(w), "a");
+});
+
+test("Clear on the blank tab a second Clear left does nothing, and the earlier Undo still works", () => {
+  reset();
+  const [w] = setup("a");
+  const cleared = S().clearUnpinnedTabs(w);
+  const blank = S().windows[w].tabIds.slice();
+  assert.equal(S().clearUnpinnedTabs(w), null, "no blank tab swapped for another");
+  assert.deepEqual(S().windows[w].tabIds, blank);
+  assert.equal(clearedTabs.canUndoClear(S(), cleared), true);
+  S().undoClearTabs(cleared);
+  assert.deepEqual(hosts(w), ["a"]);
+});
+
+test("Undo of a second Clear after switching profiles brings the tab back in its profile without switching back", () => {
+  reset();
+  const [w] = setup("a");
+  const p = S().createProfile({ name: "Work" });
+  S().switchProfile(w, p);
+  S().switchProfile(w, "default");
+  const cleared = S().clearUnpinnedTabs(w);
+  S().switchProfile(w, p);
+  assert.equal(clearedTabs.canUndoClear(S(), cleared), true, "switching profiles leaves the toast's Undo working");
+  S().undoClearTabs(cleared);
+  assert.equal(S().windows[w].profileId, p, "the window stays on Work");
+  const back = S().windows[w].activeTabIds.default;
+  assert.equal(short(S().tabs[back].url), "a", "the default profile's selected tab is the one Clear closed");
+  S().switchProfile(w, "default");
+  assert.equal(shown(w), "a");
+});
+
 test("Clear on a lone selected tab closes it and leaves the window open", () => {
   reset({ newTabPosition: "top" });
   const [w] = setup("a");

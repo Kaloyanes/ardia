@@ -1,7 +1,8 @@
 import type { BrowserState } from "../browser/store";
 import { activeTabId, inPinnedContainer, pinSection, viewTabIds } from "../browser/model";
-import type { ClosedTab, TabGroup } from "../browser/types";
-import { splitOf, splitTabIds, splitTabIdsOf } from "../splits/splits";
+import type { ClosedTab, SplitView, TabGroup } from "../browser/types";
+import { splitOf, splitTabIds, splitTabIdsOf, withPaneIds } from "../splits/splits";
+import { hasPage } from "../tabs/pageSession";
 import { shownLiveOf } from "../tabs/tabLive";
 import { tileFolderOf } from "./tileFolders";
 
@@ -16,6 +17,7 @@ export type ClearedTabs = {
   remoteDeletions: number;
   selectedTabId?: string;
   blankTabIds?: string[];
+  splits?: SplitView[];
 };
 
 const remotePinDeletions = new Map<string, number>();
@@ -35,12 +37,18 @@ function withSplitPanes(s: BrowserState, ids: string[]): Set<string> {
 export function clearedTabIds(s: BrowserState, windowId: string): string[] {
   const ids = unpinnedTabIds(s, windowId);
   const active = activeTabId(s, windowId);
-  const playing = (id: string) => id !== active && !!shownLiveOf(s, id).playingAudio;
+  const playing = (id: string) => !!shownLiveOf(s, id).playingAudio;
   const kept = withSplitPanes(s, ids.filter((id) => id === active || playing(id)));
   const cleared = ids.filter((id) => !kept.has(id));
   if (cleared.length) return cleared;
   const stillPlaying = withSplitPanes(s, ids.filter(playing));
-  return ids.filter((id) => !stillPlaying.has(id));
+  const selected = ids.filter((id) => !stillPlaying.has(id));
+  return selected.every((id) => isBlankTab(s, id)) ? [] : selected;
+}
+
+function isBlankTab(s: BrowserState, id: string): boolean {
+  const t = s.tabs[id];
+  return !!t && !t.url && !hasPage(t) && !splitOf(s, id);
 }
 
 function windowFingerprint(s: BrowserState, windowId: string): string {
@@ -74,7 +82,24 @@ export function undoable(before: BrowserState, after: BrowserState, windowId: st
     remoteDeletions: remotePinDeletions.get(profileId) ?? 0,
     selectedTabId: selectedAmong(before, windowId, entries),
     blankTabIds: (after.windows[windowId]?.tabIds ?? []).filter((id) => !before.tabs[id]),
+    splits: clearedSplits(before, entries),
   };
+}
+
+function clearedSplits(before: BrowserState, entries: ClosedTab[]): SplitView[] {
+  const closed = new Set(entries.map((e) => e.tabId));
+  return Object.values(before.splits).filter((v) => splitTabIds(v).some((id) => closed.has(id)));
+}
+
+export function rejoinedSplits(s: BrowserState, cleared: ClearedTabs, renamed: (id: string) => string): BrowserState["splits"] {
+  let splits = s.splits;
+  for (const split of cleared.splits ?? []) {
+    const panes = splitTabIds(split).map(renamed);
+    const placed = panes.every((id) => s.tabs[id]?.windowId === cleared.windowId && !splitOf({ splits }, id));
+    if (!placed || splits[split.id]) continue;
+    splits = { ...splits, [split.id]: withPaneIds(split, panes) };
+  }
+  return splits;
 }
 
 function selectedAmong(s: BrowserState, windowId: string, entries: ClosedTab[]): string | undefined {

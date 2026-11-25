@@ -13,7 +13,7 @@ import { cleanedTabsFor, closedEntries, closeQuietly, keptCleanedTabs, regroupRe
 import { activated, apply, removeTabs } from "../tabs/tabs";
 import { shownLiveOf } from "../tabs/tabLive";
 import type { CloseOptions } from "../tabs/tabs";
-import { canUndoClear, clearedTabIds, undoable, type ClearedTabs } from "./clearedTabs";
+import { canUndoClear, clearedTabIds, rejoinedSplits, undoable, type ClearedTabs } from "./clearedTabs";
 
 export function isClosedPin(s: BrowserState, id: string): boolean {
   const t = s.tabs[id];
@@ -225,6 +225,14 @@ export function forgetClosedWindowCleanUps(s: BrowserState, prev: BrowserState):
   return gone.length ? { privateCleanedTabs: without(s.privateCleanedTabs, gone) } : null;
 }
 
+function reselected(s: BrowserState, windowId: string, selected: string | undefined): BrowserState {
+  const tab = selected ? s.tabs[selected] : undefined;
+  const w = s.windows[windowId];
+  if (!tab || !w) return s;
+  if (w.kind === "private" || w.profileId === tab.profileId) return apply(s, activated(s, tab.id));
+  return { ...s, windows: { ...s.windows, [windowId]: { ...w, activeTabIds: { ...w.activeTabIds, [tab.profileId]: tab.id } } } };
+}
+
 export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice> = (set, get) => ({
   cleanedTabs: [],
   privateCleanedTabs: {},
@@ -309,10 +317,10 @@ export const createCleanUpSlice: StateCreator<BrowserState, [], [], CleanUpSlice
       return moved ? { ...c, tabId: moved, restoreFrom: c.restoreFrom ?? c.tabId } : c;
     });
     const joined = { ...restored, closedTabs, groups: syncGroupOrder(groups, window), windows: { ...restored.windows, [windowId]: window } };
-    const blanks = (cleared.blankTabIds ?? []).filter((id) => joined.tabs[id] && !joined.tabs[id]!.url && !hasPage(joined.tabs[id]!));
-    const next = blanks.length ? removeTabs(joined, blanks, false) : joined;
-    const selected = cleared.selectedTabId && now(cleared.selectedTabId);
-    set(selected && next.tabs[selected] ? apply(next, activated(next, selected)) : next);
+    const split = { ...joined, splits: rejoinedSplits(joined, cleared, now) };
+    const blanks = (cleared.blankTabIds ?? []).filter((id) => split.tabs[id] && !split.tabs[id]!.url && !hasPage(split.tabs[id]!));
+    const next = blanks.length ? removeTabs(split, blanks, false) : split;
+    set(reselected(next, windowId, cleared.selectedTabId && now(cleared.selectedTabId)));
   },
 
   removeClosedPin(id) {
