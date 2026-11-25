@@ -118,6 +118,8 @@ public final class LookModule: Module {
       Prop("classicChrome") { (view: GlassView, value: ClassicChrome?) in view.classicChrome = value ?? ClassicChrome() }
       Prop("shown") { (view: GlassView, value: Bool?) in view.shown = value ?? true }
       Prop("shownMs") { (view: GlassView, value: Double?) in view.shownDuration = max(0, value ?? 200) / 1000 }
+      Prop("privately") { (view: GlassView, value: Bool?) in view.privately = value == true }
+      Prop("overlay") { (view: GlassView, value: Bool?) in view.overlay = value == true }
       Prop("color") { (view: GlassView, value: String?) in view.colors.color = value }
       Prop("themeColors") { (view: GlassView, value: [String]?) in view.colors.themeColors = value }
       Prop("darkThemeColors") { (view: GlassView, value: [String]?) in view.colors.darkThemeColors = value }
@@ -313,6 +315,8 @@ final class GlassView: ExpoView {
   var classicChrome = ClassicChrome()
   var shown = true
   var shownDuration: TimeInterval = 0.2
+  var privately = false
+  var overlay = false
   var colors = LookColors()
   var source: String?
 
@@ -364,6 +368,8 @@ final class GlassView: ExpoView {
     let classic = isSolid
     glass.batch {
       glass.label = accessibilityIdentifier ?? "-"
+      glass.privately = privately || colors.isIncognito
+      glass.overlay = overlay
       glass.source = source
       glass.dark = dark
       glass.tint = tint
@@ -402,14 +408,13 @@ final class GlassView: ExpoView {
   }
 
   private func fadeShadow(from: Float, animated: Bool) {
-    let target = layer.shadowOpacity
-    guard animated, from != target else {
-      if !animated { layer.removeAnimation(forKey: "shownShadow") }
+    guard case let .fade(start, end) = LiquidGlassRules.shadowFade(from: Double(from), to: Double(layer.shadowOpacity), animated: animated) else {
+      layer.removeAnimation(forKey: "shownShadow")
       return
     }
     let fade = CABasicAnimation(keyPath: "shadowOpacity")
-    fade.fromValue = from
-    fade.toValue = target
+    fade.fromValue = Float(start)
+    fade.toValue = Float(end)
     fade.duration = shownDuration
     fade.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
     layer.add(fade, forKey: "shownShadow")

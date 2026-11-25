@@ -186,7 +186,9 @@ final class GlassFrames: NSObject {
       }
     }
     for surface in still { draws += surface.plan(with: nil, space: nil) }
-    for surface in live { surface.noteLensShown(now: now) }
+    let consent = UsageConsent.state()
+    let consentWindow = consent.sharing ? consent.generation : nil
+    for surface in live { surface.noteLensShown(now: now, consentWindow: consentWindow) }
     if PhoneTestBuild.isOn {
       for surface in live where surface.choice.path == .live {
         if surface.showsLens {
@@ -230,7 +232,7 @@ final class GlassFrames: NSObject {
         box.cooldown.trip(now: CACurrentMediaTime())
         cooldowns.setObject(box, forKey: owner)
         capture.forgetSamples()
-        PendingCounts.add(PendingCounts.glassCapturesOverBudget)
+        if !members.contains(where: \.privately) { PendingCounts.add(PendingCounts.glassCapturesOverBudget) }
         NSLog("PAGELAB look glass capture over budget: %@ turns to clear glass for %.0f s (trip %d, last %.1f ms)", members.map(\.label).joined(separator: ","), LiquidGlassRules.budgetCooldown(trips: box.cooldown.trips), box.cooldown.trips, spent)
         members.forEach { $0.needsPath() }
       }
@@ -280,6 +282,7 @@ final class GlassFrames: NSObject {
     }
     if let web, page != nil, capture.page.observe(web, now: now) {
       capture.drop()
+      for surface in members where surface.overlay { surface.dropLensNow() }
       if capture.page.arrived { capture.motion.arrive(now: now) }
       capture.tone = GlassToneGate()
       NotificationCenter.default.post(name: GlassTone.changed, object: web)
@@ -305,7 +308,8 @@ final class GlassFrames: NSObject {
     if let web, let page {
       let under = strip.applying(page.transform.inverted())
       capture.page.request(web, around: under, pixelsPerPoint: pixelsPerPoint, now: now)
-      if let luminance = capture.page.luminance(under: under, of: web), capture.tone.observe(luminance: luminance, now: now), let dark = capture.tone.dark {
+      let toneStrip = GlassFrames.toneStrip(of: members, in: space)
+      if !toneStrip.isNull, let luminance = capture.page.luminance(under: toneStrip.applying(page.transform.inverted()), of: web), capture.tone.observe(luminance: luminance, now: now), let dark = capture.tone.dark {
         NotificationCenter.default.post(name: GlassTone.changed, object: web, userInfo: [GlassTone.darkKey: dark])
         if PhoneTestBuild.isOn {
           stats.toneFlips += 1
@@ -372,6 +376,10 @@ final class GlassFrames: NSObject {
     if outcome == .captured || outcome == .failed { capturedNow = true }
     if outcome == .captured { capture.follow(shiftable ? web : nil) }
     finish(outcome, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil)
+  }
+
+  static func toneStrip(of members: [LiquidGlassSurface], in space: UIView) -> CGRect {
+    members.filter { !$0.overlay }.compactMap { member in member.region(in: space).map { $0.insetBy(dx: -member.marginPoints, dy: -member.marginPoints) } }.reduce(CGRect.null) { $0.union($1) }.intersection(space.bounds)
   }
 
   private func finish(_ outcome: GlassCapture.Outcome, capture: GlassCapture, members: [LiquidGlassSurface], pieces: Int, sourceWhole: Bool, page: Bool) {

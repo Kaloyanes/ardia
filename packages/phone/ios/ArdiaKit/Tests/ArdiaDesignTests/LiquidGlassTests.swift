@@ -153,6 +153,68 @@ struct LiquidGlassTests {
     #expect(!first && !later, "over-budget glass is counted by glass_captures_over_budget instead")
   }
 
+  @Test func `glass behind an Incognito page is never counted, and privacy or consent changing starts the stretch again`() {
+    let frame = 1.0 / 60
+    var privateGlass = LiquidGlassRules.LensWithheld()
+    var counted = 0
+    var now = 0.0
+    while now < 6 {
+      if privateGlass.note(path: .live, showsLens: false, now: now, privately: true) { counted += 1 }
+      now += frame
+    }
+    #expect(counted == 0)
+    var leftPrivate = 0
+    while now < 8.5 {
+      if privateGlass.note(path: .live, showsLens: false, now: now, privately: false) { leftPrivate += 1 }
+      now += frame
+    }
+    #expect(leftPrivate == 0, "clear glass seen while private doesn't carry over once the page is no longer private")
+    var consent = LiquidGlassRules.LensWithheld()
+    var beforeSharing = 0
+    now = 0
+    while now < 2.5 {
+      if consent.note(path: .live, showsLens: false, now: now, consentWindow: nil) { beforeSharing += 1 }
+      now += frame
+    }
+    var afterSharing = 0
+    while now < 5 {
+      if consent.note(path: .live, showsLens: false, now: now, consentWindow: 1) { afterSharing += 1 }
+      now += frame
+    }
+    #expect(beforeSharing == 0 && afterSharing == 0, "time before sharing was turned on is not counted")
+    #expect(!LiquidGlassRules.countsGlass(privately: true, consentWindow: 1))
+    #expect(!LiquidGlassRules.countsGlass(privately: false, consentWindow: nil))
+    #expect(LiquidGlassRules.countsGlass(privately: false, consentWindow: 1))
+  }
+
+  @Test func `a lens shown between frames starts the clear stretch again`() {
+    let frame = 1.0 / 60
+    var withheld = LiquidGlassRules.LensWithheld()
+    var counted = 0
+    var now = 0.0
+    while now < 2 {
+      if withheld.note(path: .live, showsLens: false, now: now) { counted += 1 }
+      now += frame
+    }
+    withheld.lensShown()
+    while now < 4.5 {
+      if withheld.note(path: .live, showsLens: false, now: now) { counted += 1 }
+      now += frame
+    }
+    #expect(counted == 0, "2 s and 2.5 s of clear glass either side of a lens are two short stretches, not one long one")
+    while now < 5.2 {
+      if withheld.note(path: .live, showsLens: false, now: now) { counted += 1 }
+      now += frame
+    }
+    #expect(counted == 1)
+  }
+
+  @Test func `the shadow's fade settles whenever it is already where it is going`() {
+    #expect(LiquidGlassRules.shadowFade(from: 1, to: 0, animated: true) == .fade(from: 1, to: 0))
+    #expect(LiquidGlassRules.shadowFade(from: 1, to: 1, animated: true) == .settle, "a collapse undone before Core Animation draws must drop the collapse's fade, or the shadow fades out and jumps back")
+    #expect(LiquidGlassRules.shadowFade(from: 0, to: 1, animated: false) == .settle)
+  }
+
   @Test func `the light comes from the top left and the rim is dimmer in dark`() {
     let light = LiquidGlassRules.light(LiquidGlassParams.defaults.lightAngle)
     #expect(light.x < 0 && light.y < 0)

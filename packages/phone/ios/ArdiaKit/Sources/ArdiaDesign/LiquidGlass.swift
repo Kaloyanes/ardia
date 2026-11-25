@@ -296,18 +296,31 @@ public enum LiquidGlassRules {
   public static let lensWithheldAfter: TimeInterval = 3
   public static let lensWithheldGap: TimeInterval = 0.25
 
+  public static func countsGlass(privately: Bool, consentWindow: Int?) -> Bool { !privately && consentWindow != nil }
+
   public struct LensWithheld: Equatable, Sendable {
     public private(set) var since: TimeInterval?
     public private(set) var counted = false
     private var notedAt = -Double.infinity
+    private var privately = false
+    private var consentWindow: Int?
 
     public init() {}
 
-    public mutating func note(path: Path, showsLens: Bool, now: TimeInterval) -> Bool {
+    public mutating func lensShown() {
+      since = nil
+      counted = false
+    }
+
+    public mutating func note(path: Path, showsLens: Bool, now: TimeInterval, privately: Bool = false, consentWindow: Int? = 0) -> Bool {
       defer { notedAt = now }
-      guard path == .live, !showsLens else {
-        since = nil
-        counted = false
+      if privately != self.privately || consentWindow != self.consentWindow {
+        self.privately = privately
+        self.consentWindow = consentWindow
+        lensShown()
+      }
+      guard path == .live, !showsLens, LiquidGlassRules.countsGlass(privately: privately, consentWindow: consentWindow) else {
+        lensShown()
         return false
       }
       if since == nil || now - notedAt > lensWithheldGap {
@@ -318,6 +331,15 @@ public enum LiquidGlassRules {
       counted = true
       return true
     }
+  }
+
+  public enum ShadowFade: Equatable, Sendable {
+    case settle
+    case fade(from: Double, to: Double)
+  }
+
+  public static func shadowFade(from: Double, to: Double, animated: Bool) -> ShadowFade {
+    animated && from != to ? .fade(from: from, to: to) : .settle
   }
 
   public static let captureRetryBase: TimeInterval = 0.05

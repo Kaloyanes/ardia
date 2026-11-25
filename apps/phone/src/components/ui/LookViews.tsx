@@ -208,6 +208,8 @@ type FrostProps = {
   fill: string;
   dark?: boolean;
   incognito?: boolean;
+  privately?: boolean;
+  overlay?: boolean;
   solid?: boolean;
   style?: StyleProp<ViewStyle>;
   children?: ReactNode;
@@ -237,12 +239,15 @@ export function LookFrost({
   fill,
   dark,
   incognito = false,
+  privately = false,
+  overlay = false,
   solid = false,
   style,
   children,
 }: FrostProps) {
   const look = useProfileLook();
   const theme = useTheme();
+  const privateContext = useIncognitoLook();
   const reduceTransparency = useReduceTransparency();
   const nativeLook = useNativeLook();
   if (!nativeLook || solid)
@@ -262,6 +267,8 @@ export function LookFrost({
         shape="rounded"
         cornerRadius={cornerRadius}
         interactive={false}
+        privately={incognito || privately || privateContext}
+        overlay={overlay}
         {...lookColors(look, incognito, shade)}
         dark={shade}
         reduceTransparency={reduceTransparency}
@@ -335,7 +342,7 @@ export function ChromeSurface({
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was && was.x === layout.x && was.y === layout.y && was.width === layout.width && was.height === layout.height ? was : layout));
   if (glassIsNative()) {
     const shade = dark ?? (incognito || theme.dark);
-    const glassProps = { source, name: testID, shape, cornerRadius, tint: incognito ? undefined : lookGlassTint(look), interactive, tinted, surface, barShadow, shown, shownMs, sampleHold, classicChrome: nativeClassicChrome, ...lookColors(look, incognito, shade), dark: shade };
+    const glassProps = { source, name: testID, shape, cornerRadius, tint: incognito ? undefined : lookGlassTint(look), interactive, tinted, surface, barShadow, shown, shownMs, sampleHold, privately: incognito, classicChrome: nativeClassicChrome, ...lookColors(look, incognito, shade), dark: shade };
     const split = splitsGlassFromFace(Platform.OS, true, branch);
     const glass = split ? (
       <View testID={testID ? `${testID}Face` : undefined} collapsable={false} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
