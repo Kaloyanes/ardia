@@ -975,12 +975,17 @@ class WebUIProcessPolicyTests(unittest.TestCase):
                 rotation = text[text.index('void RotateShellRecoveryDocuments('):]
                 rotation = rotation[:rotation.index('\n}\n')]
                 self.assertIn('static bool rotated = false;', rotation)
-                self.assertLess(rotation.index('kPreviousShellRecoveryDocument'), rotation.rindex('kShellRecoveryDocument'))
+                self.assertRegex(rotation, r'RecoveryArchive\(\)\.Rotate\(\s*ReadRecoveryDocument\(directory\),\s*'
+                                           r'WriteRecoveryDocument\(directory\)\)')
                 noted = text[text.index('void NoteShellRecovery('):]
                 noted = noted[:noted.index('\n}\n')]
                 self.assertIn('RecoveryTally().Record(outcome);', noted)
-                self.assertIn('kShellRecoveryDocument', noted)
+                self.assertRegex(noted, r'RecoveryArchive\(\)\.Save\(ReadRecoveryDocument\(directory\),\s*'
+                                        r'WriteRecoveryDocument\(directory\), tally\)')
                 self.assertIn('RecoveryTally().Json()', noted)
+                self.assertNotIn('kShellRecoveryDocument', text)
+                self.assertNotIn('kPreviousShellRecoveryDocument', text)
+                self.assertEqual(text.count('desktop_webui_process::RecoveryDocuments archive;'), 1)
         linux = (LINUX / 'ac_linux_host.cc').read_text()
         guard = linux[linux.index('if (method == "ArdiaShell.writeDocument" || method == "ArdiaShell.saveDocument" ||'):]
         self.assertIn('desktop_webui_process::ShellRecoveryDocument(name)', guard[:guard.index('return std::move(done)')])

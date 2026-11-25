@@ -1026,11 +1026,31 @@ desktop_webui_process::ShellRecoveryTally& RecoveryTally() {
   return tally;
 }
 
+desktop_webui_process::RecoveryDocuments& RecoveryArchive() {
+  static desktop_webui_process::RecoveryDocuments archive;
+  return archive;
+}
+
+auto ReadRecoveryDocument(const base::FilePath& directory) {
+  return [directory](const std::string& name) {
+    StoredDocument stored = ReadStoredDocument(directory, name);
+    return desktop_webui_process::RecoveryDocumentRead{stored.outcome, std::move(stored.contents)};
+  };
+}
+
+auto WriteRecoveryDocument(const base::FilePath& directory) {
+  return [directory](const std::string& name, const std::string& contents) {
+    return WriteDocument(directory, name, contents);
+  };
+}
+
 void NoteShellRecovery(const base::FilePath& directory, desktop_webui_process::RecoveryOutcome outcome) {
   RecoveryTally().Record(outcome);
-  FileRunner()->PostTask(FROM_HERE, base::BindOnce(base::IgnoreResult(&WriteDocument), directory,
-                                                   std::string(desktop_webui_process::kShellRecoveryDocument),
-                                                   std::make_optional(RecoveryTally().Json())));
+  FileRunner()->PostTask(FROM_HERE, base::BindOnce(
+      [](const base::FilePath& directory, const std::string& tally) {
+        RecoveryArchive().Save(ReadRecoveryDocument(directory), WriteRecoveryDocument(directory), tally);
+      },
+      directory, RecoveryTally().Json()));
 }
 
 void RotateShellRecoveryDocuments(const base::FilePath& directory) {
@@ -1039,11 +1059,7 @@ void RotateShellRecoveryDocuments(const base::FilePath& directory) {
   rotated = true;
   FileRunner()->PostTask(FROM_HERE, base::BindOnce(
       [](const base::FilePath& directory) {
-        const auto current = ReadDocument(directory, desktop_webui_process::kShellRecoveryDocument);
-        WriteDocument(directory, desktop_webui_process::kPreviousShellRecoveryDocument,
-                      current.value_or(desktop_webui_process::kNoShellRecoveries));
-        WriteDocument(directory, desktop_webui_process::kShellRecoveryDocument,
-                      std::string(desktop_webui_process::kNoShellRecoveries));
+        RecoveryArchive().Rotate(ReadRecoveryDocument(directory), WriteRecoveryDocument(directory));
       },
       directory));
 }

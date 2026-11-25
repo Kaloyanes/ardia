@@ -8,6 +8,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+
+#include "ardia/desktop/ac_desktop_policy.h"
 
 namespace ardia::desktop_webui_process {
 
@@ -141,6 +144,36 @@ struct ShellRecoveryTally {
 };
 
 inline constexpr std::string_view kShellBootstrapAsset = "host-bootstrap.js";
+
+struct RecoveryDocumentRead {
+  desktop_policy::StoredRead outcome = desktop_policy::StoredRead::kFailed;
+  std::string contents;
+};
+
+class RecoveryDocuments {
+ public:
+  template <typename Read, typename Write>
+  void Rotate(Read&& read, Write&& write) {
+    const RecoveryDocumentRead current = read(kShellRecoveryDocument);
+    if (current.outcome == desktop_policy::StoredRead::kFailed) return;
+    const std::string archived =
+        current.outcome == desktop_policy::StoredRead::kFound ? current.contents : std::string(kNoShellRecoveries);
+    if (!write(kPreviousShellRecoveryDocument, archived)) return;
+    archived_ = true;
+    write(kShellRecoveryDocument, std::string(kNoShellRecoveries));
+  }
+
+  template <typename Read, typename Write>
+  bool Save(Read&& read, Write&& write, const std::string& tally) {
+    if (!archived_) Rotate(read, write);
+    return archived_ && write(kShellRecoveryDocument, tally);
+  }
+
+  bool archived() const { return archived_; }
+
+ private:
+  bool archived_ = false;
+};
 
 class LaunchBootstrap {
  public:

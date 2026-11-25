@@ -295,15 +295,36 @@ ardia::desktop_webui_process::ShellRecoveryTally& RecoveryTally() {
   return tally;
 }
 
+ardia::desktop_webui_process::RecoveryDocuments& RecoveryArchive() {
+  static ardia::desktop_webui_process::RecoveryDocuments archive;
+  return archive;
+}
+
+auto ReadRecoveryDocument(const base::FilePath& directory) {
+  return [directory](const std::string& name) {
+    StoredDocument stored = ReadDocumentFile(directory, name);
+    return ardia::desktop_webui_process::RecoveryDocumentRead{
+        stored.outcome, std::move(stored.contents)};
+  };
+}
+
+auto WriteRecoveryDocument(const base::FilePath& directory) {
+  return [directory](const std::string& name, const std::string& contents) {
+    return WriteDocumentFile(directory, name, contents);
+  };
+}
+
 void NoteShellRecovery(
     ardia::desktop_webui_process::RecoveryOutcome outcome) {
   RecoveryTally().Record(outcome);
   FileRunner()->PostTask(
       FROM_HERE,
       base::BindOnce(
-          base::IgnoreResult(&WriteDocumentFile), SessionDirectory(),
-          std::string(ardia::desktop_webui_process::kShellRecoveryDocument),
-          RecoveryTally().Json()));
+          [](const base::FilePath& directory, const std::string& tally) {
+            RecoveryArchive().Save(ReadRecoveryDocument(directory),
+                                   WriteRecoveryDocument(directory), tally);
+          },
+          SessionDirectory(), RecoveryTally().Json()));
 }
 
 void RotateShellRecoveryDocuments() {
@@ -313,20 +334,13 @@ void RotateShellRecoveryDocuments() {
   }
   rotated = true;
   FileRunner()->PostTask(
-      FROM_HERE, base::BindOnce([](const base::FilePath& directory) {
-        const StoredDocument current = ReadDocumentFile(
-            directory, ardia::desktop_webui_process::kShellRecoveryDocument);
-        WriteDocumentFile(
-            directory,
-            ardia::desktop_webui_process::kPreviousShellRecoveryDocument,
-            current.outcome == ardia::desktop_policy::StoredRead::kFound
-                ? current.contents
-                : std::string(
-                      ardia::desktop_webui_process::kNoShellRecoveries));
-        WriteDocumentFile(
-            directory, ardia::desktop_webui_process::kShellRecoveryDocument,
-            ardia::desktop_webui_process::kNoShellRecoveries);
-      }, SessionDirectory()));
+      FROM_HERE, base::BindOnce(
+                     [](const base::FilePath& directory) {
+                       RecoveryArchive().Rotate(
+                           ReadRecoveryDocument(directory),
+                           WriteRecoveryDocument(directory));
+                     },
+                     SessionDirectory()));
 }
 
 std::string Text(const base::DictValue& value, std::string_view key) {

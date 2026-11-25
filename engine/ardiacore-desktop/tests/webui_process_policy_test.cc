@@ -2,6 +2,9 @@
 
 #include <cassert>
 #include <cstdio>
+#include <map>
+#include <set>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -282,9 +285,120 @@ void TestGivingUpIsReportedOnlyWhenTheBudgetRefuses() {
   assert(spent.Next(5, WindowState::kOpen, true) == RecoveryStep::kNothing);
 }
 
+struct FakeFolder {
+  std::map<std::string, std::string> files;
+  std::set<std::string> unwritable;
+  bool reads_fail = false;
+  int writes = 0;
+
+  auto Read() {
+    return [this](const std::string& name) {
+      if (reads_fail) return policy::RecoveryDocumentRead{ardia::desktop_policy::StoredRead::kFailed, {}};
+      const auto found = files.find(name);
+      if (found == files.end()) return policy::RecoveryDocumentRead{ardia::desktop_policy::StoredRead::kMissing, {}};
+      return policy::RecoveryDocumentRead{ardia::desktop_policy::StoredRead::kFound, found->second};
+    };
+  }
+
+  auto Write() {
+    return [this](const std::string& name, const std::string& contents) {
+      ++writes;
+      if (unwritable.count(name)) return false;
+      files[name] = contents;
+      return true;
+    };
+  }
+
+  std::string At(const std::string& name) const {
+    const auto found = files.find(name);
+    return found == files.end() ? std::string("<missing>") : found->second;
+  }
+};
+
+const std::string kLastRun = "{\"attempts\":2,\"recovered\":1,\"exhausted\":1}\n";
+const std::string kThisRun = "{\"attempts\":1,\"recovered\":0,\"exhausted\":0}\n";
+
+void TestRotationArchivesTheLastRunAndStartsAFreshTally() {
+  FakeFolder folder;
+  folder.files[policy::kShellRecoveryDocument] = kLastRun;
+  policy::RecoveryDocuments documents;
+  documents.Rotate(folder.Read(), folder.Write());
+  assert(documents.archived());
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == kLastRun);
+  assert(folder.At(policy::kShellRecoveryDocument) == policy::kNoShellRecoveries);
+  assert(documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(folder.At(policy::kShellRecoveryDocument) == kThisRun);
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == kLastRun);
+}
+
+void TestAFirstRunArchivesAnEmptyTally() {
+  FakeFolder folder;
+  policy::RecoveryDocuments documents;
+  documents.Rotate(folder.Read(), folder.Write());
+  assert(documents.archived());
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == policy::kNoShellRecoveries);
+  assert(folder.At(policy::kShellRecoveryDocument) == policy::kNoShellRecoveries);
+}
+
+void TestAFailedArchiveKeepsTheLastRunsTallyUntilARetryWorks() {
+  FakeFolder folder;
+  folder.files[policy::kShellRecoveryDocument] = kLastRun;
+  folder.files[policy::kPreviousShellRecoveryDocument] = "{\"attempts\":9,\"recovered\":9,\"exhausted\":0}\n";
+  folder.unwritable.insert(policy::kPreviousShellRecoveryDocument);
+  policy::RecoveryDocuments documents;
+  documents.Rotate(folder.Read(), folder.Write());
+  assert(!documents.archived());
+  assert(folder.At(policy::kShellRecoveryDocument) == kLastRun);
+  assert(!documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(!documents.archived());
+  assert(folder.At(policy::kShellRecoveryDocument) == kLastRun);
+  folder.unwritable.clear();
+  assert(documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(documents.archived());
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == kLastRun);
+  assert(folder.At(policy::kShellRecoveryDocument) == kThisRun);
+}
+
+void TestAnUnreadableTallyIsNeitherArchivedNorOverwritten() {
+  FakeFolder folder;
+  folder.files[policy::kShellRecoveryDocument] = kLastRun;
+  folder.reads_fail = true;
+  policy::RecoveryDocuments documents;
+  documents.Rotate(folder.Read(), folder.Write());
+  assert(!documents.archived() && folder.writes == 0);
+  assert(!documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(folder.writes == 0);
+  assert(folder.At(policy::kShellRecoveryDocument) == kLastRun);
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == "<missing>");
+  folder.reads_fail = false;
+  assert(documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == kLastRun);
+  assert(folder.At(policy::kShellRecoveryDocument) == kThisRun);
+}
+
+void TestAFailedResetAfterArchivingIsOverwrittenByTheNextSave() {
+  FakeFolder folder;
+  folder.files[policy::kShellRecoveryDocument] = kLastRun;
+  policy::RecoveryDocuments documents;
+  folder.unwritable.insert(policy::kShellRecoveryDocument);
+  documents.Rotate(folder.Read(), folder.Write());
+  assert(documents.archived());
+  assert(folder.At(policy::kPreviousShellRecoveryDocument) == kLastRun);
+  folder.unwritable.clear();
+  const int writes = folder.writes;
+  assert(documents.Save(folder.Read(), folder.Write(), kThisRun));
+  assert(folder.writes == writes + 1);
+  assert(folder.At(policy::kShellRecoveryDocument) == kThisRun);
+}
+
 }
 
 int main() {
+  TestRotationArchivesTheLastRunAndStartsAFreshTally();
+  TestAFirstRunArchivesAnEmptyTally();
+  TestAFailedArchiveKeepsTheLastRunsTallyUntilARetryWorks();
+  TestAnUnreadableTallyIsNeitherArchivedNorOverwritten();
+  TestAFailedResetAfterArchivingIsOverwrittenByTheNextSave();
   TestAnInitialLoadThatNeverCommitsIsRecovered();
   TestAnInitialLoadThatCommitsIsNotARecovery();
   TestOnlyARecoveryThatCommitsCountsAsRecovered();
