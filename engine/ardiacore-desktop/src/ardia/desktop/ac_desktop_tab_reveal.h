@@ -134,16 +134,18 @@ class TabRevealCoordinator {
     const auto found = tabs_.find(state.tab_id);
     Surface next;
     next.state = state;
+    bool invalidated = false;
     if (found == tabs_.end()) {
       next.epoch = ++next_epoch_;
     } else {
       const TabSurfaceState& was = found->second.state;
-      const bool invalidated = was.is_crashed != state.is_crashed || was.is_evicted != state.is_evicted ||
-                               was.is_dom_only != state.is_dom_only;
+      invalidated = was.is_crashed != state.is_crashed || was.is_evicted != state.is_evicted ||
+                    was.is_dom_only != state.is_dom_only || (was.has_committed_frame && !state.has_committed_frame);
       next.epoch = invalidated ? ++next_epoch_ : found->second.epoch;
     }
     tabs_[state.tab_id] = next;
     React(state.tab_id, now, reveals);
+    if (invalidated) ReissueAwaitedEpoch(state.tab_id, reveals);
     return reveals;
   }
 
@@ -476,6 +478,16 @@ class TabRevealCoordinator {
       Reveal reveal = Base(id, pane);
       reveal.action = RevealAction::kHideAllNative;
       reveal.kind = SwitchKind::kEmpty;
+      reveals.push_back(std::move(reveal));
+    }
+  }
+
+  void ReissueAwaitedEpoch(TabId tab, std::vector<Reveal>& reveals) const {
+    for (const auto& [id, pane] : panes_) {
+      if (!pane.pending || pane.target != tab) continue;
+      Reveal reveal = Base(id, pane);
+      reveal.action = RevealAction::kHoldPrevious;
+      reveal.kind = SwitchKind::kHeld;
       reveals.push_back(std::move(reveal));
     }
   }

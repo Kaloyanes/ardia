@@ -677,6 +677,59 @@ void StaleFramesAreIgnored() {
   EXPECT(steady.EpochOf(kA) == epoch);
 }
 
+void AnInvalidatedTargetReissuesItsEpoch() {
+  TabRevealCoordinator coordinator = ShowingA();
+  coordinator.UpdateTab(Cold(kB), 0);
+  const Reveal held = Last(coordinator.Switch(kPane, kB, 0));
+  EXPECT(held.action == RevealAction::kHoldPrevious);
+  const reveal::SurfaceEpoch first = held.awaiting_epoch;
+  TabSurfaceState evicted = Cold(kB);
+  evicted.is_evicted = true;
+  const Steps steps = coordinator.UpdateTab(evicted, 20);
+  EXPECT(steps.size() == 1);
+  const Reveal reissued = Last(steps);
+  EXPECT(reissued.pane_id == kPane);
+  EXPECT(reissued.action == RevealAction::kHoldPrevious);
+  EXPECT(reissued.awaiting == kB);
+  EXPECT(reissued.visible == kA);
+  EXPECT(reissued.deadline_ms == held.deadline_ms);
+  EXPECT(reissued.awaiting_epoch != first);
+  EXPECT(reissued.hide.empty());
+  EXPECT(coordinator.OnTargetFrameCommitted(kB, first, kWidth, kHeight, 30).empty());
+  EXPECT(coordinator.IsHolding(kPane));
+  const Steps settled = coordinator.OnTargetFrameCommitted(kB, reissued.awaiting_epoch, kWidth, kHeight, 40);
+  EXPECT(settled.size() == 1);
+  EXPECT(Last(settled).visible == kB);
+  EXPECT(coordinator.stats().held_until_frame == 1);
+  EXPECT(coordinator.stats().deadline_fallbacks == 0);
+  EXPECT(coordinator.UpdateTab(Live(kB, 900, 700), 50).empty());
+  ExpectBalancedHolds(coordinator);
+}
+
+void LosingACommittedFrameRejectsQueuedFrames() {
+  TabRevealCoordinator coordinator = ShowingA();
+  coordinator.UpdateTab(Live(kB, 600, 400), 0);
+  const Reveal held = Last(coordinator.Switch(kPane, kB, 0));
+  EXPECT(held.action == RevealAction::kHoldPrevious);
+  const reveal::SurfaceEpoch queued = held.awaiting_epoch;
+  const Steps steps = coordinator.UpdateTab(Cold(kB), 10);
+  EXPECT(steps.size() == 1);
+  const Reveal reissued = Last(steps);
+  EXPECT(reissued.action == RevealAction::kHoldPrevious);
+  EXPECT(reissued.awaiting == kB);
+  EXPECT(reissued.deadline_ms == held.deadline_ms);
+  EXPECT(reissued.awaiting_epoch != queued);
+  EXPECT(coordinator.OnTargetFrameCommitted(kB, queued, kWidth, kHeight, 20).empty());
+  EXPECT(coordinator.IsHolding(kPane));
+  EXPECT(coordinator.OnTargetFrameCommitted(kB, reissued.awaiting_epoch, kWidth, kHeight, 30).size() == 1);
+  EXPECT(coordinator.stats().held_until_frame == 1);
+
+  TabRevealCoordinator idle = ShowingA();
+  idle.UpdateTab(Live(kB), 0);
+  EXPECT(idle.UpdateTab(Cold(kB), 1).empty());
+  ExpectBalancedHolds(coordinator);
+}
+
 void GenerationsNeverRepeat() {
   TabRevealCoordinator coordinator = ShowingA();
   const uint64_t first = Last(coordinator.Switch(kPane, kB, 0)).generation;
@@ -818,6 +871,8 @@ int main() {
       {"ClosingThePendingTargetKeepsTheHoldBounded", ClosingThePendingTargetKeepsTheHoldBounded},
       {"ClosingTheVisibleTabHidesIt", ClosingTheVisibleTabHidesIt},
       {"StaleFramesAreIgnored", StaleFramesAreIgnored},
+      {"AnInvalidatedTargetReissuesItsEpoch", AnInvalidatedTargetReissuesItsEpoch},
+      {"LosingACommittedFrameRejectsQueuedFrames", LosingACommittedFrameRejectsQueuedFrames},
       {"GenerationsNeverRepeat", GenerationsNeverRepeat},
       {"HidingTheWindowCancelsHolds", HidingTheWindowCancelsHolds},
       {"TimestampsNeverRunBackwards", TimestampsNeverRunBackwards},
