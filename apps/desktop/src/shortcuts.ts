@@ -105,3 +105,8 @@ export function linuxNativeBindings(bindings: Binding[], profiles: readonly stri
 }
 
 export const dispatchesKeyPress = (binding: Pick<Binding, "command">, event: Pick<KeyboardEvent, "repeat">) => !(event.repeat && KEY_REPEAT_IGNORED_COMMANDS.has(binding.command));
+
+const IME_PROCESS_KEY_CODE = 229;
+
+export const composingKey = (event: Pick<KeyboardEvent, "isComposing" | "key" | "keyCode">) =>
+  event.isComposing || event.key === "Process" || event.keyCode === IME_PROCESS_KEY_CODE;
