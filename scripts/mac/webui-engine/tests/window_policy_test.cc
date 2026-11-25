@@ -158,9 +158,10 @@ TEST(declining_the_download_prompt_leaves_nothing_for_a_later_quit_to_cancel) {
   const policy::DownloadAsker main{"main", "3"};
   policy::DownloadPermission permission;
   permission.Shown(main, {"a"});
-  permission.Declined(policy::DownloadAsker{"main", "2"});
+  permission.Opened(main, "dialog:downloads-warning:1");
+  permission.Declined(policy::DownloadAsker{"main", "2"}, "dialog:downloads-warning:1");
   CHECK(permission.pending());
-  permission.Declined(main);
+  permission.Declined(main, "dialog:downloads-warning:1");
   CHECK(!permission.pending());
   const auto later = permission.Take(main);
   CHECK(!later.present);
@@ -173,6 +174,28 @@ TEST(declining_the_download_prompt_leaves_nothing_for_a_later_quit_to_cancel) {
   const auto confirmed = permission.Take(main);
   CHECK(confirmed.present && confirmed.ids == (std::set<std::string>{"a"}));
   CHECK(!permission.Take(main).present);
+}
+
+TEST(declining_an_unrelated_confirm_keeps_the_download_prompts_snapshot) {
+  const policy::DownloadAsker main{"main", "3"};
+  policy::DownloadPermission permission;
+  permission.Shown(main, {"a"});
+  permission.Declined(main, "dialog:already-open-close-tab:1");
+  CHECK(permission.pending());
+  permission.Opened(main, "dialog:downloads-warning:2");
+  permission.Opened(main, "dialog:another-confirm:3");
+  permission.Declined(main, "dialog:another-confirm:3");
+  permission.Declined(main, "dialog:already-open-close-tab:1");
+  CHECK(permission.pending());
+  permission.Opened(policy::DownloadAsker{"main", "4"}, "dialog:other-renderer:4");
+  const auto confirmed = permission.Take(main);
+  CHECK(confirmed.present && confirmed.ids == (std::set<std::string>{"a"}));
+  permission.Shown(main, {"b"});
+  permission.Declined(main, "dialog:downloads-warning:2");
+  CHECK(permission.pending());
+  permission.Opened(main, "dialog:downloads-warning:5");
+  permission.Declined(main, "dialog:downloads-warning:5");
+  CHECK(!permission.pending() && !permission.Take(main).present);
 }
 
 TEST(re_registering_the_edge_while_outside_the_content_reports_the_live_pointer_and_polls) {

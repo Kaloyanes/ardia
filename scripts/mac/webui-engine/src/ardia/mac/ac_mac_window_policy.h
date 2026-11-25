@@ -137,15 +137,24 @@ class DownloadPermission {
   void Shown(DownloadAsker asker, std::set<std::string> ids) {
     asker_ = std::move(asker);
     shown_ = DownloadAuthorization{true, std::move(ids)};
+    prompt_.clear();
   }
 
-  void Declined(const DownloadAsker& asker) {
-    if (shown_ && asker_ == asker) shown_.reset();
+  void Opened(const DownloadAsker& asker, const std::string& dialog_id) {
+    if (shown_ && asker_ == asker && prompt_.empty() && !dialog_id.empty()) prompt_ = dialog_id;
+  }
+
+  void Declined(const DownloadAsker& asker, const std::string& dialog_id) {
+    if (shown_ && asker_ == asker && !prompt_.empty() && prompt_ == dialog_id) {
+      shown_.reset();
+      prompt_.clear();
+    }
   }
 
   DownloadAuthorization Take(const DownloadAsker& asker) {
     std::optional<DownloadAuthorization> shown = std::move(shown_);
     shown_.reset();
+    prompt_.clear();
     if (!shown || asker_ != asker) return {};
     return std::move(*shown);
   }
@@ -155,6 +164,7 @@ class DownloadPermission {
  private:
   DownloadAsker asker_;
   std::optional<DownloadAuthorization> shown_;
+  std::string prompt_;
 };
 
 inline std::set<std::string> DownloadsToCancel(bool shell_confirmed,

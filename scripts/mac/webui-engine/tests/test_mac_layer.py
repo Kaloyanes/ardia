@@ -366,11 +366,18 @@ class ContractTests(unittest.TestCase):
 
     def test_a_confirmed_quit_cancels_downloads_before_it_exits(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
-        finish = lifecycle.split('void FinishShellQuit() {', 1)[1].split('\n}\n', 1)[0]
+        finish = lifecycle.split('void FinishShellQuit(window_policy::DownloadAuthorization authorized) {', 1)[1].split('\n}\n', 1)[0]
         self.assertLess(finish.index('window_policy::DownloadsToCancel(true, UnloadHandlersPending(), authorized, ActiveDownloadIds())'),
                         finish.index('item->Cancel(false);'))
         self.assertLess(finish.index('item->Cancel(false);'), finish.index('chrome::AttemptExit();'))
-        self.assertIn('std::exchange(QuitDownloadAuthorization(), {})', finish)
+        self.assertNotIn('QuitDownloadAuthorization()', finish)
+        exit_decision = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(exit_decision.index('std::exchange(QuitDownloadAuthorization(), {})'), exit_decision.index('PostTask('))
+        self.assertIn('base::BindOnce(&FinishShellQuit, std::move(authorized))', exit_decision)
+        self.assertIn('FinishShellQuit(std::exchange(QuitDownloadAuthorization(), {}));', lifecycle)
+        opened = lifecycle.split('void NoteDialogOpened(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('ShownDownloads().Opened(asker, *dialog);', opened)
+        self.assertIn('NoteDialogOpened(window_policy::DownloadAsker{window_id_, live}, *request);', lifecycle)
         self.assertNotIn('CancelAllDownloads', lifecycle)
         pending = lifecycle.split('bool UnloadHandlersPending() {', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('ForEachCurrentBrowserWindowInterfaceOrderedByActivation(', pending)
@@ -389,12 +396,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('ShownDownloads().Declined(', answer)
         self.assertIn('NoteDialogAnswer(envelope);', lifecycle.split('void ShellHostView::StartLifecycle() {', 1)[1].split('\n}\n', 1)[0])
         exit_soon = lifecycle.split('void ExitSoon(bool shell_confirmed) {', 1)[1].split('\n}\n', 1)[0]
-        self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit)', exit_soon)
+        self.assertIn('shell_confirmed ? base::BindOnce(&FinishShellQuit, std::move(authorized))', exit_soon)
+        self.assertIn(': base::BindOnce(&chrome::AttemptExit)', exit_soon)
         self.assertIn('ExitSoon(false);', lifecycle.split('void QuitWithoutShell() {', 1)[1].split('\n}\n', 1)[0])
         quit = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]
         self.assertNotIn('ExitSoon(false)', quit)
         self.assertNotIn('chrome::AttemptExit()', quit)
-        self.assertIn('FinishShellQuit();', quit)
+        self.assertIn('FinishShellQuit(std::exchange(QuitDownloadAuthorization(), {}));', quit)
         self.assertEqual(lifecycle.count('chrome::AttemptExit();'), 1)
 
     def test_a_late_quit_acknowledgment_cancels_its_close_instead_of_exiting(self):

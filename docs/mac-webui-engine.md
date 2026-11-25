@@ -72,7 +72,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
   cancels the quit, and a window that answers after its quit ended keeps its window open instead of exiting. The
   shell already asked about active downloads, so that quit cancels the ones it reported before it exits and
   Chromium doesn't ask again. It counts downloads the way Chromium does at shutdown, and the list belongs to the window that asked: declining
-  the prompt drops it, so a later Quit can't cancel those downloads without asking again. A download that started
+  the download prompt drops it (declining some other question doesn't), so a later Quit can't cancel those downloads without asking again. A download that started
   while the windows flushed is left for Chromium to ask about,
   and if any tab in any browser window still has a "Leave site?" handler to run, no download is cancelled. A
   second Quit while a window is still flushing for the first gives that window a fresh close. With no live shell, Quit exits at once and Chromium asks about downloads itself.

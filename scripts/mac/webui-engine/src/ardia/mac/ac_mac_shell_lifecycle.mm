@@ -151,10 +151,19 @@ void NoteDialogAnswer(const base::Value& envelope) {
   const base::DictValue* result = data ? data->FindDict("result") : nullptr;
   const std::string* window = data ? data->FindString("windowId") : nullptr;
   const std::string* renderer = data ? data->FindString("rendererGeneration") : nullptr;
-  if (!result || !window || !renderer || result->FindBool("confirmed").value_or(false)) {
+  const std::string* dialog = data ? data->FindString("dialogId") : nullptr;
+  if (!result || !window || !renderer || !dialog || result->FindBool("confirmed").value_or(false)) {
     return;
   }
-  ShownDownloads().Declined(window_policy::DownloadAsker{*window, *renderer});
+  ShownDownloads().Declined(window_policy::DownloadAsker{*window, *renderer}, *dialog);
+}
+
+void NoteDialogOpened(const window_policy::DownloadAsker& asker, const base::DictValue& request) {
+  const std::string* kind = request.FindString("kind");
+  const std::string* dialog = request.FindString("dialogId");
+  if (kind && *kind == "confirm" && dialog) {
+    ShownDownloads().Opened(asker, *dialog);
+  }
 }
 
 window_policy::DownloadAuthorization& QuitDownloadAuthorization() {
@@ -162,8 +171,7 @@ window_policy::DownloadAuthorization& QuitDownloadAuthorization() {
   return *authorized;
 }
 
-void FinishShellQuit() {
-  const window_policy::DownloadAuthorization authorized = std::exchange(QuitDownloadAuthorization(), {});
+void FinishShellQuit(window_policy::DownloadAuthorization authorized) {
   const std::set<std::string> cancel =
       window_policy::DownloadsToCancel(true, UnloadHandlersPending(), authorized, ActiveDownloadIds());
   if (!cancel.empty()) {
@@ -182,8 +190,10 @@ void FinishShellQuit() {
 
 void ExitSoon(bool shell_confirmed) {
   QuitDeadline().Stop();
+  window_policy::DownloadAuthorization authorized = std::exchange(QuitDownloadAuthorization(), {});
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, shell_confirmed ? base::BindOnce(&FinishShellQuit) : base::BindOnce(&chrome::AttemptExit));
+      FROM_HERE, shell_confirmed ? base::BindOnce(&FinishShellQuit, std::move(authorized))
+                                 : base::BindOnce(&chrome::AttemptExit));
 }
 
 std::string StringAt(const base::ListValue* values, std::size_t index) {
@@ -247,7 +257,7 @@ void StartQuit(const window_policy::DownloadAsker& asker) {
                            [](std::uint64_t generation) {
                              if (Quit().Expired(generation) == window_policy::QuitStep::kExit) {
                                Trace("quit went ahead after the windows missed the flush deadline");
-                               FinishShellQuit();
+                               FinishShellQuit(std::exchange(QuitDownloadAuthorization(), {}));
                              }
                            },
                            generation));
@@ -440,6 +450,7 @@ void ShellHostView::DialogCall(const std::string& method, const base::ListValue*
   if (refusal != dialog_policy::Refusal::kNone) {
     return std::move(done).Run(false, Failure("ERR_DIALOG", dialog_policy::RefusalMessage(refusal)));
   }
+  NoteDialogOpened(window_policy::DownloadAsker{window_id_, live}, *request);
   std::move(done).Run(true, base::Value(base::DictValue().Set("accepted", true)));
 }
 
