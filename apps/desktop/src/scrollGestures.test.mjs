@@ -527,3 +527,32 @@ test("a short flick from rest still pages, and a long reverse flick on an unfini
   spring.input("ended", 130, 1, WIDTH, 1.01);
   assert.equal(spring.selected, 0);
 });
+
+test("a quick reverse flick still keeps the committed profile after the interrupted settle crossed halfway", () => {
+  const { spring, at } = interruptedAt(0.62);
+  assert.ok(at > 0.5 && at < 0.7, `interrupted at ${at}`);
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 4, 1, WIDTH, 1);
+  spring.input("changed", 10, 1, WIDTH, 1.01);
+  spring.input("ended", 10, 1, WIDTH, 1.01);
+  assert.ok(spring.position > 0.5 && spring.position < at);
+  assert.equal(spring.selected, 1, "a 10 px reverse flick past halfway undid the switch");
+});
+
+test("a reverse flick after mayBegin held the settle still needs its own travel", () => {
+  const { spring } = interruptedAt(0.62);
+  spring.input("prepare", 0, 0, WIDTH, 1);
+  assert.equal(spring.phase, "holding");
+  spring.input("began", 0, 1, WIDTH, 1);
+  spring.input("changed", 4, 1, WIDTH, 1);
+  spring.input("changed", 10, 1, WIDTH, 1.01);
+  spring.input("ended", 10, 1, WIDTH, 1.01);
+  assert.equal(spring.selected, 1);
+  const long = interruptedAt(0.62).spring;
+  long.input("prepare", 0, 0, WIDTH, 1);
+  long.input("began", 0, 1, WIDTH, 1);
+  long.input("changed", 90, 1, WIDTH, 1);
+  long.input("changed", 200, 1, WIDTH, 1.01);
+  long.input("ended", 200, 1, WIDTH, 1.01);
+  assert.equal(long.selected, 0, "a long reverse flick from a held settle goes back");
+});

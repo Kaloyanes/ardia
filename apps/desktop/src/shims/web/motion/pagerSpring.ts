@@ -60,7 +60,7 @@ export function sequenceSource(start = 0): SequenceSource {
   };
 }
 
-type Drag = { start: number; width: number; lo: number; hi: number; home: number; detent: number };
+type Drag = { start: number; width: number; lo: number; hi: number; home: number; detent: number; interrupted: boolean };
 type Sample = { time: number; position: number };
 type Spring = { from: number; target: number; velocity: number; start: number | null };
 
@@ -83,7 +83,7 @@ export class PagerSpring {
   private selectionSequenceValue = 0;
   private propSelected = 0;
   private propAck = 0;
-  private drag: Drag = { start: 0, width: 0, lo: 0, hi: 0, home: 0, detent: 0 };
+  private drag: Drag = { start: 0, width: 0, lo: 0, hi: 0, home: 0, detent: 0, interrupted: false };
   private history: Sample[] = [];
   private spring: Spring | null = null;
   private lastFrame: number | null = null;
@@ -345,7 +345,8 @@ export class PagerSpring {
     const x = this.positionValue;
     const lo = Math.max(0, Math.min(home - 1, Math.floor(x)));
     const hi = Math.min(this.countValue - 1, Math.max(home + 1, Math.ceil(x)));
-    this.drag = { start: x, width: 0, lo, hi, home, detent: clampToIndex(Math.round(x), lo, hi) };
+    const interrupted = (this.phaseValue === "settling" || this.phaseValue === "holding") && x !== home;
+    this.drag = { start: x, width: 0, lo, hi, home, detent: clampToIndex(Math.round(x), lo, hi), interrupted };
     this.history = [];
     this.velocityValue = 0;
     this.phaseValue = "tracking";
@@ -410,7 +411,8 @@ export class PagerSpring {
   }
 
   private ownProgress(x: number, home: number) {
-    return Math.abs(this.drag.start - home) < 0.5 || Math.abs(x - this.drag.start) >= OWN_TRAVEL;
+    const interrupted = this.drag.interrupted || Math.abs(this.drag.start - home) >= 0.5;
+    return !interrupted || Math.abs(x - this.drag.start) >= OWN_TRAVEL;
   }
 
   private slowAim(x: number, home: number) {
