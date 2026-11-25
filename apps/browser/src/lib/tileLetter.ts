@@ -1,5 +1,5 @@
 import { displayHostOf } from "./url";
-import { graphemeClusters, isPictographic, startsCluster } from "./graphemes";
+import { graphemeClusters, isControl, isPictographic, startsCluster } from "./graphemes";
 
 const LETTER = /\p{L}/u;
 
@@ -26,7 +26,11 @@ export function tileLetterOf(url: string, title: string): string {
 export const TILE_LETTERS_MAX = 2;
 export const TILE_LETTERS_MAX_LENGTH = 24;
 
-const UNSEEN = /[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\s]|(?![\u200D\u{E0020}-\u{E007F}])\p{Cf}/gu;
+const SPACE = /[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u200C\u2028\u2029\u202F\u205F\u3000\uFEFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]/u;
+const unseen = (char: string) => SPACE.test(char) || isControl(char.codePointAt(0)!);
+const withoutUnseen = (text: string) => [...text].filter((char) => !unseen(char)).join("");
+const BASIC_PLANE_RUN = /[\u0000-\uD7FF\uE000-\uFFFF]+/g;
+const inBasicPlane = (text: string, change: (run: string) => string) => text.replace(BASIC_PLANE_RUN, change);
 const ZWJ = "\u200D";
 
 function withoutStrayJoiners(cluster: string): string {
@@ -35,7 +39,7 @@ function withoutStrayJoiners(cluster: string): string {
 }
 
 function cleanOnce(text: string): string {
-  const shown = text.replace(UNSEEN, "").normalize("NFC").toLocaleUpperCase().normalize("NFC").replace(UNSEEN, "");
+  const shown = withoutUnseen(inBasicPlane(withoutUnseen(text), (run) => run.normalize("NFC").toLocaleUpperCase().normalize("NFC")));
   let kept = "";
   for (const cluster of graphemeClusters(shown).filter(startsCluster).map(withoutStrayJoiners).slice(0, TILE_LETTERS_MAX)) {
     const room = TILE_LETTERS_MAX_LENGTH - kept.length;

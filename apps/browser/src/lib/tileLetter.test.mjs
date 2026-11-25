@@ -90,3 +90,19 @@ test("tile letters follow Unicode's grapheme rules: symbols that aren't emoji co
   const samples = ["⌀⌀⌀", "क्षअ", "ক্ষমা", "ક્ષર", "త్రి", "ക്ഷേ", "한국어", "👩‍💻👨‍👩‍👧", "🇫🇷🇩🇪🇮🇹", "é̂x", "🏳️‍🌈x", "ﷺab", "؀١x", "ไทย", "ລາວ"];
   for (const text of samples) assert.deepEqual(graphemeClusters(text), [...segmenter.segment(text)].map((s) => s.segment), text);
 });
+
+test("tile letters keep a Khmer conjunct and its next letter, and a Zanabazar Square sign starts its own grapheme", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  assert.equal(cleanTileLetters("ស្ករ"), "ស្ករ");
+  assert.equal(cleanTileLetters("\u{11A3A}AA"), "\u{11A3A}A");
+  assert.equal(cleanTileLetters("क्षअ"), "क्षअ");
+  assert.equal(cleanTileLetters("⌀⌀⌀"), "⌀⌀");
+  assert.equal(cleanTileLetters("👩‍💻👨‍👩‍👧x"), "👩‍💻👨‍👩‍👧");
+});
+
+test("tile letters normalise and upper-case only the basic plane, so Hermes, which composes a tag character as if it were a letter, cleans the same as V8", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  assert.equal(cleanTileLetters("ำក\u{E0067}́⃣️"), "ក\u{E0067}́⃣️", "the tag stays a tag, and the leading spacing mark goes");
+  assert.equal(cleanTileLetters("𐐨b"), "𐐨B", "an astral letter keeps its case");
+  assert.equal(cleanTileLetters("éb"), "ÉB");
+});

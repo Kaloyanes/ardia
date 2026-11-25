@@ -3,6 +3,7 @@ import type { Tab } from "../browser/types";
 import { PIN_TAB, PIN_LETTERS } from "./pinRecords";
 import { commitPinnedEdit, homeWindow, store, unpinnedRemotely, windowsHomeFirst } from "./pinnedSyncState";
 import { pinKeyOf } from "../browser/model";
+import { pinnedGroupMembers } from "../browser/structure";
 import { cleanTileLetters } from "../../lib/tileLetter";
 
 const NO_LETTERS = "";
@@ -10,8 +11,9 @@ const NO_LETTERS = "";
 function localPinKeys(profileId: string): Set<string> {
   const s = store();
   const keys = new Set<string>();
-  for (const t of Object.values(s.tabs)) if (t.profileId === profileId && t.pin) keys.add(pinKeyOf(t));
-  for (const p of s.parkedPins[profileId]?.tabs ?? []) if (!p.groupId) keys.add(p.id);
+  const members = pinnedGroupMembers(s.groups);
+  for (const t of Object.values(s.tabs)) if (t.profileId === profileId && (t.pin || members.has(t.id))) keys.add(pinKeyOf(t));
+  for (const p of s.parkedPins[profileId]?.tabs ?? []) keys.add(p.id);
   return keys;
 }
 
@@ -28,16 +30,17 @@ export function pinnedLettersAdapter(profileId: string): Adapter {
         if (known.has(key)) return;
         known.add(key);
         const k = `${PIN_LETTERS}${key}`;
-        if (letters) values.set(k, letters);
+        if (letters) values.set(k, cleanTileLetters(base(k)) === letters ? base(k) : letters);
         else if (base(k) !== undefined) values.set(k, NO_LETTERS);
       };
+      const members = pinnedGroupMembers(s.groups);
       for (const w of windowsHomeFirst(s, homeWindow(s, profileId))) {
         for (const id of w.tabIds) {
           const t = s.tabs[id];
-          if (t?.profileId === profileId && t.pin) offer(pinKeyOf(t), t.tileLetters);
+          if (t?.profileId === profileId && (t.pin || members.has(id))) offer(pinKeyOf(t), t.tileLetters);
         }
       }
-      for (const p of s.parkedPins[profileId]?.tabs ?? []) if (!p.groupId) offer(p.id, p.tileLetters);
+      for (const p of s.parkedPins[profileId]?.tabs ?? []) offer(p.id, p.tileLetters);
       unpinned = unpinnedRemotely(recorded, remote);
       return {
         values,
@@ -56,14 +59,15 @@ export function pinnedLettersAdapter(profileId: string): Adapter {
       }
       if (!incoming.size) return true;
       const s = store();
+      const members = pinnedGroupMembers(s.groups);
       let tabs: Record<string, Tab> | null = null;
       for (const t of Object.values(s.tabs)) {
-        if (t.profileId !== profileId || !t.pin || !incoming.has(pinKeyOf(t))) continue;
+        if (t.profileId !== profileId || !(t.pin || members.has(t.id)) || !incoming.has(pinKeyOf(t))) continue;
         const letters = incoming.get(pinKeyOf(t));
         if (letters !== t.tileLetters) (tabs ??= { ...s.tabs })[t.id] = { ...t, tileLetters: letters };
       }
       const park = s.parkedPins[profileId];
-      const parked = park?.tabs.map((p) => (p.groupId || !incoming.has(p.id) || incoming.get(p.id) === p.tileLetters ? p : { ...p, tileLetters: incoming.get(p.id) }));
+      const parked = park?.tabs.map((p) => (!incoming.has(p.id) || incoming.get(p.id) === p.tileLetters ? p : { ...p, tileLetters: incoming.get(p.id) }));
       const parkEdited = !!park && parked!.some((p, i) => p !== park.tabs[i]);
       if (!tabs && !parkEdited) return true;
       commitPinnedEdit(s, profileId, tabs ? { tabs } : {}, parkEdited ? { tabs: parked! } : null);

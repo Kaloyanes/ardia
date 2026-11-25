@@ -16,7 +16,7 @@ type Room = { width: number; height: number };
 
 export function TileLetters({ windowId }: { windowId: string }) {
   const target = useSidebarUi((u) => (u.tileLetters?.windowId === windowId ? u.tileLetters : null));
-  return target ? <LettersPanel key={target.tabId} target={target} /> : null;
+  return target ? <TileLettersPanel key={target.tabId} target={target} /> : null;
 }
 
 export function placeTileLetters(anchor: Target["anchor"], room: Room, height: number) {
@@ -30,7 +30,12 @@ export function placeTileLetters(anchor: Target["anchor"], room: Room, height: n
   return { top, left };
 }
 
-function LettersPanel({ target }: { target: Target }) {
+export const lettersHint = (draft: string, siteLetter: string) => {
+  const shown = draft.trim() ? cleanTileLetters(draft) : null;
+  return shown ? `The tile shows “${shown}”.` : `Up to ${TILE_LETTERS_MAX}. Leave it empty for the site’s letter${siteLetter ? `, “${siteLetter}”` : ""}.`;
+};
+
+export function TileLettersPanel({ target }: { target: Target }) {
   const theme = useTheme();
   const own = useTab(target.tabId, (t) => t?.tileLetters ?? "");
   const siteLetter = useTab(target.tabId, (t) => (t ? tileLetterOf(t.url, t.customTitle ?? t.title) : ""));
@@ -48,9 +53,9 @@ function LettersPanel({ target }: { target: Target }) {
             <Text size="small" weight="semibold">
               Tile Letters
             </Text>
-            <TextField autoFocus selectOnFocus value={draft} onChangeText={(typed) => setDraft(cleanTileLetters(typed) ?? "")} placeholder={siteLetter} onSubmit={done} onEscape={closeTileLetters} />
+            <TextField autoFocus selectOnFocus value={draft} onChangeText={setDraft} placeholder={siteLetter} onSubmit={done} onEscape={closeTileLetters} />
             <Text size="caption" tone="textTertiary">
-              {`Up to ${TILE_LETTERS_MAX}. Leave it empty for the site’s letter.`}
+              {lettersHint(draft, siteLetter)}
             </Text>
             <View style={BUTTONS}>
               <Button variant="pill" tone="chip" title="Cancel" onPress={closeTileLetters} />

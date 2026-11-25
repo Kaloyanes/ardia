@@ -392,3 +392,32 @@ test("a Mac that syncs before it has a window keeps the letters waiting for thei
   const key = a.with(() => `plet:${S().tabs[tabOf("mail")].pinKey ?? tabOf("mail")}`);
   assert.equal(a.scope.records[key]?.v, "MA");
 });
+
+test("a tile's letters survive a stay in a pinned group, even for a Mac that joins meanwhile, and come back with it to Top Apps", async () => {
+  const folder = new Folder();
+  const a = new Device("devA", folder);
+  const b = new Device("devB", folder);
+  seed(a);
+  b.with(() => S().createWindow({ url: "https://b-home.example/" }));
+  a.with(() => S().updateTab(tabOf("mail"), { tileLetters: "MA" }));
+  await syncAll([a, b]);
+  const key = a.with(() => S().tabs[tabOf("mail")].pinKey ?? tabOf("mail"));
+  a.with(() => {
+    const groupId = S().groupTabs([tabOf("row")], { pinned: true, name: "Reading" });
+    S().placeTabs([tabOf("mail")], { pinned: false, groupId });
+  });
+  await syncAll([a, b]);
+  assert.ok(memberOf(a, key), "mail is in A's pinned group");
+  assert.equal(a.scope.records[`plet:${key}`]?.v, "MA", "the record stays while it's grouped");
+  const c = new Device("devC", folder);
+  c.with(() => S().createWindow({ url: "https://c-home.example/" }));
+  await syncAll([c, a, b, c]);
+  assert.equal(memberOf(c, key)?.tileLetters, "MA", "the Mac that joined gets the letters on the grouped tab");
+  const grouped = a.with(() => memberOf(a, key).id);
+  a.with(() => S().pinTabs([grouped], true, false));
+  await syncAll([a, b, c, a, b, c]);
+  for (const [name, device] of [["A", a], ["B", b], ["C", c]]) {
+    const tab = device.with(() => Object.values(S().tabs).find((t) => (t.pinKey ?? t.id) === key && t.pin?.as === "tile"));
+    assert.equal(tab?.tileLetters, "MA", `${name} has the tile back with its letters`);
+  }
+});
