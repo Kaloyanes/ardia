@@ -66,6 +66,23 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
+  downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
+  session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
+  cancels the quit. With no live shell, Quit exits at once.
+- **Dialogs.** `ArdiaShell.beginDialog` and `cancelDialog` show `confirm` and `prompt` as an `NSAlert` sheet on the
+  window, one at a time, and answer with `shell.dialogResolved`. With `ARDIA_BACKGROUND=1` a dialog is logged and
+  answered as cancelled. The request checks are in `ac_mac_dialog_policy.h`.
+- **Window close.** `requestWindowClose`, `beginWindowCloseDrain`, `acknowledgeWindowClose` and `rejectWindowClose`
+  follow Linux's protocol (`shell.closeRequested`, `shell.closeCancelled`). The red traffic light asks the shell first
+  instead of closing at once. A departing window's session is saved before it closes.
+- **Window state and controls.** `ArdiaShell.windowState` reads the real window (zoomed, full screen). The host sends
+  `windowState` and `onWindowEvent` (`focus`, `blur`, `frame`, `maximized`, `fullScreen`, `close`, `sidebarEdge`)
+  as the window changes. It also serves `toggleFullScreen`, `restoreFullScreen`, `setWindowTitle`, `minimizeWindow`,
+  `toggleMaximizeWindow`, `setWindowFrame`, `setAppearance` and `watchSidebarEdge`, plus `setShortcutRecording`,
+  `setSwitcherCapture` and `restoreShortcutFocus` for the shortcut recorder and the tab switcher. Browser windows
+  are at least 720 × 460, as in the React Native app. A background instance never goes full screen or minimizes.
+  These checks are in `ac_mac_window_policy.h`.
 - **Unclaimed tabs.** Tabs Chromium opens on its own (`target=_blank`, `window.open`) are offered as `ArdiaTabs`
   `unclaimed` and through `ArdiaTabs.unclaimedTabs`, and `tab.create` adopts an offered one by `adoptId` (`tab:<id>`).
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's

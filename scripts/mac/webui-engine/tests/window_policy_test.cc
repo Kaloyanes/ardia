@@ -1,0 +1,130 @@
+#include "ardia/mac/ac_mac_window_policy.h"
+
+#include <limits>
+#include <string>
+
+#include "check.h"
+
+namespace policy = ardia_mac::window_policy;
+
+TEST(window_ids_match_the_shell_pattern) {
+  CHECK(policy::ValidWindowId("main") && policy::ValidWindowId("w_1-a"));
+  CHECK(!policy::ValidWindowId("") && !policy::ValidWindowId("-main") && !policy::ValidWindowId("a b"));
+  CHECK(!policy::ValidWindowId(std::string(129, 'a')) && policy::ValidWindowId(std::string(128, 'a')));
+}
+
+TEST(a_close_runs_request_drain_acknowledge_and_closing) {
+  policy::CloseBook book;
+  const auto identity = book.Request(3);
+  CHECK(identity && identity->renderer == "3" && identity->close == "1");
+  CHECK(book.Deciding());
+  CHECK(book.Request(3) == identity);
+  CHECK(!book.Request(4));
+  CHECK(!book.BeginDrain(*identity, 4));
+  CHECK(!book.BeginDrain(policy::CloseIdentity{"3", "2"}, 3));
+  CHECK(!book.Acknowledge(*identity, 3, 0));
+  CHECK(book.BeginDrain(*identity, 3) && !book.Deciding());
+  CHECK(!book.Acknowledge(*identity, 3, std::nullopt));
+  CHECK(!book.Acknowledge(*identity, 3, -1));
+  CHECK(!book.Acknowledge(*identity, 3, 1.5));
+  CHECK(!book.Acknowledge(*identity, 3, std::numeric_limits<double>::infinity()));
+  CHECK(book.Acknowledge(*identity, 3, 12));
+  CHECK(!book.BeginClosing(policy::CloseIdentity{"3", "9"}));
+  CHECK(book.BeginClosing(*identity));
+  book.Retire();
+  CHECK(book.phase() == policy::ClosePhase::kClosing);
+}
+
+TEST(a_cancelled_close_issues_a_fresh_identity) {
+  policy::CloseBook book;
+  const auto first = book.Request(1);
+  CHECK(book.Cancel(*first) && book.Cancel(*first));
+  CHECK(!book.Open() && !book.Matches(*first, 1));
+  const auto second = book.Request(1);
+  CHECK(second && second->close == "2");
+  CHECK(!book.Cancel(*first));
+  policy::CloseBook idle;
+  CHECK(!idle.Request(0));
+  CHECK(!idle.Cancel(policy::CloseIdentity{}));
+}
+
+TEST(acknowledgments_carry_a_departure_only_with_base_and_session) {
+  CHECK(policy::ValidDeparture(false, false, 0, false, false));
+  CHECK(policy::ValidDeparture(true, true, 2, true, true));
+  CHECK(!policy::ValidDeparture(true, false, 0, false, false));
+  CHECK(!policy::ValidDeparture(true, true, 3, true, true));
+  CHECK(!policy::ValidDeparture(true, true, 2, true, false));
+  CHECK(policy::ValidAcknowledgeShape(4, false) && policy::ValidAcknowledgeShape(5, true));
+  CHECK(!policy::ValidAcknowledgeShape(5, false) && !policy::ValidAcknowledgeShape(4, true));
+}
+
+TEST(quit_waits_for_every_window_and_a_rejection_aborts_it) {
+  policy::QuitBarrier barrier;
+  CHECK(barrier.Begin({"main", "second"}));
+  CHECK(!barrier.Begin({"main"}));
+  CHECK(barrier.Waits("main") && !barrier.Waits("other"));
+  CHECK(barrier.Acknowledged("main") == policy::QuitStep::kWait);
+  CHECK(barrier.Rejected("other") == policy::QuitStep::kWait);
+  CHECK(barrier.Acknowledged("second") == policy::QuitStep::kExit && !barrier.running());
+  CHECK(barrier.Begin({"main"}));
+  CHECK(barrier.Rejected("main") == policy::QuitStep::kAbort && !barrier.running());
+  CHECK(barrier.Expired() == policy::QuitStep::kWait);
+  CHECK(barrier.Begin({"main"}));
+  CHECK(barrier.Expired() == policy::QuitStep::kExit);
+}
+
+TEST(window_state_reads_zoom_and_full_screen) {
+  CHECK(policy::StateOf(true, false, false) == (policy::WindowState{true, false, false}));
+  CHECK(policy::StateOf(true, true, false) == (policy::WindowState{false, false, true}));
+  CHECK(policy::StateOf(true, false, true) == (policy::WindowState{false, false, false}));
+  CHECK(!policy::StateOf(false, false, false).tiled);
+}
+
+TEST(frames_are_finite_bounded_and_at_least_the_minimum_size) {
+  CHECK(!policy::FrameFrom(0, 0, 100, std::nullopt));
+  CHECK(!policy::FrameFrom(0, 0, 0, 100));
+  CHECK(!policy::FrameFrom(0, std::numeric_limits<double>::quiet_NaN(), 900, 600));
+  CHECK(!policy::FrameFrom(2e5, 0, 900, 600));
+  const auto small = policy::FrameFrom(10.4, 20.6, 100, 100);
+  CHECK(small && *small == (policy::Frame{10, 21, policy::kMinWidth, policy::kMinHeight}));
+  const auto frame = *policy::FrameFrom(100, 100, 1200, 800);
+  CHECK(policy::OnAnyScreen(frame, {{0, 0, 1440, 900}}));
+  CHECK(!policy::OnAnyScreen(policy::Frame{5000, 5000, 800, 600}, {{0, 0, 1440, 900}}));
+  CHECK(!policy::OnAnyScreen(frame, {}));
+}
+
+TEST(titles_and_appearances_are_bounded) {
+  CHECK(policy::WindowTitle("Ardia") == std::string("Ardia"));
+  CHECK(policy::WindowTitle("a\nb") == std::string("a b"));
+  CHECK(!policy::WindowTitle(std::string(policy::kTitleLimit + 1, 'a')));
+  CHECK(policy::AppearanceNamed("dark") == policy::Appearance::kDark);
+  CHECK(policy::AppearanceNamed("auto") == policy::Appearance::kAuto);
+  CHECK(!policy::AppearanceNamed("Dark") && !policy::AppearanceNamed(""));
+}
+
+TEST(the_sidebar_edge_reports_only_changes) {
+  policy::EdgeWatch watch;
+  CHECK(!watch.Moved(600, 100, 1200, 800, false));
+  const auto started = watch.Watch(0, policy::Side::kLeft, false);
+  CHECK(started && !started->over);
+  const auto over = watch.Moved(2, 100, 1200, 800, false);
+  CHECK(over && over->over && over->x == 2 && over->y == 100);
+  CHECK(!watch.Moved(4, 120, 1200, 800, false));
+  const auto pressed = watch.Moved(4, 120, 1200, 800, true);
+  CHECK(pressed && !pressed->over);
+  CHECK(watch.Moved(-20, 120, 1200, 800, false)->over);
+  CHECK(!watch.Moved(-30, 120, 1200, 800, false)->over);
+  watch.Watch(300, policy::Side::kLeft, true);
+  CHECK(watch.Moved(250, 120, 1200, 800, true)->over);
+  watch.Watch(0, policy::Side::kRight, false);
+  CHECK(watch.Moved(1197, 120, 1200, 800, false)->over);
+  const auto resigned = watch.Resigned();
+  CHECK(resigned && !resigned->over && resigned->x == -1);
+  CHECK(!watch.Moved(std::numeric_limits<double>::quiet_NaN(), 0, 1200, 800, false));
+  watch.Stop();
+  CHECK(!watch.Moved(1, 1, 1200, 800, false));
+}
+
+int main(int argc, char** argv) {
+  return ardia_mac_test::RunAll(argc, argv);
+}

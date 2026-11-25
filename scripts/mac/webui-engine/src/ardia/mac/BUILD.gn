@@ -27,6 +27,9 @@ if (is_official_build) {
 
   source_set("mac") {
     sources = [
+      "ac_mac_dialog.h",
+      "ac_mac_dialog.mm",
+      "ac_mac_dialog_policy.h",
       "ac_mac_glass.h",
       "ac_mac_glass.mm",
       "ac_mac_glass_layout.h",
@@ -42,13 +45,17 @@ if (is_official_build) {
       "ac_mac_shell_calls.mm",
       "ac_mac_shell_host.h",
       "ac_mac_shell_host.mm",
+      "ac_mac_shell_lifecycle.mm",
       "ac_mac_shell_policy.h",
       "ac_mac_webui.h",
       "ac_mac_webui.mm",
       "ac_mac_webui_policy.h",
       "ac_mac_window.h",
       "ac_mac_window.mm",
+      "ac_mac_window_events.h",
+      "ac_mac_window_events.mm",
       "ac_mac_window_layout.h",
+      "ac_mac_window_policy.h",
       "generated/ac_desktop_routes.h",
     ]
     sources += get_target_outputs(":bootstrap")

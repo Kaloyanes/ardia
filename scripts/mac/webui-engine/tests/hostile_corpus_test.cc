@@ -8,12 +8,14 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu_model.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
 #include "ardia/mac/ac_mac_window_layout.h"
+#include "ardia/mac/ac_mac_window_policy.h"
 #include "check.h"
 #include "launch_args.h"
 
@@ -245,6 +247,86 @@ TEST(launch_environment) {
   }
   CHECK(ardia_mac::webui_policy::Active(
       ardia_mac::webui_policy::Decide(ardia_mac::webui_policy::Build::kDevelopment, "webui", std::nullopt)));
+}
+
+TEST(dialog_guards) {
+  namespace dialog = ardia_mac::dialog_policy;
+  for (const std::string& text : Load().strings) {
+    if (dialog::ValidDialogId(text)) CHECK(text.size() >= 16 && text.size() <= 96 && Charset(text, ":_-"));
+    if (dialog::ValidGeneration(text)) CHECK(text.front() != '0' && text.size() <= 20 && Charset(text, ""));
+    dialog::Request request;
+    request.dialog_id = {true, true, text};
+    request.kind = {true, true, text};
+    request.has_options = true;
+    request.title = {true, true, text};
+    request.message = {true, true, text};
+    request.confirm_title = {true, true, text};
+    request.window_id = {true, true, text};
+    if (const auto spec = dialog::Parse(request, "main")) {
+      CHECK(dialog::ValidDialogId(spec->dialog_id) && (text == "confirm" || text == "prompt"));
+    }
+    dialog::Request control;
+    control.dialog_id = {true, true, "dialog:0123456789abcdef:1"};
+    control.kind = {true, true, "prompt"};
+    control.has_options = true;
+    control.title = {true, true, text};
+    control.message = {true, true, text};
+    control.value = {true, true, text};
+    control.placeholder = {true, true, text};
+    control.suppression = {true, true, text};
+    const auto spec = dialog::Parse(control, "main");
+    CHECK(spec.has_value() == (text.size() <= dialog::kTitleLimit));
+    if (spec) {
+      CHECK(NoControls(dialog::ButtonTitle(spec->confirm_title, "OK")));
+      for (char c : dialog::Displayable(spec->title)) {
+        const auto byte = static_cast<unsigned char>(c);
+        CHECK(c == '\n' || c == '\t' || (byte >= 0x20 && byte != 0x7f));
+      }
+      const auto answer = dialog::Resolve(*spec, {.accepted = true, .text = text});
+      if (answer.text) CHECK(!answer.text->empty() && answer.text->size() <= dialog::kValueLimit);
+      dialog::Queue queue;
+      CHECK(queue.Admit(*spec, text, text) == dialog::Refusal::kNone || !dialog::ValidGeneration(text));
+    }
+  }
+  dialog::Request valid;
+  valid.dialog_id = {true, true, "dialog:0123456789abcdef:1"};
+  valid.kind = {true, true, "confirm"};
+  valid.has_options = true;
+  valid.title = {true, true, "Quit?"};
+  CHECK(dialog::Parse(valid, "main").has_value());
+}
+
+TEST(window_lifecycle_guards) {
+  namespace policy = ardia_mac::window_policy;
+  for (const std::string& text : Load().strings) {
+    if (policy::ValidWindowId(text)) CHECK(text.size() <= 128 && Charset(text, "_-"));
+    if (policy::ValidGeneration(text)) CHECK(text.front() != '0' && Charset(text, ""));
+    if (const auto title = policy::WindowTitle(text)) CHECK(NoControls(*title) && title->size() == text.size());
+    if (policy::AppearanceNamed(text)) CHECK(text == "auto" || text == "light" || text == "dark");
+    policy::CloseBook book;
+    const auto identity = book.Request(1);
+    CHECK(!book.BeginDrain(policy::CloseIdentity{text, text}, 1) || (text == "1"));
+    CHECK(identity.has_value());
+  }
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      if (const auto frame = policy::FrameFrom(a, b, a, b)) {
+        CHECK(std::isfinite(frame->x) && std::isfinite(frame->height));
+        CHECK(frame->width >= policy::kMinWidth && frame->height >= policy::kMinHeight);
+        CHECK(std::abs(frame->x) <= policy::kFrameLimit && frame->width <= policy::kFrameLimit);
+      }
+      policy::EdgeWatch watch;
+      watch.Watch(a, policy::Side::kLeft, false);
+      if (const auto report = watch.Moved(a, b, 1200, 800, false)) {
+        CHECK(!report->over || (std::isfinite(report->x) && std::isfinite(report->y)));
+      }
+      policy::CloseBook book;
+      const auto identity = book.Request(1);
+      book.BeginDrain(*identity, 1);
+      if (book.Acknowledge(*identity, 1, a)) CHECK(std::isfinite(a) && a >= 0 && std::floor(a) == a);
+    }
+  }
+  CHECK(policy::FrameFrom(0, 0, 1280, 800).has_value());
 }
 
 int main(int argc, char** argv) {
