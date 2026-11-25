@@ -131,6 +131,7 @@ export function GroupPanel({ groupId, windowId, anchor, windowHeight }: { groupI
       <View style={SEARCH_FIELD_ROW}>
         <SearchField
           look="bare"
+          surface="panel"
           inputRef={field}
           value={query}
           onChangeText={(text) => {

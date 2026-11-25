@@ -940,7 +940,7 @@ index fac5699dedeaaa35bb22b8f8d5d96a3817ca92b1..692ea640ba83db5b0bfe3fc1a24fda68
        RCTBaseTextInputShadowView *shadowView =
            (RCTBaseTextInputShadowView *)[self.bridge.uiManager shadowViewForReactTag:viewTag];
 diff --git a/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputView.mm b/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputView.mm
-index 9973da7611fc92df7e66010350504bf077a9f2d9..66f7f05ae27762b12e41f92c02bd3997212ed092 100644
+index 9973da7611fc92df7e66010350504bf077a9f2d9..2786db490b29ba8cf114bd885311b18ee2a46658 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputView.mm
 +++ b/Libraries/Text/TextInput/Singleline/RCTSinglelineTextInputView.mm
 @@ -26,7 +26,9 @@ - (instancetype)initWithBridge:(RCTBridge *)bridge
@@ -976,8 +976,11 @@ index 9973da7611fc92df7e66010350504bf077a9f2d9..66f7f05ae27762b12e41f92c02bd3997
  - (void)setUseSecureTextField:(BOOL)useSecureTextField {
    if (_useSecureTextField != useSecureTextField) {
      _useSecureTextField = useSecureTextField;
-@@ -84,10 +97,11 @@ - (void)setUseSecureTextField:(BOOL)useSecureTextField {
+@@ -82,12 +95,14 @@ - (void)setUseSecureTextField:(BOOL)useSecureTextField {
+     _backedTextInputView.placeholder = previousTextField.placeholder;
+     _backedTextInputView.placeholderColor = previousTextField.placeholderColor;
      _backedTextInputView.selectionColor = previousTextField.selectionColor;
++    _backedTextInputView.cursorColor = previousTextField.cursorColor;
      _backedTextInputView.textAlignment = previousTextField.textAlignment;
      _backedTextInputView.textContainerInset = previousTextField.textContainerInset;
 -    _backedTextInputView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -1009,15 +1012,16 @@ index 386405335b411e70a82909033febc7dd5b4adabe..ace454e53458fb82d2fd6b456c4e9562
  
  @end
 diff --git a/Libraries/Text/TextInput/Singleline/RCTUITextField.h b/Libraries/Text/TextInput/Singleline/RCTUITextField.h
-index 61242af88da2f235e5ae506e79dfb9898742eb51..75e3a670371a2c2f5b1466c29c6009aa3cbc8de5 100644
+index 61242af88da2f235e5ae506e79dfb9898742eb51..dccbeb45af839f0e55953b458d8861599644cde6 100644
 --- a/Libraries/Text/TextInput/Singleline/RCTUITextField.h
 +++ b/Libraries/Text/TextInput/Singleline/RCTUITextField.h
-@@ -50,6 +50,10 @@ NS_ASSUME_NONNULL_BEGIN
+@@ -50,6 +50,11 @@ NS_ASSUME_NONNULL_BEGIN
  @property (nonatomic, assign, readonly) CGPoint contentOffset;
  @property (nonatomic, assign, readonly) UIEdgeInsets contentInset;
  @property (nonatomic, assign) BOOL disableKeyboardShortcuts;
 +#if TARGET_OS_OSX
 +@property (nonatomic, assign) BOOL ardiaCentersCapitals;
++@property (nonatomic, strong, nullable) RCTUIColor *cursorColor;
 +- (void)ardia_applySelectionLookToEditor:(NSTextView *)editor;
 +#endif
  

@@ -55,7 +55,7 @@ test("a form field's caret is resolved against the field fill it paints, not the
   const onField = caretColor(custom, "field");
   assert.ok(shown(onField, custom.field) >= 3, `caret on the custom field fill: ${onField} at ${shown(onField, custom.field).toFixed(2)}`);
   const field = readFileSync(fileURLToPath(new URL("./Field.tsx", import.meta.url)), "utf8");
-  assert.equal((field.match(/cursorColor=\{caretColor\(theme, (?:bare \? "ntpBarSolid" : )?"field"\)\}/g) ?? []).length, 2, "SearchField and TextField pass the field fill they paint");
+  assert.equal((field.match(/cursorColor=\{caretColor\(theme, (?:bare \? surface : )?"field"\)\}/g) ?? []).length, 2, "SearchField and TextField pass the field fill they paint");
 });
 
 test("every text field that sets a selection colour sets its caret too", () => {
@@ -74,4 +74,28 @@ test("every text field that sets a selection colour sets its caret too", () => {
   });
   assert.ok(files.length > 50, `walked the components: ${files.length}`);
   assert.deepEqual(missing, []);
+});
+
+test("a bare search field's caret is resolved against the surface it sits on: the Search Tabs and group panels, and the empty split pane's row", async () => {
+  const { emptyPaneFieldSurface } = await import("../split/tokens.ts");
+  for (const dark of [false, true]) assert.equal(caretColor(stock(dark), "panel"), fieldInk.caret[dark ? "dark" : "light"], "the stock panel keeps the stock ink");
+  const custom = { ...stock(false), panel: "#787D86", textPrimary: "#FFFFFF" };
+  const onPanel = caretColor(custom, "panel");
+  assert.ok(shown(onPanel, custom.panel) >= 3, `caret on a #787D86 panel: ${onPanel} at ${shown(onPanel, custom.panel).toFixed(2)}`);
+  const rowHover = { ...stock(false), rowHover: "#787D86", textPrimary: "#FFFFFF" };
+  const onRow = caretColor(rowHover, emptyPaneFieldSurface);
+  assert.ok(shown(onRow, emptyPaneFieldSurface(rowHover)) >= 3, `caret on the empty pane's row: ${onRow}`);
+  assert.equal(caretColor(stock(false), emptyPaneFieldSurface), fieldInk.caret.light, "the stock empty pane keeps the stock ink");
+  const callers = { "../sidebar/SearchTabs.tsx": /look="bare"\s+surface="panel"/, "../sidebar/GroupPanel.tsx": /look="bare"\s+surface="panel"/, "../split/SplitEmptyState.tsx": /look="bare"\s+surface=\{emptyPaneFieldSurface\}/ };
+  for (const [file, pattern] of Object.entries(callers)) assert.match(readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"), pattern, file);
+  const bareCallers = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (name.endsWith(".tsx") && /<SearchField[^>]*look="bare"/s.test(readFileSync(path, "utf8").replace(/\n/g, " "))) bareCallers.push(path);
+    }
+  };
+  walk(fileURLToPath(new URL("..", import.meta.url)));
+  assert.equal(bareCallers.length, 3, `every bare SearchField is one of the three above: ${bareCallers}`);
 });
