@@ -399,12 +399,19 @@ export class PagerSpring {
     if (!cancelled) {
       const flick = Math.abs(v * this.drag.width) >= FLICK_VELOCITY;
       const x = this.positionValue;
-      const aim = !flick ? Math.round(x) : v > 0 ? Math.floor(x) + 1 : Math.ceil(x) - 1;
+      const aim = flick ? (v > 0 ? Math.floor(x) + 1 : Math.ceil(x) - 1) : this.slowAim(x, home);
       const lo = Math.max(0, home - 1);
       const hi = Math.max(lo, Math.min(this.countValue - 1, home + 1));
       target = clampToIndex(aim, lo, hi);
     }
     this.settle(target, this.towards(target, v));
+  }
+
+  private slowAim(x: number, home: number) {
+    const fromHome = x - home;
+    const travelled = x - this.drag.start;
+    const leftHome = Math.abs(fromHome) >= 0.5 && travelled !== 0 && fromHome > 0 === travelled > 0;
+    return leftHome ? Math.round(x) : home;
   }
 
   private towards(target: number, v: number) {

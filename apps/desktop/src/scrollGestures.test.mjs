@@ -3,6 +3,7 @@ import test from "node:test";
 import { HOSTILE_VALUES } from "../../../scripts/security/hostile-inputs.mjs";
 
 const hostListeners = [];
+const invoked = [];
 const wheelListeners = [];
 globalThis.HTMLElement = class {};
 globalThis.Element = globalThis.HTMLElement;
@@ -10,7 +11,8 @@ globalThis.getComputedStyle = () => ({ display: "block", visibility: "visible", 
 globalThis.window = {
   addEventListener: (type, listener) => type === "wheel" && wheelListeners.push(listener),
   __ardiaHost: {
-    bootstrap: { windowId: "main", profileId: "default", capabilities: ["shell.scrollGestures"] },
+    bootstrap: { windowId: "main", profileId: "default", capabilities: ["shell.scrollGestures", "shell.pageSwipeClaim"] },
+    invoke: (method, args) => (invoked.push([method, args]), Promise.resolve({ claimed: true })),
     onEvent: (listener) => (hostListeners.push(listener), () => {}),
   },
 };
@@ -20,9 +22,11 @@ const page = Object.assign(new HTMLElement(), { parentElement: null, scrollWidth
 const container = { contains: (element) => element === page || element === node, parentElement: null };
 const node = { isConnected: true, parentElement: container, getClientRects: () => [card], getBoundingClientRect: () => card };
 page.parentElement = container;
-globalThis.document = { elementFromPoint: () => page };
+let hitElement = page;
+globalThis.document = { elementFromPoint: () => hitElement };
 
-const { addSwipeTarget, onScrollGesture, SCROLL_GESTURE_EVENT, SCROLL_GESTURES_CAPABILITY } = await import("./shims/web/motion/swipe.ts");
+const { addSwipeTarget, onScrollGesture, onPageSwipe, SCROLL_GESTURE_EVENT, SCROLL_GESTURES_CAPABILITY, PAGE_SWIPE_CLAIM } = await import("./shims/web/motion/swipe.ts");
+const { PagerSpring } = await import("./shims/web/motion/pagerSpring.ts");
 const { Pager, setPagerClock } = await import("./shims/web/motion/pager.ts");
 
 const WIDTH = 240;
@@ -31,8 +35,9 @@ const at = { x: 120, y: 300 };
 const host = (payload) => hostListeners.forEach((listener) => listener("ArdiaShell", SCROLL_GESTURE_EVENT, { ...at, momentum: "none", dx: 0, dy: 0, ...payload }));
 const native = (payload, t) => onScrollGesture({ ...at, momentum: "none", dx: 0, dy: 0, ...payload }, t);
 
-function swipeTarget(seen, { back = true, forward = true, pager = false, nativePager = null } = {}) {
+function swipeTarget(seen, { back = true, forward = true, pager = false, nativePager = null, tabId = null } = {}) {
   return {
+    tabId: () => tabId,
     node: () => node,
     canSwipeBack: () => back,
     canSwipeForward: () => forward,
@@ -304,4 +309,162 @@ test("the settle continues from the finger's last position and the store's ack l
   assert.ok(positions.slice(before).every((p) => p === 1), "acknowledging the switch moved the page");
   pager.detach(area);
   pager.attach(area);
+});
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+const pageEvent = (payload, t) => onPageSwipe({ dx: 0, dy: 0, ...payload }, t);
+
+test("a page swipe reaches only the overlay of the tab it began on, never another tab at the same spot", async () => {
+  const forA = [];
+  const forB = [];
+  const removeB = addSwipeTarget(swipeTarget(forB, { tabId: "tab-b" }));
+  pageEvent({ phase: "began", dx: 10, x: 120, y: 300, tabId: "tab-a", gesture: 1 }, 50);
+  pageEvent({ phase: "changed", dx: 30, tabId: "tab-a", gesture: 1 }, 50.01);
+  pageEvent({ phase: "ended", tabId: "tab-a", gesture: 1 }, 50.02);
+  assert.deepEqual(forB, [], "tab A's swipe drove tab B's overlay");
+  const removeA = addSwipeTarget(swipeTarget(forA, { tabId: "tab-a" }));
+  pageEvent({ phase: "began", dx: 10, x: 120, y: 300, tabId: "tab-a", gesture: 2 }, 51);
+  pageEvent({ phase: "changed", dx: 30, tabId: "tab-a", gesture: 9 }, 51.01);
+  pageEvent({ phase: "changed", dx: 30, tabId: "tab-b", gesture: 2 }, 51.02);
+  pageEvent({ phase: "changed", dx: 5, tabId: "tab-a", gesture: 2 }, 51.03);
+  pageEvent({ phase: "cancelled", tabId: "tab-a", gesture: 2 }, 51.04);
+  removeA();
+  removeB();
+  await flush();
+  assert.deepEqual(forB, []);
+  assert.deepEqual(forA.map((e) => [e.phase, e.distance]), [["began", 10], ["changed", 15], ["cancelled", 15]]);
+});
+
+test("the shell claims a page swipe only once it tracks one, and gives it back when it lets go", async () => {
+  invoked.length = 0;
+  const seen = [];
+  const remove = addSwipeTarget(swipeTarget(seen, { tabId: "tab-a" }));
+  pageEvent({ phase: "began", dx: 2, x: 120, y: 300, tabId: "tab-a", gesture: 3 }, 60);
+  await flush();
+  assert.deepEqual(invoked, [], "nothing is claimed before horizontal intent");
+  pageEvent({ phase: "changed", dx: 8, tabId: "tab-a", gesture: 3 }, 60.01);
+  pageEvent({ phase: "changed", dy: 80, tabId: "tab-a", gesture: 3 }, 60.02);
+  pageEvent({ phase: "ended", tabId: "tab-a", gesture: 3 }, 60.03);
+  await flush();
+  assert.deepEqual(invoked, [
+    [PAGE_SWIPE_CLAIM, { gesture: 3, tabId: "tab-a", claimed: true }],
+    [PAGE_SWIPE_CLAIM, { gesture: 3, tabId: "tab-a", claimed: false }],
+  ]);
+  assert.deepEqual(seen.map((e) => e.phase), ["began", "cancelled"]);
+  remove();
+});
+
+test("a page swipe toward a direction with no history is never claimed, so the page keeps its wheel", async () => {
+  invoked.length = 0;
+  const seen = [];
+  const remove = addSwipeTarget(swipeTarget(seen, { tabId: "tab-a", back: false }));
+  pageEvent({ phase: "began", dx: 12, x: 120, y: 300, tabId: "tab-a", gesture: 4 }, 70);
+  pageEvent({ phase: "changed", dx: 30, tabId: "tab-a", gesture: 4 }, 70.01);
+  pageEvent({ phase: "ended", tabId: "tab-a", gesture: 4 }, 70.02);
+  remove();
+  await flush();
+  assert.deepEqual(invoked, []);
+  assert.deepEqual(seen, []);
+});
+
+test("a swipe over the onboarding overlay never reaches the profile pager underneath", () => {
+  const seen = [];
+  const remove = addSwipeTarget(swipeTarget(seen, { pager: true }));
+  hitElement = Object.assign(new HTMLElement(), { parentElement: null });
+  try {
+    native({ phase: "mayBegin" }, 80);
+    native({ phase: "began", dx: -10 }, 80.01);
+    native({ phase: "changed", dx: -60 }, 80.02);
+    native({ phase: "ended" }, 80.03);
+    native({ phase: "wheel", dx: -1 }, 80.1);
+  } finally {
+    hitElement = page;
+    remove();
+  }
+  assert.deepEqual(seen, []);
+});
+
+test("a shell gesture the host cancels after mayBegin lets a held settle finish instead of stranding it", (t) => {
+  const { fake, pager } = pagerTarget(t, ["a", "b", "c"]);
+  fake.set(90);
+  fling(90, -2400);
+  fake.pump(3);
+  native({ phase: "mayBegin" }, 90.1);
+  assert.equal(pager.snapshot().phase, "holding");
+  native({ phase: "cancelled" }, 90.11);
+  assert.equal(pager.snapshot().phase, "settling");
+  fake.pump();
+  assert.equal(pager.snapshot().phase, "idle");
+  assert.equal(pager.snapshot().position, 1);
+});
+
+test("an owned-momentum guard with no momentum behind it expires, so later DOM wheels are the page's again", () => {
+  const seen = [];
+  const remove = addSwipeTarget(swipeTarget(seen));
+  native({ phase: "began", dx: 10 }, 95);
+  native({ phase: "changed", dx: 30 }, 95.01);
+  native({ phase: "ended" }, 95.02);
+  const right = wheel({ deltaX: -3, timeStamp: 95020 });
+  const realNow = performance.now.bind(performance);
+  const skew = realNow();
+  performance.now = () => skew + 130;
+  let later;
+  try {
+    later = wheel({ deltaX: -3, timeStamp: 95200 });
+  } finally {
+    performance.now = realNow;
+    remove();
+  }
+  assert.equal(right.defaultPrevented, true);
+  assert.equal(later.defaultPrevented, false);
+});
+
+test("a fast move below halfway, a 390 ms pause and a still lift springs back to where it began", (t) => {
+  const { fake, pager } = pagerTarget(t, ["a", "b", "c"]);
+  fake.set(500);
+  native({ phase: "began", dx: -10 }, 500);
+  native({ phase: "changed", dx: -60 }, 500.01);
+  native({ phase: "changed", dx: -20 }, 500.02);
+  assert.ok(pager.snapshot().position < 0.5);
+  native({ phase: "ended" }, 500.41);
+  assert.equal(pager.snapshot().selected, 0, "the stale flick velocity advanced the pager");
+  fake.pump();
+  assert.equal(pager.snapshot().position, 0);
+});
+
+test("a short second swipe in the same direction keeps the profile the first one committed", () => {
+  const spring = new PagerSpring();
+  spring.configure(3, 0, 0, ["a", "b", "c"]);
+  spring.drain();
+  spring.input("began", 0, -1, WIDTH, 0);
+  spring.input("changed", 10, -1, WIDTH, 0);
+  spring.input("changed", 90, -1, WIDTH, 0.01);
+  spring.input("ended", 90, -1, WIDTH, 0.012);
+  assert.equal(spring.selected, 1);
+  let now = 0.012;
+  while (spring.position < 0.3) spring.stepFrame((now += FRAME));
+  const carried = spring.position;
+  assert.ok(carried < 0.5);
+  spring.input("began", 0, -1, WIDTH, 0.2);
+  assert.equal(spring.position, carried, "the second gesture jumped from the carried position");
+  spring.input("changed", 10, -1, WIDTH, 0.25);
+  spring.input("ended", 10, -1, WIDTH, 0.6);
+  assert.equal(spring.selected, 1, "the gentle second nudge snapped back to the first profile");
+  for (let i = 0; i < 600 && spring.phase === "settling"; i++) spring.stepFrame((now += FRAME));
+  assert.equal(spring.position, 1);
+});
+
+test("a slow drag that leaves its committed home past halfway still lands where it was taken", () => {
+  const spring = new PagerSpring();
+  spring.configure(3, 0, 0, ["a", "b", "c"]);
+  spring.drain();
+  spring.input("began", 0, -1, WIDTH, 0);
+  spring.input("changed", 90, -1, WIDTH, 0.01);
+  spring.input("ended", 90, -1, WIDTH, 0.012);
+  let now = 0.012;
+  while (spring.position < 0.3) spring.stepFrame((now += FRAME));
+  spring.input("began", 0, 1, WIDTH, 0.2);
+  spring.input("changed", 120, 1, WIDTH, 0.5);
+  spring.input("ended", 120, 1, WIDTH, 0.9);
+  assert.equal(spring.selected, 0, "a deliberate drag back to the first profile is honoured");
 });

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace ardia_mac::swipe_policy {
 
@@ -106,18 +107,52 @@ class RouteLatch {
       return hit;
     }
     if (kind == Kind::kGesture && (phase == Phase::kMayBegin || phase == Phase::kBegan)) {
+      if (open_ && latched_ != Route::kNone && latched_ != hit) {
+        abandoned_ = latched_;
+      }
       latched_ = hit;
+      open_ = true;
+    } else if (kind == Kind::kGesture && (phase == Phase::kEnded || phase == Phase::kCancelled)) {
+      open_ = false;
     }
     return latched_;
   }
 
-  void Reset() { latched_ = Route::kNone; }
+  Route TakeAbandoned() { return std::exchange(abandoned_, Route::kNone); }
+
+  Route Interrupt() {
+    const Route open = open_ ? latched_ : Route::kNone;
+    Reset();
+    return open;
+  }
+
+  void Reset() {
+    latched_ = Route::kNone;
+    abandoned_ = Route::kNone;
+    open_ = false;
+  }
 
  private:
   Route latched_ = Route::kNone;
+  Route abandoned_ = Route::kNone;
+  bool open_ = false;
 };
 
-enum class Ack { kWheelConsumed, kScrollBegin, kScrollConsumed, kScrollUnconsumed };
+inline constexpr double kCancelDominance = 2;
+
+constexpr bool HorizontalIntent(double dx, double dy) {
+  const double x = dx < 0 ? -dx : dx;
+  const double y = dy < 0 ? -dy : dy;
+  return x >= kStartDistance && kStartDominance * x >= y;
+}
+
+constexpr bool VerticalIntent(double dx, double dy) {
+  const double x = dx < 0 ? -dx : dx;
+  const double y = dy < 0 ? -dy : dy;
+  return y >= kStartDistance && kCancelDominance * x < y;
+}
+
+enum class Ack { kWheelBegan, kWheelConsumed, kScrollBegin, kScrollConsumed, kScrollUnconsumed };
 
 struct Step {
   Phase phase = Phase::kCancelled;
@@ -127,9 +162,10 @@ struct Step {
 
 class PageSwipe {
  public:
-  void Begin(bool enabled) {
+  void Begin(bool enabled, std::uint64_t gesture) {
     *this = PageSwipe();
     state_ = enabled ? State::kPending : State::kIdle;
+    gesture_ = gesture;
   }
 
   std::optional<Step> Scroll(double dx, double dy) {
@@ -141,8 +177,6 @@ class PageSwipe {
     if (state_ == State::kTracking) {
       return Step{Phase::kChanged, dx, dy};
     }
-    pending_dx_ += dx;
-    pending_dy_ += dy;
     return Start();
   }
 
@@ -151,11 +185,16 @@ class PageSwipe {
       return std::nullopt;
     }
     switch (ack) {
+      case Ack::kWheelBegan:
+        wheel_began_ = true;
+        return std::nullopt;
       case Ack::kWheelConsumed:
-        state_ = State::kPage;
+        if (wheel_began_) {
+          state_ = State::kPage;
+        }
         return std::nullopt;
       case Ack::kScrollBegin:
-        scrolling_ = true;
+        scrolling_ = wheel_began_;
         return std::nullopt;
       case Ack::kScrollConsumed:
         if (scrolling_) {
@@ -172,9 +211,18 @@ class PageSwipe {
     return std::nullopt;
   }
 
+  bool Claim(std::uint64_t gesture, bool claimed) {
+    if (state_ != State::kTracking || gesture != gesture_) {
+      return false;
+    }
+    claimed_ = claimed;
+    return true;
+  }
+
   std::optional<Step> End(bool cancelled) {
     const bool tracking = state_ == State::kTracking;
     state_ = State::kIdle;
+    claimed_ = false;
     if (!tracking) {
       return std::nullopt;
     }
@@ -182,36 +230,54 @@ class PageSwipe {
   }
 
   bool Swallows() const {
-    return state_ == State::kTracking && std::fabs(total_dx_) >= kStartDistance &&
-           kStartDominance * std::fabs(total_dx_) >= std::fabs(total_dy_);
+    return state_ == State::kTracking && claimed_ && HorizontalIntent(total_dx_, total_dy_);
   }
 
+  bool active() const { return state_ == State::kPending || state_ == State::kTracking; }
   bool tracking() const { return state_ == State::kTracking; }
   bool pending() const { return state_ == State::kPending; }
   bool page_owned() const { return state_ == State::kPage; }
+  bool claimed() const { return claimed_; }
+  std::uint64_t gesture() const { return gesture_; }
 
  private:
   enum class State { kIdle, kPending, kPage, kTracking };
 
   std::optional<Step> Start() {
-    if (!unconsumed_ || (pending_dx_ == 0 && pending_dy_ == 0)) {
+    if (!unconsumed_) {
+      return std::nullopt;
+    }
+    if (VerticalIntent(total_dx_, total_dy_)) {
+      state_ = State::kPage;
+      return std::nullopt;
+    }
+    if (!HorizontalIntent(total_dx_, total_dy_)) {
       return std::nullopt;
     }
     state_ = State::kTracking;
-    const Step step{Phase::kBegan, pending_dx_, pending_dy_};
-    pending_dx_ = 0;
-    pending_dy_ = 0;
-    return step;
+    return Step{Phase::kBegan, total_dx_, total_dy_};
   }
 
   State state_ = State::kIdle;
+  std::uint64_t gesture_ = 0;
+  bool wheel_began_ = false;
   bool scrolling_ = false;
   bool unconsumed_ = false;
-  double pending_dx_ = 0;
-  double pending_dy_ = 0;
+  bool claimed_ = false;
   double total_dx_ = 0;
   double total_dy_ = 0;
 };
+
+inline constexpr char kPageSwipeClaimCall[] = "shell.pageSwipeClaim";
+inline constexpr std::uint64_t kGestureLimit = 9007199254740991u;
+
+inline std::optional<std::uint64_t> GestureId(std::optional<double> value) {
+  if (!value || !std::isfinite(*value) || *value < 1 || *value > static_cast<double>(kGestureLimit) ||
+      std::floor(*value) != *value) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(*value);
+}
 
 }
 

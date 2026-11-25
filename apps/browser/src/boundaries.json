@@ -2612,19 +2612,25 @@
   {
    "id": "mac-webui-swipe:scrollGestures",
    "source": "page",
-   "guard": "Mac WebUI host (dev builds only): one local NSEvent scroll-wheel monitor per shell window acts only on events whose window is that window and is removed before the host goes away (ScrollGestures). Phases come from AppKit (event.phase, momentumPhase, hasPreciseScrollingDeltas), never from timing (PhaseOf, Classify); deltas, points and times must be finite and bounded (Delta, FinitePoint, FiniteTime). Each gesture keeps the surface it began on and its momentum follows it (RouteLatch). Over the shell the host only reports onScrollGesture and swallows nothing. Over a hosted page a back or forward swipe needs the system's swipe-between-pages setting, a presented and visible binding, a touchpad scroll begin and a first non-momentum scroll update the page leaves unconsumed; a page that scrolls or calls preventDefault on the wheel keeps the gesture, acks without a scroll begin are ignored, only horizontal-dominant motion of a tracked swipe is swallowed and the end is always passed to the page (PageSwipe). Chrome's own history swiper is off for the shell and hosted pages (HistorySwipingControl). In JS onScrollGesture and onPageSwipe accept only known phases with finite deltas and points within bounds (scrollGesture, pageSwipe in apps/desktop/src/shims/web/motion/swipe.ts).",
+   "guard": "Mac WebUI host (dev builds only): one local NSEvent scroll-wheel monitor per shell window acts only on events whose window is that window and is removed, with its resign-key and resign-active observers, before the host goes away (ScrollGestures). Phases come from AppKit (event.phase, momentumPhase, hasPreciseScrollingDeltas), never from timing (PhaseOf, Classify); deltas, points and times must be finite and bounded (Delta, FinitePoint, FiniteTime). Each gesture keeps the surface it began on; a gesture that moves to another surface, or whose window or app resigns, cancels the route it left (RouteLatch). Over the shell the host only reports onScrollGesture and swallows nothing. Over a hosted page each gesture gets a new number and is bound to its binding id, binding generation, key, main-frame document and widget, and is cancelled the moment any of them changes or the tab stops being presented and visible (PageLive, checked on every event, ack, claim and presentation change). A back or forward swipe needs the system's swipe-between-pages setting, a wheel phaseBegan, a touchpad scroll begin and a first non-momentum update the page leaves unconsumed, then horizontal intent; vertical intent or a consumed update before that gives the page its gesture, and acks from before the wheel phaseBegan are ignored (PageSwipe). The host swallows only a tracked swipe's horizontal motion, and only after shell.pageSwipeClaim names that gesture number and tab with claimed true (GestureId, Claim); a release or the end drops the claim, and the end always reaches the page. Chrome's own history swiper is off for the shell and hosted pages (HistorySwipingControl). In JS onScrollGesture and onPageSwipe accept only known phases with finite deltas and points within bounds, a tab id of at most 256 characters and a whole positive gesture number, and a page swipe reaches only the swipe area whose pageTabId is that tab (scrollGesture, pageSwipe, samePageGesture in apps/desktop/src/shims/web/motion/swipe.ts).",
    "checks": [
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#PhaseOf",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#Classify",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#Delta",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#RouteLatch",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#PageSwipe",
-    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#AckFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe_policy.h#GestureId",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#AcksFor",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#PageLive",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#bool Claim(",
     "scripts/mac/webui-engine/src/ardia/mac/ac_mac_swipe.mm#KeepChromeHistorySwiperOff",
     "scripts/mac/webui-engine/tests/swipe_policy_test.cc#a_page_that_scrolls_or_prevents_the_wheel_keeps_its_gesture",
-    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#stale_acks_without_a_scroll_begin_never_start_a_swipe",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#stale_acks_from_an_earlier_gesture_never_start_or_end_a_swipe",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#only_a_swipe_the_shell_claimed_swallows_and_only_its_horizontal_motion",
+    "scripts/mac/webui-engine/tests/swipe_policy_test.cc#claimed_gesture_ids_are_whole_positive_and_bounded",
     "scripts/mac/webui-engine/tests/swipe_policy_test.cc#deltas_points_and_times_are_finite_and_bounded",
-    "apps/desktop/src/scrollGestures.test.mjs#malformed"
+    "apps/desktop/src/scrollGestures.test.mjs#malformed",
+    "apps/desktop/src/scrollGestures.test.mjs#another tab"
    ],
    "detected": false
   },

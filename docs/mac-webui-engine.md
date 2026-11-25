@@ -173,11 +173,19 @@ that branch). It is a development tool and never runs in a release. Like Windows
     advertises `shell.scrollGestures`, and `swipe.ts` then drives the profile pager from these phases alone: it ends
     the drag on the event the fingers lift with, ignores the momentum of a swipe it tracked, and only holds a DOM
     `wheel` off the shell's scrollers while a swipe or its momentum is its own.
-  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe`, timed by the same phases: it starts
-    only with the system's swipe-between-pages setting on, after the page's first non-momentum touchpad scroll
-    update comes back unconsumed. A page that scrolls, or calls `preventDefault` on the wheel, keeps its gesture
-    (carousels, maps, Figma). A tracked swipe swallows only its horizontal motion and always passes the end to the
-    page. Chrome's own history swiper is turned off for the shell and every hosted page (`HistorySwipingControl`).
+  - A gesture that moves to another surface before it starts, or whose window or app resigns, cancels the route it
+    left, so a pager held by `mayBegin` settles instead of staying held.
+  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
+    timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
+    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. A page that
+    scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
+    vertical start. The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
+    soon as any of them changes or the tab stops being shown. `swipe.ts` routes it only to the swipe area whose
+    `pageTabId` is that tab.
+  - The host swallows a page swipe's horizontal motion only after the shell claims it with `shell.pageSwipeClaim
+    {gesture, tabId, claimed}`, which `swipe.ts` sends once it tracks the swipe (history in that direction, horizontal
+    intent) and withdraws when it lets go. The end always reaches the page. Chrome's own history swiper is turned off
+    for the shell and every hosted page (`HistorySwipingControl`).
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),

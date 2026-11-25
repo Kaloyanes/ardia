@@ -1285,6 +1285,49 @@ class SwipeContractTests(unittest.TestCase):
             self.assertIn(f'"{name}"', policy)
             self.assertIn(f'"{name}"', swipe)
 
+    def test_a_page_gesture_stays_bound_to_its_tab_document_and_widget(self):
+        live = self.source.split('bool PageLive() const {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('host->bindings_.find(page_binding)', 'binding->binding_generation != page_generation',
+                       'binding->key() != page_key', '!binding->presented', '!binding->visible',
+                       'page_document.AsRenderFrameHostIfValid()', 'contents->GetPrimaryMainFrame()',
+                       'view->GetRenderWidgetHost() == watch->host()'):
+            self.assertIn(needle, live)
+        for name in ('void Scroll(double dx, double dy) {', 'void Acknowledged(sp::Ack ack) {', 'bool Claim(const base::DictValue& args) {'):
+            body = self.source.split(name, 1)[1].split('\n  }\n', 1)[0]
+            self.assertIn('KeepPage()', body, name)
+        forward = self.source.split('void ForwardPage(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('.Set("tabId", page_key)', forward)
+        self.assertIn('.Set("gesture"', forward)
+        host = (MAC / 'ac_mac_shell_host.mm').read_text()
+        reattach = host.split('void ShellHostView::ReattachViewports() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_->Revalidate();', reattach)
+        gone = host.split('void ShellHostView::BindingGone(PageBinding* binding) {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_->Revalidate();', gone)
+        self.assertGreaterEqual(host.count('scroll_gestures_->Revalidate();'), 4)
+
+    def test_the_shell_claims_a_page_swipe_before_the_host_swallows_it(self):
+        calls = (MAC / 'ac_mac_shell_calls.mm').read_text()
+        self.assertIn('if (scroll_gestures_ && ScrollGestures::Handles(method)) {', calls)
+        claim = self.source.split('bool Claim(const base::DictValue& args) {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('sp::GestureId(args.FindDouble("gesture"))', 'args.FindString("tabId")', 'args.FindBool("claimed")',
+                       '*tab != page_key', 'page.Claim(*gesture, *claimed)'):
+            self.assertIn(needle, claim)
+        policy = (MAC / 'ac_mac_swipe_policy.h').read_text()
+        swallows = policy.split('bool Swallows() const {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('claimed_', swallows)
+        self.assertIn('HorizontalIntent(', swallows)
+
+    def test_a_retargeted_or_deactivated_gesture_cancels_the_route_it_left(self):
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('Abandon(routes.TakeAbandoned(), event.timestamp);', handle)
+        start = self.source.split('ScrollGestures::ScrollGestures(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('NSWindowDidResignKeyNotification', start)
+        self.assertIn('NSApplicationDidResignActiveNotification', start)
+        self.assertIn('state->Interrupt();', start)
+        teardown = self.source.split('ScrollGestures::~ScrollGestures() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('removeObserver:observer', teardown)
+        self.assertLess(teardown.index('removeObserver:observer'), teardown.index('InvalidateWeakPtrs'))
+
 
 class BoundaryTests(unittest.TestCase):
     def test_every_bridge_handler_has_a_boundary_row(self):
@@ -1304,7 +1347,7 @@ class BoundaryTests(unittest.TestCase):
                        'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
                        'application:openURLs:', 'ArdiaShell.listenForOpenURLs', 'extensionView.create',
                        'extensions.resolveInstallPrompt', 'executeExtensionAction', 'pip.command',
-                       'webView.setAutoPictureInPicture', 'onScrollGesture', 'onPageSwipe'):
+                       'webView.setAutoPictureInPicture', 'onScrollGesture', 'onPageSwipe', 'shell.pageSwipeClaim'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',

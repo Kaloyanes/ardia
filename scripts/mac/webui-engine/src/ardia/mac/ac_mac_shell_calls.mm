@@ -389,6 +389,9 @@ void ShellHostView::Invoke(const std::string& method,
   if (pip_ && PipPresenter::Handles(method)) {
     return pip_->Invoke(method, args, std::move(done));
   }
+  if (scroll_gestures_ && ScrollGestures::Handles(method)) {
+    return scroll_gestures_->Invoke(method, args, std::move(done));
+  }
   if (method == "shell.inputRegions") {
     return SetInputRegions(args, std::move(done));
   }

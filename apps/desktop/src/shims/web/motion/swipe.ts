@@ -23,6 +23,8 @@ const MAX_NATIVE_POINT = 1_000_000;
 
 export const SCROLL_GESTURES_CAPABILITY = "shell.scrollGestures";
 export const SCROLL_GESTURE_EVENT = "onScrollGesture";
+export const PAGE_SWIPE_CLAIM = "shell.pageSwipeClaim";
+const MAX_TAB_ID_LENGTH = 256;
 
 export type SwipeTarget = {
   node: () => HTMLElement | null;
@@ -33,6 +35,7 @@ export type SwipeTarget = {
   isPager: () => boolean;
   pager: () => { pager: Pager; area: PagerArea } | null;
   onSwipe: (event: SwipeEvent) => void;
+  tabId?: () => string | null;
 };
 
 type State = "idle" | "pending" | "tracking" | "ignored";
@@ -60,7 +63,9 @@ let swallowing = false;
 let lastMagnitude = 0;
 let nativeScroll = false;
 let hostClockOffset = Infinity;
-let ownedMomentum = { armed: false, flowing: false, endedAt: 0 };
+let ownedMomentum = { armed: false, flowing: false, endedAt: 0, armedAt: 0 };
+let pageGesture: { tabId: string; gesture: number | null; claimed: boolean } | null = null;
+let gestureHost: ArdiaHost | undefined;
 
 function blank(): Gesture {
   return { state: "idle", target: null, hit: null, dx: 0, dy: 0, direction: 0, available: false, times: [], deltas: [], time: 0 };
@@ -88,11 +93,12 @@ function visible(node: HTMLElement) {
   return true;
 }
 
-function targetAt(x: number, y: number, hit: Element | null): SwipeTarget | null {
+function targetAt(x: number, y: number, hit: Element | null, tabId?: string): SwipeTarget | null {
   if (!hit) return null;
   let best: SwipeTarget | null = null;
   let bestContainer: HTMLElement | null = null;
   for (const target of targets) {
+    if (tabId !== undefined && target.tabId?.() !== tabId) continue;
     const node = target.node();
     const container = node?.parentElement;
     if (!node || !container || !visible(node) || !container.contains(hit)) continue;
@@ -190,10 +196,11 @@ function shouldTrack() {
   return true;
 }
 
-export function begin(x: number, y: number, hit: Element | null, timestamp: number) {
+export function begin(x: number, y: number, hit: Element | null, timestamp: number, tabId?: string) {
   if (gesture.state === "tracking") pagerInput(gesture.target, "abandon", timestamp);
   gesture = blank();
-  const target = targetAt(x, y, hit);
+  pageGesture = null;
+  const target = targetAt(x, y, hit, tabId);
   if (!target) {
     gesture.state = "ignored";
     releasePrepared(timestamp);
@@ -205,9 +212,9 @@ export function begin(x: number, y: number, hit: Element | null, timestamp: numb
   gesture.hit = hit;
 }
 
-export function prepare(x: number, y: number, hit: Element | null, timestamp: number) {
+export function prepare(x: number, y: number, hit: Element | null, timestamp: number, tabId?: string) {
   releasePrepared(timestamp);
-  const target = targetAt(x, y, hit);
+  const target = targetAt(x, y, hit, tabId);
   if (!target || !hasNativePager(target)) return;
   prepared = target;
   pagerInput(target, "prepare", timestamp);
@@ -246,6 +253,7 @@ export function end(cancelled: boolean, timestamp: number) {
     releasePrepared(timestamp);
     return false;
   }
+  gesture.time = Math.max(gesture.time, timestamp);
   emit(cancelled ? "cancelled" : "ended", releaseVelocity(timestamp));
   gesture.state = "idle";
   return true;
@@ -307,6 +315,7 @@ function releaseByGap() {
 function onWheel(e: WheelEvent) {
   if (e.ctrlKey || !targets.size) return;
   if (nativeScroll) {
+    if (ownedMomentum.armed && !ownedMomentum.flowing && performance.now() / 1000 - ownedMomentum.armedAt > OWNED_MOMENTUM_WAIT) ownedMomentum = restingMomentum();
     if (gesture.state === "tracking" || ownedMomentum.armed) e.preventDefault();
     return;
   }
@@ -357,7 +366,7 @@ function onWheel(e: WheelEvent) {
   if (handled) e.preventDefault();
 }
 
-type PageSwipe = { phase: "began" | "changed" | "ended" | "cancelled"; dx: number; dy: number; x?: number; y?: number; t?: number };
+type PageSwipe = { phase: "began" | "changed" | "ended" | "cancelled"; dx: number; dy: number; x?: number; y?: number; t?: number; tabId?: string; gesture?: number };
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const bounded = (value: unknown, limit: number): value is number => finite(value) && Math.abs(value) <= limit;
@@ -375,8 +384,31 @@ function pageSwipe(value: unknown): PageSwipe | null {
   if (swipe.phase !== "began" && swipe.phase !== "changed" && swipe.phase !== "ended" && swipe.phase !== "cancelled") return null;
   if (!finite(swipe.dx) || !finite(swipe.dy)) return null;
   if (swipe.phase === "began" && (!finite(swipe.x) || !finite(swipe.y))) return null;
+  if (swipe.tabId !== undefined && (typeof swipe.tabId !== "string" || !swipe.tabId || swipe.tabId.length > MAX_TAB_ID_LENGTH)) return null;
+  if (swipe.gesture !== undefined && (typeof swipe.gesture !== "number" || !Number.isSafeInteger(swipe.gesture) || swipe.gesture < 1)) return null;
+  if (swipe.gesture !== undefined && swipe.tabId === undefined) return null;
   return swipe as PageSwipe;
 }
+
+function claimPageSwipe(page: { tabId: string; gesture: number }, claimed: boolean) {
+  const host = gestureHost;
+  if (!host || !host.bootstrap?.capabilities?.includes(PAGE_SWIPE_CLAIM)) return;
+  void Promise.resolve()
+    .then(() => host.invoke(PAGE_SWIPE_CLAIM, { gesture: page.gesture, tabId: page.tabId, claimed }))
+    .catch(() => {});
+}
+
+function syncPageClaim() {
+  const page = pageGesture;
+  if (!page || page.gesture === null) return;
+  const want = gesture.state === "tracking";
+  if (want === page.claimed) return;
+  page.claimed = want;
+  claimPageSwipe({ tabId: page.tabId, gesture: page.gesture }, want);
+}
+
+const samePageGesture = (swipe: PageSwipe) =>
+  swipe.tabId === undefined || (!!pageGesture && pageGesture.tabId === swipe.tabId && pageGesture.gesture === (swipe.gesture ?? null));
 
 export function onPageSwipe(value: unknown, timestamp?: number) {
   const swipe = pageSwipe(value);
@@ -385,15 +417,23 @@ export function onPageSwipe(value: unknown, timestamp?: number) {
   if (swipe.phase === "began") {
     if (gesture.state === "pending" || gesture.state === "tracking") end(true, t);
     const hit = typeof document === "undefined" ? null : document.elementFromPoint(swipe.x!, swipe.y!);
-    prepare(swipe.x!, swipe.y!, hit, t);
-    begin(swipe.x!, swipe.y!, hit, t);
+    prepare(swipe.x!, swipe.y!, hit, t, swipe.tabId);
+    begin(swipe.x!, swipe.y!, hit, t, swipe.tabId);
+    if (swipe.tabId !== undefined && gesture.state === "pending") pageGesture = { tabId: swipe.tabId, gesture: swipe.gesture ?? null, claimed: false };
     update(swipe.dx, swipe.dy, t);
-  } else if (swipe.phase === "changed") {
-    update(swipe.dx, swipe.dy, t);
-  } else {
-    if (swipe.dx || swipe.dy) update(swipe.dx, swipe.dy, t);
-    end(swipe.phase === "cancelled", t);
+    syncPageClaim();
+    return;
   }
+  if (!samePageGesture(swipe)) return;
+  if (swipe.phase === "changed") {
+    update(swipe.dx, swipe.dy, t);
+    syncPageClaim();
+    return;
+  }
+  if (swipe.dx || swipe.dy) update(swipe.dx, swipe.dy, t);
+  if (pageGesture) pageGesture.claimed = false;
+  end(swipe.phase === "cancelled", t);
+  pageGesture = null;
 }
 
 type GesturePhase = "none" | "mayBegin" | "began" | "changed" | "ended" | "cancelled";
@@ -412,7 +452,7 @@ function scrollGesture(value: unknown): ScrollGesture | null {
 }
 
 const hitAt = (x: number, y: number) => (typeof document === "undefined" ? null : document.elementFromPoint(x, y));
-const restingMomentum = () => ({ armed: false, flowing: false, endedAt: 0 });
+const restingMomentum = () => ({ armed: false, flowing: false, endedAt: 0, armedAt: 0 });
 
 function followMomentum(momentum: GesturePhase, t: number) {
   if (!ownedMomentum.armed) return;
@@ -453,7 +493,7 @@ export function onScrollGesture(value: unknown, timestamp?: number) {
   if (g.phase === "ended" || g.phase === "cancelled") {
     if (g.dx || g.dy) update(g.dx, g.dy, t);
     const tracked = end(g.phase === "cancelled", t);
-    if (tracked && g.phase === "ended") ownedMomentum = { armed: true, flowing: false, endedAt: t };
+    if (tracked && g.phase === "ended") ownedMomentum = { armed: true, flowing: false, endedAt: t, armedAt: performance.now() / 1000 };
     return;
   }
   update(g.dx, g.dy, t);
@@ -463,6 +503,7 @@ const nativeScrollFrom = (host: ArdiaHost | undefined) => !!host?.bootstrap?.cap
 
 function listenForPageSwipes(host: ArdiaHost | undefined = ardiaHost) {
   nativeScroll = nativeScrollFrom(host);
+  gestureHost = host;
   return host?.onEvent((module, event, payload) => {
     if (module !== "ArdiaShell") return;
     if (event === "onPageSwipe") onPageSwipe(payload);
