@@ -23,21 +23,31 @@ function TintLayer({ windowId, slot, count, children }: { windowId: string; slot
   useEffect(() => {
     const element = layer.current;
     const Timeline = (globalThis as { ScrollTimeline?: ScrollTimelineConstructor }).ScrollTimeline;
-    if (!element || !Timeline || slot === 0 || count < 2) return;
+    if (!element || !Timeline || count < 2) return;
     let animation: Animation | null = null;
-    const stop = watchPagerScroller(windowId, (scroller) => {
+    const stop = watchPagerScroller(windowId, (pager) => {
       animation?.cancel();
       animation = null;
-      if (!scroller) return;
-      const from = (slot - 1) / (count - 1);
-      const to = slot / (count - 1);
+      element.style.opacity = "";
+      if (!pager) return;
+      const rel = slot - pager.first;
+      if (rel <= 0 || pager.count < 2) {
+        element.style.opacity = rel <= 0 ? "1" : "0";
+        return;
+      }
+      if (rel >= pager.count) {
+        element.style.opacity = "0";
+        return;
+      }
+      const from = (rel - 1) / (pager.count - 1);
+      const to = rel / (pager.count - 1);
       const keyframes: Keyframe[] = [
         { opacity: 0, offset: 0 },
         ...(from > 0 ? [{ opacity: 0, offset: from }] : []),
         { opacity: 1, offset: to },
         ...(to < 1 ? [{ opacity: 1, offset: 1 }] : []),
       ];
-      animation = element.animate(keyframes, { timeline: new Timeline({ source: scroller, axis: "x" }), fill: "both", easing: "linear" });
+      animation = element.animate(keyframes, { timeline: new Timeline({ source: pager.scroller, axis: "x" }), fill: "both", easing: "linear" });
     });
     return () => {
       stop();

@@ -7,7 +7,7 @@ import type { PagerPage } from "../../../../browser/src/state/windows/profilePag
 import { GLOW_ROOM, type PageSpot, type SidebarGeometry } from "../../../../browser/src/components/sidebar/pageLayout";
 import { SCROLL_EDGE } from "../../../../browser/src/components/sidebar/ScrollEdge";
 import { SidebarPage } from "../../../../browser/src/components/sidebar/SidebarPage";
-import { recordPagerMotion, setPagerScroller } from "./pagerScroller";
+import { pagerWindow, recordPagerMotion, setPagerScroller } from "./pagerScroller";
 
 type SidebarPagesProps = {
   windowId: string;
@@ -78,21 +78,22 @@ export const SidebarPages = memo(function MacSidebarPages({ windowId, pages, wid
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  const first = Math.max(0, index - 1);
+  const shown = pages.filter((page) => Math.abs(page.slot - index) <= 1);
+  const count = Math.max(1, shown.length);
+
   useLayoutEffect(() => {
     const element = scroller.current;
     if (!element || index < 0 || !width) return;
-    const left = index * width;
-    if (resting.current === index && Math.abs(element.scrollLeft - left) < 1) return;
-    const moving = resting.current >= 0 && resting.current !== index;
+    const left = (index - first) * width;
     resting.current = index;
-    if (Math.abs(element.scrollLeft - left) < 1) return;
-    element.scrollTo({ left, behavior: moving ? "smooth" : "instant" });
-  }, [index, width]);
+    if (Math.abs(element.scrollLeft - left) >= 1) element.scrollLeft = left;
+    setPagerScroller(windowId, { scroller: element, first, count });
+  }, [index, first, count, width]);
 
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
-    setPagerScroller(windowId, element);
     let moving = false;
     const onScroll = () => {
       if (moving) return;
@@ -102,13 +103,13 @@ export const SidebarPages = memo(function MacSidebarPages({ windowId, pages, wid
     const onScrollEnd = () => {
       moving = false;
       const width = element.clientWidth;
-      const landed = width ? Math.round(element.scrollLeft / width) : -1;
+      const window = pagerWindow(windowId);
+      const landed = width && window ? window.first + Math.round(element.scrollLeft / width) : -1;
       recordPagerMotion({ phase: "rest", at: performance.now(), index: landed });
       const s = useBrowser.getState();
       const id = s.profileOrder[landed];
       const w = s.windows[windowId];
       if (!id || !w || w.kind === "private" || id === w.profileId) return;
-      resting.current = landed;
       s.switchProfile(windowId, id);
     };
     element.addEventListener("scroll", onScroll, { passive: true });
@@ -133,16 +134,16 @@ export const SidebarPages = memo(function MacSidebarPages({ windowId, pages, wid
   const height = Math.max(0, available - (topField ? GLOW_ROOM : 0));
   return (
     <div ref={scroller} className="ardia-mac-pager" style={SCROLLER_STYLE}>
-      <div style={{ position: "relative", width: Math.max(1, pages.length) * width, height: "100%" }}>
-        {pages.map((page) => (
-          <div key={`snap-${page.id}`} style={{ position: "absolute", top: 0, bottom: 0, left: page.slot * width, width, scrollSnapAlign: "start", scrollSnapStop: "always", pointerEvents: "none" }} />
+      <div style={{ position: "relative", width: count * width, height: "100%" }}>
+        {shown.map((page) => (
+          <div key={`snap-${page.id}`} style={{ position: "absolute", top: 0, bottom: 0, left: (page.slot - first) * width, width, scrollSnapAlign: "start", scrollSnapStop: "always", pointerEvents: "none" }} />
         ))}
         {pages.map((page) =>
           page.id === current || neighbours ? (
             <SidebarPage
               key={page.id}
               profileId={page.id}
-              slot={page.slot}
+              slot={Math.abs(page.slot - index) <= 1 ? page.slot - first : -100}
               paging
               width={width}
               current={page.id === current}
