@@ -297,13 +297,11 @@ test("web Liquid Glass adds a luminous specular rim over the brightened edge, a 
   const glassOf = (source) => source.slice(source.indexOf("export function GlassEffect("), source.indexOf("\n}\n", source.indexOf("export function GlassEffect(")));
   const shown = glassOf(desktop("./shims/web/chrome.tsx"));
   const web = glassOf(demo("shims/web/chrome.tsx"));
-  const fallbackOf = (body) => body.slice(body.indexOf("<div style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.shadow }} />"), body.indexOf("\n", body.indexOf("data-ardia-glass-ring")));
+  const fallbackOf = (body) => body.slice(body.indexOf("<div style={{ ...layer, borderRadius: fallbackRadius(cornerRadius), boxShadow: look.shadow }} />"), body.indexOf("\n", body.indexOf("data-ardia-glass-ring"))).split("\n").map((line) => line.trim()).join("\n");
   assert.ok(fallbackOf(shown).includes("data-ardia-glass-rim") && fallbackOf(shown).includes("look.sheen"));
   assert.equal(fallbackOf(shown), fallbackOf(web), "the desktop fallback draws the demo's specular layers");
   assert.match(shown, /useGlassLook\(frame, \{ material: clear \? "clear" : "regular", tint: glassTint\(tint\), group: group \?\? undefined, appearance: theme \}, !scrolled && nativeGlassFor\(shellOverPages\(\)\)\);/, "native Liquid Glass still takes over on macOS 26");
-  assert.match(shown, /const framed = \[\{ borderRadius: cornerRadius \}, style\];/, "the frame keeps style opacity so native glass measures it");
-  assert.match(shown, /<View ref=\{frame\} pointerEvents="none" \{\.\.\.props\} style=\{framed\}>\n\s+<div data-ardia-glass-layers="" style=\{layer\}>\n\s+<div style=\{\{ \.\.\.layer, borderRadius: fallbackRadius\(cornerRadius\), boxShadow: look\.shadow \}\} \/>/, "the CSS shadow and rims sit inside the fallback that native glass hides");
-  assert.match(shown, /data-ardia-glass-ring=[^\n]*\/>\n\s+<\/div>\n\s+<\/div>\n\s+\{children\}\n\s+<\/View>/, "hosted content renders outside the hidden fallback");
+  assert.match(shown, /<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>\n\s+<div data-ardia-glass-layers="" style=\{layer\}>\n\s+<div style=\{\{ \.\.\.layer, borderRadius: fallbackRadius\(cornerRadius\), boxShadow: look\.shadow \}\} \/>/, "the CSS shadow and rims sit inside the fallback that native glass hides");
   assert.equal(shown.match(/\{children\}/g)?.length, 2, "hosted content renders in the scrolled and the shaped glass");
   assert.match(desktop("./base.css"), /\[data-ardia-glass-effect\]\[data-ardia-glass="on"\] > \[data-ardia-glass-layers\] \{\n\s+visibility: hidden;/);
   const dark = specularLook(true, false);
@@ -319,4 +317,31 @@ test("web Liquid Glass adds a luminous specular rim over the brightened edge, a 
   assert.equal(specularLook(true, true).blur, 0, "clear glass stays unfrosted");
   assert.equal(withBlur("saturate(2)", dark.blur), "blur(2px) saturate(2)");
   assert.equal(withBlur("saturate(2)", 0), "saturate(2)");
+});
+
+test("a faded GlassEffect fades only its measured glass layer, and the content it hosts stays opaque", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { GlassEffect, glassFrameStyles } = await import("./shims/web/chrome.tsx");
+  const { outer, glassLayer } = glassFrameStyles([{ position: "absolute", top: -1, alignItems: "center" }, { opacity: 0.25 }], 8);
+  assert.deepEqual(outer, { position: "absolute", top: -1, alignItems: "center" }, "the hosting frame keeps layout and drops the fade");
+  assert.deepEqual(glassLayer, { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, borderRadius: 8, opacity: 0.25 }, "the measured glass layer carries the fade and the radius");
+  assert.equal(glassFrameStyles(undefined, 4).glassLayer.opacity, undefined);
+  const html = renderToStaticMarkup(createElement(GlassEffect, { cornerRadius: 8, style: { opacity: 0.25 } }, createElement("span", { id: "hosted" }, "Go")));
+  const layers = html.indexOf("data-ardia-glass-layers");
+  const hosted = html.indexOf('<span id="hosted">');
+  assert.ok(html.startsWith("<div data-ardia-glass-layers") && hosted > layers, html);
+  let depth = 0;
+  let closed = -1;
+  for (const tag of html.matchAll(/<(\/?)div\b[^>]*>/g)) {
+    depth += tag[1] ? -1 : 1;
+    if (depth === 0) {
+      closed = tag.index;
+      break;
+    }
+  }
+  assert.ok(closed > 0 && closed < hosted, "the hosted content sits after the CSS fallback, outside anything the fade or the native handoff hides");
+  const source = readFileSync(new URL("./shims/web/chrome.tsx", import.meta.url), "utf8");
+  assert.match(source, /<View pointerEvents="none" \{\.\.\.props\} style=\{outer\}>\n\s+<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>/);
+  assert.match(source, /<\/div>\n\s+<\/View>\n\s+\{children\}\n\s+<\/View>/, "children are the glass layer's sibling");
 });

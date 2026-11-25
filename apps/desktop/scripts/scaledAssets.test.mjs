@@ -113,6 +113,10 @@ test("emitted names follow the strictest WebUI host rules, so mark@2x ships as m
   assert.equal(hostServesPath("/assets/x.png"), false);
   assert.equal(hostServesPath(`${"a/".repeat(300)}x`), false, "the whole path stays within the Mac host's 512 bytes");
   assert.ok(hostServesPath("assets/ntp-mark-front-2x-Ab_9.png"));
+  assert.equal(hostSafeFileName("a./b../c.png"), "a/b/c.png", "no part ends in a dot");
+  assert.equal(hostSafeFileName("assets/CON.png"), "assets/-CON.png");
+  assert.equal(hostSafeFileName("nul/com1/LPT9.txt/aux"), "-nul/-com1/-LPT9.txt/-aux");
+  assert.equal(hostSafeFileName("console/com10/comma.png"), "console/com10/comma.png", "only the exact device names are reserved");
   const dotted = hostSafeFileName(`${"n".repeat(91)}.${"n".repeat(20)}.png`);
   assert.equal(dotted, `${"n".repeat(91)}.png`, "a cut that ends on a dot never meets the extension as '..'");
   assert.ok(hostServesPath(dotted));

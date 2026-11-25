@@ -24,7 +24,7 @@ const TIMING_KEYS = new Set(["offset", "computedOffset", "easing", "composite"])
 
 export const fadesOnly = (animation: AnimationLike): boolean => {
   const frames = animation.effect?.getKeyframes?.();
-  return !!frames?.length && frames.every((frame) => Object.keys(frame).every((key) => key === "opacity" || TIMING_KEYS.has(key)));
+  return !!frames && frames.every((frame) => Object.keys(frame).every((key) => key === "opacity" || TIMING_KEYS.has(key)));
 };
 
 export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[]): boolean =>

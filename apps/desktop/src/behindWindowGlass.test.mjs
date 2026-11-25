@@ -61,3 +61,29 @@ test("a themed profile keeps native glass behind the window and lays its theme o
   assert.match(glassBranch, /themed \? <ThemedVibrancy /);
   assert.match(glassBranch, /const treatment = themed \? null : glassTreatment\(dark, tintColor, tintAlpha, tintLightness\);/);
 });
+
+test("each profile page's backdrop takes that page's own appearance, so a light stock profile swiped in from a dark custom one is light all the way", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { useBrowser } = await import("../../browser/src/state/browser/store.ts");
+  const { PageThemeContext, ThemeContext } = await import("../../browser/src/components/ui/theme.ts");
+  const { useSurfaceDark } = await import("./shims/web/chrome.tsx");
+  const Probe = () => (useSurfaceDark() ? "dark" : "light");
+  const darkCustom = { dark: true };
+  const lightStock = { dark: false };
+  const before = useBrowser.getState().ui;
+  useBrowser.setState((s) => ({ ui: { ...s.ui, appDark: false } }));
+  try {
+    const page = (selected, own) => renderToStaticMarkup(createElement(ThemeContext.Provider, { value: selected }, createElement(PageThemeContext.Provider, { value: own }, createElement(Probe))));
+    assert.equal(page(darkCustom, lightStock), "light", "the incoming light stock page reads light while the dark custom profile is selected");
+    assert.equal(page(lightStock, darkCustom), "dark", "the outgoing dark custom page stays dark after the light one is selected");
+    assert.equal(renderToStaticMarkup(createElement(ThemeContext.Provider, { value: darkCustom }, createElement(Probe))), "dark", "without its own page theme a backdrop would follow the selected profile");
+  } finally {
+    useBrowser.setState({ ui: before });
+  }
+  const shaders = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
+  assert.match(shaders, /const surfaceDark = useSurfaceDark\(\);/);
+  assert.match(shaders, /: surfaceDark;/);
+  const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
+  assert.match(tint, /<PageThemeContext\.Provider value=\{theme\}>\n\s+<WindowBackdrop vibrancy /);
+});

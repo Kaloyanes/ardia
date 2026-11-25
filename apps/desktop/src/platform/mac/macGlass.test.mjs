@@ -238,6 +238,7 @@ test("a fade on a backdrop's ancestor moves nothing, so an idle window with one 
   assert.equal(fadesOnly(fade), true);
   assert.equal(fadesOnly(slide), false);
   assert.equal(fadesOnly({ playState: "running", effect: { target: tintLayer } }), false, "without keyframes an animation still counts as motion");
+  assert.equal(fadesOnly({ playState: "running", effect: { target: tintLayer, getKeyframes: () => [] } }), true, "an empty keyframe list moves nothing");
   assert.equal(animationMovesBackdrop([fade], [backdrop]), false);
   assert.equal(animationMovesBackdrop([fade, slide], [backdrop]), true);
   const frames = [];

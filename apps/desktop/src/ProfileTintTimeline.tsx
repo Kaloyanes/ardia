@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { WindowBackdrop } from "../../browser/src/components/ui";
 import { spaceLookSource } from "../../browser/src/lib/profileLook";
-import { profileTheme } from "../../browser/src/components/ui/theme";
+import { PageThemeContext, profileTheme } from "../../browser/src/components/ui/theme";
 import { useProfileLooks } from "../../browser/src/state/profiles/hooks";
 import { useWindowId } from "../../browser/src/state/browser/hooks";
 import { usePagerPages } from "../../browser/src/state/windows/profilePager";
@@ -98,7 +98,9 @@ export function ProfileTint() {
         const theme = themes[k]!;
         return (
           <TintLayer key={page.id} windowId={windowId} slot={page.slot} crossfade={crossfade} last={last}>
-            <WindowBackdrop vibrancy {...theme.backdrop} colors={theme.windowTint} grainOpacity={theme.grain} style={StyleSheet.absoluteFill} />
+            <PageThemeContext.Provider value={theme}>
+              <WindowBackdrop vibrancy {...theme.backdrop} colors={theme.windowTint} grainOpacity={theme.grain} style={StyleSheet.absoluteFill} />
+            </PageThemeContext.Provider>
           </TintLayer>
         );
       })}
