@@ -1,5 +1,4 @@
-import { useRef } from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewInstance } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LayoutAnimationConfig } from "react-native-reanimated";
 import { destinationWords, dismissWords } from "../../lib/sharedWords";
 import { closeSettings, pushSettings } from "../../state/settings/nav";
@@ -7,33 +6,32 @@ import { useSyncStatus } from "../../state/sync/hooks";
 import { syncOffered } from "../../state/sync/offer";
 import { syncRowSubtitle } from "../../state/sync/syncRules";
 import { duration, font, settingsLayout, settingsTint, space, Symbol, useDesign, useTheme, useWarningInk } from "../ui";
-import { MaterialSettingsGroups } from "./MaterialSettingsGroups";
-import { BarButton, Group, IconTile, SettingsPage } from "./SettingsKit";
+import { BarButton, Group, IconTile, NavRow, SettingsPage } from "./SettingsKit";
 import { SettingsPaneList } from "./SettingsPanes";
-import { useMaterialYouSwitch } from "./materialYouSwitch";
 
 export function SettingsRoot() {
   const stacks = useWindowDimensions().fontScale >= settingsLayout.accessibilityFontScale;
   const material = useDesign() === "material";
-  const materialSwitch = useRef<ViewInstance>(null);
-  const appearanceRow = useRef<ViewInstance>(null);
-  const { reveal, change } = useMaterialYouSwitch(material, () => (material ? materialSwitch.current : appearanceRow.current));
   return (
     <SettingsPage
       title={destinationWords.settings}
       mediumAppBar={material}
-      revealRef={reveal}
       onClose={material ? closeSettings : undefined}
       trailing={material ? undefined : <BarButton title={dismissWords.done} emphasized onPress={closeSettings} />}
     >
       {syncOffered() ? (
         <Group>
-          <SyncCard stacks={stacks} />
+          {material ? <MaterialSyncRow /> : <SyncCard stacks={stacks} />}
         </Group>
       ) : null}
-      {material ? <MaterialSettingsGroups stacks={stacks} materialSwitch={materialSwitch} onMaterialYou={change} /> : <SettingsPaneList appearanceRow={appearanceRow} />}
+      <SettingsPaneList />
     </SettingsPage>
   );
+}
+
+function MaterialSyncRow() {
+  const line = syncRowSubtitle(useSyncStatus());
+  return <NavRow title={destinationWords.sync} icon="macAndPhone" value={line.text} onPress={() => pushSettings({ page: "sync" })} />;
 }
 
 function SyncCard({ stacks }: { stacks: boolean }) {

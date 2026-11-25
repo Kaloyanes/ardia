@@ -227,12 +227,11 @@ function ClassicDivider({ inset = settingsLayout.rowInset }: { inset?: number })
 
 type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: boolean };
 
-function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, onPress, buttonRef }: RowBase & { value?: string; detail?: string; chevron?: boolean; onPress: () => void; buttonRef?: RefObject<ViewInstance | null> }) {
+function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, onPress }: RowBase & { value?: string; detail?: string; chevron?: boolean; onPress: () => void }) {
   const theme = useTheme();
   return (
     <View>
       <Pressable
-        ref={buttonRef}
         accessibilityRole="button"
         accessibilityLabel={detail ? `${title}, ${detail}` : title}
         accessibilityValue={value ? { text: value } : undefined}

@@ -117,7 +117,9 @@ onAndroid("turning Material You on in Appearance makes Settings the full-screen 
   unmount(root);
 });
 
-onAndroid("with Material You on, Settings opens as the Material root with the switch in General, and turning it off there swaps in the iPhone pane list", () => {
+const paneRows = (root: Root) => ["General", "Tabs", "Appearance", "Search", "Site settings"].map((pane) => settingButton(root, pane));
+
+onAndroid("with Material You on, Settings opens as the Material page of the same pane list, the switch is only in Appearance, and turning it off there keeps the page", () => {
   usePreferences.setState({ materialYou: true });
   const root = renderSurface(<Surfaces />);
   act(() => openSettings());
@@ -125,34 +127,28 @@ onAndroid("with Material You on, Settings opens as the Material root with the sw
   const sheet = fullSheet(root);
   expect(flat(sheet).top).toBe(0);
   expect(materialPages(root)).toHaveLength(1);
-  expect(root.root.findAll((node) => node.props.accessibilityLabel === "Appearance" && typeof node.props.onPress === "function")).toHaveLength(0);
+  for (const row of paneRows(root)) expect(row).toBeDefined();
+  expect(materialYouRow(root)).toBeUndefined();
+  act(() => settingButton(root, "Appearance").props.onPress());
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
   const scroll = settingsList(root);
   act(() => scroll.props.onScroll({ nativeEvent: { contentOffset: { y: 120 } } }));
-  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
 
   act(() => materialYouRow(root)!.props.onPress());
   settle();
   expect(fullSheet(root)).toBe(sheet);
   expect(flat(sheet).top).toBeGreaterThan(40);
   expect(getAnimatedStyle(sheet)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
-  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }]);
+  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }, { page: "appearance" }]);
   expect(settingsList(root)).toBe(scroll);
-  expect(settingsScroll("Settings")).toBe(120);
+  expect(settingsScroll("Appearance")).toBe(120);
   expect(materialPages(root)).toHaveLength(0);
-  expect(materialYouRow(root)).toBeUndefined();
-  expect(settingButton(root, "Appearance")).toBeDefined();
-  expect(hostById(root, "settingsTitle")!.props.children).toBe("Settings");
+  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(false);
   expect(currentPreferences().materialYou).toBe(false);
   expect(counted).toHaveBeenCalledWith("material_you_turned_off");
-
-  act(() => settingButton(root, "Appearance").props.onPress());
-  act(() => materialYouRow(root)!.props.onPress());
-  settle();
-  expect(materialPages(root)).toHaveLength(1);
   act(() => void handleSystemBack());
-  expect(useSettingsNav.getState().stack).toEqual([{ page: "root" }]);
-  expect(materialPages(root)).toHaveLength(1);
-  expect(materialYouRow(root)!.props.accessibilityState.checked).toBe(true);
+  for (const row of paneRows(root)) expect(row).toBeDefined();
+  expect(materialYouRow(root)).toBeUndefined();
   unmount(root);
 });
 
@@ -208,52 +204,31 @@ const revealsWith = (y: number) => {
   return { reveal, scrolledTo };
 };
 
-onAndroid("turning Material You off from the Material root brings Appearance, where the switch now lives, into view before focusing it", () => {
+onAndroid("each Material You flip in Appearance brings the replacement switch into the list's view before focusing it", () => {
   const { reveal, scrolledTo } = revealsWith(40);
-  const focus = jest.spyOn(coverFocus, "focusForScreenReader").mockImplementation(() => () => undefined);
-  usePreferences.setState({ materialYou: true });
-  const root = renderSurface(<Surfaces />);
-  act(() => openSettings());
-  settle();
-  const list = settingsList(root);
-  act(() => list.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 393, height: 700 } } }));
-  act(() => list.props.onScroll({ nativeEvent: { contentOffset: { y: 260 } } }));
-  reveal.mockClear();
-  focus.mockClear();
-  act(() => materialYouRow(root)!.props.onPress());
-  settle();
-  expect(reveal).toHaveBeenCalledTimes(1);
-  const [frame, target] = reveal.mock.calls[0]!;
-  expect(frame).toMatchObject({ scrollY: 260, viewport: 700 });
-  expect(target).not.toBeNull();
-  expect(scrolledTo).toEqual([{ y: 40, animated: false }]);
-  expect(focus).toHaveBeenCalledTimes(1);
-  expect(focus.mock.calls[0]![0]()).toBe(target);
-  expect(reveal.mock.invocationCallOrder[0]!).toBeLessThan(focus.mock.invocationCallOrder[0]!);
-  unmount(root);
-});
-
-onAndroid("Material You returns TalkBack focus to the replacement switch after each flip in Appearance and after turning it on from the root", () => {
   const focus = jest.spyOn(coverFocus, "focusForScreenReader").mockImplementation(() => () => undefined);
   const root = renderSurface(<Surfaces />);
   act(() => openSettings({ page: "appearance" }));
   settle();
+  const list = settingsList(root);
+  act(() => list.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 393, height: 700 } } }));
+  act(() => list.props.onScroll({ nativeEvent: { contentOffset: { y: 260 } } }));
   for (const enabled of [true, false]) {
+    reveal.mockClear();
     focus.mockClear();
+    scrolledTo.length = 0;
     act(() => materialYouRow(root)!.props.onPress());
     settle();
     expect(currentPreferences().materialYou).toBe(enabled);
+    expect(reveal).toHaveBeenCalledTimes(1);
+    const [frame, target] = reveal.mock.calls[0]!;
+    expect(frame).toMatchObject({ scrollY: 260, viewport: 700 });
+    expect(target).not.toBeNull();
+    expect(scrolledTo).toEqual([{ y: 40, animated: false }]);
     expect(focus).toHaveBeenCalledTimes(1);
-    expect(focus.mock.calls[0]![0]()).not.toBeNull();
+    expect(focus.mock.calls[0]![0]()).toBe(target);
+    expect(reveal.mock.invocationCallOrder[0]!).toBeLessThan(focus.mock.invocationCallOrder[0]!);
   }
-  act(() => materialYouRow(root)!.props.onPress());
-  act(() => void handleSystemBack());
-  settle();
-  focus.mockClear();
-  act(() => materialYouRow(root)!.props.onPress());
-  settle();
-  expect(focus).toHaveBeenCalledTimes(1);
-  expect(focus.mock.calls[0]![0]()).not.toBeNull();
   unmount(root);
 });
 

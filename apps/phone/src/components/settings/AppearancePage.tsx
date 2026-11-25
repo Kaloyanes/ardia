@@ -15,7 +15,7 @@ import { popSettings, pushSettings } from "../../state/settings/nav";
 import { matchMyMac } from "../../state/sync/actions";
 import { useSyncEnabled } from "../../state/sync/hooks";
 import { capsule, font, materialYouOffered, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
-import { MaterialSettingsLeading } from "./MaterialSettingsKit";
+import { MaterialCheckRow, MaterialSettingsLeading } from "./MaterialSettingsKit";
 import { useMaterialYouSwitch } from "./materialYouSwitch";
 import { Divider, Group, IconTile, NavRow, SettingsFormColorsContext, SettingsPage, ToggleRow } from "./SettingsKit";
 import { actionWords } from "../../lib/sharedWords";
@@ -76,7 +76,11 @@ function AndroidAppearanceControls({ materialSwitch, onMaterialYou }: { material
   );
 }
 
-export function CheckRow({ title, checked, divider, onPress, disabled = false }: { title: string; checked: boolean; divider: boolean; onPress: () => void; disabled?: boolean }) {
+export function CheckRow(props: Parameters<typeof ClassicCheckRow>[0]) {
+  return useDesign() === "material" ? <MaterialCheckRow {...props} /> : <ClassicCheckRow {...props} />;
+}
+
+function ClassicCheckRow({ title, checked, divider, onPress, disabled = false }: { title: string; checked: boolean; divider: boolean; onPress: () => void; disabled?: boolean }) {
   const theme = useTheme();
   const accent = useContext(SettingsFormColorsContext)?.formAccent ?? theme.formAccent;
   return (
