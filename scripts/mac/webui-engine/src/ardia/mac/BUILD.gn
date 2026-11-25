@@ -65,7 +65,7 @@ if (is_official_build) {
       "//base",
       "//chrome/browser",
       "//chrome/browser/profiles:profile",
-      "//components/download/public/common",
+      "//components/download/public/common:public",
       "//components/sessions",
       "//components/version_info",
       "//components/zoom",
