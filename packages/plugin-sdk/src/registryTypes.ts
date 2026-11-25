@@ -83,7 +83,7 @@ export const pluginDetailSpec = obj(
     tier,
     repo: githubRepo,
     tags,
-    versions: arr(versionEntrySpec, { min: 1, max: REGISTRY_LIMITS.versions }),
+    versions: arr(versionEntrySpec, { max: REGISTRY_LIMITS.versions }),
   },
   { required: ["id", "name", "description", "official", "tier", "repo", "tags", "versions"], what: "a plugin's registry entry" },
 );
@@ -165,6 +165,9 @@ export function validatePluginDetail(raw: unknown, expectedId?: string): Validat
       if (Object.hasOwn(entry[field], detail.id)) problems.push(`versions[${i}].${field}: a plugin can't depend on itself`);
     }
   });
+  const live = detail.versions.filter((v) => !v.yanked);
+  if (live.some((v) => v.channel === "latest") && detail.tags.latest === undefined) problems.push("tags.latest is required while a latest release isn't yanked");
+  else if (live.length && !live.some((v) => v.channel === "latest") && detail.tags.beta === undefined) problems.push("tags.beta is required while a beta release isn't yanked");
   for (const [tag, version] of Object.entries(detail.tags)) {
     const entry = detail.versions.find((v) => v.version === version);
     if (!entry) problems.push(`tags.${tag}: ${version} isn't one of the versions`);

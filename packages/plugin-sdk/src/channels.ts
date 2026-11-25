@@ -51,6 +51,8 @@ const abortError = (signal: AbortSignalLike) =>
 
 const MAX_HELD_MESSAGES = 256;
 
+type SocketEvent = { kind: "message"; data: string; binary: boolean } | { kind: "error"; message: string } | { kind: "close"; code: number; reason: string };
+
 const quiet = () => undefined;
 
 export type Channels = ReturnType<typeof createChannels>;
@@ -148,9 +150,7 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     signal?.addEventListener("abort", onAbort, { once: true });
     const head = await new Promise<StreamHead>((resolve, reject) => {
       rejectHead = reject;
-      const started = rpc.start<StreamHead>(M.fetchStream, { ...request, stream: id });
-      headId = started.id;
-      started.done.then(resolve, (error) => {
+      rpc.start<StreamHead>(M.fetchStream, { ...request, stream: id }, (requestId) => (headId = requestId)).done.then(resolve, (error) => {
         rejectHead = null;
         queue.fail(error, true);
         reject(error);
@@ -193,24 +193,41 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     let state: SocketState = "connecting";
     let protocol = "";
     let settle: { resolve: () => void; reject: (error: unknown) => void } | null = null;
-    const held = { message: [] as [string, boolean][], close: [] as [number, string][], error: [] as string[] };
-    let flushing = false;
+    const pending: SocketEvent[] = [];
+    let draining = false;
+    const listening = (event: SocketEvent) => listeners[event.kind].size > 0;
+    const deliverOne = (event: SocketEvent) => {
+      if (event.kind === "message") for (const l of [...listeners.message]) safely(() => l(event.data, event.binary));
+      else if (event.kind === "error") for (const l of [...listeners.error]) safely(() => l(event.message));
+      else for (const l of [...listeners.close]) safely(() => l(event.code, event.reason));
+    };
     const drain = () => {
-      if (listeners.message.size) for (const [data, binary] of held.message.splice(0)) for (const l of [...listeners.message]) safely(() => l(data, binary));
-      if (listeners.error.size) for (const message of held.error.splice(0)) for (const l of [...listeners.error]) safely(() => l(message));
-      if (listeners.close.size && (!held.message.length || !listeners.message.size)) for (const [code, reason] of held.close.splice(0)) for (const l of [...listeners.close]) safely(() => l(code, reason));
+      if (draining) return;
+      draining = true;
+      try {
+        for (;;) {
+          let last = -1;
+          for (let i = pending.length - 1; i >= 0; i--) {
+            if (listening(pending[i]!)) {
+              last = i;
+              break;
+            }
+          }
+          if (last < 0) return;
+          for (const event of pending.splice(0, last + 1)) if (listening(event)) deliverOne(event);
+        }
+      } finally {
+        draining = false;
+      }
     };
-    const flush = () => {
-      if (flushing) return;
-      flushing = true;
-      void Promise.resolve().then(() => {
-        flushing = false;
-        drain();
-      });
+    const emit = (event: SocketEvent) => {
+      pending.push(event);
+      drain();
+      if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
     };
-    const attach = <L>(set: Set<L>, listener: L): Disposable => {
-      const added = addTo(set, listener);
-      flush();
+    const attach = <K extends keyof typeof listeners>(kind: K, listener: Parameters<(typeof listeners)[K]["add"]>[0]): Disposable => {
+      const added = addTo(listeners[kind] as Set<typeof listener>, listener);
+      drain();
       return added;
     };
     const forget = () => {
@@ -242,9 +259,9 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
           },
         );
       },
-      onMessage: (listener) => attach(listeners.message, listener),
-      onClose: (listener) => attach(listeners.close, listener),
-      onError: (listener) => attach(listeners.error, listener),
+      onMessage: (listener) => attach("message", listener),
+      onClose: (listener) => attach("close", listener),
+      onError: (listener) => attach("error", listener),
     };
     sockets.set(id, {
       opened(given) {
@@ -254,22 +271,15 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
         settle?.resolve();
       },
       message(data, binary) {
-        if (!listeners.message.size || held.message.length) {
-          if (held.message.length < MAX_HELD_MESSAGES) held.message.push([data, binary]);
-          if (listeners.message.size) drain();
-          return;
-        }
-        for (const listener of [...listeners.message]) safely(() => listener(data, binary));
+        if (state === "closed") return;
+        emit({ kind: "message", data, binary });
       },
       closed(code, reason) {
         if (state === "closed") return;
         state = "closed";
         forget();
         handshakeFailed(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
-        if (!listeners.close.size || held.message.length || held.close.length) {
-          held.close.push([code, reason]);
-          drain();
-        } else for (const listener of [...listeners.close]) safely(() => listener(code, reason));
+        emit({ kind: "close", code, reason });
       },
       failed(message) {
         if (state === "connecting") {
@@ -277,12 +287,7 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
           forget();
           handshakeFailed(new PluginError("failed", message));
         }
-        if (!listeners.error.size || held.error.length) {
-          if (held.error.length < MAX_HELD_MESSAGES) held.error.push(message);
-          if (listeners.error.size) drain();
-          return;
-        }
-        for (const listener of [...listeners.error]) safely(() => listener(message));
+        emit({ kind: "error", message });
       },
     });
     let connectId = 0;
@@ -318,9 +323,7 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
           reject(error);
         },
       };
-      const started = rpc.start<{ protocol?: string; open?: boolean }>(M.wsConnect, { ...params });
-      connectId = started.id;
-      started.done.then(
+      rpc.start<{ protocol?: string; open?: boolean }>(M.wsConnect, { ...params }, (requestId) => (connectId = requestId)).done.then(
         (reply) => {
           if (reply && reply.open === true) sockets.get(id)?.opened(typeof reply.protocol === "string" ? reply.protocol : "");
         },

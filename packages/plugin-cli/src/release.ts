@@ -73,9 +73,12 @@ export function assetFiles(project: Project, platforms: readonly PlatformKey[]):
   const owners = new Map<string, PlatformKey>();
   for (const platform of platforms) {
     const name = assetName(project, platform);
-    const clash = owners.get(name.toLowerCase());
-    if (clash) throw new CliError(`${clash} and ${platform} would both be released as ${name} (names that differ only in case collide on macOS and Windows); give each platform its own name in release.assets or use {platform} in release.asset`);
+    for (const file of [name, `${name}.sha256`]) {
+      const clash = owners.get(file.toLowerCase());
+      if (clash) throw new CliError(`${clash} and ${platform} would both write ${file} (names that differ only in case collide on macOS and Windows); give each platform its own name in release.assets or use {platform} in release.asset`);
+    }
     owners.set(name.toLowerCase(), platform);
+    owners.set(`${name}.sha256`.toLowerCase(), platform);
     names.set(platform, name);
   }
   return names;

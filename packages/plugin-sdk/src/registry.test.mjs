@@ -23,6 +23,7 @@ import {
   verifyEnvelope,
   verifySignedJson,
 } from "./registry.ts";
+import { satisfies } from "./semver.ts";
 
 const keys = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -205,6 +206,11 @@ describe("registry documents", () => {
     assert.deepEqual(validatePluginDetail({ ...d, tags: { latest: "9.9.9" } }).problems, ["tags.latest: 9.9.9 isn't one of the versions"]);
     assert.equal(validatePluginDetail({ ...d, v: 1 }).ok, false);
     assert.equal(validatePluginDetail({ ...d, tags: {}, versions: d.versions.map((v) => ({ ...v, yanked: true })) }).ok, true);
+    assert.equal(validatePluginDetail({ ...d, tags: {}, versions: [] }).ok, true);
+    assert.deepEqual(validatePluginDetail({ ...d, tags: {} }).problems, ["tags.latest is required while a latest release isn't yanked"]);
+    const betaOnly = detail("@a/b", [version("1.0.0-beta.1")]);
+    assert.deepEqual(validatePluginDetail({ ...betaOnly, tags: {} }).problems, ["tags.beta is required while a beta release isn't yanked"]);
+    assert.equal(validatePluginDetail(betaOnly).ok, true);
     assert.equal(validatePluginDetail({ ...d, description: "y".repeat(1000) }).ok, true);
     assert.equal(validatePluginDetail({ ...d, versions: [version("1.0.0", { artifacts: { "beos-x86": artifact() } })] }).ok, false);
     assert.deepEqual(validatePluginDetail({ ...d, versions: [version("1.0.0", { artifacts: {} })], tags: { latest: "1.0.0" } }).problems, ["versions[0].artifacts must have at least one platform"]);
@@ -238,6 +244,19 @@ describe("revocations", () => {
       revocation({ match: { registry: "https://evil.example.com" }, action: "block" }),
     ],
   };
+
+  test("exact bare versions don't stretch a long selector past the length limit", () => {
+    const selector = Array.from({ length: 27 }, (_, i) => `1.0.${i}`).join(" || ");
+    assert.equal(selector.length, 256);
+    assert.ok(selector.length + 27 > 256, "spelling each version as =x.y.z would pass the limit");
+    const entries = [revocation({ match: { id: "@a/b", versions: [selector] } })];
+    assert.equal(validateRevocationList({ seq: 1, issuedAt: "2026-11-25T00:00:00Z", entries }).ok, true);
+    assert.equal(matchRevocations({ id: "@a/b", version: "1.0.26" }, entries).length, 1);
+    assert.equal(matchRevocations({ id: "@a/b", version: "1.0.27" }, entries).length, 0);
+    assert.equal(satisfies("1.5.0", "1.0.0", { bareExact: true }), false);
+    assert.equal(satisfies("1.5.0", "1.0.0"), true);
+    assert.equal(satisfies("1.0.0", "1.0.0", { bareExact: true }), true);
+  });
 
   test("a bare version inside || or a space-joined set still matches exactly", () => {
     const or = [revocation({ match: { id: "@a/b", versions: ["1.0.0 || 2.0.0"] } })];
@@ -361,6 +380,17 @@ describe("resolvePluginGraph", () => {
     assert.match(resolvePluginGraph({ ...base, ardiaVersion: "0.2.0", roots: [{ id: "@a/ai" }] }).problems[0].message, /no version works with this Ardia/);
     const wide = new Map(Array.from({ length: 12 }, (_, i) => [`@w/p${i}`, detail(`@w/p${i}`, Array.from({ length: 6 }, (_, v) => version(`1.${v}.0`, { dependencies: i < 11 ? { [`@w/p${i + 1}`]: "^1.0.0" } : { "@w/none": "*" } })))]));
     assert.equal(resolvePluginGraph({ catalog: wide, ardiaVersion: "1.0.0", platform: null, maxSteps: 200, roots: [{ id: "@w/p0" }] }).problems[0].code, "unsettled");
+  });
+
+  test("an optional dependency whose newest version closes a cycle falls back to an older one", () => {
+    const graph = new Map([
+      ["@q/app", detail("@q/app", [version("1.0.0", { optionalDependencies: { "@q/helper": "^1.0.0" } })])],
+      ["@q/helper", detail("@q/helper", [version("1.0.0"), version("1.1.0", { dependencies: { "@q/app": "*" } })])],
+    ]);
+    const result = resolvePluginGraph({ catalog: graph, ardiaVersion: "1.0.0", platform: null, roots: [{ id: "@q/app" }] });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.deepEqual(result.plan.map((p) => [p.id, p.version]), [["@q/helper", "1.0.0"], ["@q/app", "1.0.0"]]);
+    assert.deepEqual(result.skipped, []);
   });
 
   test("a candidate that closes a cycle is passed over for an older one that doesn't", () => {
@@ -537,6 +567,15 @@ describe("diffSecuritySurface", () => {
     assert.equal(diffSecuritySurface(command({ view: "a" }), command({ view: "b" })).expanded, true);
     assert.equal(diffSecuritySurface(command({ open: "tab", path: "/a" }), command({ open: "tab", path: "/b" })).expanded, true);
     assert.equal(diffSecuritySurface(command({ panel: "side" }), command({ panel: "side" })).expanded, false);
+  });
+
+  test("a new or retargeted panel needs a prompt", () => {
+    const panels = (list) => ({ contributes: { panels: list } });
+    const side = { id: "side", title: "Side", mode: "sidecar", view: "main" };
+    assert.equal(diffSecuritySurface(panels([]), panels([side])).expanded, true);
+    assert.equal(diffSecuritySurface(panels([side]), panels([{ ...side, view: "other" }])).expanded, true);
+    assert.equal(diffSecuritySurface(panels([side]), panels([{ ...side, mode: "split", view: undefined, file: "ui.html" }])).expanded, true);
+    assert.equal(diffSecuritySurface(panels([side]), panels([{ ...side, title: "Renamed" }])).expanded, false);
   });
 
   test("an unknown permission moving from false to anything needs a prompt", () => {

@@ -1,6 +1,6 @@
 import type { PlatformKey } from "./manifestParts";
 import type { RegistryArtifact, RegistryRevocationsPayload, RegistryVersion, RevocationAction, RevocationEntry } from "./registryTypes";
-import { isSemver, satisfies } from "./semver";
+import { satisfies } from "./semver";
 
 export type RevocationTarget = {
   id: string;
@@ -35,23 +35,8 @@ export function sameRegistry(a: string | undefined, b: string | undefined): bool
   return left.host === right.host;
 }
 
-export function exactSelector(selector: string): string {
-  return selector
-    .split("||")
-    .map((alternative) => {
-      const tight = alternative.trim().replace(/(\^|~>?|>=|<=|>|<|=)\s+/g, "$1");
-      if (/\s-\s/.test(tight)) return tight;
-      return tight
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((token) => (isSemver(token) ? `=${token}` : token))
-        .join(" ");
-    })
-    .join(" || ");
-}
-
 export function versionMatches(version: string, selectors: readonly string[]): boolean {
-  return selectors.some((selector) => satisfies(version, exactSelector(selector), { includePrerelease: true }));
+  return selectors.some((selector) => satisfies(version, selector, { includePrerelease: true, bareExact: true }));
 }
 
 function entryMatches(entry: RevocationEntry, target: RevocationTarget): boolean {

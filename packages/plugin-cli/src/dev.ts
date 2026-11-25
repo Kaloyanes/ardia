@@ -14,6 +14,8 @@ export type DevPaths = { dataDir: string; configDir: string; socket: string; lin
 
 export type DevLink = { v: 1; id: string; path: string; manifest: "plugin.json"; version: string; linkedAt: string; pid: number; cli: string };
 
+type ReloadOutcome = { ok: true; reached: boolean; reason?: undefined; message?: undefined } | { ok: false; reached?: undefined; reason: "build" | "check" | "refused"; message?: string };
+
 export type DevSession = { paths: DevPaths; stop(): Promise<void>; done: Promise<void> };
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -137,23 +139,26 @@ export async function runDev(dir: string | undefined, out: Output, flags: DevFla
   const paths = devPaths(project, flags);
   const signal = flags.signal;
   let warnedUnreachable = false;
-  const reload = async (report: BuildReport): Promise<boolean> => {
+  const reload = async (report: BuildReport): Promise<ReloadOutcome> => {
     out.info(`[${new Date().toLocaleTimeString()}] ${describeBuild(report)}`);
-    if (!report.ok) return false;
+    if (!report.ok) return { ok: false, reason: "build" };
     const check = checkProject(project, { built: true });
     if (!check.ok) {
       out.warn(`not reloading ${project.manifest.id}: plugin.json or its files have ${check.problems.length} problem${check.problems.length === 1 ? "" : "s"}`);
       for (const problem of check.problems) out.warn(`  ${problem}`);
-      return false;
+      return { ok: false, reason: "check" };
     }
     const ping = await pingArdia(paths.socket, { id: project.manifest.id, path: project.dir, link: paths.link });
     if (ping.reached && !ping.error) out.info(`reloaded ${project.manifest.id} in Ardia`);
-    else if (ping.reached) out.warn(`Ardia didn't reload the plugin: ${ping.error}`);
+    else if (ping.reached) {
+      out.warn(`Ardia didn't reload the plugin: ${ping.error}`);
+      return { ok: false, reason: "refused", message: ping.error ?? "Ardia refused the reload" };
+    }
     else if (!warnedUnreachable) {
       warnedUnreachable = true;
       out.info(`Ardia isn't reachable at ${paths.socket}; it picks the link up when it starts (turn on Settings › Advanced › Let programs control Ardia to reload on save)`);
     }
-    return true;
+    return { ok: true, reached: ping.reached };
   };
   const finished = (): DevSession => ({ paths, stop: async () => undefined, done: Promise.resolve() });
   if (signal?.aborted) return finished();
@@ -161,18 +166,21 @@ export async function runDev(dir: string | undefined, out: Output, flags: DevFla
   out.info(`linked ${project.manifest.id} → ${paths.link}`);
   if (flags.once) {
     const interrupted = () => new CliError(`Stopped before ${project.manifest.id} was reloaded; the dev link is removed`, [], 130);
+    let report: BuildReport;
+    let outcome: ReloadOutcome;
     try {
-      const report = await buildProject(project, flags);
+      report = await buildProject(project, flags);
       if (signal?.aborted) throw interrupted();
-      const reloaded = await reload(report);
+      outcome = await reload(report);
       if (signal?.aborted) throw interrupted();
       if (!report.ok) throw new CliError("The build failed, so the dev link is removed", report.errors);
-      if (!reloaded) throw new CliError(`${project.manifest.id} has problems, so Ardia wasn't asked to reload it and the dev link is removed`, checkProject(project, { built: true }).problems);
+      if (!outcome.ok && outcome.reason === "refused") throw new CliError(`Ardia refused to reload ${project.manifest.id}, so the dev link is removed`, [outcome.message ?? ""]);
+      if (!outcome.ok) throw new CliError(`${project.manifest.id} has problems, so Ardia wasn't asked to reload it and the dev link is removed`, checkProject(project, { built: true }).problems);
     } catch (error) {
       if (removeDevLink(paths)) out.info(`unlinked ${project.manifest.id}`);
       throw error;
     }
-    out.result(`linked ${project.manifest.id} at ${paths.link}`, { id: project.manifest.id, link: paths.link, socket: paths.socket });
+    out.result(`linked ${project.manifest.id} at ${paths.link}: ${describeBuild(report)}`, { id: project.manifest.id, link: paths.link, socket: paths.socket, reloaded: outcome.reached === true, build: report });
     return finished();
   }
   let finish!: () => void;

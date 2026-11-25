@@ -245,10 +245,12 @@ describe("channel edge cases", () => {
     const calls = [];
     const forgotten = [];
     let next = 0;
-    const start = (method, params) => {
+    const start = (method, params, onId) => {
       calls.push([method, params]);
       const handler = handlers[method];
-      return { id: ++next, done: handler ? Promise.resolve().then(() => handler(params)) : Promise.resolve(null) };
+      const id = ++next;
+      onId?.(id);
+      return { id, done: handler ? Promise.resolve().then(() => handler(params)) : Promise.resolve(null) };
     };
     return { calls, forgotten, rpc: { start, request: (method, params) => start(method, params).done, forget: (id) => forgotten.push(id) } };
   };
@@ -332,6 +334,52 @@ describe("channel edge cases", () => {
     assert.deepEqual(forgotten, [1]);
     assert.equal(channels.openCount(), 0);
     assert.equal([added, removed].join(), "1,1");
+  });
+
+  test("one queue keeps every held socket event in order, and attaching drains it at once", async () => {
+    const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    const got = [];
+    channels.deliver("net.ws.error", { socket: socket.id, message: "e1" });
+    channels.deliver("net.ws.message", { socket: socket.id, data: "m1" });
+    socket.onError((m) => got.push(m));
+    assert.deepEqual(got, ["e1"], "attaching drains synchronously");
+    socket.onMessage((d) => got.push(d));
+    assert.deepEqual(got, ["e1", "m1"]);
+    const late = await channels.connect("wss://b.com/");
+    const order = [];
+    channels.deliver("net.ws.error", { socket: late.id, message: "boom" });
+    late.onMessage((d) => order.push(d));
+    channels.deliver("net.ws.message", { socket: late.id, data: "after" });
+    late.onError((m) => order.push(m));
+    assert.deepEqual(order, ["after"], "a message delivered past an unheard error drops that error rather than reordering it");
+    const flood = await channels.connect("wss://c.com/");
+    for (let i = 0; i < 300; i++) channels.deliver("net.ws.message", { socket: flood.id, data: `m${i}` });
+    channels.deliver("net.ws.close", { socket: flood.id, code: 1000, reason: "" });
+    const seen = [];
+    flood.onClose(() => seen.push("closed"));
+    flood.onMessage((d) => seen.push(d));
+    assert.equal(seen.at(0), "closed");
+  });
+
+  test("the request id is known before the transport sends, so a synchronous error forgets the right waiter", async () => {
+    const { createRpc } = await import("./rpc.ts");
+    let channels;
+    const transport = {
+      send(line) {
+        const message = JSON.parse(line);
+        if (message.method === "net.fetch.stream") channels.deliver("net.fetch.error", { stream: message.params.stream, message: "refused at once" });
+        if (message.method === "net.ws.connect") channels.deliver("net.ws.error", { socket: message.params.socket, message: "handshake refused" });
+      },
+      onLine() {},
+    };
+    const rpc = createRpc(transport);
+    channels = createChannels(rpc, () => {});
+    await assert.rejects(channels.fetchStream("https://a.com/"), /refused at once/);
+    await assert.rejects(channels.connect("wss://a.com/"), /handshake refused/);
+    assert.equal(rpc.pendingCount(), 0);
+    assert.equal(channels.openCount(), 0);
   });
 
   test("a refused close leaves the socket open", async () => {

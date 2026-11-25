@@ -21,6 +21,7 @@ export type SecuritySurfaceInput = {
     netRules?: string;
     menus?: Readonly<Record<string, readonly { command: string; when?: string }[] | undefined>>;
     commands?: readonly CommandShape[];
+    panels?: readonly { id?: string; mode?: string; view?: string; file?: string; side?: string; retainContext?: boolean }[];
   };
 };
 
@@ -136,6 +137,10 @@ function grantsOf(input: SecuritySurfaceInput | null | undefined): Grant[] {
   for (const hook of list<string>(c.hooks)) grants.push(plain(`hooks:${hook}`));
   if (c.passwordManager) grants.push(plain("passwordManager"));
   if (c.netRules) grants.push(plain(`netRules:${c.netRules}`));
+  for (const panel of list<Record<string, unknown>>(c.panels)) {
+    const target = Object.fromEntries(["mode", "view", "file", "side", "retainContext"].filter((key) => panel[key] !== undefined).map((key) => [key, panel[key]]));
+    grants.push(plain(`panels:${String(panel.id)}:${JSON.stringify(target)}`));
+  }
   grants.push(...scriptGrants(list<ScriptShape>(c.contentScripts)), ...styleGrants(c.pageStyles), ...menuGrants(c.menus), ...commandGrants(list<CommandShape>(c.commands)));
   const unique = new Map<string, Grant>();
   for (const grant of grants) if (!unique.has(grant.key)) unique.set(grant.key, grant);

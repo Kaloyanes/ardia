@@ -9,7 +9,9 @@ export type Comparator = { readonly op: "<" | "<=" | ">" | ">=" | "="; readonly 
 
 export type Range = { readonly source: string; readonly sets: readonly (readonly Comparator[])[] };
 
-export type SatisfyOptions = { includePrerelease?: boolean };
+export type RangeOptions = { bareExact?: boolean };
+
+export type SatisfyOptions = { includePrerelease?: boolean } & RangeOptions;
 
 const NUMERIC = "0|[1-9]\\d{0,8}";
 const IDENT = "(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)";
@@ -135,7 +137,7 @@ function primitive(op: Comparator["op"], p: Partial): Comparator[] {
   return [{ op: "<", version: nextMinor }];
 }
 
-function comparatorsOf(token: string): Comparator[] | null {
+function comparatorsOf(token: string, options: RangeOptions): Comparator[] | null {
   const match = /^(\^|~>?|>=|<=|>|<|=)?\s*(.+)$/.exec(token);
   if (!match) return null;
   const op = match[1];
@@ -144,7 +146,7 @@ function comparatorsOf(token: string): Comparator[] | null {
   if (op === "^") return caret(p);
   if (op === "~" || op === "~>") return tilde(p);
   if (op === undefined) {
-    if (p.major !== null && p.minor !== null && p.patch !== null) return [{ op: ">=", version: exact(p) }];
+    if (p.major !== null && p.minor !== null && p.patch !== null) return [{ op: options.bareExact ? "=" : ">=", version: exact(p) }];
     if (p.major !== null && match[2]?.split(".").every((part) => !/[xX*]/.test(part))) return [{ op: ">=", version: exact(p) }];
     return xRange(p);
   }
@@ -161,7 +163,7 @@ function hyphen(low: string, high: string): Comparator[] | null {
   return [...lower, ...primitive("<=", to)];
 }
 
-function parseSet(text: string): Comparator[] | null {
+function parseSet(text: string, options: RangeOptions): Comparator[] | null {
   const trimmed = text.trim();
   if (trimmed === "") return [];
   const hyphenMatch = /^(\S+)\s+-\s+(\S+)$/.exec(trimmed);
@@ -169,18 +171,18 @@ function parseSet(text: string): Comparator[] | null {
   const tokens = trimmed.replace(/(\^|~>?|>=|<=|>|<|=)\s+/g, "$1").split(/\s+/);
   const out: Comparator[] = [];
   for (const token of tokens) {
-    const comparators = comparatorsOf(token);
+    const comparators = comparatorsOf(token, options);
     if (!comparators) return null;
     out.push(...comparators);
   }
   return out;
 }
 
-export function parseRange(text: unknown): Range | null {
+export function parseRange(text: unknown, options: RangeOptions = {}): Range | null {
   if (typeof text !== "string" || text.length > MAX_LENGTH || /[\u0000-\u001f]/.test(text)) return null;
   const sets: Comparator[][] = [];
   for (const part of text.split("||")) {
-    const set = parseSet(part);
+    const set = parseSet(part, options);
     if (!set) return null;
     sets.push(set);
   }
@@ -220,7 +222,7 @@ function setAllows(set: readonly Comparator[], target: SemVer, options: SatisfyO
 
 export function satisfies(target: string | SemVer, range: string | Range, options: SatisfyOptions = {}): boolean {
   const parsedVersion = typeof target === "string" ? parseSemver(target) : target;
-  const parsedRange = typeof range === "string" ? parseRange(range) : range;
+  const parsedRange = typeof range === "string" ? parseRange(range, options) : range;
   if (!parsedVersion || !parsedRange) return false;
   return parsedRange.sets.some((set) => setAllows(set, parsedVersion, options));
 }

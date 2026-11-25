@@ -143,6 +143,19 @@ describe("manifest v3", () => {
     assert.equal(main.test("dist/index.js"), true);
   });
 
+  test("paths with line breaks or control characters are refused by the validator and the schema alike", () => {
+    for (const bad of ["dist/a\n.js", "dist/\r.js", "bin/\u0007x", "bin/x\u007f"]) {
+      assert.equal(problems({ main: bad.endsWith(".js") ? bad : `${bad}.js` }).length, 1, JSON.stringify(bad));
+      assert.equal(problems({ sidecar: { run: [bad] } }).length, 1, JSON.stringify(bad));
+    }
+    const schema = generateManifestV3JsonSchema();
+    const program = new RegExp(schema.properties.sidecar.properties.run.prefixItems[0].pattern, "u");
+    const main = new RegExp(schema.properties.main.pattern, "u");
+    for (const bad of ["bin/x\n", "bin\n/x", "\nbin", "a\r", "a\u0001"]) assert.equal(program.test(bad), false, JSON.stringify(bad));
+    assert.equal(main.test("dist/a\n/../x.js"), false);
+    assert.equal(main.test("dist/index.js"), true);
+  });
+
   test("sidecar.run[0] is a program inside the plugin's folder", () => {
     ok({ sidecar: { run: ["bin/server", "--port", "0"] } });
     ok({ sidecar: { run: ["server"] } });

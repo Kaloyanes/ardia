@@ -65,7 +65,7 @@ export const GITHUB_REPO_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-
 export const SEMVER_PATTERN =
   "^(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})(?:-((?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d{0,8}|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?$";
 export const HTTPS_URL_PATTERN = "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})(?::\\d{1,5})?(?:[/?#][^\\s]*)?$";
-const PLUGIN_PATH_PATTERN = "^(?![A-Za-z]:)(?!.*/$)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/\\\\\\u0000][^\\\\\\u0000]*$";
+const PLUGIN_PATH_PATTERN = "^(?![A-Za-z]:)(?![\\s\\S]*/$)(?![\\s\\S]*(?:^|/)\\.{1,2}(?:/|$))(?![\\s\\S]*//)[^/\\\\\\u0000-\\u001f\\u007f][^\\\\\\u0000-\\u001f\\u007f]*$";
 
 export const PLATFORM_KEYS = ["universal", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64", "windows-x64"] as const;
 export type PlatformKey = (typeof PLATFORM_KEYS)[number];
@@ -94,7 +94,7 @@ export const RUN_AT = ["document_start", "document_idle"] as const;
 export const ACTIVATION_PREFIXES_V3 = ["onCommand", "onView", "onPanel", "onToolbar", "onOmnibox", "onMenu", "onEvent", "onUrl", "onService", "onInputMode"] as const;
 
 export function isPluginPath(value: string): boolean {
-  if (!value || value.length > LIMITS_V3.path || value.startsWith("/") || /^[A-Za-z]:/.test(value) || value.includes("\\") || value.includes("\0")) return false;
+  if (!value || value.length > LIMITS_V3.path || value.startsWith("/") || /^[A-Za-z]:/.test(value) || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return false;
   return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 

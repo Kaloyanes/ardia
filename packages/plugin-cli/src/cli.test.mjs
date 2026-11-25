@@ -393,7 +393,7 @@ describe("round 1 fixes", () => {
     const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
     manifest.release = { github: "acme/twins", assets: { "macos-arm64": "twins.tar.gz", "linux-x64": "twins.tar.gz" } };
     writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
-    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both be released as twins\.tar\.gz/);
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both write twins\.tar\.gz/);
     manifest.release = { github: "acme/twins", asset: "twins.tar.gz" };
     writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
     const ok = await runRelease(dir, silent(), { dryRun: true, platform: "universal,macos-arm64,linux-x64" });
@@ -450,13 +450,57 @@ describe("round 1 fixes", () => {
     assert.equal(await mainWith(["build", dir], q.streams), 1);
   });
 
+  test("an archive name may not land on another platform's .sha256", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/shaclash" });
+    const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
+    manifest.release = { github: "acme/shaclash", assets: { "macos-arm64": "p.tar.gz", "linux-x64": "P.TAR.GZ.sha256" } };
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both write P\.TAR\.GZ\.sha256/);
+    assert.equal(existsSync(join(dir, "release")), false, "nothing is packed before the names are checked");
+  });
+
+  test("dev --once fails and unlinks when Ardia refuses the reload, and its JSON keeps the build", async () => {
+    const dir = fresh();
+    initPlugin(dir, { id: "@acme/refused" });
+    const data = join(mkdtempSync(join(tmpdir(), "apx-")), "d");
+    mkdirSync(data, { recursive: true });
+    let refuse = true;
+    const server = createServer((socket) => {
+      socket.setEncoding("utf8");
+      socket.on("data", (line) => {
+        const request = JSON.parse(line);
+        socket.write(`${JSON.stringify(refuse ? { id: request.id, error: { code: "refused", message: "dev plugins are off" } } : { id: request.id, result: { ok: true } })}\n`);
+      });
+    });
+    await new Promise((resolve) => server.listen(join(data, "ArdiaControl.sock"), resolve));
+    try {
+      const link = join(data, "config", "plugins-dev", "acme__refused.json");
+      const q = quiet();
+      assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], q.streams), 1);
+      assert.match(q.out.stderr, /Ardia refused to reload @acme\/refused/);
+      assert.match(q.out.stderr, /dev plugins are off/);
+      assert.equal(existsSync(link), false);
+      refuse = false;
+      const ok = quiet();
+      assert.equal(await mainWith(["dev", dir, "--once", "--json", "--data-dir", data], ok.streams), 0);
+      const result = JSON.parse(ok.out.stdout);
+      assert.equal(result.reloaded, true);
+      assert.equal(result.build.ok, true);
+      assert.deepEqual(result.build.outputs.map((o) => o.entry), ["dist/index.js"]);
+      assert.equal(existsSync(link), true);
+    } finally {
+      server.close();
+    }
+  });
+
   test("release asset names that differ only in case collide", async () => {
     const dir = fresh();
     initPlugin(dir, { id: "@acme/cased" });
     const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
     manifest.release = { github: "acme/cased", assets: { "macos-arm64": "Plugin.tar.gz", "linux-x64": "plugin.tar.gz" } };
     writeFileSync(join(dir, "plugin.json"), JSON.stringify(manifest));
-    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both be released as plugin\.tar\.gz/);
+    await assert.rejects(runRelease(dir, silent(), { dryRun: true }), /would both write plugin\.tar\.gz/);
   });
 
   test("a stop that races setup still unlinks, and stopping twice is safe", async () => {

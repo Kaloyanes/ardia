@@ -81,6 +81,7 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
   const candidateCache = new Map<string, { choices: Choice[]; rejected: Set<Rejection> }>();
   let steps = 0;
   let limit = maxSteps;
+  let optionalEdges: ReadonlyMap<string, ReadonlySet<string>> = new Map();
   let lastFailure: ResolveProblem | null = null;
 
   function candidates(detail: RegistryPluginPayload, constraints: readonly Constraint[]): { choices: Choice[]; rejected: Set<Rejection> } {
@@ -195,7 +196,7 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
     const path: string[] = [start];
     const seen = new Set<string>();
     const walk = (id: string): string[] | null => {
-      for (const dep of sortedKeys(picks.get(id)?.version.dependencies)) {
+      for (const dep of [...sortedKeys(picks.get(id)?.version.dependencies), ...[...(optionalEdges.get(id) ?? [])].sort()]) {
         if (dep === start) return [...path, start];
         if (!picks.has(dep) || seen.has(dep)) continue;
         seen.add(dep);
@@ -256,6 +257,7 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
         const extra = new Map([[edge.dep, [{ from: edge.label, range: edge.range, channel: defaultChannel }]]]);
         steps = 0;
         limit = maxSteps;
+        optionalEdges = new Map([...accepted, [edge.from, new Set([...(accepted.get(edge.from) ?? []), edge.dep])]]);
         let grown: Picks | null;
         try {
           grown = search(picks, [edge.dep], extra);
@@ -263,6 +265,8 @@ export function resolvePluginGraph(input: ResolveInput): ResolveResult {
           if (!(error instanceof Unsettled)) throw error;
           skip("unsettled", `${edge.dep} didn't settle within ${maxSteps} steps`);
           continue;
+        } finally {
+          optionalEdges = new Map();
         }
         if (!grown) {
           const failure = lastFailure as ResolveProblem | null;

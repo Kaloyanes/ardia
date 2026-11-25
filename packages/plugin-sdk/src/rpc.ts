@@ -16,7 +16,7 @@ export type Started<T> = { id: number; done: Promise<T> };
 
 export type Rpc = {
   request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
-  start<T = unknown>(method: string, params?: Record<string, unknown>): Started<T>;
+  start<T = unknown>(method: string, params?: Record<string, unknown>, onId?: (id: number) => void): Started<T>;
   forget(id: number, reason: Error): void;
   send(message: Record<string, unknown>): void;
   takeReply(message: Record<string, unknown>): boolean;
@@ -56,8 +56,9 @@ export function createRpc(transport: Transport): Rpc {
 
   const send = (message: Record<string, unknown>) => transport.send(JSON.stringify(message));
 
-  function start<T>(method: string, params: Record<string, unknown> = {}): Started<T> {
+  function start<T>(method: string, params: Record<string, unknown> = {}, onId?: (id: number) => void): Started<T> {
     const id = ++next;
+    onId?.(id);
     if (closedBy) return { id, done: Promise.reject(closedBy) };
     let line: string;
     try {
