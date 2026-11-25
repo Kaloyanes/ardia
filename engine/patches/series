@@ -116,6 +116,7 @@ chromium chromium-enterprise-context-info.patch
 chromium chromium-ardia-layer.patch mac
 chromium chromium-ardia-linux-layer.patch linux
 chromium chromium-linux-background-windows.patch linux
+chromium chromium-linux-launch-config.patch linux
 chromium chromium-linux-companion-browsers.patch linux
 chromium chromium-linux-page-agent.patch linux
 chromium chromium-linux-page-prompts.patch linux
@@ -136,6 +137,8 @@ chromium chromium-linux-frameless-utility-windows.patch linux
 chromium chromium-linux-window-state.patch linux
 chromium chromium-linux-borderless-frame.patch linux
 chromium chromium-linux-geolocation.patch linux
+chromium chromium-linux-ime-password-copies.patch linux
+chromium chromium-linux-floating-windows.patch linux
 
 layer engine/chromium
 layer engine/ardiacore mac

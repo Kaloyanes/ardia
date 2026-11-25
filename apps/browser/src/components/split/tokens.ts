@@ -1,5 +1,6 @@
 import { curve, duration } from "../ui/motion";
-import { radius } from "../ui/tokens";
+import { radius, type ColorRoles } from "../ui/tokens";
+import { over } from "../../lib/color";
 
 const DARK = {
   emptyStateFill: "rgba(34,32,33,0.92)",
@@ -12,6 +13,8 @@ const LIGHT: typeof DARK = {
 type SplitColors = typeof DARK;
 
 export const splitColors = (dark: boolean): SplitColors => (dark ? DARK : LIGHT);
+
+export const emptyPaneFieldSurface = (roles: ColorRoles) => over(roles.rowHover, splitColors(roles.dark).emptyStateFill);
 
 export const emptyStateRadius = () => radius.sheet;
 export const EMPTY_STATE_WIDTH = 420;
