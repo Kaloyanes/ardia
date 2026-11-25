@@ -356,3 +356,15 @@ test("a faded GlassEffect fades only its measured glass layer, and the content i
   assert.match(source, /<View pointerEvents="none" \{\.\.\.props\} style=\{outer\}>\n\s+<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>/);
   assert.match(source, /<\/div>\n\s+<\/View>\n\s+\{children\}\n\s+<\/View>/, "children are the glass layer's sibling");
 });
+
+test("scrolled glass keeps main's frosted surface, fades only its glass layer and renders hosted content beside it", () => {
+  const source = readFileSync(new URL("./shims/web/chrome.tsx", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("export function GlassEffect("), source.indexOf("\n}\n", source.indexOf("export function GlassEffect(")));
+  const scrolled = body.slice(body.indexOf("  if (scrolled) {"), body.indexOf("\n  }\n", body.indexOf("  if (scrolled) {")));
+  assert.match(scrolled, /<View pointerEvents="none" \{\.\.\.props\} style=\{outer\}>\n\s+<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>\n\s+<div ref=\{host\} data-ardia-glass-layers="" style=\{scrolledGlassSurface\(theme, clear, cornerRadius\)\}>/);
+  assert.match(scrolled, /<\/div>\n\s+<\/View>\n\s+\{children\}\n\s+<\/View>/, "hosted content sits beside the faded scrolled glass");
+  assert.doesNotMatch(scrolled, /boxShadow|rgba\(255/, "the scrolled branch paints nothing of its own");
+  const surface = source.slice(source.indexOf("function scrolledGlassSurface("), source.indexOf("\n}\n", source.indexOf("function scrolledGlassSurface(")));
+  assert.match(surface, /inset 0 1px 0\.5px rgba\(255,255,255,0\.2\), inset 0 0 0 0\.5px rgba\(255,255,255,0\.1\), 0 1px 3px rgba\(0,0,0,0\.26\)/, "dark scrolled glass keeps main's hairline edge");
+  assert.match(surface, /inset 0 1px 0\.5px rgba\(255,255,255,0\.82\), inset 0 0 0 0\.5px rgba\(255,255,255,0\.48\), 0 1px 3px rgba\(0,0,0,0\.07\)/, "light scrolled glass keeps main's hairline edge");
+});
