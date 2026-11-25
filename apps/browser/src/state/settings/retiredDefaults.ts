@@ -1,13 +1,13 @@
 import type { SettingsMeta } from "./settings";
 
-type RetiredDefault = { key: string; old: unknown; applied: string };
+type RetiredDefault = { key: string; old: unknown; applied: string; waitsForSync: boolean };
 
 export const TOOLBAR_SCROLL_DEFAULT_APPLIED = "hideToolbarWhileScrolling:offByDefault";
 export const CMD_CLICK_GROUPS_DEFAULT_APPLIED = "cmdClickCreatesTabGroup:offByDefault";
 
 export const RETIRED_DEFAULTS: readonly RetiredDefault[] = [
-  { key: "hideToolbarWhileScrolling", old: true, applied: TOOLBAR_SCROLL_DEFAULT_APPLIED },
-  { key: "cmdClickCreatesTabGroup", old: true, applied: CMD_CLICK_GROUPS_DEFAULT_APPLIED },
+  { key: "hideToolbarWhileScrolling", old: true, applied: TOOLBAR_SCROLL_DEFAULT_APPLIED, waitsForSync: false },
+  { key: "cmdClickCreatesTabGroup", old: true, applied: CMD_CLICK_GROUPS_DEFAULT_APPLIED, waitsForSync: true },
 ];
 
 type Retired<S> = { settings: S | undefined; settingsMeta: SettingsMeta };
@@ -17,14 +17,14 @@ const marked = (meta: SettingsMeta, applied: string): SettingsMeta => ({ chosen:
 
 export const chosenHere = (meta: SettingsMeta, key: string) => meta.chosen.includes(key) && !meta.inferred.includes(key);
 
-function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied }: RetiredDefault, { waitForSync = false, heldBySync }: RetireOptions): Retired<S> {
+function withRetiredDefault<S extends object>({ settings: saved, settingsMeta: meta }: Retired<S>, { key, old, applied, waitsForSync }: RetiredDefault, { waitForSync = false, heldBySync }: RetireOptions): Retired<S> {
   if (meta.inferred.includes(applied)) return { settings: saved, settingsMeta: meta };
-  const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !chosenHere(meta, key);
-  if (!oldDefaultNobodyChose) return { settings: saved, settingsMeta: marked(meta, applied) };
   const without = (keys: string[]) => keys.filter((k) => k !== key);
   const unchosen = marked({ chosen: without(meta.chosen), inferred: without(meta.inferred) }, applied);
-  if (heldBySync?.(key)) return { settings: saved, settingsMeta: unchosen };
-  if (waitForSync) return { settings: saved, settingsMeta: meta };
+  if (heldBySync?.(key) && !chosenHere(meta, key)) return { settings: saved, settingsMeta: unchosen };
+  const oldDefaultNobodyChose = !!saved && (saved as Record<string, unknown>)[key] === old && !chosenHere(meta, key);
+  if (!oldDefaultNobodyChose) return { settings: saved, settingsMeta: marked(meta, applied) };
+  if (waitForSync && waitsForSync) return { settings: saved, settingsMeta: meta };
   const { [key]: _untouched, ...settings } = saved as Record<string, unknown>;
   return { settings: settings as S, settingsMeta: unchosen };
 }

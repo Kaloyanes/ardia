@@ -206,9 +206,9 @@ export function adoptProfileTheme(profileId: string) {
 
 async function loadSavedState() {
   const loading = doc;
-  await loadState();
+  const installed = await loadState(loading);
   startEditClock(doc.deviceId ?? "", doc.clock);
-  settleSettingsFromSavedSync(doc.scopes[APP_SCOPE], doc === loading && doc.enabled && !stopping && typeSyncedFor(doc.types, "settings", true));
+  settleSettingsFromSavedSync(doc.scopes[APP_SCOPE], installed && doc === loading && doc.enabled && !stopping && typeSyncedFor(doc.types, "settings", true));
   settleThemeAdoption(doc.profiles, doc.scopes[APP_SCOPE], false);
 }
 

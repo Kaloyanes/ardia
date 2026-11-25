@@ -158,6 +158,7 @@ const GROUPING = "set:cmdClickCreatesTabGroup";
 const GROUPING_RETIRED = "cmdClickCreatesTabGroup:offByDefault";
 const { loadSession, SESSION_VERSION } = await import("../session/persist.ts");
 const { settingsSyncWaitsAtLaunch } = await import("./settingsSyncAtLaunch.ts");
+const { asSecret } = await import("@ardia/core");
 
 function upgradeWithGroupingOn({ settings, synced, meta = { chosen: [], inferred: [] } }) {
   reset();
@@ -277,4 +278,54 @@ test("an on from before Ardia tracked choices (chosen and inferred) waits at lau
   await settle();
   assert.deepEqual(grouping(), { on: true, retired: true });
   assert.ok(!S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup") && !S().settingsMeta.inferred.includes("cmdClickCreatesTabGroup"));
+});
+
+test("a checkpoint read from a superseded sync session is dropped: stopping /old and starting /new never brings /old's grouping record along", async () => {
+  let release;
+  const opening = new Promise((resolve) => (release = resolve));
+  const sync = globalThis.acTestNativeModules.ArdiaSync;
+  const open = sync.openLocal;
+  let holdOpen = false;
+  await withSyncNative({ unlock: async () => false, enterPhrase: async () => ({ ok: true }), openLocal: async (sealed) => (holdOpen && (await opening), open(sealed)) }, async () => {
+    upgradeWithGroupingOn({ settings: true, synced: true });
+    const engine = await import("./engine.ts?groupingOldToNew");
+    engine.startSync();
+    await settle();
+    assert.equal(engine.useSync.getState().status, "locked");
+    holdOpen = true;
+    const recovering = engine.enterRecoveryPhrase("/old", asSecret("syncPhrase", "words"));
+    await settle();
+    await engine.stopSync();
+    assert.deepEqual(grouping(), { on: false, retired: true }, "stopping settles the waiting on");
+    holdOpen = false;
+    assert.ok("ok" in (await engine.turnOnSync("/new")));
+    release();
+    await recovering;
+    await settle();
+    assert.equal(engine.appScopeRecords()[GROUPING], undefined, "/new's state holds nothing from /old");
+    await engine.syncNow();
+    await settle();
+    assert.deepEqual(grouping(), { on: false, retired: true }, "and the next cycle doesn't turn grouping back on");
+  });
+});
+
+test("a cached off for an on from before Ardia tracked choices (chosen and inferred) applies and leaves it neither chosen nor inferred", async () => {
+  upgradeWithGroupingOn({ settings: true, synced: false, meta: { chosen: ["cmdClickCreatesTabGroup"], inferred: ["cmdClickCreatesTabGroup"] } });
+  assert.deepEqual(grouping(), { on: true, retired: false });
+  const engine = await import("./engine.ts?groupingLegacyOff");
+  engine.startSync();
+  await settle();
+  assert.deepEqual(grouping(), { on: false, retired: true });
+  assert.ok(!S().settingsMeta.chosen.includes("cmdClickCreatesTabGroup") && !S().settingsMeta.inferred.includes("cmdClickCreatesTabGroup"));
+});
+
+test("while Settings sync waits, only ⌘-click grouping waits: the hide-toolbar-while-scrolling on still retires at hydration", () => {
+  upgradeWithGroupingOn({ settings: true, synced: true });
+  reset();
+  const profile = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
+  shell.docs.set("session.json", JSON.stringify({ version: SESSION_VERSION, profiles: { default: profile }, profileOrder: ["default"], settings: { ...S().settings, cmdClickCreatesTabGroup: true, hideToolbarWhileScrolling: true }, settingsMeta: { chosen: [], inferred: [] }, windows: [], windowOrder: [], tabs: [], groups: [], splits: [], closedTabs: [], closedWindows: [] }));
+  S().hydrate(loadSession({ retiredDefaultsWaitForSync: true }));
+  assert.deepEqual(grouping(), { on: true, retired: false });
+  assert.equal(S().settings.hideToolbarWhileScrolling, false);
+  assert.ok(S().settingsMeta.inferred.includes("hideToolbarWhileScrolling:offByDefault"));
 });
