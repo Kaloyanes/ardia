@@ -385,7 +385,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('command("Quit " + app, "quit", "q", kCommand)', model)
         self.assertNotIn('role("Quit " + app, Role::kQuit', model)
         host = self.read('ac_mac_shell_host.mm')
-        self.assertIn('if (command == "quit" && !RendererLive()) {', host)
+        self.assertIn('if (command == "quit" && !shell_policy::ShellTakesQuit(RendererLive(), shell_ready_generation_, renderer_generation_)) {', host)
+        self.assertIn('shell_ready_generation_ = renderer_generation_;', self.read('ac_mac_shell_calls.mm').split('if (method == "ArdiaShell.shellPainted") {', 1)[1].split('\n  }\n', 1)[0])
         self.assertEqual((REPO / 'apps/desktop/src/quit.ts').read_text().count('export const QUIT_COMMAND = "quit";'), 1)
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         quit = lifecycle.split('void StartQuit(const window_policy::DownloadAsker& asker) {', 1)[1].split('\n}\n', 1)[0]

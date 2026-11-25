@@ -1410,7 +1410,7 @@ void ShellHostView::OnMenuCommand(const std::string& command,
   if (command.empty() || shortcut_recording_) {
     return;
   }
-  if (command == "quit" && !RendererLive()) {
+  if (command == "quit" && !shell_policy::ShellTakesQuit(RendererLive(), shell_ready_generation_, renderer_generation_)) {
     return QuitWithoutShell();
   }
   if (command == "focusCommandBar" || command == "newTab") {

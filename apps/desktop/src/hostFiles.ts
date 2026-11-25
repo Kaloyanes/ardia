@@ -65,7 +65,11 @@ export function createHostFiles(host: ArdiaHost, clock: Clock = realClock, notic
       .then((reply) => {
         if (!Array.isArray(reply) || reply.length !== paths.length) throw Object.assign(new Error("Invalid file status reply"), { code: "ERR_BAD_REPLY" });
         let changed = false;
-        paths.forEach((path, index) => (changed = remember(path, reply[index] === true) || changed));
+        paths.forEach((path, index) => {
+          const answer: unknown = reply[index];
+          if (typeof answer === "boolean") changed = remember(path, answer) || changed;
+          else remember(path, cache.get(path)?.exists ?? false, cache.get(path)?.confirmed ?? false);
+        });
         if (changed) notify();
       })
       .catch((error) => {

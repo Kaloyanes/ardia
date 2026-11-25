@@ -1,6 +1,7 @@
 #ifndef ARDIA_MAC_AC_MAC_SHELL_POLICY_H_
 #define ARDIA_MAC_AC_MAC_SHELL_POLICY_H_
 
+#include <cstdint>
 #include <algorithm>
 #include <cstddef>
 #include <utility>
@@ -103,6 +104,10 @@ enum class ShortcutAction { kDispatch, kConsume };
 
 inline ShortcutAction ShortcutActionFor(bool suppressed) {
   return suppressed ? ShortcutAction::kConsume : ShortcutAction::kDispatch;
+}
+
+inline bool ShellTakesQuit(bool renderer_live, std::uint64_t ready_generation, std::uint64_t renderer_generation) {
+  return renderer_live && ready_generation != 0 && ready_generation == renderer_generation;
 }
 
 inline bool ShortcutAccepted(int key_code, int modifiers, bool has_command, bool suppressed) {

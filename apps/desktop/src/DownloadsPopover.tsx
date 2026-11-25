@@ -67,7 +67,7 @@ function NativeDownloadsPopover({ onFallback }: { onFallback: () => void }) {
   const files = ardiaHost ? hostFiles(ardiaHost) : null;
   const [statusVersion, statusChanged] = useState(0);
   useEffect(() => files?.onChange(() => statusChanged((version) => version + 1)), [files]);
-  const props = useMemo(() => downloadsProps(list, downloadPresence((path) => files?.fileStatus(path) ?? "unknown"), dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark, statusVersion]);
+  const props = useMemo(() => downloadsProps(list, downloadPresence((path) => files?.fileStatus(path) ?? "unknown"), dark, `Show in ${PLATFORM_TERMS.fileManager}`), [list, dark, statusVersion, open]);
   const latest = useRef({ list, props });
   latest.current = { list, props };
   const controller = useRef<ReturnType<typeof openNativeDownloads> | null>(null);

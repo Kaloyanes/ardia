@@ -112,6 +112,7 @@ struct Placement {
   Appearance appearance = Appearance::kAuto;
   int slice = 0;
   Rect outline;
+  bool seamed = false;
   bool operator==(const Placement&) const = default;
 };
 
@@ -384,7 +385,7 @@ struct SliceMask {
 };
 
 inline SliceMask MaskFor(const Placement& placement) {
-  if (placement.slice <= 0) return SliceMask{};
+  if (placement.slice <= 0 && !placement.seamed) return SliceMask{};
   return SliceMask{true, Offset(placement.outline, placement.frame.x, placement.frame.y), placement.radii};
 }
 
@@ -444,6 +445,7 @@ inline Layout Lay(const std::vector<Region>& regions,
       return true;
     };
     bool on_page = false;
+    const std::size_t first_placement = layout.placements.size();
     std::vector<Rect> uncovered;
     if (ValidRect(window)) {
       const Rect shown = Intersect(rect, window);
@@ -470,6 +472,12 @@ inline Layout Lay(const std::vector<Region>& regions,
                                               CornerMask(*radii), opacity, region.material, behind_order++,
                                               region.source, *radii, region.tint, region.group, region.appearance,
                                               ++slice, rect});
+      }
+      for (std::size_t index = first_placement; slice > 0 && index < layout.placements.size(); ++index) {
+        Placement& placement = layout.placements[index];
+        if (placement.plane != Plane::kOverPage) continue;
+        placement.seamed = true;
+        placement.outline = placement.frame;
       }
     }
   }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHostFiles, FILE_STATUS_FRESH_MS } from "./hostFiles.ts";
+import { downloadPresence, downloadsProps } from "./nativeDownloads.ts";
 import { resolveHostModule } from "./hostModules.ts";
 
 function fixture(capabilities = ["ArdiaSystem.fileStatus"]) {
@@ -246,4 +247,35 @@ test("file status stays unknown while a lookup is pending or failed, and is miss
   files.expect("/d/new.zip");
   assert.equal(files.fileStatus("/d/new.zip"), "unknown");
   assert.equal(createHostFiles(fixture([]).host, f.clock).fileStatus("/d/a.zip"), "unknown");
+});
+
+test("a reply that isn't a boolean for a path leaves that path unknown", async () => {
+  const f = fixture();
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => paths.map((path) => (path === "/d/a.zip" ? null : path === "/d/b.zip" ? "false" : false)));
+  const files = createHostFiles(f.host, f.clock);
+  for (const path of ["/d/a.zip", "/d/b.zip", "/d/c.zip"]) files.fileStatus(path);
+  await f.flush();
+  assert.equal(files.fileStatus("/d/a.zip"), "unknown");
+  assert.equal(files.fileStatus("/d/b.zip"), "unknown");
+  assert.equal(files.fileStatus("/d/c.zip"), "missing");
+});
+
+test("reopening Downloads after a file is deleted and its status expires shows it as deleted", async () => {
+  const f = fixture();
+  const present = new Set(["/d/a.zip"]);
+  f.handlers.set("ArdiaSystem.fileStatus", (paths) => paths.map((path) => present.has(path)));
+  const files = createHostFiles(f.host, f.clock);
+  const list = [{ id: "a", filename: "a.zip", path: "/d/a.zip", url: "https://x/a.zip", state: "finished", received: 10, total: 10, speed: 0, paused: false, dangerous: false }];
+  const open = () => downloadsProps(list, downloadPresence((path) => files.fileStatus(path)), false, "Show").rows[0];
+  open();
+  await f.flush();
+  assert.deepEqual(open().actions, ["open", "reveal"]);
+  present.delete("/d/a.zip");
+  f.advance(FILE_STATUS_FRESH_MS + 1);
+  const reopened = open();
+  assert.deepEqual(reopened.actions, ["open", "reveal"], "the stale answer shows until the refresh it starts comes back");
+  await f.flush();
+  assert.deepEqual([open().missing, open().status], [true, "Deleted"]);
+  const panel = (await import("node:fs")).readFileSync(new URL("./DownloadsPopover.tsx", import.meta.url), "utf8");
+  assert.match(panel, /\[list, dark, statusVersion, open\]/, "the rows are read again whenever the panel opens");
 });

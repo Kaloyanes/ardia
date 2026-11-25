@@ -141,6 +141,13 @@ TEST(only_an_offered_unbound_tab_of_the_same_profile_is_adopted) {
   CHECK(policy::CheckAdoption(true, true, true, true, true) == AdoptRefusal::kAlreadyClaimed);
 }
 
+TEST(quit_waits_for_the_shell_that_painted_in_this_renderer) {
+  CHECK(policy::ShellTakesQuit(true, 3, 3));
+  CHECK(!policy::ShellTakesQuit(true, 0, 0));
+  CHECK(!policy::ShellTakesQuit(true, 2, 3));
+  CHECK(!policy::ShellTakesQuit(false, 3, 3));
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

@@ -304,6 +304,7 @@ class ShellHostView : public views::View,
   std::string window_id_;
   bool closing_ = false;
   bool painted_ = false;
+  uint64_t shell_ready_generation_ = 0;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
 
   raw_ptr<views::WebView> shell_ = nullptr;

@@ -475,6 +475,7 @@ void ShellHostView::Invoke(const std::string& method,
                  base::Value([name isEqualToString:NSAppearanceNameDarkAqua]));
   }
   if (method == "ArdiaShell.shellPainted") {
+    shell_ready_generation_ = renderer_generation_;
     if (!painted_) {
       painted_ = true;
       Note("shell painted in window " + window_id_);

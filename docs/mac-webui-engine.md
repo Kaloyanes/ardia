@@ -41,7 +41,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
   - A glass region over no page falls back behind the window, and the part of a region that no page covers (a menu
-    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles, each masked by the whole region's rounded outline; `accepted` names a region only once every
+    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles; the slices and the page side are all masked by the whole
+    region's rounded outline, so the corner curve is the same on both sides of the seam; `accepted` names a region only once every
     slice mounted, so a half-mounted region keeps its DOM fallback. The host advertises `shell.glassBehindWindow`, so
     `glassRegions.ts` also sends regions over the sidebar, toolbar or empty space instead of dropping them.
   - A region may carry `material` (`regular`, `clear`, `sidebar`, `header`, `menu`, `popover`, `hud`, `window`,
@@ -71,7 +72,8 @@ that branch). It is a development tool and never runs in a release. Like Windows
     `popoverHost` (`nativeDownloads.ts`) under the Downloads button, pushes rows as props, runs the actions the panel
     sends back, and falls back to the DOM panel when the host can't open one. A press on its own button closes it on
     release however long it's held. A finished download shows Deleted only after `ArdiaSystem.fileStatus` confirms
-    the file is gone; pending, failed or unsupported lookups count as present.
+    the file is gone; pending, failed, non-boolean or unsupported lookups count as
+    present, and reopening the panel re-reads expired statuses.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
@@ -102,6 +104,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Desktop shortcuts keep the desktop convention, so `command` is the Control key and `control` the Command key, as
     the host's accelerators read them; system items (Edit, Minimize, Close Window, Hide) use AppKit's standard keys.
   - `ArdiaShell.setShortcutRecording` stops the menu bar's key equivalents while that window records a shortcut.
+  - ⌘Q goes to the shell's quit flow only once that renderer's shell has painted; before that Chromium quits directly.
   - The in-window `≡` app menu button is hidden on macOS (`platform/appMenuButton.mac.ts`), where the menu bar holds
     those menus.
 `shell.showContextMenu` pops an `NSMenu`;

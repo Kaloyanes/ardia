@@ -560,9 +560,28 @@ TEST(a_slice_narrower_than_the_corner_radius_traces_the_whole_region_outline) {
   CHECK(mask.outline == (Rect{0, 0, 300, 200}));
   CHECK(mask.outline.right() > sliver->frame.width && mask.radii.upper_left == 12);
   const Placement* page = Find(layout, "menu", 1);
-  CHECK(page && !glass::MaskFor(*page).active);
+  CHECK(page && page->seamed && glass::MaskFor(*page).outline == (Rect{0, 0, 300, 200}));
   const auto whole = glass::Lay({Make("free", {20, 20, 100, 100}, Layer::kAuto, 12)}, {}, kWindow, 1);
   CHECK(whole.placements.size() == 1 && !glass::MaskFor(whole.placements[0]).active);
+}
+
+TEST(both_sides_of_a_page_seam_trace_the_same_corner_outline) {
+  const Rect page_rect{300, 0, 980, 800};
+  const auto layout = glass::Lay({Make("menu", {200, 100, 300, 200}, Layer::kAuto, 12)}, {{1, page_rect}}, kWindow, 1);
+  const Placement* page = Find(layout, "menu", 1);
+  const Placement* sliver = Find(layout, "menu", 0);
+  CHECK(page && sliver && page->seamed && !sliver->seamed && sliver->slice == 1);
+  if (!page || !sliver) return;
+  const glass::SliceMask over = glass::MaskFor(*page);
+  const glass::SliceMask behind = glass::MaskFor(*sliver);
+  CHECK(over.active && behind.active && over.radii == behind.radii);
+  const Rect over_in_window{page_rect.x + page->frame.x + over.outline.x, page_rect.y + page->frame.y + over.outline.y,
+                            over.outline.width, over.outline.height};
+  const Rect behind_in_window{sliver->frame.x + behind.outline.x, sliver->frame.y + behind.outline.y, behind.outline.width,
+                              behind.outline.height};
+  CHECK(over_in_window == (Rect{200, 100, 300, 200}) && behind_in_window == over_in_window);
+  const auto inside = glass::Lay({Make("inside", {400, 100, 300, 200}, Layer::kAuto, 12)}, {{1, page_rect}}, kWindow, 1);
+  CHECK(inside.placements.size() == 1 && !inside.placements[0].seamed && !glass::MaskFor(inside.placements[0]).active);
 }
 
 int main(int argc, char** argv) {
