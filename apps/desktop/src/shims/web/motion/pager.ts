@@ -260,6 +260,7 @@ export class Pager {
     const wasIdle = this.motion === 0;
     const frame = this.spring.drain();
     if (frame.phase !== "settling" || this.owner !== "js") this.stopFrames();
+    if ((frame.phase === "holding" || frame.phase === "tracking") && this.stats) this.stats.last = null;
     if (!options.outOfMotion && wasIdle && frame.phase !== "idle") this.motion = ++motions;
     this.emit(frame, options);
     if (frame.phase === "settling" && this.owner === "js") {

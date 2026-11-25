@@ -982,3 +982,31 @@ test("tint layers are set before paint and the track's live ref is written in a 
   assert.equal(trackSource.match(/live\.current = /g)?.length, 1);
   assert.ok(trackSource.indexOf("live.current = {") < trackSource.indexOf("const place = "));
 });
+
+test("a JS hold followed by a native settle doesn't count the hold as a frame gap", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, area, states } = driven(t);
+  pager.switchTo(1, ORDER);
+  fake.pump(3);
+  pager.input(area, "prepare", 0, 0, fake.clock.now());
+  assert.equal(pager.snapshot().phase, "holding");
+  fake.advance(0.5);
+  let position = pager.snapshot().position;
+  for (let k = 0; k < 4; k++) {
+    position = Math.min(1, position + 0.1);
+    assert.equal(onPagerFrame(nativeFrame(pager.key, { position, selected: 1 })), true);
+    fake.advance(FRAME);
+  }
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { phase: "idle", position: 1, selected: 1, settled: true })), true);
+  const settled = states.at(-1);
+  assert.equal(settled.phase, "settled");
+  assert.equal(settled.longFrames, 0);
+  assert.ok(settled.worstGapMs <= 17, `${settled.worstGapMs} ms`);
+});
+
+test("a tint layer that moves to the first slot is made fully opaque", async () => {
+  const { readFileSync } = await import("node:fs");
+  const tint = readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8");
+  assert.match(tint, /if \(slot <= 0\) \{\n\s*element\.style\.opacity = "1";\n\s*return;\n\s*\}/);
+});

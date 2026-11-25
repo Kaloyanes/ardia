@@ -15,7 +15,11 @@ function TintLayer({ windowId, slot, children }: { windowId: string; slot: numbe
   const layer = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const element = layer.current;
-    if (!element || slot <= 0) return;
+    if (!element) return;
+    if (slot <= 0) {
+      element.style.opacity = "1";
+      return;
+    }
     element.style.opacity = String(tintOpacity(selectedSlot(windowId), slot));
     let animation: Animation | null = null;
     const stop = watchPagerTrack(windowId, (track) => {
