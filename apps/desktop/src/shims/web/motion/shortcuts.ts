@@ -1,4 +1,5 @@
 import type { BrowserCommand } from "@ardia-real/shell";
+import { consentEpoch } from "../../../../../browser/src/state/telemetry/client";
 import { emitAppEvent, emitCommand } from "@ardia/shell";
 import { useBrowser } from "../../../../../browser/src/state/browser/store";
 import { provideNativeModule } from "../../expo-modules-core";
@@ -145,7 +146,7 @@ function onKeyDown(e: KeyboardEvent) {
   e.preventDefault();
   e.stopPropagation();
   if (shortcut.command === "tabSwitcher") switcher.holding = shortcut.mods.find((m) => m !== "shift") ?? null;
-  emitCommand({ command: shortcut.command, arg, windowId: useBrowser.getState().ui.focusOrder[0] ?? null });
+  emitCommand({ command: shortcut.command, arg, windowId: useBrowser.getState().ui.focusOrder[0] ?? null, epoch: consentEpoch() });
 }
 
 function onKeyUp(e: KeyboardEvent) {

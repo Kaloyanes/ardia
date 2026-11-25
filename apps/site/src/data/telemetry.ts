@@ -28,7 +28,6 @@ export const SITE_EVENTS = [
   "demo_customize",
   "demo_setup_code_shown",
   "demo_setup_code_copied",
-  "game_solved",
   "release_notes_viewed",
   "send_to_mac_clicked",
   "testflight_clicked",
