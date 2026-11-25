@@ -54,7 +54,7 @@ test("tile letters stay at two graphemes and a bounded length whatever is typed 
   const { cleanTileLetters, TILE_LETTERS_MAX_LENGTH } = await import("./tileLetter.ts");
   assert.equal(cleanTileLetters("a‍b‍c"), "AB", "a joiner between letters joins nothing");
   const marked = cleanTileLetters("a" + "́".repeat(4096));
-  assert.ok(marked.length <= TILE_LETTERS_MAX_LENGTH, JSON.stringify(marked));
+  assert.equal(marked, null, "a letter with more marks than the cap holds is left off whole");
   assert.equal(cleanTileLetters("a ́"), cleanTileLetters(cleanTileLetters("a ́")));
   assert.equal(cleanTileLetters("a ́"), "Á");
   assert.equal(cleanTileLetters("aß"), "AS");
@@ -144,4 +144,13 @@ test("a second letter that doesn't fit whole is left off rather than cut, so a s
   assert.equal(cleanTileLetters(family + scotland), family);
   assert.equal(cleanTileLetters(scotland + family), scotland, "the flag first, then a family that would overflow, keeps the flag");
   assert.equal(cleanTileLetters("A" + scotland), "A" + scotland);
+});
+
+test("a single letter longer than the whole cap is left off whole, so the tile falls back to the site's letter instead of a cut sequence (#4197)", async () => {
+  const { cleanTileLetters } = await import("./tileLetter.ts");
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+  assert.equal(cleanTileLetters(family + "\u200D" + scotland), null);
+  assert.equal(cleanTileLetters("a" + "\u0301\u0302".repeat(20)), null);
+  assert.equal(cleanTileLetters("a\u0301b"), "A\u0301B".normalize("NFC"));
 });

@@ -46,17 +46,8 @@ function cleanOnce(text: string): string {
   const shown = withoutUnseen(inBasicPlane(withoutUnseen(text), (run) => run.normalize("NFC").toLocaleUpperCase().normalize("NFC")));
   let kept = "";
   for (const cluster of graphemeClusters(shown).filter(startsCluster).filter(drawsSomething).map(withoutStrayJoiners).map(withoutRepeatedInvisibles).slice(0, TILE_LETTERS_MAX)) {
-    const room = TILE_LETTERS_MAX_LENGTH - kept.length;
-    if (cluster.length <= room) {
-      kept += cluster;
-      continue;
-    }
-    if (kept) break;
-    for (const char of cluster) {
-      if (char.length > TILE_LETTERS_MAX_LENGTH - kept.length) break;
-      kept += char;
-    }
-    break;
+    if (kept.length + cluster.length > TILE_LETTERS_MAX_LENGTH) break;
+    kept += cluster;
   }
   return kept;
 }
