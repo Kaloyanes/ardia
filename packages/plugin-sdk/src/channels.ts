@@ -7,6 +7,7 @@ import {
   type WsConnectParams,
 } from "./protocol";
 import { chunkQueue } from "./chunkQueue";
+import { enqueueMicrotask } from "./reconciler";
 import { PluginError, type Rpc } from "./rpc";
 import { addTo, type Disposable } from "./types";
 
@@ -195,17 +196,23 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     let settle: { resolve: () => void; reject: (error: unknown) => void } | null = null;
     const pending: SocketEvent[] = [];
     let draining = false;
+    let deferredFlush = false;
     const listening = (event: SocketEvent) => listeners[event.kind].size > 0;
     const deliverOne = (event: SocketEvent) => {
       if (event.kind === "message") for (const l of [...listeners.message]) safely(() => l(event.data, event.binary));
       else if (event.kind === "error") for (const l of [...listeners.error]) safely(() => l(event.message));
       else for (const l of [...listeners.close]) safely(() => l(event.code, event.reason));
     };
-    const drain = () => {
+    const drain = (allowSkip = false) => {
       if (draining) return;
       draining = true;
       try {
         for (;;) {
+          if (!pending.length) return;
+          if (listening(pending[0]!)) {
+            deliverOne(pending.shift()!);
+            continue;
+          }
           let last = -1;
           for (let i = pending.length - 1; i >= 0; i--) {
             if (listening(pending[i]!)) {
@@ -214,6 +221,16 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
             }
           }
           if (last < 0) return;
+          if (!allowSkip) {
+            if (!deferredFlush) {
+              deferredFlush = true;
+              enqueueMicrotask(() => {
+                deferredFlush = false;
+                drain(true);
+              });
+            }
+            return;
+          }
           for (const event of pending.splice(0, last + 1)) if (listening(event)) deliverOne(event);
         }
       } finally {
@@ -222,12 +239,12 @@ export function createChannels(rpc: Rpc, report: (error: unknown) => void) {
     };
     const emit = (event: SocketEvent) => {
       pending.push(event);
-      drain();
+      drain(false);
       if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
     };
     const attach = <K extends keyof typeof listeners>(kind: K, listener: Parameters<(typeof listeners)[K]["add"]>[0]): Disposable => {
       const added = addTo(listeners[kind] as Set<typeof listener>, listener);
-      drain();
+      drain(false);
       return added;
     };
     const forget = () => {

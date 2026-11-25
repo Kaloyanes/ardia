@@ -85,8 +85,8 @@ export function pingArdia(socketPath: string, params: Record<string, unknown>, t
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       try {
-        const reply = JSON.parse(buffer.slice(0, newline)) as { result?: unknown; error?: { message?: string } };
-        finish(reply.error ? { reached: true, error: reply.error.message ?? "Ardia refused the reload" } : { reached: true, reply: reply.result });
+        const reply = JSON.parse(buffer.slice(0, newline)) as { result?: unknown; error?: { code?: string; message?: string } };
+        finish(reply.error ? { reached: true, error: (typeof reply.error.message === "string" && reply.error.message.trim() ? reply.error.message : typeof reply.error.code === "string" && reply.error.code.trim() ? reply.error.code : "Ardia refused the reload") } : { reached: true, reply: reply.result });
       } catch {
         finish({ reached: true, error: "Ardia answered with something that isn't JSON" });
       }
@@ -149,10 +149,11 @@ export async function runDev(dir: string | undefined, out: Output, flags: DevFla
       return { ok: false, reason: "check" };
     }
     const ping = await pingArdia(paths.socket, { id: project.manifest.id, path: project.dir, link: paths.link });
-    if (ping.reached && !ping.error) out.info(`reloaded ${project.manifest.id} in Ardia`);
+    if (ping.reached && ping.error === undefined) out.info(`reloaded ${project.manifest.id} in Ardia`);
     else if (ping.reached) {
-      out.warn(`Ardia didn't reload the plugin: ${ping.error}`);
-      return { ok: false, reason: "refused", message: ping.error ?? "Ardia refused the reload" };
+      const reason = ping.error || "Ardia refused the reload";
+      out.warn(`Ardia didn't reload the plugin: ${reason}`);
+      return { ok: false, reason: "refused", message: reason };
     }
     else if (!warnedUnreachable) {
       warnedUnreachable = true;

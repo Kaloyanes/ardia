@@ -470,7 +470,7 @@ describe("round 1 fixes", () => {
       socket.setEncoding("utf8");
       socket.on("data", (line) => {
         const request = JSON.parse(line);
-        socket.write(`${JSON.stringify(refuse ? { id: request.id, error: { code: "refused", message: "dev plugins are off" } } : { id: request.id, result: { ok: true } })}\n`);
+        socket.write(`${JSON.stringify(refuse === "empty" ? { id: request.id, error: { code: "refused", message: "" } } : refuse ? { id: request.id, error: { code: "refused", message: "dev plugins are off" } } : { id: request.id, result: { ok: true } })}\n`);
       });
     });
     await new Promise((resolve) => server.listen(join(data, "ArdiaControl.sock"), resolve));
@@ -480,6 +480,11 @@ describe("round 1 fixes", () => {
       assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], q.streams), 1);
       assert.match(q.out.stderr, /Ardia refused to reload @acme\/refused/);
       assert.match(q.out.stderr, /dev plugins are off/);
+      assert.equal(existsSync(link), false);
+      refuse = "empty";
+      const empty = quiet();
+      assert.equal(await mainWith(["dev", dir, "--once", "--data-dir", data], empty.streams), 1);
+      assert.match(empty.out.stderr, /Ardia refused to reload @acme\/refused/);
       assert.equal(existsSync(link), false);
       refuse = false;
       const ok = quiet();

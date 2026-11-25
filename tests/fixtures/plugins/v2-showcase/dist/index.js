@@ -668,305 +668,6 @@
     return queue;
   }
 
-  var abortError = (signal) => signal.reason instanceof Error ? signal.reason : new PluginError("aborted", typeof signal.reason === "string" ? signal.reason : "The request was aborted.");
-  var MAX_HELD_MESSAGES = 256;
-  var quiet = () => void 0;
-  function createChannels(rpc, report) {
-    const streams = new Map();
-    const sockets = new Map();
-    const sidecarListeners = new Set();
-    const contentListeners = new Set();
-    let next = 0;
-    const safely = (listener) => {
-      try {
-        listener();
-      } catch (error) {
-        report(error);
-      }
-    };
-    function deliver(name, data) {
-      const stream = typeof data.stream === "string" ? streams.get(data.stream) : void 0;
-      const socket = typeof data.socket === "string" ? sockets.get(data.socket) : void 0;
-      switch (name) {
-        case CHANNEL_EVENTS.fetchChunk:
-          if (typeof data.data === "string") stream?.push(data.data);
-          return true;
-        case CHANNEL_EVENTS.fetchEnd:
-          stream?.end();
-          return true;
-        case CHANNEL_EVENTS.fetchError:
-          stream?.fail(new PluginError(typeof data.code === "string" ? data.code : "failed", typeof data.message === "string" ? data.message : "The stream failed."));
-          return true;
-        case CHANNEL_EVENTS.wsOpen:
-          socket?.opened(typeof data.protocol === "string" ? data.protocol : "");
-          return true;
-        case CHANNEL_EVENTS.wsMessage:
-          if (typeof data.data === "string") socket?.message(data.data, data.binary === true);
-          return true;
-        case CHANNEL_EVENTS.wsClose:
-          socket?.closed(typeof data.code === "number" ? data.code : 1006, typeof data.reason === "string" ? data.reason : "");
-          return true;
-        case CHANNEL_EVENTS.wsError:
-          socket?.failed(typeof data.message === "string" ? data.message : "The connection failed.");
-          return true;
-        case CHANNEL_EVENTS.sidecarMessage:
-          for (const listener of [...sidecarListeners]) safely(() => listener(data.message));
-          return true;
-        case CHANNEL_EVENTS.contentMessage:
-          if (typeof data.tabId === "string") {
-            const event = { tabId: data.tabId, message: data.message };
-            if (typeof data.frameId === "number") event.frameId = data.frameId;
-            if (typeof data.scriptId === "string") event.scriptId = data.scriptId;
-            for (const listener of [...contentListeners]) safely(() => listener(event));
-          }
-          return true;
-        default:
-          return false;
-      }
-    }
-    async function fetchStream(input, init = {}) {
-      const { signal, ...request } = typeof input === "string" ? { ...init, url: input } : { ...input, ...init };
-      if (signal?.aborted) throw abortError(signal);
-      const id = `f${++next}`;
-      let cancelled = false;
-      let rejectHead = null;
-      let headId = 0;
-      const cancelRemote = () => {
-        if (cancelled) return Promise.resolve();
-        cancelled = true;
-        return rpc.request(HOST_METHODS_V3.fetchCancel, { stream: id }).then(void 0, quiet);
-      };
-      const queue = chunkQueue(
-        () => {
-          streams.delete(id);
-          signal?.removeEventListener("abort", onAbort);
-        },
-        (error, fromHost) => {
-          if (rejectHead) {
-            rejectHead(error);
-            rpc.forget(headId, error instanceof Error ? error : new PluginError("failed", String(error)));
-          }
-          if (!fromHost) void cancelRemote();
-        }
-      );
-      const cancel = async () => {
-        if (cancelled || queue.ended) return;
-        queue.end();
-        await cancelRemote();
-      };
-      function onAbort() {
-        queue.fail(abortError(signal), false);
-      }
-      streams.set(id, queue);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      const head = await new Promise((resolve, reject) => {
-        rejectHead = reject;
-        rpc.start(HOST_METHODS_V3.fetchStream, { ...request, stream: id }, (requestId) => headId = requestId).done.then(resolve, (error) => {
-          rejectHead = null;
-          queue.fail(error, true);
-          reject(error);
-        });
-      });
-      rejectHead = null;
-      let consumed = false;
-      const body = {
-        [Symbol.asyncIterator]() {
-          if (consumed) throw new PluginError("used", "A stream's body can be read once.");
-          consumed = true;
-          return {
-            next: () => queue.next(),
-            return: async () => {
-              await cancel();
-              return { value: void 0, done: true };
-            }
-          };
-        }
-      };
-      return {
-        status: head.status,
-        statusText: head.statusText ?? "",
-        headers: head.headers ?? {},
-        url: head.url ?? request.url,
-        ok: head.status >= 200 && head.status < 300,
-        body,
-        async text() {
-          let out = "";
-          for await (const chunk of body) out += chunk;
-          return out;
-        },
-        cancel
-      };
-    }
-    function connect(url, options = {}) {
-      const id = `w${++next}`;
-      const listeners = { message: new Set(), close: new Set(), error: new Set() };
-      let state = "connecting";
-      let protocol = "";
-      let settle = null;
-      const pending = [];
-      let draining = false;
-      const listening = (event) => listeners[event.kind].size > 0;
-      const deliverOne = (event) => {
-        if (event.kind === "message") for (const l of [...listeners.message]) safely(() => l(event.data, event.binary));
-        else if (event.kind === "error") for (const l of [...listeners.error]) safely(() => l(event.message));
-        else for (const l of [...listeners.close]) safely(() => l(event.code, event.reason));
-      };
-      const drain = () => {
-        if (draining) return;
-        draining = true;
-        try {
-          for (; ; ) {
-            let last = -1;
-            for (let i = pending.length - 1; i >= 0; i--) {
-              if (listening(pending[i])) {
-                last = i;
-                break;
-              }
-            }
-            if (last < 0) return;
-            for (const event of pending.splice(0, last + 1)) if (listening(event)) deliverOne(event);
-          }
-        } finally {
-          draining = false;
-        }
-      };
-      const emit = (event) => {
-        pending.push(event);
-        drain();
-        if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
-      };
-      const attach = (kind, listener) => {
-        const added = addTo(listeners[kind], listener);
-        drain();
-        return added;
-      };
-      const forget = () => {
-        sockets.delete(id);
-        options.signal?.removeEventListener("abort", onAbort);
-      };
-      const socket = {
-        id,
-        url,
-        get protocol() {
-          return protocol;
-        },
-        get state() {
-          return state;
-        },
-        send: (data) => {
-          if (state !== "open") return Promise.reject(new PluginError("closed", "The socket isn't open."));
-          return rpc.request(HOST_METHODS_V3.wsSend, { socket: id, data }).then(() => void 0);
-        },
-        close: (code = 1e3, reason = "") => {
-          if (state === "closed" || state === "closing") return Promise.resolve();
-          const before = state;
-          state = "closing";
-          return rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code, reason }).then(
-            () => void 0,
-            (error) => {
-              if (state === "closing") state = before;
-              throw error;
-            }
-          );
-        },
-        onMessage: (listener) => attach("message", listener),
-        onClose: (listener) => attach("close", listener),
-        onError: (listener) => attach("error", listener)
-      };
-      sockets.set(id, {
-        opened(given) {
-          if (state !== "connecting") return;
-          state = "open";
-          protocol = given;
-          settle?.resolve();
-        },
-        message(data, binary) {
-          if (state === "closed") return;
-          emit({ kind: "message", data, binary });
-        },
-        closed(code, reason) {
-          if (state === "closed") return;
-          state = "closed";
-          forget();
-          handshakeFailed(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
-          emit({ kind: "close", code, reason });
-        },
-        failed(message) {
-          if (state === "connecting") {
-            state = "closed";
-            forget();
-            handshakeFailed(new PluginError("failed", message));
-          }
-          emit({ kind: "error", message });
-        }
-      });
-      let connectId = 0;
-      function handshakeFailed(error) {
-        if (!settle) return;
-        settle.reject(error);
-        rpc.forget(connectId, error);
-      }
-      function onAbort() {
-        if (state === "connecting") {
-          state = "closed";
-          forget();
-          handshakeFailed(abortError(options.signal));
-          void rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code: 1e3, reason: "aborted" }).then(void 0, quiet);
-          return;
-        }
-        void socket.close(1e3, "aborted").catch(report);
-      }
-      if (options.signal?.aborted) {
-        forget();
-        return Promise.reject(abortError(options.signal));
-      }
-      options.signal?.addEventListener("abort", onAbort, { once: true });
-      const params = { socket: id, url, ...options.protocols ? { protocols: options.protocols } : {}, ...options.headers ? { headers: options.headers } : {} };
-      return new Promise((resolve, reject) => {
-        settle = {
-          resolve: () => {
-            settle = null;
-            resolve(socket);
-          },
-          reject: (error) => {
-            settle = null;
-            reject(error);
-          }
-        };
-        rpc.start(HOST_METHODS_V3.wsConnect, { ...params }, (requestId) => connectId = requestId).done.then(
-          (reply) => {
-            if (reply && reply.open === true) sockets.get(id)?.opened(typeof reply.protocol === "string" ? reply.protocol : "");
-          },
-          (error) => {
-            state = "closed";
-            forget();
-            settle?.reject(error);
-          }
-        );
-      });
-    }
-    return {
-      deliver,
-      fetchStream,
-      connect,
-      onSidecarMessage: (listener) => addTo(sidecarListeners, listener),
-      onContentMessage: (listener) => addTo(contentListeners, listener),
-      openCount: () => streams.size + sockets.size,
-      closeAll() {
-        const error = new PluginError("stopped", "The plugin stopped.");
-        for (const stream of [...streams.values()]) stream.fail(error, false);
-        for (const [socket, entry] of [...sockets]) {
-          void rpc.request(HOST_METHODS_V3.wsClose, { socket, code: 1001, reason: "The plugin stopped." }).then(void 0, quiet);
-          entry.closed(1001, "The plugin stopped.");
-        }
-        streams.clear();
-        sockets.clear();
-        sidecarListeners.clear();
-        contentListeners.clear();
-      }
-    };
-  }
-
   var ELEMENT = Symbol.for("ardia.plugin.element");
   function isVNode(value) {
     return typeof value === "object" && value !== null && value.$$typeof === ELEMENT;
@@ -1434,6 +1135,321 @@
     const surface = new Surface(root, initialProps, onCommit, options);
     surface.render();
     return surface;
+  }
+
+  var abortError = (signal) => signal.reason instanceof Error ? signal.reason : new PluginError("aborted", typeof signal.reason === "string" ? signal.reason : "The request was aborted.");
+  var MAX_HELD_MESSAGES = 256;
+  var quiet = () => void 0;
+  function createChannels(rpc, report) {
+    const streams = new Map();
+    const sockets = new Map();
+    const sidecarListeners = new Set();
+    const contentListeners = new Set();
+    let next = 0;
+    const safely = (listener) => {
+      try {
+        listener();
+      } catch (error) {
+        report(error);
+      }
+    };
+    function deliver(name, data) {
+      const stream = typeof data.stream === "string" ? streams.get(data.stream) : void 0;
+      const socket = typeof data.socket === "string" ? sockets.get(data.socket) : void 0;
+      switch (name) {
+        case CHANNEL_EVENTS.fetchChunk:
+          if (typeof data.data === "string") stream?.push(data.data);
+          return true;
+        case CHANNEL_EVENTS.fetchEnd:
+          stream?.end();
+          return true;
+        case CHANNEL_EVENTS.fetchError:
+          stream?.fail(new PluginError(typeof data.code === "string" ? data.code : "failed", typeof data.message === "string" ? data.message : "The stream failed."));
+          return true;
+        case CHANNEL_EVENTS.wsOpen:
+          socket?.opened(typeof data.protocol === "string" ? data.protocol : "");
+          return true;
+        case CHANNEL_EVENTS.wsMessage:
+          if (typeof data.data === "string") socket?.message(data.data, data.binary === true);
+          return true;
+        case CHANNEL_EVENTS.wsClose:
+          socket?.closed(typeof data.code === "number" ? data.code : 1006, typeof data.reason === "string" ? data.reason : "");
+          return true;
+        case CHANNEL_EVENTS.wsError:
+          socket?.failed(typeof data.message === "string" ? data.message : "The connection failed.");
+          return true;
+        case CHANNEL_EVENTS.sidecarMessage:
+          for (const listener of [...sidecarListeners]) safely(() => listener(data.message));
+          return true;
+        case CHANNEL_EVENTS.contentMessage:
+          if (typeof data.tabId === "string") {
+            const event = { tabId: data.tabId, message: data.message };
+            if (typeof data.frameId === "number") event.frameId = data.frameId;
+            if (typeof data.scriptId === "string") event.scriptId = data.scriptId;
+            for (const listener of [...contentListeners]) safely(() => listener(event));
+          }
+          return true;
+        default:
+          return false;
+      }
+    }
+    async function fetchStream(input, init = {}) {
+      const { signal, ...request } = typeof input === "string" ? { ...init, url: input } : { ...input, ...init };
+      if (signal?.aborted) throw abortError(signal);
+      const id = `f${++next}`;
+      let cancelled = false;
+      let rejectHead = null;
+      let headId = 0;
+      const cancelRemote = () => {
+        if (cancelled) return Promise.resolve();
+        cancelled = true;
+        return rpc.request(HOST_METHODS_V3.fetchCancel, { stream: id }).then(void 0, quiet);
+      };
+      const queue = chunkQueue(
+        () => {
+          streams.delete(id);
+          signal?.removeEventListener("abort", onAbort);
+        },
+        (error, fromHost) => {
+          if (rejectHead) {
+            rejectHead(error);
+            rpc.forget(headId, error instanceof Error ? error : new PluginError("failed", String(error)));
+          }
+          if (!fromHost) void cancelRemote();
+        }
+      );
+      const cancel = async () => {
+        if (cancelled || queue.ended) return;
+        queue.end();
+        await cancelRemote();
+      };
+      function onAbort() {
+        queue.fail(abortError(signal), false);
+      }
+      streams.set(id, queue);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const head = await new Promise((resolve, reject) => {
+        rejectHead = reject;
+        rpc.start(HOST_METHODS_V3.fetchStream, { ...request, stream: id }, (requestId) => headId = requestId).done.then(resolve, (error) => {
+          rejectHead = null;
+          queue.fail(error, true);
+          reject(error);
+        });
+      });
+      rejectHead = null;
+      let consumed = false;
+      const body = {
+        [Symbol.asyncIterator]() {
+          if (consumed) throw new PluginError("used", "A stream's body can be read once.");
+          consumed = true;
+          return {
+            next: () => queue.next(),
+            return: async () => {
+              await cancel();
+              return { value: void 0, done: true };
+            }
+          };
+        }
+      };
+      return {
+        status: head.status,
+        statusText: head.statusText ?? "",
+        headers: head.headers ?? {},
+        url: head.url ?? request.url,
+        ok: head.status >= 200 && head.status < 300,
+        body,
+        async text() {
+          let out = "";
+          for await (const chunk of body) out += chunk;
+          return out;
+        },
+        cancel
+      };
+    }
+    function connect(url, options = {}) {
+      const id = `w${++next}`;
+      const listeners = { message: new Set(), close: new Set(), error: new Set() };
+      let state = "connecting";
+      let protocol = "";
+      let settle = null;
+      const pending = [];
+      let draining = false;
+      let deferredFlush = false;
+      const listening = (event) => listeners[event.kind].size > 0;
+      const deliverOne = (event) => {
+        if (event.kind === "message") for (const l of [...listeners.message]) safely(() => l(event.data, event.binary));
+        else if (event.kind === "error") for (const l of [...listeners.error]) safely(() => l(event.message));
+        else for (const l of [...listeners.close]) safely(() => l(event.code, event.reason));
+      };
+      const drain = (allowSkip = false) => {
+        if (draining) return;
+        draining = true;
+        try {
+          for (; ; ) {
+            if (!pending.length) return;
+            if (listening(pending[0])) {
+              deliverOne(pending.shift());
+              continue;
+            }
+            let last = -1;
+            for (let i = pending.length - 1; i >= 0; i--) {
+              if (listening(pending[i])) {
+                last = i;
+                break;
+              }
+            }
+            if (last < 0) return;
+            if (!allowSkip) {
+              if (!deferredFlush) {
+                deferredFlush = true;
+                enqueueMicrotask(() => {
+                  deferredFlush = false;
+                  drain(true);
+                });
+              }
+              return;
+            }
+            for (const event of pending.splice(0, last + 1)) if (listening(event)) deliverOne(event);
+          }
+        } finally {
+          draining = false;
+        }
+      };
+      const emit = (event) => {
+        pending.push(event);
+        drain(false);
+        if (pending.length > MAX_HELD_MESSAGES && event.kind !== "close" && pending[pending.length - 1] === event) pending.pop();
+      };
+      const attach = (kind, listener) => {
+        const added = addTo(listeners[kind], listener);
+        drain(false);
+        return added;
+      };
+      const forget = () => {
+        sockets.delete(id);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+      const socket = {
+        id,
+        url,
+        get protocol() {
+          return protocol;
+        },
+        get state() {
+          return state;
+        },
+        send: (data) => {
+          if (state !== "open") return Promise.reject(new PluginError("closed", "The socket isn't open."));
+          return rpc.request(HOST_METHODS_V3.wsSend, { socket: id, data }).then(() => void 0);
+        },
+        close: (code = 1e3, reason = "") => {
+          if (state === "closed" || state === "closing") return Promise.resolve();
+          const before = state;
+          state = "closing";
+          return rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code, reason }).then(
+            () => void 0,
+            (error) => {
+              if (state === "closing") state = before;
+              throw error;
+            }
+          );
+        },
+        onMessage: (listener) => attach("message", listener),
+        onClose: (listener) => attach("close", listener),
+        onError: (listener) => attach("error", listener)
+      };
+      sockets.set(id, {
+        opened(given) {
+          if (state !== "connecting") return;
+          state = "open";
+          protocol = given;
+          settle?.resolve();
+        },
+        message(data, binary) {
+          if (state === "closed") return;
+          emit({ kind: "message", data, binary });
+        },
+        closed(code, reason) {
+          if (state === "closed") return;
+          state = "closed";
+          forget();
+          handshakeFailed(new PluginError("closed", reason || `The socket closed (${code}) before it opened.`));
+          emit({ kind: "close", code, reason });
+        },
+        failed(message) {
+          if (state === "connecting") {
+            state = "closed";
+            forget();
+            handshakeFailed(new PluginError("failed", message));
+          }
+          emit({ kind: "error", message });
+        }
+      });
+      let connectId = 0;
+      function handshakeFailed(error) {
+        if (!settle) return;
+        settle.reject(error);
+        rpc.forget(connectId, error);
+      }
+      function onAbort() {
+        if (state === "connecting") {
+          state = "closed";
+          forget();
+          handshakeFailed(abortError(options.signal));
+          void rpc.request(HOST_METHODS_V3.wsClose, { socket: id, code: 1e3, reason: "aborted" }).then(void 0, quiet);
+          return;
+        }
+        void socket.close(1e3, "aborted").catch(report);
+      }
+      if (options.signal?.aborted) {
+        forget();
+        return Promise.reject(abortError(options.signal));
+      }
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      const params = { socket: id, url, ...options.protocols ? { protocols: options.protocols } : {}, ...options.headers ? { headers: options.headers } : {} };
+      return new Promise((resolve, reject) => {
+        settle = {
+          resolve: () => {
+            settle = null;
+            resolve(socket);
+          },
+          reject: (error) => {
+            settle = null;
+            reject(error);
+          }
+        };
+        rpc.start(HOST_METHODS_V3.wsConnect, { ...params }, (requestId) => connectId = requestId).done.then(
+          (reply) => {
+            if (reply && reply.open === true) sockets.get(id)?.opened(typeof reply.protocol === "string" ? reply.protocol : "");
+          },
+          (error) => {
+            state = "closed";
+            forget();
+            settle?.reject(error);
+          }
+        );
+      });
+    }
+    return {
+      deliver,
+      fetchStream,
+      connect,
+      onSidecarMessage: (listener) => addTo(sidecarListeners, listener),
+      onContentMessage: (listener) => addTo(contentListeners, listener),
+      openCount: () => streams.size + sockets.size,
+      closeAll() {
+        const error = new PluginError("stopped", "The plugin stopped.");
+        for (const stream of [...streams.values()]) stream.fail(error, false);
+        for (const [socket, entry] of [...sockets]) {
+          void rpc.request(HOST_METHODS_V3.wsClose, { socket, code: 1001, reason: "The plugin stopped." }).then(void 0, quiet);
+          entry.closed(1001, "The plugin stopped.");
+        }
+        streams.clear();
+        sockets.clear();
+        sidecarListeners.clear();
+        contentListeners.clear();
+      }
+    };
   }
 
   var SurfaceContext = createContext(null);

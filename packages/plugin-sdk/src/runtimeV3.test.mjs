@@ -352,15 +352,18 @@ describe("channel edge cases", () => {
     channels.deliver("net.ws.error", { socket: late.id, message: "boom" });
     late.onMessage((d) => order.push(d));
     channels.deliver("net.ws.message", { socket: late.id, data: "after" });
+    await Promise.resolve();
     late.onError((m) => order.push(m));
-    assert.deepEqual(order, ["after"], "a message delivered past an unheard error drops that error rather than reordering it");
+    assert.deepEqual(order, ["after"], "a message delivered after a turn with no error listener drops that error rather than reordering it");
     const flood = await channels.connect("wss://c.com/");
     for (let i = 0; i < 300; i++) channels.deliver("net.ws.message", { socket: flood.id, data: `m${i}` });
     channels.deliver("net.ws.close", { socket: flood.id, code: 1000, reason: "" });
     const seen = [];
     flood.onClose(() => seen.push("closed"));
     flood.onMessage((d) => seen.push(d));
-    assert.equal(seen.at(0), "closed");
+    assert.equal(seen.at(0), "m0");
+    assert.equal(seen.at(-1), "closed");
+    assert.equal(seen.length, 257);
   });
 
   test("the request id is known before the transport sends, so a synchronous error forgets the right waiter", async () => {
@@ -388,6 +391,19 @@ describe("channel edge cases", () => {
     const socket = await channels.connect("wss://a.com/");
     await assert.rejects(socket.close(), /busy/);
     assert.equal(socket.state, "open");
+  });
+
+  test("attaching onClose before onMessage still delivers a buffered message before close", async () => {
+    const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    channels.deliver("net.ws.message", { socket: socket.id, data: "hello" });
+    channels.deliver("net.ws.close", { socket: socket.id, code: 1000, reason: "bye" });
+    const seen = [];
+    socket.onClose((code, reason) => seen.push(`close:${code}:${reason}`));
+    socket.onMessage((data) => seen.push(`msg:${data}`));
+    await Promise.resolve();
+    assert.deepEqual(seen, ["msg:hello", "close:1000:bye"]);
   });
 
   test("a failed activation closes the channels it opened", async () => {

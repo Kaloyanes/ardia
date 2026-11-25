@@ -585,6 +585,25 @@ describe("diffSecuritySurface", () => {
     assert.equal(diffSecuritySurface({ permissions: { camera: true } }, { permissions: { camera: false } }).expanded, false);
   });
 
+  test("a live channel tag cannot point at a yanked release", () => {
+    const detail = {
+      id: "@acme/app",
+      name: "App",
+      description: "",
+      official: false,
+      tier: "js_sandbox",
+      repo: "acme/app",
+      tags: { latest: "1.0.0" },
+      versions: [
+        { version: "1.0.0", repo: "acme/app", channel: "latest", publishedAt: "2026-11-25T00:00:00Z", engines: { ardia: ">=0.3.0" }, dependencies: {}, optionalDependencies: {}, provides: [], consumes: [], permissions: {}, artifacts: { universal: { url: "https://github.com/acme/app/releases/download/v1.0.0/app.tar.gz", sha256: "a".repeat(64), sizeBytes: 10 } }, yanked: true },
+        { version: "1.1.0", repo: "acme/app", channel: "latest", publishedAt: "2026-11-25T00:00:00Z", engines: { ardia: ">=0.3.0" }, dependencies: {}, optionalDependencies: {}, provides: [], consumes: [], permissions: {}, artifacts: { universal: { url: "https://github.com/acme/app/releases/download/v1.1.0/app.tar.gz", sha256: "b".repeat(64), sizeBytes: 10 } }, yanked: false },
+      ],
+    };
+    const res = validatePluginDetail(detail);
+    assert.equal(res.ok, false);
+    assert.match(res.problems.join("\n"), /tags\.latest: 1\.0\.0 is yanked/);
+  });
+
   test("adding a sidecar or a first program from nothing expands", () => {
     assert.deepEqual(diffSecuritySurface({}, { scope: "global", sidecar: { run: ["x"] }, contributes: { programs: [{ name: "tool", path: "bin/tool" }] } }).expanded, true);
     assert.equal(diffSecuritySurface(null, { permissions: { activePage: { screenshot: true } } }).expanded, true);

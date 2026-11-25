@@ -171,6 +171,7 @@ export function validatePluginDetail(raw: unknown, expectedId?: string): Validat
   for (const [tag, version] of Object.entries(detail.tags)) {
     const entry = detail.versions.find((v) => v.version === version);
     if (!entry) problems.push(`tags.${tag}: ${version} isn't one of the versions`);
+    else if (entry.yanked) problems.push(`tags.${tag}: ${version} is yanked`);
     else if (tag === "latest" && entry.channel !== "latest") problems.push(`tags.latest: ${version} is a beta version`);
   }
   return problems.length ? { ok: false, problems } : result;
