@@ -366,8 +366,11 @@ function frameStats(inst, from, to) {
   let gap = 0;
   const gaps = [];
   for (let i = 1; i < spanning.length; i++) {
-    gap = Math.max(gap, spanning[i] - spanning[i - 1]);
-    gaps.push([spanning[i - 1], spanning[i] - spanning[i - 1]]);
+    const start = Math.max(spanning[i - 1], from);
+    const inside = Math.min(spanning[i], to) - start;
+    if (inside <= 0) continue;
+    gap = Math.max(gap, inside);
+    gaps.push([start, inside]);
   }
   return { ticks: ts.length, longestGapMs: Math.round(gap * 10) / 10, gaps };
 }
