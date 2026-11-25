@@ -1139,3 +1139,108 @@ test("openPageIn refuses to commit WebKit after a same-host redirect to the Web 
   dropSwap(tabId);
   webviews.clear();
 });
+
+test("S13: a page-made tab edited while its opener check waits asks about unsaved work before it moves", async () => {
+  const { w, opener } = streamingWindow();
+  const held = heldAnswer();
+  const film = S().newTab(w, { url: "https://www.disneyplus.com/", adoptId: "ardiacore:7", openerId: opener });
+  let edited = false;
+  webviews.set(film, {
+    evaluate: (script) => (script.includes("window.opener") ? held.answer() : Promise.resolve(script.includes("defaultValue") ? edited : false)),
+    pageCookies: () => Promise.resolve([]),
+  });
+  const asked = [];
+  shellNativeModules.ArdiaDialogs.confirm = (options) => (asked.push(options), Promise.resolve({ confirmed: false, suppressed: false }));
+  try {
+    S().updateTab(film, { url: "https://www.disneyplus.com/" });
+    arrivedOnFirstPage(film, "https://www.disneyplus.com/", "chromium");
+    await settle();
+    edited = true;
+    held.release(false);
+    assert.ok(await waitFor(() => asked.length === 1), "the move asks before it reloads the edited page");
+    for (let i = 0; i < 10; i++) await settle();
+    assert.equal(tabEngine(S(), film), "chromium", "staying keeps the page and its edits");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});
+
+test("S13: an opener answer that arrives after the page-made tab left its site and came back can't move it or set where Back goes", async () => {
+  const { w, opener } = streamingWindow();
+  const held = heldAnswer();
+  const popup = openedTab(w, opener, "https://search.example/?q=film", [held.answer, answer(true)]);
+  S().updateTab(popup, { url: "https://search.example/?q=film" });
+  arrivedOnFirstPage(popup, "https://search.example/?q=film", "chromium");
+  S().updateTab(popup, { url: "https://www.netflix.com/" });
+  followSiteChoice(popup, "chromium", "https://www.netflix.com/", "https://search.example/?q=film");
+  await settle();
+  S().updateTab(popup, { url: "https://blog.example/post" });
+  followSiteChoice(popup, "chromium", "https://blog.example/post", "https://www.netflix.com/");
+  S().updateTab(popup, { url: "https://www.netflix.com/browse" });
+  followSiteChoice(popup, "chromium", "https://www.netflix.com/browse", "https://blog.example/post");
+  for (let i = 0; i < 10; i++) await settle();
+  held.release(false);
+  for (let i = 0; i < 20; i++) await settle();
+  assert.equal(tabEngine(S(), popup), "chromium", "the newer visit's live opener keeps the tab where it is");
+  assert.equal(pageOf(popup).engineBack ?? null, null, "the stale answer publishes no Back target");
+  webviews.clear();
+});
+
+test("S13: a protected video on a platform without WebKit stores no WebKit offer", async () => {
+  const { PLATFORM_FEATURES } = await import("../../lib/platformFeatures.ts");
+  const had = PLATFORM_FEATURES.webKit;
+  const tabId = streamingTab("https://video.example/watch/1", unsavedWork(false));
+  S().updateSettings({ offerWebKitForProtectedVideo: true });
+  try {
+    PLATFORM_FEATURES.webKit = false;
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.equal(useEngineOffers.getState()[tabId], undefined, "nothing offers an engine the page can't open in");
+    PLATFORM_FEATURES.webKit = had;
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.equal(useEngineOffers.getState()[tabId]?.host, "video.example", "with WebKit there, the offer still shows");
+  } finally {
+    PLATFORM_FEATURES.webKit = had;
+    useEngineOffers.setState({}, true);
+    webviews.clear();
+  }
+});
+
+test("S13: a Peek whose first committed page redirected to a WebKit site moves there, and one that stays on its asked site keeps its engine", async () => {
+  const { opener } = streamingWindow();
+  const peek = S().openPeek(opener, "https://short.example/film");
+  assert.equal(tabEngine(S(), peek), "chromium");
+  webviews.set(peek, { evaluate: unsavedWork(false), pageCookies: () => Promise.resolve([]) });
+  S().updateTab(peek, { url: "https://www.netflix.com/title/1" });
+  arrivedOnFirstPage(peek, "https://www.netflix.com/title/1", "chromium");
+  assert.ok(await waitFor(() => tabEngine(S(), peek) === "webkit"), "the redirected Peek goes where its site is sent");
+  assert.equal(pageOf(peek).engineBack ?? null, null, "a first page has no page before it to go back to");
+  dropSwap(peek);
+  S().closePeek(opener);
+  const plain = S().openPeek(opener, "https://short.example/film");
+  webviews.set(plain, { evaluate: unsavedWork(false), pageCookies: () => Promise.resolve([]) });
+  S().updateTab(plain, { url: "https://short.example/film/1" });
+  arrivedOnFirstPage(plain, "https://short.example/film/1", "chromium");
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(tabEngine(S(), plain), "chromium");
+  S().closePeek(opener);
+  webviews.clear();
+});
+
+test("S13: a commit reported with an earlier clock than the last one still counts as a new document", async () => {
+  const tabId = streamingTab("https://www.primevideo.com/detail/2", unsavedWork(true));
+  notePageCommit(tabId, 2000);
+  let answerDialog;
+  shellNativeModules.ArdiaDialogs.confirm = () => new Promise((resolve) => (answerDialog = resolve));
+  try {
+    offerWebKit(tabId, { keySystem: "com.widevine.alpha", main: true });
+    assert.ok(await waitFor(() => !!answerDialog));
+    notePageCommit(tabId, 1500);
+    answerDialog({ confirmed: true, suppressed: false });
+    for (let i = 0; i < 20; i++) await settle();
+    assert.equal(tabEngine(S(), tabId), "chromium", "the answer was for the document before the clock stepped back");
+  } finally {
+    shellNativeModules.ArdiaDialogs.confirm = confirmNo;
+    webviews.clear();
+  }
+});

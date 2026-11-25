@@ -16,6 +16,8 @@ import { closedByUnload } from "../profiles/profileUnloading";
 import { forgetRendererHang } from "../telemetry/freezes";
 import { forgetVerificationCodes } from "../site/verificationCodes";
 import { useBrowser } from "../browser/store";
+import { siteOf } from "../engines/engines";
+import { navigationOf } from "./pageSession";
 
 export function leftPage(tabId: string, url: string, previousPage: string, engine: PageEngine) {
   if (pageOf(tabId).externalApp && hostOf(url) !== hostOf(previousPage)) answerExternalApp(tabId, false);
@@ -30,9 +32,13 @@ export function leftPage(tabId: string, url: string, previousPage: string, engin
 }
 
 export function arrivedOnFirstPage(tabId: string, url: string, engine: PageEngine) {
-  if (!madeByPage(useBrowser.getState().tabs[tabId])) return;
-  notePageMadeTab(tabId);
-  followSiteChoice(tabId, engine, url, "");
+  const t = useBrowser.getState().tabs[tabId];
+  if (madeByPage(t)) {
+    notePageMadeTab(tabId);
+    return followSiteChoice(tabId, engine, url, "");
+  }
+  const askedSite = siteOf(navigationOf(t)?.url);
+  if (askedSite && siteOf(url) && askedSite !== siteOf(url)) followSiteChoice(tabId, engine, url, "");
 }
 
 export function pageEnded(tabId: string) {

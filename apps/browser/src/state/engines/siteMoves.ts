@@ -12,7 +12,7 @@ const store = () => useBrowser.getState();
 const SITE_MOVE_SPACING_MS = 10_000;
 
 type Move = { from: PageEngine; to: PageEngine; url: string; navigation: number | null; previousUrl: string; consent: ConsentToken | null; forVideo?: { site: string }; delayed?: boolean };
-type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null; cooling: ReturnType<typeof setTimeout> | null };
+type TabMoves = { lastMovedAt: number; moving: boolean; pending: Move | null; cooling: ReturnType<typeof setTimeout> | null; visit: number };
 
 const tabMoves = new Map<string, TabMoves>();
 const probingVideo = new Set<string>();
@@ -27,7 +27,7 @@ function movesOf(tabId: string): TabMoves {
     }
   });
   let moves = tabMoves.get(tabId);
-  if (!moves) tabMoves.set(tabId, (moves = { lastMovedAt: 0, moving: false, pending: null, cooling: null }));
+  if (!moves) tabMoves.set(tabId, (moves = { lastMovedAt: 0, moving: false, pending: null, cooling: null, visit: 0 }));
   return moves;
 }
 
@@ -134,12 +134,14 @@ function settlePending(tabId: string, move: Move) {
 
 async function moveOpenedTab(tabId: string, url: string, move: Move) {
   const holds = modeStillHolds();
-  const stillOnSite = () => !!store().tabs[tabId] && holds() && siteOf(pageUrl(store().tabs[tabId])) === siteOf(url) && tabEngine(store(), tabId) === move.from;
+  const visit = movesOf(tabId).visit;
+  const sameVisit = () => tabMoves.get(tabId)?.visit === visit && navigationNow(tabId) === move.navigation;
+  const stillOnSite = () => !!store().tabs[tabId] && holds() && sameVisit() && siteOf(pageUrl(store().tabs[tabId])) === siteOf(url) && tabEngine(store(), tabId) === move.from;
   const opener = await openerState(tabId, stillOnSite);
   if (!stillOnSite() || !routedTo(tabId, move.to)(pageUrl(store().tabs[tabId]))) return;
   if (opener === "live") return noteSiteMove("keptForOpener", true, move.consent);
   if (opener === "unknown") return noteSiteMove("dropped", true, move.consent);
-  startMove(tabId, move);
+  startMove(tabId, { ...move, delayed: true });
 }
 
 export function followSiteChoice(tabId: string, engine: PageEngine, url: string, previousUrl: string) {
@@ -148,6 +150,7 @@ export function followSiteChoice(tabId: string, engine: PageEngine, url: string,
   if (!t) return;
   const consent = consentToken();
   dropMovesLeftBehind(tabId);
+  if (siteOf(url) !== siteOf(previousUrl)) movesOf(tabId).visit++;
   const navigation = navigationNow(tabId);
   if (singleEngine(s)) {
     const forced = modeEngineFor(s, t, url);
@@ -198,5 +201,6 @@ export function offerWebKit(tabId: string, { keySystem }: ProtectedMediaRequest)
   const rule = chosenEngine(s, t.url);
   if (rule === "chromium" || siteDeclined(site)) return;
   if (rule === "webkit") return void moveForProtectedVideo(tabId, site, keySystem);
+  if (!canSwitchEngine(t.url)) return;
   showEngineOffer(tabId, site, keySystem);
 }

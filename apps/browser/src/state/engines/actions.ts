@@ -56,7 +56,7 @@ export function notePageCommit(tabId: string, committedAt: number | undefined) {
   if (typeof committedAt !== "number" || !(committedAt > 0)) return;
   watchClosedTabs();
   const last = committedDocuments.get(tabId);
-  if (last && committedAt <= last.at) return;
+  if (last && committedAt === last.at) return;
   committedDocuments.set(tabId, { id: ++nextDocument, at: committedAt });
 }
 
