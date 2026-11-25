@@ -1496,7 +1496,7 @@
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
         "types": "61009063b512da80275f0dd04c37f6e1ab06ce3fb7961d131e2f6144186b2d71",
-        "swift": "6fd9b54fdba75ce306cf9cba6b7ccf8a919b5518607cedd7c54a20f17a240dfb"
+        "swift": "773af59f99fcfcd683bae21adf1264389e72a599959bab51833bff2b70d8bc8a"
       },
       "modules": {
         "ArdiaShell": {
