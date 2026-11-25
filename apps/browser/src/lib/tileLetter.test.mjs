@@ -154,3 +154,16 @@ test("a single letter longer than the whole cap is left off whole, so the tile f
   assert.equal(cleanTileLetters("a" + "\u0301\u0302".repeat(20)), null);
   assert.equal(cleanTileLetters("a\u0301b"), "A\u0301B".normalize("NFC"));
 });
+
+test("a long paste is cut only between graphemes, so spaces before a flag can't split it, and a blank label saved earlier shows the site's letter (#4197)", async () => {
+  const { cleanTileLetters, tileLettersOf } = await import("./tileLetter.ts");
+  const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+  assert.equal(cleanTileLetters(" ".repeat(180) + scotland), scotland);
+  for (let pad = 1520; pad < 1540; pad++) {
+    const cleaned = cleanTileLetters(" ".repeat(pad) + scotland);
+    assert.ok(cleaned === scotland || cleaned === null, `padding ${pad}: the flag is kept whole or left off, never cut`);
+  }
+  assert.equal(cleanTileLetters("x".repeat(5000)), "XX");
+  assert.equal(tileLettersOf({ url: "https://mail.example/", title: "Mail", tileLetters: "\u2800" }), "M");
+  assert.equal(tileLettersOf({ url: "https://mail.example/", title: "Mail", tileLetters: "GM" }), "GM");
+});

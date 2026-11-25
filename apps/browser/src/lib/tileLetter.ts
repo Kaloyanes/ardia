@@ -52,9 +52,20 @@ function cleanOnce(text: string): string {
   return kept;
 }
 
+const INPUT_WINDOW = TILE_LETTERS_MAX_LENGTH * 64;
+
+function withinWindow(input: string): string {
+  if (input.length <= INPUT_WINDOW) return input;
+  const last = input.charCodeAt(INPUT_WINDOW - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? INPUT_WINDOW - 1 : INPUT_WINDOW;
+  const clusters = graphemeClusters(input.slice(0, end));
+  clusters.pop();
+  return clusters.join("");
+}
+
 export function cleanTileLetters(input: unknown): string | null {
   if (typeof input !== "string") return null;
-  let kept = cleanOnce(input.slice(0, TILE_LETTERS_MAX_LENGTH * 8));
+  let kept = cleanOnce(withinWindow(input));
   for (let pass = 0; pass < 4; pass++) {
     const again = cleanOnce(kept);
     if (again === kept) break;
@@ -64,4 +75,4 @@ export function cleanTileLetters(input: unknown): string | null {
 }
 
 export const tileLettersOf = (t: { url: string; title: string; customTitle?: string | null; tileLetters?: string | null }): string =>
-  t.tileLetters || tileLetterOf(t.url, t.customTitle ?? t.title);
+  (t.tileLetters && cleanTileLetters(t.tileLetters)) || tileLetterOf(t.url, t.customTitle ?? t.title);
