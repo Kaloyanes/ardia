@@ -73,11 +73,9 @@ export function ProfileBar({ selectedId }: { selectedId: string }) {
     else if (right > x + width) next = right - width + TRAY_PAD;
     if (!restored.current) {
       restored.current = true;
-      if (next > 0) {
-        view.current.x = next;
-        savedStripX = next;
-        scroller.current?.scrollTo({ x: next, animated: false });
-      }
+      view.current.x = next;
+      savedStripX = next;
+      if (next > 0) scroller.current?.scrollTo({ x: next, animated: false });
       return;
     }
     if (next !== x) scroller.current?.scrollTo({ x: next, animated });
