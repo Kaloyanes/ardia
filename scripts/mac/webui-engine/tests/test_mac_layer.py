@@ -454,7 +454,7 @@ class ContractTests(unittest.TestCase):
         watch = source.split('class DownloadWatch', 1)[1].split('\n};', 1)[0]
         notifier = watch.index('download::AllDownloadItemNotifier notifier_;')
         for member in ('std::map<std::string, policy::ProgressMark> marks_;',
-                       'policy::ReadyQueue<base::OnceClosure> ready_;', 'raw_ptr<SystemServices> owner_;'):
+                       'policy::ReadyQueue<base::OnceCallback<void(bool)>> ready_;', 'raw_ptr<SystemServices> owner_;'):
             self.assertLess(watch.index(member), notifier, member)
 
     def test_in_window_pip_is_a_native_plane_between_pages_and_the_shell(self):
@@ -495,6 +495,20 @@ class ContractTests(unittest.TestCase):
         for needle in ('viewDidChangeBackingProperties', 'NSWindowDidChangeScreenNotification',
                        'OnDisplayMetricsChanged', 'display.id() != display_id_', 'GetDisplayNearestPoint'):
             self.assertIn(needle, source)
+
+    def test_round_three_contracts(self):
+        system = (MAC / 'ac_mac_system.mm').read_text()
+        watch_teardown = system.split('~DownloadWatch() override {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('ready_.Drop()', watch_teardown)
+        self.assertIn('false', watch_teardown)
+        handoff = system.split('void SystemServices::HandOffOpenUrls() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('browser_shutdown::IsTryingToQuit()', handoff)
+        self.assertIn('browser_shutdown::HasShutdownStarted()', handoff)
+        pip = (MAC / 'ac_mac_pip.mm').read_text()
+        self.assertIn('ContentSettingsType::AUTO_PICTURE_IN_PICTURE', pip)
+        self.assertIn('PresentationFor(intent, presenter != nullptr, PermissionOf(contents))', pip)
+        enter = pip.split('void PipPlayer::EnterWindow(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(enter.index('window_->ShowInactive();'), enter.index('window_->GetMinimumSize()'))
 
     def test_no_unbounded_integer_narrowing(self):
         for path in MAC.glob('*.mm'):

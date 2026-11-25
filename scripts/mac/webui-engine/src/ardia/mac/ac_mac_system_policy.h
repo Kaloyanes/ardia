@@ -277,6 +277,8 @@ class ReadyQueue {
     return std::exchange(waiting_, {});
   }
 
+  std::vector<Callback> Drop() { return std::exchange(waiting_, {}); }
+
   bool ready() const { return ready_; }
   std::size_t waiting() const { return waiting_.size(); }
 
@@ -289,8 +291,8 @@ inline bool DownloadMember(bool primary_profile, int tabs_in_window) {
   return primary_profile || tabs_in_window > 0;
 }
 
-inline bool HandsLinksToChrome(bool hosts_alive, std::size_t pending) {
-  return !hosts_alive && pending > 0;
+inline bool HandsLinksToChrome(bool hosts_alive, std::size_t pending, bool quitting) {
+  return !hosts_alive && pending > 0 && !quitting;
 }
 
 inline bool CapturesOpenUrls(bool hook_installed, bool host_alive, bool host_seen) {

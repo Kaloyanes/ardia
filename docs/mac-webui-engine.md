@@ -91,7 +91,7 @@ that branch). It is a development tool and never runs in a release. Like Windows
   side panel hooks with `ArdiaExtensions` `extensions.installPrompt` and `extensions.sidePanel`.
 - **Picture in picture** (`ac_mac_pip`, rules in `ac_mac_pip_policy.h`). `apply.sh` adds `g_ardia_mac_video_overlay` to
   `CreateVideoOverlayWindow`, so the host makes the player: automatic picture in picture plays inside the window that
-  shows its tab, on a native plane (an `NSView` with its own compositor, hosted by a `NativeViewHost`) ordered above
+  shows its tab and the site allows it (Ask goes to Chrome's window and its prompt), on a native plane (an `NSView` with its own compositor, hosted by a `NativeViewHost`) ordered above
   the pages and below the shell (`pip.attach | viewport | command`, `ArdiaPip` `player`), explicit picture in picture and pop-outs use
   Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
   display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.

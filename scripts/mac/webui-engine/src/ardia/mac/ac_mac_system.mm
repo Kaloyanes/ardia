@@ -29,6 +29,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/download/download_crx_util.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -341,15 +342,21 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
   }
   DownloadWatch(const DownloadWatch&) = delete;
   DownloadWatch& operator=(const DownloadWatch&) = delete;
-  ~DownloadWatch() override = default;
+  ~DownloadWatch() override {
+    for (Waiter& waiting : ready_.Drop()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                                                               base::BindOnce(std::move(waiting), false));
+    }
+  }
+
+  using Waiter = base::OnceCallback<void(bool)>;
 
   content::DownloadManager* manager() const { return notifier_.GetManager(); }
 
-  void WhenReady(base::OnceClosure ready) {
+  void WhenReady(Waiter ready) {
     content::DownloadManager* downloads = manager();
-    if (std::optional<base::OnceClosure> now =
-            ready_.Hold(!downloads || downloads->IsManagerInitialized(), std::move(ready))) {
-      std::move(*now).Run();
+    if (std::optional<Waiter> now = ready_.Hold(!downloads || downloads->IsManagerInitialized(), std::move(ready))) {
+      std::move(*now).Run(true);
     }
   }
 
@@ -384,14 +391,14 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
  private:
   void OnManagerInitialized(content::DownloadManager*) override {
     SeedRunning();
-    for (base::OnceClosure& ready : ready_.Release()) {
-      std::move(ready).Run();
+    for (Waiter& ready : ready_.Release()) {
+      std::move(ready).Run(true);
     }
   }
 
   void OnManagerGoingDown(content::DownloadManager*) override {
-    for (base::OnceClosure& ready : ready_.Release()) {
-      std::move(ready).Run();
+    for (Waiter& ready : ready_.Release()) {
+      std::move(ready).Run(true);
     }
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&SystemServices::WatchGone, owner_->GetWeakPtr(),
@@ -435,7 +442,7 @@ class DownloadWatch : public download::AllDownloadItemNotifier::Observer {
   raw_ptr<SystemServices> owner_;
   raw_ptr<Profile> profile_;
   std::map<std::string, policy::ProgressMark> marks_;
-  policy::ReadyQueue<base::OnceClosure> ready_;
+  policy::ReadyQueue<base::OnceCallback<void(bool)>> ready_;
   download::AllDownloadItemNotifier notifier_;
 };
 
@@ -456,7 +463,14 @@ void SystemServices::HandOffOpenUrls() {
   if (!Hosts().empty()) {
     return DeliverOpenUrls();
   }
-  if (!policy::HandsLinksToChrome(false, OpenUrls().pending())) {
+  const bool quitting = browser_shutdown::IsTryingToQuit() || browser_shutdown::HasShutdownStarted();
+  if (!policy::HandsLinksToChrome(false, OpenUrls().pending(), quitting)) {
+    if (quitting && !OpenUrls().empty()) {
+      Trace("open urls: " + base::NumberToString(OpenUrls().pending()) + " dropped while quitting");
+      while (!OpenUrls().empty()) {
+        OpenUrls().Take();
+      }
+    }
     return;
   }
   NSMutableArray<NSURL*>* urls = [NSMutableArray array];
@@ -603,7 +617,10 @@ void SystemServices::DownloadsCall(const std::string& name, Profile* profile, ba
   }
   watch->WhenReady(base::BindOnce(
       [](base::WeakPtr<SystemServices> self, base::WeakPtr<Profile> weak_profile, std::string name,
-         base::DictValue input, Done done) {
+         base::DictValue input, Done done, bool ready) {
+        if (!ready) {
+          return Fail(std::move(done), "ERR_PROFILE_WINDOW", "This profile no longer has tabs in this window");
+        }
         Profile* profile = weak_profile.get();
         if (self && profile && !self->MemberProfiles().contains(profile)) {
           self->SyncWatchesSoon();

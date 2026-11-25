@@ -90,6 +90,27 @@ TEST(popped_out_players_keep_the_window_minimum_inside_the_work_area) {
   CHECK(pip::PopOutBox({100, 100, 480, 270}, area) == (pip::Box{100, 100, 480, 270}));
 }
 
+TEST(automatic_pip_keeps_chromiums_ask_prompt) {
+  CHECK(pip::PermissionFor(false, true, false, false) == pip::AutoPipPermission::kAllow);
+  CHECK(pip::PermissionFor(false, false, true, false) == pip::AutoPipPermission::kAsk);
+  CHECK(pip::PermissionFor(false, false, true, true) == pip::AutoPipPermission::kBlock);
+  CHECK(pip::PermissionFor(false, false, false, false) == pip::AutoPipPermission::kBlock);
+  CHECK(pip::PermissionFor(true, true, false, false) == pip::AutoPipPermission::kBlock);
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kAsk) ==
+        pip::Presentation::kWindow);
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, true, pip::AutoPipPermission::kBlock) ==
+        pip::Presentation::kDeclined);
+}
+
+TEST(pop_outs_refit_to_the_shown_windows_effective_minimum) {
+  const pip::Box area{0, 25, 1440, 875};
+  const pip::Box flush{1440 - 284, 900 - 160, 284, 160};
+  CHECK(pip::PopOutBox(flush, area, 360, 240) == (pip::Box{1440 - 360, 900 - 240, 360, 240}));
+  CHECK(pip::PopOutBox(flush, area, 100, 100) == flush);
+  CHECK(pip::PopOutBox({200, 200, 480, 270}, area, 360, 240) == (pip::Box{200, 200, 480, 270}));
+  CHECK(pip::PopOutBox({0, 0, 10, 10}, area, 5000, 5000) == area);
+}
+
 TEST(default_player_sits_bottom_right_with_the_video_aspect) {
   const pip::Box wide = pip::DefaultPlayerBox(1600, 1000, 1920, 1080);
   CHECK(wide.width == 448 && wide.height == 252 && wide.x == 1600 - 448 - 10 && wide.y == 1000 - 252 - 10);
@@ -100,10 +121,12 @@ TEST(default_player_sits_bottom_right_with_the_video_aspect) {
 }
 
 TEST(automatic_pip_needs_a_window_that_shows_the_tab) {
-  CHECK(pip::PresentationFor(pip::Intent::kExplicit, true) == pip::Presentation::kWindow);
-  CHECK(pip::PresentationFor(pip::Intent::kExplicit, false) == pip::Presentation::kWindow);
-  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, true) == pip::Presentation::kInWindow);
-  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, false) == pip::Presentation::kDeclined);
+  const auto allow = pip::AutoPipPermission::kAllow;
+  CHECK(pip::PresentationFor(pip::Intent::kExplicit, true, allow) == pip::Presentation::kWindow);
+  CHECK(pip::PresentationFor(pip::Intent::kExplicit, false, pip::AutoPipPermission::kBlock) ==
+        pip::Presentation::kWindow);
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, true, allow) == pip::Presentation::kInWindow);
+  CHECK(pip::PresentationFor(pip::Intent::kAutomatic, false, allow) == pip::Presentation::kDeclined);
   CHECK(pip::Presents(true, 4, 4, true));
   CHECK(!pip::Presents(true, 3, 4, true));
   CHECK(!pip::Presents(false, 4, 4, true));

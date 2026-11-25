@@ -195,6 +195,21 @@ TEST(waiters_run_once_when_the_manager_initializes_later) {
   CHECK(queue.Hold(false, [] {}).has_value());
 }
 
+TEST(a_dropped_watch_settles_every_queued_request_as_refused) {
+  policy::ReadyQueue<std::function<void(bool)>> queue;
+  int refused = 0;
+  int served = 0;
+  for (int index = 0; index < 3; ++index) {
+    CHECK(!queue.Hold(false, [&](bool ready) { ready ? ++served : ++refused; }).has_value());
+  }
+  for (auto& waiting : queue.Drop()) waiting(false);
+  CHECK(refused == 3 && served == 0);
+  CHECK(queue.waiting() == 0);
+  CHECK(!queue.ready());
+  CHECK(queue.Drop().empty());
+  CHECK(queue.Release().empty());
+}
+
 TEST(links_are_captured_before_the_first_window_and_while_windows_live) {
   CHECK(policy::CapturesOpenUrls(true, false, false));
   CHECK(policy::CapturesOpenUrls(true, true, true));
@@ -211,9 +226,10 @@ TEST(companion_profiles_count_for_downloads_only_while_they_hold_tabs) {
 }
 
 TEST(queued_links_go_back_to_chrome_once_no_window_is_left) {
-  CHECK(policy::HandsLinksToChrome(false, 2));
-  CHECK(!policy::HandsLinksToChrome(true, 2));
-  CHECK(!policy::HandsLinksToChrome(false, 0));
+  CHECK(policy::HandsLinksToChrome(false, 2, false));
+  CHECK(!policy::HandsLinksToChrome(true, 2, false));
+  CHECK(!policy::HandsLinksToChrome(false, 0, false));
+  CHECK(!policy::HandsLinksToChrome(false, 2, true));
 }
 
 TEST(every_method_is_advertised_once) {

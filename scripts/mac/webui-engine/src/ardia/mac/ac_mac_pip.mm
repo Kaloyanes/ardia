@@ -13,7 +13,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "cc/layers/deadline_policy.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
+#include "url/gurl.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 #include "components/viz/common/frame_timing_details.h"
@@ -131,6 +139,36 @@ pip::Intent IntentFor(content::WebContents* contents) {
   return pip::Intent::kExplicit;
 }
 
+pip::AutoPipPermission PermissionOf(content::WebContents* contents) {
+  if (!contents) {
+    return pip::AutoPipPermission::kBlock;
+  }
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  HostContentSettingsMap* settings = profile ? HostContentSettingsMapFactory::GetForProfile(profile) : nullptr;
+  if (!settings) {
+    return pip::AutoPipPermission::kBlock;
+  }
+  const GURL url = contents->GetLastCommittedURL();
+  const ContentSetting setting =
+      settings->GetContentSetting(url, url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
+  permissions::PermissionDecisionAutoBlocker* blocker = PermissionDecisionAutoBlockerFactory::GetForProfile(profile);
+  const bool asks = setting == CONTENT_SETTING_ASK;
+  const bool embargoed = asks && blocker && blocker->IsEmbargoed(url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
+  return pip::PermissionFor(g_ardia_auto_picture_in_picture_off, setting == CONTENT_SETTING_ALLOW, asks, embargoed);
+}
+
+gfx::Rect RefitPopOut(const gfx::Rect& rect, const gfx::Size& minimum) {
+  display::Screen* screen = display::Screen::Get();
+  if (!screen) {
+    return rect;
+  }
+  const gfx::Rect area = screen->GetDisplayMatching(rect).work_area();
+  const pip::Box placed = pip::PopOutBox(pip::Box{rect.x(), rect.y(), rect.width(), rect.height()},
+                                         pip::Box{area.x(), area.y(), area.width(), area.height()},
+                                         minimum.width(), minimum.height());
+  return gfx::Rect(placed.x, placed.y, placed.width, placed.height);
+}
+
 base::TimeDelta Milliseconds(double ms) {
   return base::Milliseconds(ms);
 }
@@ -187,7 +225,7 @@ void PipPlayer::ShowInactive() {
     return;
   }
   PipPresenter* presenter = intent == pip::Intent::kAutomatic ? PipPresenter::Find(contents) : nullptr;
-  switch (pip::PresentationFor(intent, presenter != nullptr)) {
+  switch (pip::PresentationFor(intent, presenter != nullptr, PermissionOf(contents))) {
     case pip::Presentation::kInWindow:
       return EnterInWindow(presenter);
     case pip::Presentation::kWindow:
@@ -240,6 +278,12 @@ void PipPlayer::EnterWindow(std::optional<gfx::Rect> screen_bounds) {
     Trace("background instance: picture in picture window kept ordered out");
   } else {
     window_->ShowInactive();
+  }
+  if (screen_bounds && !screen_bounds->IsEmpty()) {
+    const gfx::Rect placed = RefitPopOut(*screen_bounds, window_->GetMinimumSize());
+    if (placed != window_->GetBounds()) {
+      window_->SetBounds(placed);
+    }
   }
   if (!handoff) {
     return ReleasePresenter(base::TimeDelta());

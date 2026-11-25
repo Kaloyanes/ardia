@@ -2,6 +2,7 @@
 #define ARDIA_MAC_AC_MAC_PIP_POLICY_H_
 
 #include <algorithm>
+#include <initializer_list>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -109,9 +110,9 @@ inline Box FitInWorkArea(Box rect, Box area) {
   return fitted;
 }
 
-inline Box PopOutBox(Box rect, Box area) {
-  rect.width = std::max(rect.width, kMinPopOutWidth);
-  rect.height = std::max(rect.height, kMinPopOutHeight);
+inline Box PopOutBox(Box rect, Box area, int min_width = kMinPopOutWidth, int min_height = kMinPopOutHeight) {
+  rect.width = std::max({rect.width, min_width, kMinPopOutWidth});
+  rect.height = std::max({rect.height, min_height, kMinPopOutHeight});
   return FitInWorkArea(rect, area);
 }
 
@@ -119,8 +120,25 @@ enum class Intent { kExplicit, kAutomatic };
 
 enum class Presentation { kInWindow, kWindow, kDeclined };
 
-inline Presentation PresentationFor(Intent intent, bool presenter_found) {
+enum class AutoPipPermission { kAllow, kAsk, kBlock };
+
+inline AutoPipPermission PermissionFor(bool switched_off, bool allowed, bool asks, bool embargoed) {
+  if (switched_off) return AutoPipPermission::kBlock;
+  if (allowed) return AutoPipPermission::kAllow;
+  if (asks && !embargoed) return AutoPipPermission::kAsk;
+  return AutoPipPermission::kBlock;
+}
+
+inline Presentation PresentationFor(Intent intent, bool presenter_found, AutoPipPermission permission) {
   if (intent == Intent::kExplicit) return Presentation::kWindow;
+  switch (permission) {
+    case AutoPipPermission::kAsk:
+      return Presentation::kWindow;
+    case AutoPipPermission::kBlock:
+      return Presentation::kDeclined;
+    case AutoPipPermission::kAllow:
+      break;
+  }
   return presenter_found ? Presentation::kInWindow : Presentation::kDeclined;
 }
 
