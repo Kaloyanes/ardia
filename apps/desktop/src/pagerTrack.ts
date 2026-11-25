@@ -85,9 +85,14 @@ export const tintFallbackOpacity = (slot: number, variable: string) => (slot <= 
 
 export type RevealSpot = { listTop: number; rowTop: number; rowHeight: number; viewport: number; scrollY: number };
 
+export function centredOffset(listTop: number, rowTop: number, rowHeight: number, viewport: number): number | null {
+  if (!(viewport > 0) || ![listTop, rowTop, rowHeight].every(Number.isFinite)) return null;
+  return Math.max(0, Math.round(listTop + rowTop + rowHeight / 2 - viewport / 2));
+}
+
 export function revealOffset({ listTop, rowTop, rowHeight, viewport, scrollY }: RevealSpot): number | null {
-  if (!(viewport > 0) || ![listTop, rowTop, rowHeight, scrollY].every(Number.isFinite)) return null;
-  const target = Math.max(0, Math.round(listTop + rowTop + rowHeight / 2 - viewport / 2));
+  const target = centredOffset(listTop, rowTop, rowHeight, viewport);
+  if (target === null || !Number.isFinite(scrollY)) return null;
   return Math.abs(target - scrollY) < 1 ? null : target;
 }
 
@@ -113,10 +118,18 @@ export function revealRow(spot: RevealTarget | undefined, row: () => RevealRow |
   if (!span) return "done";
   const node = extentOf(spot.scroller.getScrollableNode?.());
   const scrollY = node ? node.scrollTop : spot.scrollY;
-  const target = revealOffset({ listTop: listInset + (spot.regions[span.section] ?? 0), rowTop: span.top, rowHeight: span.height, viewport: spot.viewport, scrollY });
-  if (target === null) return "done";
-  if (node && node.scrollHeight - node.clientHeight + 1 < target) return "wait";
-  spot.scroller.scrollTo({ y: target, animated: false });
+  const listTop = listInset + (spot.regions[span.section] ?? 0);
+  const wanted = centredOffset(listTop, span.top, span.height, spot.viewport);
+  if (wanted === null) return "done";
+  if (!node) {
+    if (Math.abs(wanted - scrollY) >= 1) spot.scroller.scrollTo({ y: wanted, animated: false });
+    return "done";
+  }
+  const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
+  const rowBottom = listTop + span.top + span.height;
+  if (wanted > maxScroll + 1 && rowBottom > node.scrollHeight) return "wait";
+  const target = Math.min(wanted, maxScroll);
+  if (Math.abs(target - scrollY) >= 1) spot.scroller.scrollTo({ y: target, animated: false });
   return "done";
 }
 

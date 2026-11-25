@@ -1,5 +1,5 @@
 import type { NativePagerConfig, PagerSnapshot, PagerStateEvent } from "@ardia-real/ardiacore";
-import { PagerSpring, type MirroredFrame, type PagerFrame, type PagerInput } from "./pagerSpring";
+import { PagerSpring, sequenceSource, type MirroredFrame, type PagerFrame, type PagerInput } from "./pagerSpring";
 
 export type { PagerInput } from "./pagerSpring";
 
@@ -48,6 +48,7 @@ export function setPagerClock(next: PagerClock) {
 }
 
 let motions = 0;
+const sequences = sequenceSource();
 const pagers = new Map<string, Pager>();
 
 type SettleStats = { last: number; frames: number; long: number; worst: number };
@@ -55,7 +56,7 @@ type SettleStats = { last: number; frames: number; long: number; worst: number }
 export class Pager {
   private areas = new Set<PagerArea>();
   private dragArea: PagerArea | null = null;
-  private readonly spring = new PagerSpring();
+  private readonly spring = new PagerSpring(sequences);
   private frameId = 0;
   private motion = 0;
   private stats: SettleStats | null = null;
@@ -157,9 +158,9 @@ export class Pager {
       const index = this.spring.orderIndex(native.profileId);
       if (index < 0) return false;
       if (index !== native.selected) {
-        if (this.revokedSelection === null) {
+        if (this.owner === "native") {
           this.nativeSelection = Math.max(this.nativeSelection, native.selectionSequence);
-          this.revokeNative(true);
+          this.revokeNative();
           this.flush();
         }
         return false;
@@ -216,8 +217,8 @@ export class Pager {
     this.stopNativeWatch();
   }
 
-  private revokeNative(always = false) {
-    if (this.owner !== "native" && !always) return;
+  private revokeNative() {
+    if (this.owner !== "native") return;
     this.releaseNative();
     this.revokedSelection = this.nativeSelection;
     this.spring.takeOver();

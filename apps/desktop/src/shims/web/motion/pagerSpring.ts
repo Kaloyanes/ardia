@@ -47,11 +47,29 @@ const sameOrder = (a: readonly string[], b: readonly string[]) => a.length === b
 
 export type MirroredFrame = Pick<PagerFrame, "position" | "velocity" | "phase" | "selected" | "count" | "began" | "selectedChanged" | "settled" | "detentCrossed">;
 
+export type SequenceSource = { next: () => number; atLeast: (value: number) => void };
+
+export function sequenceSource(start = 0): SequenceSource {
+  let last = start;
+  return {
+    next: () => ++last,
+    atLeast: (value) => {
+      if (Number.isFinite(value)) last = Math.max(last, Math.trunc(value));
+    },
+  };
+}
+
 type Drag = { start: number; width: number; lo: number; hi: number; home: number; detent: number };
 type Sample = { time: number; position: number };
 type Spring = { from: number; target: number; velocity: number; start: number | null };
 
 export class PagerSpring {
+  private readonly sequences: SequenceSource;
+
+  constructor(sequences: SequenceSource = sequenceSource()) {
+    this.sequences = sequences;
+  }
+
   private configuredFlag = false;
   private reduceMotionFlag = false;
   private countValue = 1;
@@ -60,7 +78,6 @@ export class PagerSpring {
   private positionValue = 0;
   private velocityValue = 0;
   private phaseValue: PagerPhase = "idle";
-  private counter = 0;
   private sequenceValue = 0;
   private selectionSequenceValue = 0;
   private propSelected = 0;
@@ -79,6 +96,7 @@ export class PagerSpring {
     const clamped = Math.max(1, Math.trunc(count) || 1);
     this.propSelected = clamp(Math.trunc(selected) || 0, 0, clamped - 1);
     this.propAck = Math.max(this.propAck, ack);
+    this.sequences.atLeast(this.propAck);
     if (!this.configuredFlag) {
       this.configuredFlag = true;
       this.countValue = clamped;
@@ -301,7 +319,7 @@ export class PagerSpring {
   }
 
   private next() {
-    return ++this.counter;
+    return this.sequences.next();
   }
 
   private reconcile() {

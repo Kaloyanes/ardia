@@ -370,9 +370,10 @@ test("producer to receiver: successive frames, then a reorder and a count change
   assert.ok(Number.isFinite(pager.snapshot().position));
   native.spring.configure(3, 0, 0, ["work", "personal", "side"]);
   native.spring.drain();
-  assert.equal(native.step((at += FRAME), { profile_id: native.spring.selectedId() }), false, "the old motion stays revoked");
+  assert.equal(native.step((at += FRAME), { profile_id: native.spring.selectedId() }), true, "once the engine has the same order its frames agree again");
   fake.pump();
   assert.equal(pager.snapshot().position, 0);
+  assert.equal(pager.snapshot().profileId, "work");
   pager.configure({ key: pager.key, selected: 0, count: 4, ack: 0, order: ["work", "personal", "side", "new"] });
   native.spring.input("began", 0, -1, WIDTH, at);
   assert.equal(native.step((at += FRAME)), false, "a frame counting three profiles never drives four");
@@ -764,4 +765,71 @@ test("the release velocity bound keeps the closed-form spring on one side of the
     const bounded = spring.overshootFreeVelocity(x0, v);
     for (let t = 0; t <= 2; t += 0.0005) assert.ok(Math.sign(spring.springDisplacement(x0, bounded, t)) !== -Math.sign(x0), `${x0}, ${v} crossed at ${t}`);
   }
+});
+
+test("a mismatched native frame during a JS drag is dropped and the drag keeps tracking", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const { pager, area, positions } = driven(t);
+  pager.input(area, "began", 0, -1, 0);
+  pager.input(area, "changed", 48, -1, 0.02);
+  assert.equal(onPagerFrame(nativeFrame(pager.key, { phase: "settling", selected: 1, position: 0.8, profileId: "side" })), false);
+  assert.equal(pager.snapshot().phase, "tracking");
+  assert.equal(fake.pending, 0);
+  pager.input(area, "changed", 96, -1, 0.04);
+  assert.equal(positions.at(-1), (96 * 0.5) / WIDTH);
+  assert.equal(pager.snapshot().phase, "tracking");
+});
+
+test("a remounted pager keeps its sequences above what the window already acknowledged", (t) => {
+  const fake = fakeClock();
+  t.after(setPagerClock(fake.clock));
+  const key = `remount-${++keys}`;
+  const states = [];
+  const area = { pageWidth: () => WIDTH, attached: () => true, onPosition: () => {}, onState: (e) => states.push(e) };
+  const first = Pager.named(key);
+  first.attach(area);
+  first.configure({ key, selected: 0, count: 3, ack: 0, order: ORDER });
+  first.switchTo(1, ORDER);
+  fake.pump();
+  const acked = first.snapshot().selectionSequence;
+  const seen = Math.max(...states.map((s) => s.sequence));
+  first.detach(area);
+  assert.equal(Pager.existing(key), undefined);
+  const second = Pager.named(key);
+  second.attach(area);
+  t.after(() => second.detach(area));
+  second.configure({ key, selected: 1, count: 3, ack: acked, order: ORDER });
+  assert.ok(second.snapshot().sequence > seen, `${second.snapshot().sequence} after ${seen}`);
+  const before = states.length;
+  fake.setReduce(true);
+  second.switchTo(2, ORDER);
+  const fresh = states.slice(before);
+  assert.deepEqual(fresh.map((s) => s.phase), ["selected", "settled"]);
+  assert.ok(fresh.every((s) => s.sequence > seen && s.profileId === "side"));
+  second.configure({ key, selected: 1, count: 3, ack: acked, order: ORDER });
+  assert.equal(second.snapshot().selected, 2, "the old ack can't pull the new selection back");
+});
+
+test("a fresh spring seeds its sequences past the ack it is configured with", () => {
+  const s = new PagerSpring();
+  s.configure(3, 1, 40, ORDER);
+  assert.ok(s.sequence > 40);
+  s.switchTo(2);
+  assert.ok(s.selectionSequence > 40);
+});
+
+test("a row near the end of a fully loaded list is revealed at the bottom of the scroll range", () => {
+  const scrolled = [];
+  const node = { scrollTop: 0, scrollHeight: 2000, clientHeight: 600 };
+  const spot = { viewport: 600, scrollY: 0, regions: { list: 0 }, scroller: { getScrollableNode: () => node, scrollTo: (to) => { scrolled.push(to.y); node.scrollTop = to.y; } } };
+  const row = () => ({ section: "list", top: 1916, height: 32 });
+  assert.equal(track.centredOffset(0, 1916, 32, 600), 1632);
+  assert.equal(track.revealRow(spot, row, 0), "done");
+  assert.deepEqual(scrolled, [1400]);
+  assert.equal(track.revealRow(spot, row, 0), "done");
+  assert.deepEqual(scrolled, [1400], "already as close as the list allows");
+  node.scrollHeight = 1200;
+  node.scrollTop = 0;
+  assert.equal(track.revealRow(spot, row, 0), "wait", "the row itself hasn't mounted yet");
 });
