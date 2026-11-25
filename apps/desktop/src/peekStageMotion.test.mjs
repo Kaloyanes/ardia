@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { collapsedTransform, compositorOnly, createBoundsCommit, createStageController, createWebAnimator, ENTER_MS, expandedTransform, PEEK_MOVING_ATTRIBUTE, stageMotion, STEP_MS } from "./peekStageMotion.ts";
+import { collapsedTransform, compositorOnly, computedPresentation, continuedMotion, createBoundsCommit, createStageController, createWebAnimator, ENTER_MS, expandedTransform, PEEK_MOVING_ATTRIBUTE, stageMotion, STEP_MS } from "./peekStageMotion.ts";
 
 const geometry = { width: 1200, height: 800, card: { x: 200, y: 100, width: 800, height: 600 }, source: { x: 40, y: 40, width: 20, height: 20 }, fullscreen: false };
 const MOVES = ["enter", "close", "promote"];
@@ -263,5 +263,60 @@ test("a card animation cancelled because the scrim's animate() threw never surfa
     assert.deepEqual(unhandled, []);
   } finally {
     process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("closing during the entrance continues from the card's live transform and opacity, over the share of the close the entrance covered", async () => {
+  const root = fakeNode();
+  const card = fakeNode();
+  const scrim = fakeNode();
+  const live = new Map([[card, { transform: "matrix(0.5, 0, 0, 0.5, -120, -80)", opacity: 0.6 }], [scrim, { opacity: 0.4 }]]);
+  const animator = createWebAnimator(() => root, () => card, () => scrim, () => {}, (node) => live.get(node) ?? null);
+  const done = [];
+  const controller = createStageController(animator, { state() {}, done: (generation, outcome) => done.push(outcome) }, () => ({ geometry, reduceMotion: false }));
+  controller.begin(1);
+  card.animations[0].currentTime = 80;
+  assert.equal(controller.close(1), true);
+  assert.equal(card.animations[0].cancelled, true);
+  const closing = card.animations[1];
+  assert.deepEqual(closing.frames[0], { transform: "matrix(0.5, 0, 0, 0.5, -120, -80)", opacity: 0.6 }, "no jump back to full size and opacity");
+  assert.equal(closing.frames.at(-1).transform, collapsedTransform(geometry));
+  assert.equal(closing.options.duration, Math.round(STEP_MS * 80 / ENTER_MS));
+  assert.deepEqual(scrim.animations[1].frames[0], { opacity: 0.4 });
+  assert.ok(compositorOnly(closing.frames));
+  closing.finish();
+  scrim.animations[1].finish();
+  await tick();
+  assert.deepEqual(done, ["closed"]);
+});
+
+test("a close after the entrance settled, or a first move, keeps its full keyframes and duration", () => {
+  const card = fakeNode();
+  const scrim = fakeNode();
+  const animator = createWebAnimator(() => fakeNode(), () => card, () => scrim, () => {}, () => ({ transform: "matrix(1, 0, 0, 1, 0, 0)", opacity: 1 }));
+  animator.run("enter", stageMotion("enter", geometry, false)).catch(() => {});
+  assert.deepEqual(card.animations[0].frames[0], stageMotion("enter", geometry, false).card[0]);
+  card.animations[0].currentTime = ENTER_MS;
+  animator.run("close", stageMotion("close", geometry, false)).catch(() => {});
+  assert.equal(card.animations[1].options.duration, STEP_MS);
+  animator.cancel();
+  const plain = stageMotion("close", geometry, false);
+  assert.deepEqual(continuedMotion(plain, { card: null, scrim: null }, 1), plain);
+  const snap = stageMotion("close", geometry, true);
+  assert.deepEqual(continuedMotion(snap, { card: { transform: "matrix(2, 0, 0, 2, 0, 0)", opacity: 0.2 }, scrim: null }, 0.5), snap);
+  assert.equal(continuedMotion(plain, { card: null, scrim: null }, Number.NaN).duration, STEP_MS);
+});
+
+test("the live presentation reads the computed transform and opacity, treating none as identity", () => {
+  const saved = globalThis.getComputedStyle;
+  try {
+    globalThis.getComputedStyle = () => ({ transform: "none", opacity: "0.25" });
+    assert.deepEqual(computedPresentation({}), { transform: "translate(0px, 0px) scale(1, 1)", opacity: 0.25 });
+    globalThis.getComputedStyle = () => ({ transform: "matrix(0.3, 0, 0, 0.3, 4, 5)", opacity: "" });
+    assert.deepEqual(computedPresentation({}), { transform: "matrix(0.3, 0, 0, 0.3, 4, 5)" });
+    delete globalThis.getComputedStyle;
+    assert.equal(computedPresentation({}), null);
+  } finally {
+    if (saved) globalThis.getComputedStyle = saved;
   }
 });

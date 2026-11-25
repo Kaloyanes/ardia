@@ -59,17 +59,43 @@ export type StageAnimator = {
 };
 
 type AnimatedNode = {
-  animate?: (frames: Keyframe[], options: KeyframeAnimationOptions) => Pick<Animation, "cancel" | "finished">;
+  animate?: (frames: Keyframe[], options: KeyframeAnimationOptions) => Playing;
   setAttribute(name: string, value: string): void;
   removeAttribute(name: string): void;
 };
 
-export function createWebAnimator(root: () => AnimatedNode | null, card: () => AnimatedNode | null, scrim: () => AnimatedNode | null, settledBounds: () => void): StageAnimator {
-  let running: Pick<Animation, "cancel" | "finished">[] = [];
+type Playing = Pick<Animation, "cancel" | "finished"> & { currentTime?: CSSNumberish | null };
+export type LivePresentation = { transform?: string; opacity?: number };
+type PresentationReader = (node: AnimatedNode) => LivePresentation | null;
+
+export function computedPresentation(node: AnimatedNode): LivePresentation | null {
+  if (typeof getComputedStyle !== "function") return null;
+  const style = getComputedStyle(node as unknown as Element);
+  const opacity = Number.parseFloat(style.opacity);
+  return { transform: !style.transform || style.transform === "none" ? IDENTITY : style.transform, ...(Number.isFinite(opacity) ? { opacity } : {}) };
+}
+
+export function continuedMotion(motion: StageMotion, from: { card: LivePresentation | null; scrim: LivePresentation | null }, elapsed: number): StageMotion {
+  if (motion.duration <= 0) return motion;
+  const startFrom = (frames: StageFrame[], live: LivePresentation | null) => {
+    if (!live || frames.length < 2) return frames;
+    const first: StageFrame = {};
+    if (frames[0]!.transform !== undefined && live.transform !== undefined) first.transform = live.transform;
+    if (frames[0]!.opacity !== undefined && live.opacity !== undefined) first.opacity = live.opacity;
+    return [{ ...frames[0]!, ...first }, ...frames.slice(1)];
+  };
+  const fraction = Math.min(Math.max(Number.isFinite(elapsed) ? elapsed : 1, 0), 1);
+  return { ...motion, card: startFrom(motion.card, from.card), scrim: startFrom(motion.scrim, from.scrim), duration: Math.round(motion.duration * fraction) };
+}
+
+export function createWebAnimator(root: () => AnimatedNode | null, card: () => AnimatedNode | null, scrim: () => AnimatedNode | null, settledBounds: () => void, presentation: PresentationReader = computedPresentation): StageAnimator {
+  let running: Playing[] = [];
+  let current: { move: StageMove; duration: number; lead: Playing | null } | null = null;
   let holder: AnimatedNode | null = null;
   const cancelAll = () => {
     const stopping = running;
     running = [];
+    current = null;
     for (const animation of stopping) animation.cancel();
   };
   const play = (node: AnimatedNode | null, frames: StageFrame[], motion: StageMotion) => {
@@ -94,15 +120,26 @@ export function createWebAnimator(root: () => AnimatedNode | null, card: () => A
       settledBounds();
     },
     cancel: cancelAll,
-    run(_move, motion) {
+    run(move, requested) {
+      let motion = requested;
+      if (running.length && current) {
+        const cardNode = card();
+        const scrimNode = scrim();
+        const live = { card: cardNode ? presentation(cardNode) : null, scrim: scrimNode ? presentation(scrimNode) : null };
+        const time = Number(current.lead?.currentTime ?? Number.NaN);
+        const elapsed = current.duration > 0 && Number.isFinite(time) ? time / current.duration : 1;
+        motion = continuedMotion(requested, live, current.move === "enter" && move === "close" ? elapsed : 1);
+      }
       cancelAll();
-      const started: Pick<Animation, "cancel" | "finished">[] = [];
+      const started: Playing[] = [];
       running = started;
+      current = { move, duration: motion.duration, lead: null };
       try {
         for (const [node, frames] of [[card(), motion.card], [scrim(), motion.scrim]] as const) {
           const animation = play(node, frames, motion);
           if (animation) started.push(animation);
         }
+        current.lead = started[0] ?? null;
       } catch (error) {
         if (running === started) cancelAll();
         return Promise.reject(error);
