@@ -502,6 +502,7 @@ struct RequestedWindow {
   std::string kind;
   bool small = false;
   bool pinned = false;
+  const char* window_class = nullptr;
   std::string title;
   base::DictValue utility;
   base::WeakPtr<BrowserWindowInterface> browser;
@@ -1242,6 +1243,7 @@ class ShellHostView : public views::View,
   const std::string& window_id() const { return window_id_; }
   bool is_utility() const { return !kind_.empty(); }
   bool pins_size() const { return pinned_; }
+  const char* window_class() const { return window_class_; }
   void ReleasePinnedSize() {
     if (!pinned_) return;
     pinned_ = false;
@@ -1276,6 +1278,7 @@ class ShellHostView : public views::View,
     small_ = request.small;
     pinned_ = request.pinned;
     opened_pinned_ = request.pinned;
+    window_class_ = request.window_class;
     title_ = std::move(request.title);
     utility_ = std::move(request.utility);
     page_profile_ = std::move(request.page_profile);
@@ -1649,6 +1652,7 @@ class ShellHostView : public views::View,
   bool small_ = false;
   bool pinned_ = false;
   bool opened_pinned_ = false;
+  const char* window_class_ = nullptr;
   bool reports_commits_ = false;
   std::map<int, base::WeakPtr<content::WebContents>> offered_;
   std::map<std::string, uint64_t> pending_restores_;
@@ -7072,9 +7076,10 @@ void OpenNativeWindow(WindowOpening opening, uint64_t generation, Profile* page,
     }
   }
   const bool pinned = linux_window::OpensPinned(opening.kind, opening.small, maximized);
+  const char* const window_class = linux_window::WindowClass(opening.kind, opening.small);
   BrowserWindowInterface* created = nullptr;
   {
-    base::AutoReset<const char*> window_class(&OpeningWindowClass(), linux_window::WindowClass(opening.kind, opening.small));
+    base::AutoReset<const char*> opening_class(&OpeningWindowClass(), window_class);
     created = CreateBrowserWindow(std::move(params));
   }
   if (!created) return fail(base::Value("Chrome could not create a window"));
@@ -7083,6 +7088,7 @@ void OpenNativeWindow(WindowOpening opening, uint64_t generation, Profile* page,
   request.kind = opening.kind;
   request.small = opening.small;
   request.pinned = pinned;
+  request.window_class = window_class;
   request.title = opening.title;
   if (opening.utility) request.utility = std::move(*opening.utility);
   request.browser = created->GetWeakPtr();
@@ -8798,7 +8804,13 @@ void StartLinuxHost() {
     const auto found = Hosts().find(browser->GetSessionID().id());
     if (found != Hosts().end()) found->second->MinimumSize(minimum);
   };
-  g_ardia_linux_window_class = [](const BrowserWindowInterface*) { return OpeningWindowClass(); };
+  g_ardia_linux_window_class = [](const BrowserWindowInterface* browser) -> const char* {
+    if (OpeningWindowClass() || !browser) return OpeningWindowClass();
+    const int session = browser->GetSessionID().id();
+    if (const auto host = Hosts().find(session); host != Hosts().end()) return host->second->window_class();
+    const auto requested = RequestedWindows().find(session);
+    return requested != RequestedWindows().end() && requested->second.browser.get() == browser ? requested->second.window_class : nullptr;
+  };
   g_ardia_linux_pins_window_size = [](const BrowserWindowInterface* browser) {
     if (!browser) return false;
     const int session = browser->GetSessionID().id();

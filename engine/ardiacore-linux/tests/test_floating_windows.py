@@ -10,8 +10,7 @@ LINUX = SOURCE / 'ardia' / 'linux'
 PATCHES = ROOT.parent / 'patches'
 PATCH = PATCHES / 'chromium-linux-floating-windows.patch'
 WIDGET = 'chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc'
-FRAME = 'chrome/browser/ui/views/frame/opaque_browser_frame_view.cc'
-FRAME_HEADER = 'chrome/browser/ui/views/frame/opaque_browser_frame_view.h'
+WIDGET_HEADER = 'chrome/browser/ui/views/frame/browser_widget.h'
 
 CORE = r'''#include <cassert>
 #include <cstring>
@@ -44,19 +43,10 @@ int main() {
 
 WIDGET_FIXTURE = '''#include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
 
-#include "base/functional/bind.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/shell_integration_linux.h"
-#include "chrome/browser/ui/browser_init_state.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.h"
-#include "chrome/browser/ui/views/frame/browser_native_widget_factory.h"
+#include <string>
+
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
-#include "chrome/common/pref_names.h"
-#include "ui/ozone/public/ozone_platform.h"
-#include "ui/platform_window/platform_window.h"
-#include "ui/views/widget/widget.h"
 
 bool ArdiaLinuxFramelessApp(const BrowserWindowInterface* browser);
 
@@ -65,66 +55,43 @@ BrowserNativeWidgetAuraLinux::BrowserNativeWidgetAuraLinux(
     BrowserView* browser_view)
     : BrowserNativeWidgetAura(browser_widget, browser_view) {
 }
-
-views::Widget::InitParams BrowserNativeWidgetAuraLinux::GetWidgetParams(
-    views::Widget::InitParams::Ownership ownership) {
-  views::Widget::InitParams params(ownership);
-  if (app) {
-    params.wayland_app_id = shell_integration_linux::GetXdgAppIdForWebApp(
-        BrowserInitState::From(&browser)->create_params().app_name,
-        browser.GetProfile()->GetPath());
+''' + '\n' * 60 + '''BrowserNativeWidgetAuraLinux::WindowClass
+BrowserNativeWidgetAuraLinux::GetWindowClass() const {
+  WindowClass window_class;
+  if (is_app && browser.GetProfile()) {
+    window_class.wayland_app_id = app_id;
   } else {
-    params.wayland_app_id = params.wm_class_class;
+    window_class.wayland_app_id = window_class.wm_class_class;
+    if (!is_app && browser.GetProfile()) {
+      if (!desktop_id.empty()) {
+        window_class.wm_class_name = desktop_id;
+        window_class.wayland_app_id = desktop_id;
+      }
+    }
   }
-
-  return params;
+  return window_class;
 }
 
-bool BrowserNativeWidgetAuraLinux::UseCustomFrame() const {
-  return true;
-}
-'''
-
-FRAME_FIXTURE = '''// Copyright 2012 The Chromium Authors
-
-#include "chrome/browser/ui/views/frame/opaque_browser_frame_view.h"
-
-#include <algorithm>
-#include <utility>
-
-#include "base/trace_event/trace_event.h"
-''' + '\n' * 50 + '''using content::WebContents;
-
-namespace {
-
-constexpr int kRoundedCaptionButtonSize = 16;
-''' + '\n' * 50 + '''  return button && button->GetVisible() &&
-         button->GetMirroredBounds().Contains(point);
-}
-
-}  // namespace
-
-///////////////////////////////////////////////////////////////////////////////
-''' + '\n' * 190 + '''}
-
-gfx::Size OpaqueBrowserFrameView::GetMinimumSize() const {
-  return layout_->GetMinimumSize(this);
-}
-
-void OpaqueBrowserFrameView::PaintAsActiveChanged() {
-  UpdateCaptionButtonPlaceholderContainerBackground();
-  BrowserFrameView::PaintAsActiveChanged();
+''' + '\n' * 70 + '''BrowserNativeWidget* BrowserNativeWidget::CreateBrowserNativeWidget(
+    BrowserWidget* browser_widget,
+    BrowserView* browser_view) {
+  return new BrowserNativeWidgetAuraLinux(browser_widget, browser_view);
 }
 '''
 
-FRAME_HEADER_FIXTURE = '''class OpaqueBrowserFrameView {
-''' + '\n' * 60 + '''  void WindowControlsOverlayEnabledChanged() override;
-  void SetCaptionButtonsOpacity(float opacity) override;
-  gfx::Size GetMinimumSize() const override;
-  void PaintAsActiveChanged() override;
-  void OnThemeChanged() override;
+WIDGET_HEADER_FIXTURE = '''class BrowserWidget : public views::Widget {
+ public:
+''' + '\n' * 60 + '''#if BUILDFLAG(IS_LINUX)
+  bool tiled() const { return tiled_; }
+  void set_tiled(bool tiled) { tiled_ = tiled; }
+  const ui::WindowTiledEdges& tiled_edges() const { return tiled_edges_; }
+  void set_tiled_edges(const ui::WindowTiledEdges& edges) {
+    tiled_edges_ = edges;
+  }
+#endif
 
-  gfx::Rect GetBoundsForClientView() const override;
+  // Initialize the frame (creates the underlying native window).
+  void InitBrowserWidget();
 };
 '''
 
@@ -157,10 +124,17 @@ class FloatingWindowHostTests(unittest.TestCase):
     def test_a_window_gets_its_class_while_chrome_creates_it(self):
         self.assertIn('extern const char* (*g_ardia_linux_window_class)(const BrowserWindowInterface*);', self.host)
         opening = self.section('void OpenNativeWindow(WindowOpening opening,', 'void BeginWindowOpening(')
-        scope = opening.index('base::AutoReset<const char*> window_class(&OpeningWindowClass(), '
-                              'linux_window::WindowClass(opening.kind, opening.small));')
+        self.assertIn('const char* const window_class = linux_window::WindowClass(opening.kind, opening.small);', opening)
+        scope = opening.index('base::AutoReset<const char*> opening_class(&OpeningWindowClass(), window_class);')
         self.assertLess(scope, opening.index('created = CreateBrowserWindow(std::move(params));'))
-        self.assertIn('g_ardia_linux_window_class = [](const BrowserWindowInterface*) { return OpeningWindowClass(); };', self.host)
+        self.assertIn('request.window_class = window_class;', opening)
+
+    def test_an_open_window_keeps_its_class_when_chrome_asks_again(self):
+        hook = self.section('g_ardia_linux_window_class = [](', 'g_ardia_linux_pins_window_size = [](')
+        self.assertIn('if (OpeningWindowClass() || !browser) return OpeningWindowClass();', hook)
+        self.assertIn('return host->second->window_class();', hook)
+        self.assertIn('requested->second.browser.get() == browser ? requested->second.window_class : nullptr', hook)
+        self.assertIn('window_class_ = request.window_class;', self.host)
 
     def test_little_ardia_settings_and_import_open_pinned_unless_restored_maximized(self):
         opening = self.section('void OpenNativeWindow(WindowOpening opening,', 'void BeginWindowOpening(')
@@ -201,11 +175,11 @@ class FloatingWindowPatchTests(unittest.TestCase):
         self.assertGreater(at, names.index('chromium-linux-window-minimum-size.patch'))
         self.assertEqual(names.count(PATCH.name), 1)
 
-    def test_the_patch_names_the_class_and_pins_the_frame(self):
+    def test_the_patch_names_the_class_and_pins_the_widget(self):
         if shutil.which('git') is None:
             self.skipTest('git is unavailable')
         with tempfile.TemporaryDirectory(prefix='ardia-floating-patch-') as directory:
-            for path, text in ((WIDGET, WIDGET_FIXTURE), (FRAME, FRAME_FIXTURE), (FRAME_HEADER, FRAME_HEADER_FIXTURE)):
+            for path, text in ((WIDGET, WIDGET_FIXTURE), (WIDGET_HEADER, WIDGET_HEADER_FIXTURE)):
                 target = pathlib.Path(directory) / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(text)
@@ -213,19 +187,19 @@ class FloatingWindowPatchTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             widget = (pathlib.Path(directory) / WIDGET).read_text()
-            frame = (pathlib.Path(directory) / FRAME).read_text()
-            header = (pathlib.Path(directory) / FRAME_HEADER).read_text()
+            header = (pathlib.Path(directory) / WIDGET_HEADER).read_text()
         self.assertIn('const char* (*g_ardia_linux_window_class)(const BrowserWindowInterface*) =\n    nullptr;', widget)
-        self.assertLess(widget.index('params.wayland_app_id = params.wm_class_class;'),
-                        widget.index('    params.wm_class_name = ardia_class;\n    params.wayland_app_id = ardia_class;'))
-        self.assertLess(widget.index('params.wayland_app_id = ardia_class;'), widget.index('  return params;'))
-        self.assertIn('bool (*g_ardia_linux_pins_window_size)(const BrowserWindowInterface*) =\n    nullptr;', frame)
-        self.assertIn('return frame->GetWidget()->GetWindowBoundsInScreen().size();', frame)
-        minimum = frame[frame.index('gfx::Size OpaqueBrowserFrameView::GetMinimumSize() const {'):]
-        self.assertLess(minimum.index('ArdiaLinuxPinnedWindowSize(this)'), minimum.index('return layout_->GetMinimumSize(this);'))
-        maximum = frame[frame.index('gfx::Size OpaqueBrowserFrameView::GetMaximumSize() const {'):]
-        self.assertLess(maximum.index('ArdiaLinuxPinnedWindowSize(this)'), maximum.index('return BrowserFrameView::GetMaximumSize();'))
-        self.assertIn('  gfx::Size GetMaximumSize() const override;\n', header)
+        self.assertIn('bool (*g_ardia_linux_pins_window_size)(const BrowserWindowInterface*) =\n    nullptr;', widget)
+        window_class = widget[widget.index('BrowserNativeWidgetAuraLinux::GetWindowClass() const {'):]
+        self.assertLess(window_class.index('window_class.wayland_app_id = desktop_id;'),
+                        window_class.index('    window_class.wm_class_name = ardia_class;\n    window_class.wayland_app_id = ardia_class;'))
+        self.assertLess(window_class.index('window_class.wayland_app_id = ardia_class;'), window_class.index('  return window_class;'))
+        for bound in ('Minimum', 'Maximum'):
+            body = widget[widget.index(f'gfx::Size BrowserWidget::Get{bound}Size() const {{'):]
+            self.assertLess(body.index('ArdiaLinuxPinsWindowSize(browser_view_.get())'), body.index('GetWindowBoundsInScreen().size()'))
+            self.assertLess(body.index('GetWindowBoundsInScreen().size()'), body.index(f'views::Widget::Get{bound}Size();'))
+        linux_block = header[header.index('#if BUILDFLAG(IS_LINUX)'):header.index('#endif')]
+        self.assertIn('  gfx::Size GetMinimumSize() const override;\n  gfx::Size GetMaximumSize() const override;\n', linux_block)
 
 
 if __name__ == '__main__':
