@@ -21,6 +21,50 @@ struct CompositionText {
 #endif
 '''
 
+UNICODE_STUB = r'''#ifndef BASE_STRINGS_UTF_STRING_CONVERSION_UTILS_H_
+#define BASE_STRINGS_UTF_STRING_CONVERSION_UTILS_H_
+#include <cstdint>
+#include <string>
+#include <string_view>
+namespace base_icu {
+using UChar32 = int32_t;
+}
+namespace base {
+inline bool ReadUnicodeCharacter(std::string_view src, size_t* index, base_icu::UChar32* out) {
+  const unsigned char lead = static_cast<unsigned char>(src[*index]);
+  size_t extra = lead < 0x80 ? 0 : (lead >> 5) == 0x6 ? 1 : (lead >> 4) == 0xE ? 2 : (lead >> 3) == 0x1E ? 3 : 4;
+  if (extra == 4 || *index + extra >= src.size()) {
+    *out = -1;
+    return false;
+  }
+  base_icu::UChar32 code_point = extra == 0 ? lead : lead & (0x3F >> extra);
+  for (size_t i = 1; i <= extra; ++i) {
+    const unsigned char next = static_cast<unsigned char>(src[*index + i]);
+    if ((next & 0xC0) != 0x80) {
+      *index += i - 1;
+      *out = -1;
+      return false;
+    }
+    code_point = (code_point << 6) | (next & 0x3F);
+  }
+  *index += extra;
+  *out = code_point;
+  return true;
+}
+inline size_t WriteUnicodeCharacter(base_icu::UChar32 code_point, std::u16string* output) {
+  if (code_point < 0x10000) {
+    output->push_back(static_cast<char16_t>(code_point));
+    return 1;
+  }
+  code_point -= 0x10000;
+  output->push_back(static_cast<char16_t>(0xD800 + (code_point >> 10)));
+  output->push_back(static_cast<char16_t>(0xDC00 + (code_point & 0x3FF)));
+  return 2;
+}
+}
+#endif
+'''
+
 SCENARIOS = r'''#include <malloc.h>
 #include <cassert>
 #include <cstdio>
@@ -30,6 +74,7 @@ SCENARIOS = r'''#include <malloc.h>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 #include "ui/base/ime/wipe_text.h"
 
 static bool g_watching = false;
@@ -102,8 +147,45 @@ int main() {
     ui::WipeText(replaced);
     replaced = std::u16string(u"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz");
   }
+  {
+    std::string mixed;
+    mixed.reserve(256);
+    mixed += "\xC3\xA9";
+    for (int i = 0; i < 100; ++i) mixed += 'Q';
+    std::u16string converted = ui::UTF8ToUTF16WithoutReallocation(mixed);
+    assert(converted.size() == 101 && converted[0] == u'\u00e9' && converted[100] == u'Q');
+    ui::WipeText(converted);
+    std::string wide;
+    wide.reserve(256);
+    for (int i = 0; i < 8; ++i) wide += 'Q';
+    for (int i = 0; i < 64; ++i) wide += "\xE4\xB8\xAD";
+    converted = ui::UTF8ToUTF16WithoutReallocation(wide);
+    assert(converted.size() == 72 && converted[8] == u'\u4e2d');
+    ui::WipeText(converted);
+    ui::WipeText(mixed);
+    ui::WipeText(wide);
+  }
+  {
+    std::optional<std::u16string> moved(std::u16string(40, u'Q'));
+    std::optional<std::u16string> taken = std::move(moved);
+    moved = std::nullopt;
+    ui::WipeText(taken);
+  }
   g_watching = false;
   assert(g_freed_secrets == 0);
+  {
+    std::vector<size_t> offsets = {0, 1, 2, 3, 6, 10, 11, 12};
+    bool valid = false;
+    std::u16string converted = ui::UTF8ToUTF16WithoutReallocation(
+        "a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80", &offsets, &valid);
+    assert(valid);
+    assert(converted == u"a\u00e9\u20ac\U0001F600");
+    const size_t npos = std::u16string::npos;
+    assert((offsets == std::vector<size_t>{0, 1, npos, 2, 3, 5, npos, npos}));
+    valid = true;
+    converted = ui::UTF8ToUTF16WithoutReallocation("a\xFF" "b", nullptr, &valid);
+    assert(!valid && converted == u"a\ufffdb");
+  }
   std::puts("wipe text scenarios passed");
 }
 '''
@@ -130,13 +212,11 @@ def patched_hunks(patch, path):
 class ImePasswordCopiesTests(unittest.TestCase):
     patch = PATCH.read_text()
 
-    def test_the_patch_is_linux_only_and_follows_the_geolocation_patch(self):
+    def test_the_patch_is_a_linux_only_series_step(self):
         steps = [line.split() for line in (PATCHES / 'series').read_text().splitlines() if line.startswith('chromium ')]
         names = [step[1] for step in steps]
-        at = names.index(PATCH.name)
-        self.assertEqual(steps[at], ['chromium', PATCH.name, 'linux'])
-        self.assertEqual(names[at - 1], 'chromium-linux-geolocation.patch')
         self.assertEqual(names.count(PATCH.name), 1)
+        self.assertEqual(steps[names.index(PATCH.name)], ['chromium', PATCH.name, 'linux'])
 
     def test_the_wipe_helper_zeroes_text_before_its_memory_is_released(self):
         compiler = shutil.which('clang++') or shutil.which('c++')
@@ -148,6 +228,9 @@ class ImePasswordCopiesTests(unittest.TestCase):
             ime.mkdir(parents=True)
             (ime / 'wipe_text.h').write_text(added_file(self.patch, 'ui/base/ime/wipe_text.h'))
             (ime / 'composition_text.h').write_text(COMPOSITION_STUB)
+            strings = scratch / 'base' / 'strings'
+            strings.mkdir(parents=True)
+            (strings / 'utf_string_conversion_utils.h').write_text(UNICODE_STUB)
             (scratch / 'scenarios.cc').write_text(SCENARIOS)
             binary = scratch / 'scenarios'
             compiled = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-O2', '-g', '-I', str(scratch),
@@ -212,6 +295,21 @@ class ImePasswordCopiesTests(unittest.TestCase):
         self.assertIn('+  ui::WipeText(committed);', gtk)
         self.assertIn('+  ui::WipeText(composition_text.text);', gtk)
         self.assertIn('+    for (char& byte : UNSAFE_BUFFERS(base::span(str, strlen(str)))) {\n+      *static_cast<volatile char*>(&byte) = 0;', gtk)
+        self.assertIn('std::optional<std::u16string> result_text = std::move(result_text_);', added)
+        self.assertIn('if (filtered && NeedInsertChar(result_text)) {', [line[1:].strip() for line in aura.splitlines() if line.startswith(' ')])
+
+    def test_password_text_is_converted_without_reallocating_a_plaintext_buffer(self):
+        for path in ('ui/ozone/platform/wayland/host/wayland_input_method_context.cc', 'ui/gtk/input_method_context_impl_gtk.cc',
+                     'ui/base/ime/linux/composition_text_util_pango.cc'):
+            hunks = patched_hunks(self.patch, path)
+            added = [line[1:] for line in hunks.splitlines() if line.startswith('+')]
+            removed = [line[1:] for line in hunks.splitlines() if line.startswith('-')]
+            self.assertTrue(any('UTF8ToUTF16WithoutReallocation(' in line for line in added), path)
+            self.assertTrue(any('base::UTF8ToUTF16' in line for line in removed), path)
+            self.assertFalse(any('base::UTF8ToUTF16' in line for line in added), path)
+        helper = added_file(self.patch, 'ui/base/ime/wipe_text.h')
+        self.assertIn('  converted.reserve(utf8.size());\n', helper)
+        self.assertNotIn('shrink_to_fit', helper)
 
 
 if __name__ == '__main__':

@@ -82,6 +82,11 @@ function randomSecret(length) {
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
+function mixedSecret(length) {
+  const alphabet = "abcdefghijkmnpqrstuvwxyz23456789äéîøüßñçæ中文字東京語";
+  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 function windows(text) {
   if (text.length <= WINDOW) return [text];
   const starts = [];
@@ -192,7 +197,7 @@ function wtypeKeys(chord) {
   return [...mods.flatMap((mod) => ["-M", mod]), "-k", key, ...mods.reverse().flatMap((mod) => ["-m", mod])];
 }
 
-function x11Desk(run, step) {
+function x11Desk(run) {
   const xdotool = (...args) => run("xdotool", args, { timeout: 20000 });
   return {
     ozone: "x11",
@@ -268,7 +273,7 @@ async function main() {
     report.steps.push({ name, at: new Date().toISOString(), ...detail });
     process.stderr.write(`== ${name} ${JSON.stringify(detail)}\n`);
   };
-  const desk = options.wayland ? waylandDesk(run, step) : x11Desk(run, step);
+  const desk = options.wayland ? waylandDesk(run, step) : x11Desk(run);
   const typeFromStdin = desk.type;
   const capture = async (name) => {
     await pause(400);
@@ -326,9 +331,9 @@ async function main() {
     const cancelOver = randomSecret(18);
     const cancelTail = randomSecret(12);
     const cancelErased = randomSecret(12);
-    const imeCommitted = randomSecret(16);
-    const imeComposed = randomSecret(14);
-    const imeAbandoned = randomSecret(14);
+    const imeCommitted = mixedSecret(28);
+    const imeComposed = mixedSecret(28);
+    const imeAbandoned = randomSecret(28);
     await unlock("__heapCancel");
     await dialog();
     await capture("1-empty");

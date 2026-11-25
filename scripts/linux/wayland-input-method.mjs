@@ -80,9 +80,10 @@ export class WaylandInputMethod {
 
   send(objectId, opcode, args = []) {
     const body = encodeArgs(args);
+    if (8 + body.length > 0xffff) throw new Error(`a Wayland message of ${8 + body.length} bytes is too long`);
     const header = Buffer.alloc(8);
     header.writeUInt32LE(objectId, 0);
-    header.writeUInt32LE(((8 + body.length) << 16) | opcode, 4);
+    header.writeUInt32LE((((8 + body.length) << 16) | opcode) >>> 0, 4);
     this.socket.write(Buffer.concat([header, body]));
   }
 
@@ -154,7 +155,7 @@ export class WaylandInputMethod {
     this.inputMethod = this.newId((opcode, body) => {
       if (opcode === 0) {
         this.pendingActive = true;
-        this.pendingPurpose = null;
+        this.pendingPurpose = 0;
       } else if (opcode === 1) {
         this.pendingActive = false;
       } else if (opcode === 4) {

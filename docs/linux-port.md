@@ -1660,15 +1660,17 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
   - Text an input method commits or composes passes through Chromium's IME layer first.
     `chromium-linux-ime-password-copies.patch` zeroes that layer's copies before their memory is freed or reused:
     the text-input-v3 event strings, the Wayland and GTK contexts' conversions, and `InputMethodAuraLinux`'s
-    composition and pending commit. On Wayland, `SurroundingTextTracker` sees a password client's text only as a
-    same-length mask, which keeps delete-surrounding offsets right. Outside Chromium, libwayland's message buffers,
+    composition and pending commit. Those conversions write into a buffer sized for the worst case up front, so none
+    is grown or shrunk, which would free a partial copy (`base::UTF8ToUTF16` shrinks its result for non-ASCII text).
+    On Wayland, `SurroundingTextTracker` sees a password client's text only as a same-length mask, which keeps
+    delete-surrounding offsets right. Outside Chromium, libwayland's message buffers,
     the compositor and the input method itself still hold their own copies.
   - `scripts/linux/password-heap-check.mjs` types random passwords into the real dialog of a package under Xvfb and
     scans the browser process's memory, as UTF-8 and UTF-16: while typed the password must exist exactly once, text
     typed over or erased must be gone while the dialog is still open, and nothing may be left once it closes. With
     `--wayland` it runs under sway and also acts as the seat's input method (`wayland-input-method.mjs`, the
-    zwp_input_method_v2 wire protocol in Node). It commits one password whole, composes one and commits it, and
-    composes one it then abandons. While that composition is open, the scan must find each of the three somewhere in
+    zwp_input_method_v2 wire protocol in Node). It commits one password whole, composes one and commits it (both mix
+    ASCII with accented and CJK letters), and composes one it then abandons. While that composition is open, the scan must find each of the three somewhere in
     the browser process's memory as UTF-16. That shows each reached the browser, not which allocation holds it: a
     committed string could match an earlier preedit copy. Missing evidence gives `ime-not-delivered` once the flow
     checks pass (a wrong answer or a non-password field purpose gives `flows-wrong` first). The abandoned one must be gone
