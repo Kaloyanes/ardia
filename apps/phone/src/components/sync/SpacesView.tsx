@@ -203,7 +203,7 @@ function SpacePage({ profile, isShown, onMenu, bottom }: { profile: SyncedProfil
     return before ? new Set([...now].filter((key) => !before.has(key))) : new Set<string>();
   }, [rows]);
   const toggle = (key: string) => toggleSpaceRow(profile.syncId, key);
-  const linkMenu = (url: string, title: string, at: Point | null) => onMenu({ items: pinnedLinkMenu(url, title, profile.syncId), at });
+  const linkMenu = (url: string, title: string, at: Point | null, pinnedKey: string | null = null) => onMenu({ items: pinnedLinkMenu(url, title, profile.syncId, pinnedKey), at });
   return (
     <FlatList
       data={rows}
@@ -246,7 +246,7 @@ type RowProps = {
   tint: string;
   onToggle: (key: string) => void;
   onShowAll: (deviceId: string) => void;
-  onLongPress: (url: string, title: string, at: Point | null) => void;
+  onLongPress: (url: string, title: string, at: Point | null, pinnedKey: string | null) => void;
   onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void;
 };
 
@@ -285,8 +285,8 @@ function Row({ row, profileId, tint, onToggle, onShowAll, onLongPress, onFolder 
         <Pressable
           accessibilityRole="button"
           onPress={() => openRemote(row.url, row.title, profileId, row.pinnedKey)}
-          onLongPress={(event) => onLongPress(row.url, row.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY })}
-          {...screenReaderActions([{ name: "longpress", run: () => onLongPress(row.url, row.title, null) }])}
+          onLongPress={(event) => onLongPress(row.url, row.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }, row.pinnedKey)}
+          {...screenReaderActions([{ name: "longpress", run: () => onLongPress(row.url, row.title, null, row.pinnedKey) }])}
           style={({ pressed }) => [styles.row, { paddingLeft: space.l + INDENT * row.depth }, pressed ? { backgroundColor: theme.rowHighlight } : null]}
         >
           <View testID="spaceTabIcon" style={[styles.tabSymbol, { width: iconSide, height: iconSide }]}>

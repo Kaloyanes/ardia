@@ -15,7 +15,11 @@ const TILE_HEIGHT = 56;
 const TILE_HEIGHT_MAX = 72;
 export const SPACES_LARGE_TEXT = 1.5;
 
-export function pinnedLinkMenu(url: string, title: string, profileId: string, onOpened: () => void = noteNothing): MenuItem[] {
+export type PinOpener = (url: string, title: string, pinnedKey: string | null) => void;
+
+const opensRemote = (profileId: string): PinOpener => (url, title, pinnedKey) => openRemote(url, title, profileId, pinnedKey);
+
+export function pinnedLinkMenu(url: string, title: string, profileId: string, pinnedKey: string | null = null, open: PinOpener = opensRemote(profileId)): MenuItem[] {
   menuOpenedHaptic();
   const sharing: MenuItem[] = /^https?:\/\//i.test(url)
     ? [
@@ -23,26 +27,14 @@ export function pinnedLinkMenu(url: string, title: string, profileId: string, on
         { label: actionWords.share, icon: iconRoles.share, onPress: () => shareUrl(url, title) },
       ]
     : [];
-  const open = () => {
-    onOpened();
-    openRemote(url, title, profileId);
-  };
-  return [{ label: actionWords.open, icon: "arrowUpForward", onPress: open }, ...sharing];
+  return [{ label: actionWords.open, icon: "arrowUpForward", onPress: () => open(url, title, pinnedKey) }, ...sharing];
 }
 
-export function pinnedFolderMenu(tile: PinnedTile, profileId: string, onOpened: () => void = noteNothing): MenuItem[] {
-  return (tile.folder ?? []).map((tab) => ({
-    label: remoteTitle(tab.title, tab.url),
-    onPress: () => {
-      onOpened();
-      openRemote(tab.url, tab.title, profileId, tab.key);
-    },
-  }));
+export function pinnedFolderMenu(tile: PinnedTile, profileId: string, open: PinOpener = opensRemote(profileId)): MenuItem[] {
+  return (tile.folder ?? []).map((tab) => ({ label: remoteTitle(tab.title, tab.url), onPress: () => open(tab.url, tab.title, tab.key) }));
 }
 
-const noteNothing = () => undefined;
-
-export function Tiles({ tiles, profileId, onFolder, onLink, onOpened = noteNothing }: { tiles: PinnedTile[]; profileId: string; onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void; onLink: (url: string, title: string, at: Point | null) => void; onOpened?: () => void }) {
+export function Tiles({ tiles, profileId, onFolder, onLink, open = opensRemote(profileId) }: { tiles: PinnedTile[]; profileId: string; onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void; onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null) => void; open?: PinOpener }) {
   const { width, fontScale } = useWindowDimensions();
   const height = Math.min(TILE_HEIGHT * fontScale, TILE_HEIGHT_MAX);
   const titled = fontScale < SPACES_LARGE_TEXT;
@@ -54,7 +46,7 @@ export function Tiles({ tiles, profileId, onFolder, onLink, onOpened = noteNothi
       {rows.map((row, index) => (
         <View key={index} style={styles.tileRow}>
           {row.map((tile) => (
-            <TileButton key={tile.key} tile={tile} profileId={profileId} height={height} titled={titled} onFolder={onFolder} onLink={onLink} onOpened={onOpened} />
+            <TileButton key={tile.key} tile={tile} height={height} titled={titled} onFolder={onFolder} onLink={onLink} open={open} />
           ))}
           {Array.from({ length: columns - row.length }, (_, i) => (
             <View key={`gap${i}`} style={styles.tile} />
@@ -67,20 +59,18 @@ export function Tiles({ tiles, profileId, onFolder, onLink, onOpened = noteNothi
 
 function TileButton({
   tile,
-  profileId,
   height,
   titled,
   onFolder,
   onLink,
-  onOpened,
+  open,
 }: {
   tile: PinnedTile;
-  profileId: string;
   height: number;
   titled: boolean;
   onFolder: (tile: PinnedTile, anchor: RefObject<ViewInstance | null>) => void;
-  onLink: (url: string, title: string, at: Point | null) => void;
-  onOpened: () => void;
+  onLink: (url: string, title: string, at: Point | null, pinnedKey: string | null) => void;
+  open: PinOpener;
 }) {
   const theme = useTheme();
   const anchor = useRef<ViewInstance>(null);
@@ -97,11 +87,10 @@ function TileButton({
           onFolder(tile, anchor);
           return;
         }
-        onOpened();
-        openRemote(tile.url, tile.title, profileId, tile.key);
+        open(tile.url, tile.title, tile.key);
       }}
-      onLongPress={folder ? undefined : (event) => onLink(tile.url, tile.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY })}
-      {...(folder ? {} : screenReaderActions([{ name: "longpress", run: () => onLink(tile.url, tile.title, null) }]))}
+      onLongPress={folder ? undefined : (event) => onLink(tile.url, tile.title, { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }, tile.key)}
+      {...(folder ? {} : screenReaderActions([{ name: "longpress", run: () => onLink(tile.url, tile.title, null, tile.key) }]))}
       style={tileStyle}
     >
       <View testID="spaceTileFace" style={[styles.tileFace, { height, backgroundColor: theme.groupFill }]}>

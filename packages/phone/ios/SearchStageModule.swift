@@ -22,13 +22,7 @@ final class SearchStagePanelView: ExpoView {
   }
 
   override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-    guard takesTouches else { return nil }
-    if let hit = super.hitTest(point, with: event) { return hit }
-    guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
-    for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 && subview.isUserInteractionEnabled {
-      if let hit = subview.hitTest(convert(point, to: subview), with: event) { return hit }
-    }
-    return nil
+    takesTouches ? super.hitTest(point, with: event) : nil
   }
 }
 

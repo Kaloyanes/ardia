@@ -580,6 +580,14 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       transform: [{ translateY: trayOffset(lift, drag.value, rise, trayHeight, panelRadius) + back.value * trayBackTravel }],
     };
   }, [trayHeight, safeBottom, reduceMotion, command !== null, panelRadius]);
+  const pinsStyle = useAnimatedStyle(() => {
+    const lift = liftOf(heldLift.value, keyboard.height.value, keyboard.full.value, hasLanded.value, isClosing.value, pinned.value, floor.value);
+    const rise = reduceMotion ? 1 : Math.max(landing.value, keyboardProgress(keyboard.height.value, keyboard.full.value, 0));
+    return {
+      opacity: reduceMotion ? dim.value : 1,
+      transform: [{ translateY: trayOffset(lift, drag.value, rise, trayHeight, panelRadius) + back.value * trayBackTravel }],
+    };
+  }, [trayHeight, safeBottom, reduceMotion, panelRadius]);
 
   return (
     <StandbyContext.Provider value={standby}>
@@ -601,7 +609,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       {panel ? (
         <MotionView style={StyleSheet.absoluteFill} pointerEvents="box-none" to={departed ? PANEL_DEPARTED : PANEL_HOME} motion={PANEL_DEPART}>
         {arcPanel && furnished && !standby && !closing ? (
-          <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, trayStyle]}>
+          <Animated.View pointerEvents="box-none" style={[styles.pinsOverPanel, { bottom: trayHeight, paddingLeft: insets.left, paddingRight: insets.right }, pinsStyle]}>
             <NewTabPins maxHeight={window.height - insets.top - trayHeight - resting - space.m * 2} inset={place.cardInset} plate={origin === "page" ? <SearchPanelFace incognito={false} dark={theme.dark} panelRadius={panelRadius} corners="all" /> : null} />
           </Animated.View>
         ) : null}

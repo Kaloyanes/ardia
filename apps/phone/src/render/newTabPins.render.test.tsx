@@ -1,14 +1,15 @@
-import { Platform, StyleSheet } from "react-native";
+import { Dimensions, Keyboard, Platform, StyleSheet } from "react-native";
 import { act } from "react-test-renderer";
 import { SearchTray } from "../components/search/SearchTray";
-import { DesignProvider } from "../components/ui";
+import { DesignProvider, FloatingMenu } from "../components/ui";
 import * as browse from "../state/browse/store";
 import { history } from "../state/history/store";
 import { dismissSearch, presentSearch, setSearchText } from "../state/search/store";
 import { useStageBar } from "../state/search/stageBar";
+import { useTrayCovers } from "../state/search/trayBack";
 import * as syncActions from "../state/sync/actions";
 import { OFF_STATUS, useSync, type PinnedTile, type SyncedProfile } from "../state/sync/store";
-import { currentTabs, useTabs } from "../state/tabs/store";
+import { currentTabs, updateTabById, useTabs } from "../state/tabs/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
@@ -189,4 +190,119 @@ test("over a page the tiles sit on the panel's own face so they read over any pa
   expect(plate(overPage)).toBeDefined();
   expect(plate(overPage)!.findAll((node) => node.props.testID === "searchPanelFace")).not.toHaveLength(0);
   unmount(overPage);
+});
+
+const menus = (root: Root) => root.root.findAll((node) => node.type === FloatingMenu);
+
+test("a tile's long-press Open keeps its pinned key, so a pinned site opened from its menu is still found again later", () => {
+  const opened = jest.spyOn(syncActions, "openRemote").mockImplementation(() => undefined);
+  const counted = jest.spyOn(telemetry, "countUsage");
+  act(() => browse.newTab());
+  const root = tray();
+  act(() => root.root.findAll((node) => node.props.accessibilityLabel === "Pin 1" && typeof node.props.onLongPress === "function")[0]!.props.onLongPress({ nativeEvent: { pageX: 120, pageY: 300 } }));
+  const items = menus(root)[0]!.props.items as { label: string; onPress: () => void }[];
+  act(() => items.find((item) => item.label === "Open")!.onPress());
+  expect(opened).toHaveBeenCalledWith("https://pin1.example/", "Pin 1", "work", "k1");
+  expect(counted).toHaveBeenCalledWith("new_tab_pins_opened");
+  unmount(root);
+});
+
+test("a folder menu open when sync takes the pins away is dropped and lets the tray go, and doesn't come back with the pins", () => {
+  act(() => useTrayCovers.setState({ covers: 0 }));
+  act(() => browse.newTab());
+  const root = tray();
+  tap(root, "Pin 2");
+  expect(menus(root)).toHaveLength(1);
+  expect(useTrayCovers.getState().covers).toBe(1);
+  act(() => withSpace([]));
+  expect(menus(root)).toHaveLength(0);
+  expect(useTrayCovers.getState().covers).toBe(0);
+  act(() => withSpace([tile(0), tile(1), tile(2, [{ key: "f0", title: "Folder Tab", url: "https://folder.example/", icon: null }])]));
+  expect(pins(root)).toBeDefined();
+  expect(menus(root)).toHaveLength(0);
+  expect(useTrayCovers.getState().covers).toBe(0);
+  unmount(root);
+});
+
+const pressOf = (root: Root, label: string) => root.root.findAll((node) => node.props.accessibilityLabel === label && typeof node.props.onPress === "function")[0]!.props.onPress as () => void;
+const FOLDER = [{ key: "f0", title: "Folder Tab", url: "https://folder.example/", icon: null }];
+
+test("a pin menu belongs to its panel, space and pin: a space change or the panel closing drops it and lets the tray go", () => {
+  act(() => useTrayCovers.setState({ covers: 0 }));
+  act(() => browse.newTab());
+  const root = tray();
+  tap(root, "Pin 2");
+  expect(menus(root)).toHaveLength(1);
+  act(() =>
+    useSync.setState((state) => ({
+      ...state,
+      view: { ...(state.view as object), profiles: [...state.view.profiles, profile("home", [tile(0), tile(1), tile(2, FOLDER)])], selectedProfileId: "home", shownProfileId: "home" } as never,
+    })),
+  );
+  expect(menus(root)).toHaveLength(0);
+  expect(useTrayCovers.getState().covers).toBe(0);
+  act(() => withSpace([tile(0), tile(1), tile(2, FOLDER)]));
+  tap(root, "Pin 2");
+  expect(useTrayCovers.getState().covers).toBe(1);
+  act(() => dismissSearch());
+  act(() => jest.runOnlyPendingTimers());
+  expect(menus(root)).toHaveLength(0);
+  expect(useTrayCovers.getState().covers).toBe(0);
+  unmount(root);
+});
+
+test("once the tiles stop being offered they leave at once, and a tap or menu choice still in flight opens nothing", () => {
+  const opened = jest.spyOn(syncActions, "openRemote").mockImplementation(() => undefined);
+  const counted = jest.spyOn(telemetry, "countUsage");
+  act(() => browse.newTab());
+  const root = tray();
+  const staleTap = pressOf(root, "Pin 1");
+  act(() => root.root.findAll((node) => node.props.accessibilityLabel === "Pin 0" && typeof node.props.onLongPress === "function")[0]!.props.onLongPress({ nativeEvent: { pageX: 40, pageY: 300 } }));
+  const staleOpen = (menus(root)[0]!.props.items as { label: string; onPress: () => void }[]).find((item) => item.label === "Open")!.onPress;
+  act(() => setSearchText("p"));
+  expect(pins(root)).toBeUndefined();
+  act(() => staleTap());
+  act(() => staleOpen());
+  act(() => setSearchText(""));
+  act(() => useTabs.setState({ incognito: true }));
+  expect(pins(root)).toBeUndefined();
+  act(() => staleTap());
+  expect(opened).not.toHaveBeenCalled();
+  expect(counted).not.toHaveBeenCalledWith("new_tab_pins_opened");
+  unmount(root);
+});
+
+test("with the keyboard up, the folder and long-press menus are bounded by its top, so every row can scroll into view", () => {
+  jest.spyOn(Keyboard, "metrics").mockReturnValue({ height: 336, screenX: 0, screenY: Dimensions.get("window").height - 336, width: 393 } as never);
+  act(() => browse.newTab());
+  const root = tray();
+  tap(root, "Pin 2");
+  const floor = menus(root)[0]!.props.floor as number;
+  expect(floor).toBeGreaterThan(0);
+  expect(floor).toBeLessThanOrEqual(Dimensions.get("window").height - 336);
+  act(() => menus(root)[0]!.props.onDismiss());
+  act(() => root.root.findAll((node) => node.props.accessibilityLabel === "Pin 0" && typeof node.props.onLongPress === "function")[0]!.props.onLongPress({ nativeEvent: { pageX: 40, pageY: 300 } }));
+  expect(menus(root)[0]!.props.floor).toBe(floor);
+  unmount(root);
+});
+
+test("a pin opened from its menu keeps its key, so after its page moves on the tile switches back to that tab instead of opening a second one", () => {
+  const counted = jest.spyOn(telemetry, "countUsage");
+  act(() => browse.newTab());
+  const first = tray();
+  act(() => first.root.findAll((node) => node.props.accessibilityLabel === "Pin 1" && typeof node.props.onLongPress === "function")[0]!.props.onLongPress({ nativeEvent: { pageX: 40, pageY: 300 } }));
+  act(() => (menus(first)[0]!.props.items as { label: string; onPress: () => void }[]).find((item) => item.label === "Open")!.onPress());
+  unmount(first);
+  act(() => jest.runOnlyPendingTimers());
+  const pinned = currentTabs().open.filter((tab) => tab.pinnedKey === "k1");
+  expect(pinned).toHaveLength(1);
+  act(() => updateTabById(pinned[0]!.id, { url: "https://pin1.example/elsewhere" }));
+  const before = currentTabs().open.length;
+  act(() => browse.newTab());
+  const second = tray();
+  tap(second, "Pin 1");
+  expect(currentTabs().open.length).toBe(before);
+  expect(currentTabs().selectedId).toBe(pinned[0]!.id);
+  expect(counted).toHaveBeenCalledWith("pinned_tabs_refound");
+  unmount(second);
 });

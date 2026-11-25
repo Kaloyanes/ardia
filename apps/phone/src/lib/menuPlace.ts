@@ -75,6 +75,11 @@ export function menuShrink(anchor: Rect, width: number, height: number): { x: nu
   return { x: Math.min(1, anchor.width / width), y: Math.min(1, anchor.height / height) };
 }
 
+export function roomAbove(room: Rect, floor: number | null | undefined): Rect {
+  if (floor === null || floor === undefined) return room;
+  return { ...room, height: Math.max(0, Math.min(room.y + room.height, floor) - room.y) };
+}
+
 export function insetRect(rect: Rect, inset: { top: number; bottom: number; left: number; right: number }): Rect {
   return { x: rect.x + inset.left, y: rect.y + inset.top, width: rect.width - inset.left - inset.right, height: rect.height - inset.top - inset.bottom };
 }

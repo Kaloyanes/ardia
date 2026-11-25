@@ -2062,8 +2062,8 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `address_field_scrolled` | the search field's swipe on iPhone | Whether people swipe a long address to read its end; zero across testers after a release means the swipe stopped scrolling the field |
 | `tabs_swiped_closed`, `tabs_swiped_reopened` | the page's back and forward swipes past its history | How often the Arc Search edge gestures are used. A reopen share that jumps after a release is worth a look, since it can mean the back swipe now closes tabs people meant to keep; the counts alone don't say which closes were accidental. |
 | `page_menu_tapped_away` | a tap on the page above the iPhone's page menu sheet | Whether people find the way out of the page menu after removal of the 90% cap. Its maximum height leaves 10 points between the sheet and the safe top; zero across iPhone testers after a release means the strip above the sheet stopped closing it |
-| `new_tab_search_opened` | the iPhone's new-tab search panel opening (search not editing a page's address) | How often people start from a new tab's search; a sharp drop after a release means the panel stopped opening on a new tab |
-| `new_tab_pins_opened` | a pinned tile tapped above the new-tab search panel, on iPhone and Android (never in Incognito) | How often + leads straight to a pinned site; read it against `new_tab_search_opened`, and a drop to zero after a release while testers' spaces still have pins means the tiles stopped showing or their taps stopped landing |
+| `new_tab_search_opened` | the iPhone's new-tab search panel opening (search not editing a page's address); counted only in the iPhone's native search stage (`StagedTray`), so never on Android, with Material You on or off | How often people start from a new tab's search; a sharp drop after a release means the panel stopped opening on a new tab |
+| `new_tab_pins_opened` | a pinned tile tapped above the new-tab search panel, on iPhone and Android (never in Incognito) | How often + leads straight to a pinned site. Compare it per platform with the envelope's `platform`: on `ios` read it against `new_tab_search_opened`; on `android` there is no new-tab search count to compare with, so read it against `searches`. A drop to zero after a release while testers' spaces still have pins means the tiles stopped showing or their taps stopped landing |
 | `deck_incognito_switches` | the deck bar's Incognito switch on iPhone (build 16 feedback) | Whether people switch the deck to Incognito from its bar; zero across testers after a release means the switch stopped showing or stopped switching. Taps back to the normal tabs are not counted, since they start in Incognito |
 | `browse_for_me_opened` | Browse for Me on Expo | Whether people use Browse for Me at all; zero across testers after a release means the tray row or the voice button stopped opening it |
 | `browse_answers_chatgpt`, `browse_answers_on_device`, `browse_answers_excerpts`, `browse_answers_failed` | Browse for Me on Expo | Who writes the answers: a share of `excerpts` that grows on phones with Apple Intelligence means the model path broke, and a growing `failed` share against `browse_for_me_opened` means search or page reading broke (DuckDuckGo's page changing is the likely cause) |
@@ -2871,11 +2871,20 @@ Not audited at all: Compose's `SyncSetupContent` internals inside onboarding.
       when the panel opens.
     - **iPhone:** the tiles hang above the stage's panel (`bottom: 100%` inside `trayDrag`), so they ride the
       keyboard's lift and the pull-down and stay inside the panel's VoiceOver modal region; they fade in once the stage
-      has presented, after the unfold, and the card the morph measures is unchanged. `SearchStagePanelView` hit-tests
-      its subviews outside its bounds so the taps land.
+      has presented, after the unfold, and the card the morph measures is unchanged. Taps reach them with no native
+      change: `SearchStagePanelView` is an Expo Fabric view, so its hit test is React Native's, which follows the
+      layout's `overflowInset` into children outside the panel's bounds.
+    - **They leave at once:** typing, Incognito, the address tap or a space with no pins removes them in the same
+      render, with no exit fade, so nothing outgoing takes a touch; and every open (tile, long-press Open, a
+      folder's row) checks again that search is still open on an empty new-tab field, not Incognito, in the same
+      space, with that pin still there, before it calls `openRemote`.
+    - **Menus:** a long-press or folder menu belongs to the panel's session, the space and the pin it opened on; if
+      any of them changes or the panel closes, the menu goes and its `coverTray()` is released, so Android's
+      predictive Back works again. Both menus are bounded by the keyboard's top (`floor`, which anchored menus now
+      honour through `roomAbove`), so a long folder scrolls above the keyboard instead of running under it.
     - **Android:** beside the panel with the panel's own lift transform in the redesign, and above the rows in the
       Material You search sheet. A space with more pins than fit above the panel scrolls.
-    - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened`.
+    - **To watch:** `new_tab_pins_opened` against `new_tab_search_opened` on iPhone, filtered by the envelope's `platform`; `new_tab_search_opened` isn't counted on Android.
 
 - Settings, Archive, History and Bookmarks keep one neutral background, the system's grouped background, whatever
   space is shown (build 19, the owner: "as different spaces have different bg we shouldn't carry that everywhere").

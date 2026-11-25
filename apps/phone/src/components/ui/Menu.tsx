@@ -4,7 +4,7 @@ import { lookIsNative } from "@ardia/phone-native";
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withAlpha } from "../../lib/color";
-import { insetRect, MENU_MARGIN, menuAt, menuHeight, menuOnTrigger, menuShrink, type MenuAlign, type MenuLimits, type Point, type Rect } from "../../lib/menuPlace";
+import { insetRect, MENU_MARGIN, menuAt, menuHeight, menuOnTrigger, menuShrink, roomAbove, type MenuAlign, type MenuLimits, type Point, type Rect } from "../../lib/menuPlace";
 import { useReduceMotion } from "./contrast";
 import { focusForScreenReader } from "./coverFocus";
 import { useDesign } from "./design";
@@ -452,10 +452,10 @@ export function pointPlacer(at: Point, screen: { width: number; height: number }
   };
 }
 
-function triggerPlacer(row: Rect, host: Rect, insets: Insets, width: number, align?: MenuAlign, clearAnchor = false): MenuPlacer {
+function triggerPlacer(row: Rect, host: Rect, insets: Insets, width: number, align?: MenuAlign, clearAnchor = false, floor?: number | null): MenuPlacer {
   return (height, keepBelow, pageWidth = width) => {
     if (host.width > 0) pageWidth = Math.min(pageWidth, Math.max(1, host.width - insets.left - insets.right - MENU_MARGIN * 2));
-    const spot = menuOnTrigger(row, host, host.width > 0 ? insetRect(host, insets) : host, pageWidth, height, MENU_MARGIN, keepBelow, align, clearAnchor);
+    const spot = menuOnTrigger(row, host, roomAbove(host.width > 0 ? insetRect(host, insets) : host, floor), pageWidth, height, MENU_MARGIN, keepBelow, align, clearAnchor);
     return { place: { left: spot.left, top: spot.top, width: pageWidth }, origin: spot.origin, maxHeight: spot.height, shrink: menuShrink(row, pageWidth, spot.height) };
   };
 }
@@ -506,7 +506,7 @@ export function FloatingMenu({ items, place = {}, onDismiss, anchor, at, align, 
   }, []);
   const heldWithoutPoint = dimmed && !at && measured?.row ? { x: measured.row.x, y: measured.row.y + measured.row.height } : null;
   const point = at ?? heldWithoutPoint;
-  const placer = point ? (anchor && !measured ? undefined : pointPlacer(point, screen, insets, width, { control: measured?.row, floor })) : measured ? (measured.row ? triggerPlacer(measured.row, measured.host, insets, width, align, material) : fixedPlacer(place, measured.host, insets, width)) : undefined;
+  const placer = point ? (anchor && !measured ? undefined : pointPlacer(point, screen, insets, width, { control: measured?.row, floor })) : measured ? (measured.row ? triggerPlacer(measured.row, measured.host, insets, width, align, material, floor) : fixedPlacer(place, measured.host, insets, width)) : undefined;
   return (
     <Portal exitMs={menuExitMs(dimmed)}>
       <Menu items={items} place={{ ...place, width }} placer={placer} shown={placer !== undefined} dimmed={dimmed} privately={privately} frost={frost === undefined ? frostAround : frost} onDismiss={onDismiss} />
