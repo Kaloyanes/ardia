@@ -1,6 +1,7 @@
+#include <array>
 #include <climits>
 #include <cmath>
-#include <cstdio>
+#include <iostream>
 #include <limits>
 #include <numbers>
 #include <string>
@@ -24,7 +25,7 @@ const char* current = "";
 #define EXPECT(cond)                                                                         \
   do {                                                                                       \
     if (!(cond)) {                                                                           \
-      std::fprintf(stderr, "FAIL %s (%s:%d): %s\n", current, __FILE__, __LINE__, #cond);   \
+      std::cerr << "FAIL " << current << " (" << __FILE__ << ":" << __LINE__ << "): " << #cond << "\n"; \
       ++failures;                                                                            \
     }                                                                                        \
   } while (0)
@@ -34,8 +35,8 @@ const char* current = "";
     const double expect_a = (a);                                                                                 \
     const double expect_b = (b);                                                                                 \
     if (!(std::abs(expect_a - expect_b) <= (eps))) {                                                             \
-      std::fprintf(stderr, "FAIL %s (%s:%d): %s = %.9g, expected %.9g\n", current, __FILE__, __LINE__, #a,     \
-                   expect_a, expect_b);                                                                          \
+      std::cerr << "FAIL " << current << " (" << __FILE__ << ":" << __LINE__ << "): " << #a << " = " << expect_a \
+                << ", expected " << expect_b << "\n";                                                            \
       ++failures;                                                                                                \
     }                                                                                                            \
   } while (0)
@@ -560,9 +561,9 @@ struct RouterHarness {
   double t = 0;
 
   gesture::Result Send(gesture::TouchPhase phase, double dx, double dy, const gesture::Target* hit = nullptr,
-                       bool consumed = false) {
+                       const gesture::ContentState* content = nullptr, int64_t window = 0) {
     t += kFrame;
-    gesture::Result result = router.Scroll(phase, dx, dy, t, hit, consumed);
+    gesture::Result result = router.Scroll(phase, dx, dy, t, hit, content, window);
     log.insert(log.end(), result.actions.begin(), result.actions.end());
     return result;
   }
@@ -663,7 +664,8 @@ void RouterRejectsScrollableDescendantsAndUnavailableDirections() {
 
   const gesture::Target pager_target = NativePager();
   RouterHarness consumed;
-  EXPECT(consumed.Send(gesture::TouchPhase::kBegan, 5, 0, &pager_target, true).verdict ==
+  const gesture::ContentState taken{gesture::ContentAck::kConsumed, false, true};
+  EXPECT(consumed.Send(gesture::TouchPhase::kBegan, 5, 0, &pager_target, &taken).verdict ==
          gesture::Verdict::kContentConsumed);
 
   gesture::Target edge = History();
@@ -821,10 +823,244 @@ void MotionToRestBeatsTheWebUiSpike() {
   double now = h.t;
   const Settle settle = RunFrames(spring, now);
   const double motion_to_rest = now - start;
-  std::printf("motion-to-rest %.0f ms (settle %.0f ms, %d frames)\n", motion_to_rest * 1000, settle.seconds * 1000,
-              settle.frames);
+  std::cout << "motion-to-rest " << std::lround(motion_to_rest * 1000) << " ms (settle "
+            << std::lround(settle.seconds * 1000) << " ms, " << settle.frames << " frames)\n";
   EXPECT(spring.position() == 1);
   EXPECT(motion_to_rest <= 0.49);
+}
+
+void RouterWaitsForThePageToRefuseFirst() {
+  gesture::Target page = NativePager();
+  page.page_hit = true;
+  const gesture::ContentState pending{gesture::ContentAck::kPending, false, true};
+  const gesture::ContentState unconsumed{gesture::ContentAck::kUnconsumed, false, true};
+  const gesture::ContentState overscrolled{gesture::ContentAck::kUnconsumed, true, true};
+  const gesture::ContentState blocked{gesture::ContentAck::kUnconsumed, true, false};
+  const gesture::ContentState consumed{gesture::ContentAck::kConsumed, false, true};
+  RouterHarness h;
+  const gesture::Result first = h.Send(gesture::TouchPhase::kBegan, -10, 0, &page);
+  EXPECT(first.verdict == gesture::Verdict::kWaiting);
+  EXPECT(!first.swallow);
+  EXPECT(first.actions.empty());
+  EXPECT(h.router.pending());
+  EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &pending).verdict == gesture::Verdict::kWaiting);
+  EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &unconsumed).verdict == gesture::Verdict::kWaiting);
+  EXPECT(h.Send(gesture::TouchPhase::kChanged, -10, 0).verdict == gesture::Verdict::kWaiting);
+  EXPECT(!h.router.tracking());
+  const gesture::Result claimed = h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &overscrolled);
+  EXPECT(claimed.verdict == gesture::Verdict::kTracking);
+  EXPECT(claimed.swallow);
+  EXPECT(claimed.actions.size() == 1 && claimed.actions[0].input == PagerInput::kBegan);
+  EXPECT(claimed.actions[0].distance == 50);
+
+  RouterHarness taken;
+  taken.Send(gesture::TouchPhase::kBegan, -10, 0, &page);
+  EXPECT(taken.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &consumed).verdict ==
+         gesture::Verdict::kContentConsumed);
+  EXPECT(taken.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, &overscrolled).actions.empty());
+
+  RouterHarness refused;
+  EXPECT(refused.Send(gesture::TouchPhase::kBegan, -10, 0, &page, &blocked).verdict ==
+         gesture::Verdict::kOverscrollBlocked);
+  EXPECT(!refused.router.pending() && !refused.router.tracking());
+
+  RouterHarness stored;
+  stored.Send(gesture::TouchPhase::kBegan, 0, 0, &page, &overscrolled);
+  EXPECT(stored.Send(gesture::TouchPhase::kChanged, -10, 0).verdict == gesture::Verdict::kTracking);
+}
+
+void RouterBindsGesturesToTheirWindow() {
+  const gesture::Target a = History(2);
+  const gesture::Target b = History(3);
+  RouterHarness h;
+  h.Send(gesture::TouchPhase::kBegan, -10, 0, &a, nullptr, 100);
+  EXPECT(h.router.tracking());
+  const gesture::Result superseded = h.Send(gesture::TouchPhase::kBegan, -10, 0, &b, nullptr, 200);
+  EXPECT(superseded.actions.size() == 2);
+  EXPECT(superseded.actions[0].target == 2 && superseded.actions[0].input == PagerInput::kCancelled);
+  EXPECT(superseded.actions[1].target == 3 && superseded.actions[1].input == PagerInput::kBegan);
+  EXPECT(h.router.target() == 3);
+  const gesture::Result late_change = h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, nullptr, 100);
+  EXPECT(late_change.verdict == gesture::Verdict::kStale);
+  EXPECT(late_change.actions.empty() && !late_change.swallow);
+  const gesture::Result late_cancel = h.Send(gesture::TouchPhase::kCancelled, 0, 0, nullptr, nullptr, 100);
+  EXPECT(late_cancel.verdict == gesture::Verdict::kStale);
+  EXPECT(late_cancel.actions.empty());
+  EXPECT(h.router.tracking());
+  const gesture::Result own = h.Send(gesture::TouchPhase::kChanged, -10, 0, nullptr, nullptr, 200);
+  EXPECT(own.actions.size() == 1 && own.actions[0].target == 3 && own.actions[0].distance == 20);
+  const gesture::Result ended = h.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 200);
+  EXPECT(ended.actions.size() == 1 && ended.actions[0].input == PagerInput::kEnded);
+  EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t + 0.01, 100));
+
+  RouterHarness armed;
+  armed.Send(gesture::TouchPhase::kBegan, -10, 0, &a, nullptr, 100);
+  armed.Send(gesture::TouchPhase::kBegan, -10, 0, &b, nullptr, 200);
+  armed.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 100);
+  armed.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 200);
+  EXPECT(armed.router.Momentum(gesture::MomentumPhase::kBegan, armed.t + 0.01, 200));
+
+  const gesture::Target pager_a = NativePager(4);
+  RouterHarness native;
+  native.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_a, nullptr, 100);
+  const gesture::Result taken = native.Send(gesture::TouchPhase::kBegan, 0, 0, &b, nullptr, 200);
+  EXPECT(taken.actions.size() == 1 && taken.actions[0].target == 4 && taken.actions[0].input == PagerInput::kAbandon);
+
+  RouterHarness prepared;
+  prepared.Send(gesture::TouchPhase::kBegan, -10, 0, &a, nullptr, 100);
+  prepared.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 100);
+  prepared.Send(gesture::TouchPhase::kMayBegin, 0, 0, &pager_a, nullptr, 300);
+  EXPECT(prepared.Send(gesture::TouchPhase::kEnded, 0, 0, nullptr, nullptr, 100).actions.empty());
+  EXPECT(prepared.router.prepared() == 4);
+}
+
+void ForgetReleasesThePagerItWasDriving() {
+  const gesture::Target pager_target = NativePager();
+  {
+    PagerSpring spring = Configured(3, 0);
+    RouterHarness h;
+    const auto feed = [&](const gesture::Result& result) {
+      for (const gesture::Action& action : result.actions) gesture::ApplyToPager(spring, action, kWidth);
+    };
+    feed(h.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_target));
+    for (int i = 0; i < 10; ++i) feed(h.Send(gesture::TouchPhase::kChanged, -120, 0));
+    EXPECT(spring.phase() == PagerPhase::kTracking);
+    const gesture::Result forgotten = h.router.Forget(1);
+    EXPECT(forgotten.verdict == gesture::Verdict::kTargetGone);
+    EXPECT(forgotten.actions.size() == 1 && forgotten.actions[0].input == PagerInput::kCancelled);
+    feed(forgotten);
+    EXPECT(spring.phase() == PagerPhase::kSettling);
+    EXPECT(spring.selected() == 0);
+    double now = h.t;
+    RunFrames(spring, now);
+    EXPECT(spring.phase() == PagerPhase::kIdle);
+    EXPECT(spring.position() == 0);
+    EXPECT(h.Send(gesture::TouchPhase::kEnded, 0, 0).actions.empty());
+  }
+  {
+    PagerSpring spring = Configured(3, 0);
+    EXPECT(spring.SwitchTo(2));
+    double now = 0;
+    for (int i = 0; i < 4; ++i) spring.StepFrame(now += kFrame);
+    RouterHarness h;
+    for (const gesture::Action& action : h.Send(gesture::TouchPhase::kMayBegin, 0, 0, &pager_target).actions)
+      gesture::ApplyToPager(spring, action, kWidth);
+    EXPECT(spring.phase() == PagerPhase::kHolding);
+    const gesture::Result forgotten = h.router.Forget(1);
+    EXPECT(forgotten.actions.size() == 1 && forgotten.actions[0].input == PagerInput::kAbandon);
+    for (const gesture::Action& action : forgotten.actions) gesture::ApplyToPager(spring, action, kWidth);
+    EXPECT(spring.phase() == PagerPhase::kSettling);
+    RunFrames(spring, now);
+    EXPECT(spring.position() == 2);
+    EXPECT(!h.router.prepared());
+  }
+  {
+    const gesture::Target history = History();
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, 10, 0, &history);
+    const gesture::Result forgotten = h.router.Forget(2);
+    EXPECT(forgotten.actions.size() == 1 && forgotten.actions[0].input == PagerInput::kCancelled);
+    EXPECT(!forgotten.actions[0].native_pager);
+    EXPECT(h.router.Forget(2).actions.empty());
+  }
+  {
+    RouterHarness h;
+    h.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_target);
+    h.Send(gesture::TouchPhase::kEnded, 0, 0);
+    h.router.Forget(1);
+    EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t + 0.01));
+  }
+}
+
+void ReconfiguringDropsASupersededSelectionEvent() {
+  const std::vector<std::string> abc = {"a", "b", "c"};
+  const std::vector<std::string> ac = {"a", "c"};
+  const std::vector<std::string> bac = {"b", "a", "c"};
+  {
+    PagerSpring spring;
+    spring.Configure(3, 0, 0, &abc);
+    spring.StepFrame(0);
+    EXPECT(spring.SwitchTo(1));
+    spring.Configure(2, 0, 0, &ac);
+    const pager::Frame frame = spring.StepFrame(0.01);
+    EXPECT(!frame.selected_changed);
+    EXPECT(frame.selected == 0);
+    EXPECT(spring.selected_id() == "a");
+  }
+  {
+    PagerSpring spring;
+    spring.Configure(3, 0, 0, &abc);
+    spring.StepFrame(0);
+    EXPECT(spring.SwitchTo(1));
+    spring.Configure(3, 0, 0, &bac);
+    const pager::Frame frame = spring.StepFrame(0.01);
+    EXPECT(frame.selected_changed);
+    EXPECT(frame.selected == 0);
+    EXPECT(spring.selected_id() == "b");
+    EXPECT(!spring.StepFrame(0.02).selected_changed);
+  }
+  {
+    PagerSpring spring = Configured(3, 0);
+    EXPECT(spring.SwitchTo(2));
+    spring.Configure(4, 2, 0);
+    const pager::Frame kept = spring.StepFrame(0.01);
+    EXPECT(kept.selected_changed);
+    EXPECT(kept.selected == 2);
+  }
+  {
+    PagerSpring spring = Configured(3, 0);
+    EXPECT(spring.SwitchTo(2));
+    spring.Configure(2, 0, 0);
+    EXPECT(!spring.StepFrame(0.01).selected_changed);
+  }
+  {
+    PagerSpring spring;
+    spring.Configure(3, 0, 0, &abc);
+    EXPECT(spring.Select("c", abc));
+    const int64_t picked = spring.selection_sequence();
+    spring.Configure(3, 1, picked, &bac);
+    EXPECT(spring.selected_id() == "a");
+    EXPECT(!spring.StepFrame(0.01).selected_changed);
+  }
+}
+
+void DetentCrossingsAreCountedWithinAFrame() {
+  PagerSpring spring = Configured(3, 0);
+  spring.Input(PagerInput::kBegan, 0, -1, kWidth, 0);
+  spring.StepFrame(0);
+  spring.Input(PagerInput::kChanged, 1100, -1, kWidth, 0.01);
+  spring.Input(PagerInput::kChanged, 900, -1, kWidth, 0.02);
+  const pager::Frame back_and_forth = spring.StepFrame(0.02);
+  EXPECT(back_and_forth.detent_crossed);
+  EXPECT(back_and_forth.detent_crossings == 2);
+  const pager::Frame quiet = spring.StepFrame(0.03);
+  EXPECT(!quiet.detent_crossed && quiet.detent_crossings == 0);
+
+  PagerSpring wide = Configured(3, 1);
+  wide.Input(PagerInput::kBegan, 0, 1, kWidth, 0);
+  wide.Input(PagerInput::kChanged, 2000, 1, kWidth, 0.01);
+  wide.Input(PagerInput::kChanged, 2000, -1, kWidth, 0.02);
+  const pager::Frame jumped = wide.StepFrame(0.02);
+  EXPECT(jumped.detent_crossings == 3);
+}
+
+void MomentumNeverPrecedesTheTouchEnd() {
+  gesture::Target pager_target = NativePager();
+  RouterHarness h;
+  h.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_target);
+  h.Send(gesture::TouchPhase::kEnded, 0, 0);
+  EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t - 0.001));
+  EXPECT(!h.router.Momentum(gesture::MomentumPhase::kBegan, h.t + 0.01));
+
+  RouterHarness exact;
+  exact.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_target);
+  exact.Send(gesture::TouchPhase::kEnded, 0, 0);
+  EXPECT(exact.router.Momentum(gesture::MomentumPhase::kBegan, exact.t));
+
+  RouterHarness edge;
+  edge.Send(gesture::TouchPhase::kBegan, -10, 0, &pager_target);
+  edge.Send(gesture::TouchPhase::kEnded, 0, 0);
+  EXPECT(edge.router.Momentum(gesture::MomentumPhase::kBegan, edge.t + gesture::kMomentumStartWait));
 }
 
 struct Case {
@@ -835,7 +1071,7 @@ struct Case {
 }
 
 int main() {
-  const Case cases[] = {
+  const auto cases = std::to_array<Case>({
       {"constants match the macOS pager", ConstantsMatchMacPager},
       {"tracking is half scale", TrackingIsHalfScale},
       {"rubber bands past the ends", RubberBandsPastTheEnds},
@@ -857,13 +1093,19 @@ int main() {
       {"router survives adversarial input", RouterSurvivesAdversarialInput},
       {"router drives the pager end to end", RouterDrivesThePagerEndToEnd},
       {"motion to rest beats the WebUI spike", MotionToRestBeatsTheWebUiSpike},
-  };
+      {"router waits for the page to refuse first", RouterWaitsForThePageToRefuseFirst},
+      {"router binds gestures to their window", RouterBindsGesturesToTheirWindow},
+      {"forget releases the pager it was driving", ForgetReleasesThePagerItWasDriving},
+      {"reconfiguring drops a superseded selection event", ReconfiguringDropsASupersededSelectionEvent},
+      {"detent crossings are counted within a frame", DetentCrossingsAreCountedWithinAFrame},
+      {"momentum never precedes the touch end", MomentumNeverPrecedesTheTouchEnd},
+  });
   for (const Case& test : cases) {
     current = test.name;
     const int before = failures;
     test.run();
-    std::printf("%s %s\n", failures == before ? "ok  " : "FAIL", test.name);
+    std::cout << (failures == before ? "ok   " : "FAIL ") << test.name << "\n";
   }
-  std::printf("%d failure(s)\n", failures);
+  std::cout << failures << " failure(s)\n";
   return failures ? 1 : 0;
 }

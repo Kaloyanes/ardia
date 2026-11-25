@@ -28,7 +28,15 @@ enum class TouchPhase { kMayBegin, kBegan, kChanged, kEnded, kCancelled };
 enum class MomentumPhase { kBegan, kChanged, kEnded, kCancelled };
 
 enum class Verdict { kNone, kWaiting, kTracking, kVerticalIntent, kContentConsumed, kContentScrolls, kUnavailable,
-                     kTargetGone, kAxisCancelled };
+                     kTargetGone, kAxisCancelled, kOverscrollBlocked, kStale, kSuperseded };
+
+enum class ContentAck { kPending, kConsumed, kUnconsumed };
+
+struct ContentState {
+  ContentAck ack = ContentAck::kPending;
+  bool overscrolled = false;
+  bool overscroll_allowed = true;
+};
 
 constexpr std::string_view VerdictName(Verdict verdict) {
   switch (verdict) {
@@ -50,6 +58,12 @@ constexpr std::string_view VerdictName(Verdict verdict) {
       return "targetGone";
     case Verdict::kAxisCancelled:
       return "axisCancelled";
+    case Verdict::kOverscrollBlocked:
+      return "overscrollBlocked";
+    case Verdict::kStale:
+      return "stale";
+    case Verdict::kSuperseded:
+      return "superseded";
   }
   return "none";
 }
@@ -93,27 +107,33 @@ inline void ApplyToPager(desktop_pager::PagerSpring& pager, const Action& action
 class GestureRouter {
  public:
   Result Scroll(TouchPhase phase, double dx, double dy, double timestamp_s, const Target* hit,
-                bool consumed_by_content = false, int64_t window = 0) {
+                const ContentState* content = nullptr, int64_t window = 0) {
     Result result;
     const double now = std::isfinite(timestamp_s) ? timestamp_s : last_time_;
     last_time_ = now;
     const double step_x = std::isfinite(dx) ? dx : 0;
     const double step_y = std::isfinite(dy) ? dy : 0;
-    momentum_ = MomentumState();
-    if (phase == TouchPhase::kMayBegin) {
-      Prepare(hit, now, result);
+    const bool finishing = phase == TouchPhase::kEnded || phase == TouchPhase::kCancelled;
+    const bool live = gesture_.state == State::kPending || gesture_.state == State::kTracking;
+    if (phase != TouchPhase::kBegan && phase != TouchPhase::kMayBegin && live && window != gesture_.window) {
+      result.verdict = Verdict::kStale;
       return result;
     }
-    const bool finishing = phase == TouchPhase::kEnded || phase == TouchPhase::kCancelled;
-    if (phase == TouchPhase::kBegan) Begin(hit, now, result);
+    momentum_ = MomentumState();
+    if (phase == TouchPhase::kMayBegin) {
+      Prepare(hit, now, window, result);
+      return result;
+    }
+    if (phase == TouchPhase::kBegan) Begin(hit, now, window, result);
     if (gesture_.state == State::kIdle || gesture_.state == State::kIgnored) {
-      if (finishing) ReleasePrepared(now, result);
+      if (finishing && window == gesture_.window) ReleasePrepared(now, window, result);
       return result;
     }
     if (!gesture_.target) {
       Reject(Verdict::kTargetGone, result);
       return result;
     }
+    if (content) gesture_.content = *content;
     gesture_.dx += step_x;
     gesture_.dy += step_y;
     gesture_.time = now;
@@ -121,17 +141,17 @@ class GestureRouter {
     if (finishing) {
       if (gesture_.state != State::kTracking) {
         gesture_.state = State::kIdle;
-        ReleasePrepared(now, result);
+        ReleasePrepared(now, window, result);
         return result;
       }
       Emit(phase == TouchPhase::kEnded ? desktop_pager::PagerInput::kEnded : desktop_pager::PagerInput::kCancelled,
            ReleaseVelocity(now), result);
       gesture_.state = State::kIdle;
-      if (!gesture_.target->page_hit) momentum_ = MomentumState{window, now, true, false};
+      if (!gesture_.target->page_hit) momentum_ = MomentumState{gesture_.window, now, true, false, gesture_.target->id};
       return result;
     }
     if (gesture_.state == State::kPending) {
-      if (!ShouldTrack(consumed_by_content, result)) return result;
+      if (!ShouldTrack(result)) return result;
       gesture_.state = State::kTracking;
       if (prepared_ && prepared_->id == gesture_.target->id) prepared_.reset();
       result.verdict = Verdict::kTracking;
@@ -155,8 +175,9 @@ class GestureRouter {
   bool Momentum(MomentumPhase phase, double timestamp_s, int64_t window = 0) {
     if (!momentum_.armed) return false;
     if (!momentum_.flowing) {
-      momentum_.flowing = window == momentum_.window && phase == MomentumPhase::kBegan &&
-                          std::isfinite(timestamp_s) && timestamp_s - momentum_.ended_at <= kMomentumStartWait;
+      const double elapsed = timestamp_s - momentum_.ended_at;
+      momentum_.flowing = window == momentum_.window && phase == MomentumPhase::kBegan && std::isfinite(elapsed) &&
+                          elapsed >= 0 && elapsed <= kMomentumStartWait;
       if (!momentum_.flowing) {
         momentum_ = MomentumState();
         return false;
@@ -170,12 +191,14 @@ class GestureRouter {
 
   Result Forget(int64_t target_id) {
     Result result;
-    if (prepared_ && prepared_->id == target_id) prepared_.reset();
+    if (prepared_ && prepared_->id == target_id) ReleasePrepared(last_time_, prepared_window_, result);
     if (gesture_.target && gesture_.target->id == target_id) {
-      gesture_.target.reset();
+      if (gesture_.state == State::kTracking) Emit(desktop_pager::PagerInput::kCancelled, 0, result);
       if (gesture_.state == State::kPending || gesture_.state == State::kTracking) gesture_.state = State::kIgnored;
+      gesture_.target.reset();
       result.verdict = Verdict::kTargetGone;
     }
+    if (momentum_.armed && momentum_.target == target_id) momentum_ = MomentumState();
     return result;
   }
 
@@ -203,6 +226,8 @@ class GestureRouter {
     std::array<double, kVelocitySamples> deltas{};
     std::size_t samples = 0;
     double time = 0;
+    int64_t window = 0;
+    ContentState content;
   };
 
   struct MomentumState {
@@ -210,6 +235,7 @@ class GestureRouter {
     double ended_at = 0;
     bool armed = false;
     bool flowing = false;
+    int64_t target = 0;
   };
 
   static Action PagerAction(const Target& target, desktop_pager::PagerInput input, double timestamp_s) {
@@ -221,31 +247,39 @@ class GestureRouter {
     return action;
   }
 
-  void ReleasePrepared(double timestamp_s, Result& result) {
-    if (!prepared_) return;
+  void ReleasePrepared(double timestamp_s, int64_t window, Result& result) {
+    if (!prepared_ || prepared_window_ != window) return;
     const Target prepared = *prepared_;
     prepared_.reset();
     result.actions.push_back(PagerAction(prepared, desktop_pager::PagerInput::kAbandon, timestamp_s));
   }
 
-  void Prepare(const Target* hit, double timestamp_s, Result& result) {
-    ReleasePrepared(timestamp_s, result);
+  void Prepare(const Target* hit, double timestamp_s, int64_t window, Result& result) {
+    ReleasePrepared(timestamp_s, prepared_window_, result);
     if (!hit || !hit->has_native_pager) return;
     prepared_ = *hit;
+    prepared_window_ = window;
     result.actions.push_back(PagerAction(*hit, desktop_pager::PagerInput::kPrepare, timestamp_s));
   }
 
-  void Begin(const Target* hit, double timestamp_s, Result& result) {
-    if (gesture_.state == State::kTracking && gesture_.target && gesture_.target->has_native_pager) {
-      result.actions.push_back(PagerAction(*gesture_.target, desktop_pager::PagerInput::kAbandon, timestamp_s));
+  void Begin(const Target* hit, double timestamp_s, int64_t window, Result& result) {
+    if (gesture_.state == State::kTracking && gesture_.target) {
+      gesture_.time = timestamp_s;
+      if (gesture_.target->has_native_pager) {
+        result.actions.push_back(PagerAction(*gesture_.target, desktop_pager::PagerInput::kAbandon, timestamp_s));
+      } else {
+        Emit(desktop_pager::PagerInput::kCancelled, 0, result);
+      }
+      result.verdict = Verdict::kSuperseded;
     }
     gesture_ = Gesture();
+    gesture_.window = window;
     if (!hit) {
       gesture_.state = State::kIgnored;
-      ReleasePrepared(timestamp_s, result);
+      ReleasePrepared(timestamp_s, prepared_window_, result);
       return;
     }
-    if (!prepared_ || prepared_->id != hit->id) ReleasePrepared(timestamp_s, result);
+    if (!prepared_ || prepared_->id != hit->id) ReleasePrepared(timestamp_s, prepared_window_, result);
     gesture_.state = State::kPending;
     gesture_.target = *hit;
   }
@@ -253,37 +287,40 @@ class GestureRouter {
   void Reject(Verdict verdict, Result& result) {
     gesture_.state = State::kIgnored;
     result.verdict = verdict;
-    ReleasePrepared(gesture_.time, result);
+    ReleasePrepared(gesture_.time, prepared_window_, result);
   }
 
-  bool ShouldTrack(bool consumed_by_content, Result& result) {
+  bool Wait(Result& result) {
+    result.verdict = Verdict::kWaiting;
+    return false;
+  }
+
+  bool Refuse(Verdict verdict, Result& result) {
+    Reject(verdict, result);
+    return false;
+  }
+
+  bool ShouldTrack(Result& result) {
     const double dx = gesture_.dx;
     const double dy = gesture_.dy;
     const Target& target = *gesture_.target;
+    const ContentState& content = gesture_.content;
     const double vertical_intent = target.is_pager ? kPagerVerticalIntent : kStartDistance;
     if (std::abs(dy) >= vertical_intent && kCancelDominance * std::abs(dx) < std::abs(dy)) {
-      Reject(Verdict::kVerticalIntent, result);
-      return false;
+      return Refuse(Verdict::kVerticalIntent, result);
     }
     const bool below = target.has_native_pager ? dx == 0 : std::abs(dx) < kStartDistance;
-    if (below || kStartDominance * std::abs(dx) < std::abs(dy)) {
-      result.verdict = Verdict::kWaiting;
-      return false;
-    }
+    if (below || kStartDominance * std::abs(dx) < std::abs(dy)) return Wait(result);
     const int direction = dx > 0 ? 1 : -1;
-    if (consumed_by_content) {
-      Reject(Verdict::kContentConsumed, result);
-      return false;
-    }
-    if (direction > 0 ? target.content_scrolls_back : target.content_scrolls_forward) {
-      Reject(Verdict::kContentScrolls, result);
-      return false;
+    if (content.ack == ContentAck::kConsumed) return Refuse(Verdict::kContentConsumed, result);
+    if (target.page_hit) {
+      if (content.ack == ContentAck::kPending || !content.overscrolled) return Wait(result);
+      if (!content.overscroll_allowed) return Refuse(Verdict::kOverscrollBlocked, result);
+    } else if (direction > 0 ? target.content_scrolls_back : target.content_scrolls_forward) {
+      return Refuse(Verdict::kContentScrolls, result);
     }
     const bool available = direction > 0 ? target.can_swipe_back : target.can_swipe_forward;
-    if (!available && !target.tracks_unavailable_directions) {
-      Reject(Verdict::kUnavailable, result);
-      return false;
-    }
+    if (!available && !target.tracks_unavailable_directions) return Refuse(Verdict::kUnavailable, result);
     gesture_.direction = direction;
     gesture_.available = available;
     return true;
@@ -326,6 +363,7 @@ class GestureRouter {
 
   Gesture gesture_;
   std::optional<Target> prepared_;
+  int64_t prepared_window_ = 0;
   MomentumState momentum_;
   double last_time_ = 0;
 };

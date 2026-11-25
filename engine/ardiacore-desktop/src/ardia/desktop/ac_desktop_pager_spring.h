@@ -105,6 +105,7 @@ struct Frame {
   bool selected_changed = false;
   bool settled = false;
   bool detent_crossed = false;
+  int detent_crossings = 0;
   bool needs_frame = false;
 };
 
@@ -200,9 +201,10 @@ class PagerSpring {
     frame.selection_sequence = selection_sequence_;
     frame.moved = moved_;
     frame.began = began_;
-    frame.selected_changed = selected_changed_;
+    frame.selected_changed = PendingSelectionHolds();
     frame.settled = settled_;
-    frame.detent_crossed = detent_crossed_;
+    frame.detent_crossed = detent_crossings_ > 0;
+    frame.detent_crossings = detent_crossings_;
     frame.needs_frame = phase_ == PagerPhase::kSettling;
     return frame;
   }
@@ -233,7 +235,7 @@ class PagerSpring {
     count_ = static_cast<int>(order.size());
     SetOrder(&order);
     Jump(static_cast<int>(found - order.begin()), true);
-    selected_changed_ = true;
+    AnnounceSelection();
     return true;
   }
 
@@ -271,6 +273,12 @@ class PagerSpring {
   struct Sample {
     double time = 0;
     double position = 0;
+  };
+
+  struct PendingSelection {
+    int64_t sequence = 0;
+    int index = 0;
+    std::optional<std::string> id;
   };
 
   struct Spring {
@@ -339,8 +347,9 @@ class PagerSpring {
     if (sample && std::isfinite(timestamp_s)) Record(timestamp_s, x);
     const int nearest = ClampToIndex(std::round(x), drag_.lo, drag_.hi);
     if (nearest != drag_.detent) {
+      const int64_t crossed = std::abs(static_cast<int64_t>(nearest) - drag_.detent);
+      detent_crossings_ = static_cast<int>(std::min<int64_t>(INT_MAX, detent_crossings_ + crossed));
       drag_.detent = nearest;
-      detent_crossed_ = true;
     }
   }
 
@@ -416,7 +425,7 @@ class PagerSpring {
       selected_ = target;
       sequence_ = Next();
       selection_sequence_ = sequence_;
-      selected_changed_ = true;
+      AnnounceSelection();
     }
     StopSpring();
     if (reduce_motion_) {
@@ -458,6 +467,17 @@ class PagerSpring {
 
   void StopSpring() { spring_.reset(); }
 
+  void AnnounceSelection() {
+    pending_selection_ = PendingSelection{selection_sequence_, selected_, std::nullopt};
+    if (auto id = selected_id()) pending_selection_->id = std::string(*id);
+  }
+
+  bool PendingSelectionHolds() const {
+    if (!pending_selection_ || pending_selection_->sequence != selection_sequence_) return false;
+    if (pending_selection_->id) return selected_id() == std::optional<std::string_view>(*pending_selection_->id);
+    return pending_selection_->index == selected_;
+  }
+
   void CancelMotion() {
     StopSpring();
     phase_ = PagerPhase::kIdle;
@@ -468,9 +488,9 @@ class PagerSpring {
     Frame frame = Snapshot();
     moved_ = false;
     began_ = false;
-    selected_changed_ = false;
+    pending_selection_.reset();
     settled_ = false;
-    detent_crossed_ = false;
+    detent_crossings_ = 0;
     return frame;
   }
 
@@ -496,9 +516,9 @@ class PagerSpring {
   std::optional<double> last_frame_;
   bool moved_ = false;
   bool began_ = false;
-  bool selected_changed_ = false;
+  std::optional<PendingSelection> pending_selection_;
   bool settled_ = false;
-  bool detent_crossed_ = false;
+  int detent_crossings_ = 0;
 };
 
 }
