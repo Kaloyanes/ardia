@@ -202,3 +202,14 @@ test("forgetting a search removes every matching visit, also ones older than the
   assert.equal(log.search("", 100).length, 38);
   assert.equal(log.forget(() => false), 0);
 });
+
+test("forgetting a search that matches more urls than one delete statement binds removes all of them", () => {
+  const db = nodeDatabase();
+  migrate(db);
+  const log = createHistoryLog(db);
+  for (let at = 1; at <= 1201; at += 1) log.record(`https://duckduckgo.com/?q=otters&page=${at}`, "otters", "link", at % 2 ? "work" : null, at);
+  log.record("https://site.example/", "site", "link", null, 2000);
+  assert.equal(log.forget((url) => url.includes("otters")), 1201);
+  assert.equal(log.search("otters", 2000).length, 0);
+  assert.deepEqual(log.search("", 2000).map((visit) => visit.url), ["https://site.example/"]);
+});

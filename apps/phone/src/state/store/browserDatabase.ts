@@ -190,7 +190,12 @@ export const distinctVisitUrls = (db: SqlDatabase) => db.all<{ url: string }>("S
 
 export function deleteVisitsEverywhere(db: SqlDatabase, urls: readonly string[]) {
   if (!urls.length) return;
-  db.run(`DELETE FROM visits WHERE url IN (${urls.map(() => "?").join(",")})`, [...urls]);
+  db.transaction(() => {
+    for (let start = 0; start < urls.length; start += ID_CHUNK) {
+      const chunk = urls.slice(start, start + ID_CHUNK);
+      db.run(`DELETE FROM visits WHERE url IN (${chunk.map(() => "?").join(",")})`, chunk);
+    }
+  });
 }
 
 export type ImportRows = {
