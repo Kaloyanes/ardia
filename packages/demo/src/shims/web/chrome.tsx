@@ -5,7 +5,7 @@ import { useScopedTheme } from "../../../../../apps/browser/src/components/ui/th
 import { materialFill } from "./materials";
 import type { MiddleClickEvent } from "./MouseArea";
 import { LiquidGlassLayer } from "./liquidGlass";
-import { backdropKeyOf } from "./liquidGlassOptics";
+import { backdropKeyOf, DOCK_GLASS, glassGlow } from "./liquidGlassOptics";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;
@@ -330,8 +330,30 @@ export function WindowDragRegion({
   return <Region {...props} onClick={onRegionClick} onDoubleClick={onRegionDoubleClick} />;
 }
 
-export type DockSelectionProps = ViewProps & { fill?: string; stroke?: string; cornerRadius?: number; strokeWidth?: number; dark: boolean; outline?: boolean };
+export type DockSelectionProps = ViewProps & { image?: string; emoji?: string; theme?: string; fill?: string; stroke?: string; cornerRadius?: number; strokeWidth?: number; iconSize?: number; dark: boolean; glass?: boolean; colorRing?: boolean; outline?: boolean };
 
-export function DockSelection({ fill, stroke, cornerRadius, strokeWidth, dark: _dark, outline, style, ...props }: DockSelectionProps & Record<string, unknown>) {
-  return <View {...props} style={[{ backgroundColor: outline ? undefined : fill, borderColor: stroke, borderWidth: stroke ? (strokeWidth ?? 1) : 0, borderRadius: cornerRadius }, style]} />;
+const BLURRED_ICON_SPREAD = 250;
+const BLURRED_ICON_BLUR = { glow: 10, ring: 6 };
+
+function BlurredFavicon({ image, blur }: { image: string; blur: number }) {
+  return <img alt="" aria-hidden draggable={false} src={image} style={{ position: "absolute", left: "50%", top: "50%", width: `${BLURRED_ICON_SPREAD}%`, height: `${BLURRED_ICON_SPREAD}%`, transform: "translate(-50%, -50%)", objectFit: "contain", filter: `blur(${blur}px) saturate(1.8)`, pointerEvents: "none" }} />;
+}
+
+export function DockSelection({ fill, stroke, cornerRadius, strokeWidth, dark, glass, colorRing, outline, image, emoji: _emoji, theme, iconSize: _iconSize, style, ...props }: DockSelectionProps & Record<string, unknown>) {
+  if (!glass) return <View {...props} style={[{ backgroundColor: outline ? undefined : fill, borderColor: stroke, borderWidth: stroke ? (strokeWidth ?? 1) : 0, borderRadius: cornerRadius }, style]} />;
+  const look = dark ? "dark" : "light";
+  const blurred = theme === "blur" && image ? image : null;
+  const glow = outline || !fill || blurred ? null : glassGlow(parseColor(fill));
+  const ringWidth = colorRing ? (strokeWidth ?? 1) : 0;
+  const shape: React.CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none", borderRadius: cornerRadius, overflow: "hidden" };
+  const ring: React.CSSProperties = { ...shape, boxSizing: "border-box", padding: ringWidth, mask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)", maskComposite: "exclude", WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)", WebkitMaskComposite: "xor" };
+  return (
+    <View pointerEvents="none" {...props} style={[{ borderRadius: cornerRadius }, style]}>
+      {glow ? <div style={{ ...shape, background: glow, opacity: DOCK_GLASS.hue[look] }} /> : null}
+      {blurred && !outline ? <div style={{ ...shape, opacity: DOCK_GLASS.hue[look] }}><BlurredFavicon image={blurred} blur={BLURRED_ICON_BLUR.glow} /></div> : null}
+      {outline ? null : <div style={{ ...shape, background: `linear-gradient(to bottom, rgba(255,255,255,${DOCK_GLASS.sheen[look]}), rgba(255,255,255,0) ${DOCK_GLASS.sheenEnd}%)` }} />}
+      {ringWidth > 0 && blurred && !stroke ? <div style={ring}><BlurredFavicon image={blurred} blur={BLURRED_ICON_BLUR.ring} /></div> : null}
+      {ringWidth > 0 && !(blurred && !stroke) ? <div style={{ ...shape, boxSizing: "border-box", border: `${ringWidth}px solid ${stroke ?? `rgba(255,255,255,${DOCK_GLASS.ring[look]})`}`, mixBlendMode: stroke ? undefined : "soft-light" }} /> : null}
+    </View>
+  );
 }
