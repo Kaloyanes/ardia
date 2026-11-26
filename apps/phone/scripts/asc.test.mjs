@@ -227,6 +227,8 @@ function fakeAppStore() {
     if (path === "/v1/apps/app/appStoreVersions") {
       versionReads++;
       if (state.submittedOnce && state.afterSubmit === "fail") return new Response(JSON.stringify({ errors: [{ detail: "The API key in use does not allow this request" }] }), { status: 403 });
+      if (state.submittedOnce && state.afterSubmit === "network") throw new TypeError("fetch failed");
+      if (state.submittedOnce && state.afterSubmit === "garbage") return new Response("<html>bad gateway</html>", { status: 200, headers: { "content-type": "application/json" } });
       if (state.submittedOnce && state.afterSubmit === "hide") return reply(state.versions.filter((row) => row.id !== "v101").map(versionRow), 200, []);
       if (state.mutate && versionReads === state.mutate.after + 1) Object.assign(state.versions.find((row) => row.id === state.mutate.id), state.mutate.changes);
       return reply(state.versions.map(versionRow), 200, state.builds.map((build) => ({ id: build.id, type: "builds", attributes: { version: build.number } })));
@@ -299,6 +301,7 @@ function fakeAppStore() {
     if (submission && method === "PATCH" && body.data.attributes.submitted) {
       state.submittedOnce = true;
       if (state.swapBuildOnSubmit) state.versions.find((row) => submission.items.includes(row.id)).build = state.swapBuildOnSubmit;
+      if (state.swapReleaseOnSubmit) state.versions.find((row) => submission.items.includes(row.id)).releaseType = state.swapReleaseOnSubmit;
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) {
@@ -805,7 +808,14 @@ test("app-store checks the build again after submitting and only reports what Ap
   assert.match(swapped.err, /App Store Connect shows build 9/);
   assert.match(swapped.err, /cancel it in App Store Connect/);
   assert.deepEqual(afterSubmit(swapped), []);
-  for (const failure of ["hide", "fail"]) {
+  const released = appStore(ready101({ swapReleaseOnSubmit: "AFTER_APPROVAL" }));
+  assert.equal(released.code, 1, released.out);
+  assert.match(released.err, /review submission made-1/);
+  assert.match(released.err, /submitted build 12/);
+  assert.match(released.err, /AFTER_APPROVAL, not MANUAL/);
+  assert.doesNotMatch(released.out, /The release is MANUAL/);
+  assert.deepEqual(afterSubmit(released), []);
+  for (const failure of ["hide", "fail", "network", "garbage"]) {
     const unverified = appStore(ready101({ afterSubmit: failure }));
     assert.equal(unverified.code, 1, `${failure}: ${unverified.out}`);
     assert.match(unverified.err, /review submission made-1/);

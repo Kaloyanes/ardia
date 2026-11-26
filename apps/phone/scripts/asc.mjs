@@ -1134,10 +1134,9 @@ async function appStore(args) {
   try {
     reviewed = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
   } catch (error) {
-    if (!(error instanceof ApiError)) throw error;
     refuse(
       `review submission ${submission.id} was sent with version ${versionString}, submitted build ${number}, but this run couldn't confirm the build ` +
-        `App Store Connect holds (${error.message}); check it there and cancel it in App Store Connect if it's wrong`,
+        `App Store Connect holds (${error instanceof Error ? error.message : String(error)}); check it there and cancel it in App Store Connect if it's wrong`,
     );
   }
   if (!reviewed) {
@@ -1152,9 +1151,15 @@ async function appStore(args) {
         `${reviewed.build ?? "none"}; cancel it in App Store Connect if that's wrong`,
     );
   }
+  if (reviewed.releaseType !== held.releaseType) {
+    refuse(
+      `review submission ${submission.id} was sent with version ${versionString}, submitted build ${number}, but App Store Connect now shows the release as ` +
+        `${reviewed.releaseType}, not ${held.releaseType}; set it back to Manual in App Store Connect before approval, or cancel the submission there`,
+    );
+  }
   console.log(
     `version ${versionString} (${number}) submitted for App Review: ${sent?.attributes?.state ?? "WAITING_FOR_REVIEW"}. ` +
-      `The release is ${held.releaseType}: press Release in App Store Connect once it is approved.`,
+      `The release is ${reviewed.releaseType}: press Release in App Store Connect once it is approved.`,
   );
 }
 
