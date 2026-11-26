@@ -45,7 +45,7 @@ internal object AppUpdateHandoff {
     fun start(context: Context, activity: Activity?, url: String, title: String): Map<String, Any?> {
         val fileName = releaseApkName(url) ?: return mapOf("handoff" to "unavailable")
         enqueue(context, url, fileName, title)?.let {
-            runCatching { notificationsShown(context) }
+            ensureChannel(context)
             return mapOf("handoff" to "notifications", "id" to it.toString())
         }
         if (openElsewhere(context, activity, url, title)) return mapOf("handoff" to "browser")
@@ -122,11 +122,15 @@ internal object AppUpdateHandoff {
         }
     }
 
+    fun ensureChannel(context: Context): NotificationManager? {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return null
+        if (manager.getNotificationChannel(CHANNEL) == null) runCatching { manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT)) }
+        return manager
+    }
+
     fun notificationsShown(context: Context): Boolean {
-        val notifications = NotificationManagerCompat.from(context)
-        if (!notifications.areNotificationsEnabled()) return false
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT))
+        val manager = ensureChannel(context) ?: return false
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
         return (manager.getNotificationChannel(CHANNEL)?.importance ?: NotificationManager.IMPORTANCE_NONE) != NotificationManager.IMPORTANCE_NONE
     }
 

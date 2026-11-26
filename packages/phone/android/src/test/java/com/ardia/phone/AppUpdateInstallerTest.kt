@@ -39,4 +39,18 @@ class AppUpdateInstallerTest {
         shadowOf(context.packageManager).setCanRequestPackageInstalls(true)
         assertEquals("committed", install(sha256))
     }
+
+    @Test
+    fun theAppUpdatesChannelExistsBeforeNotificationsAreAllowedAndATurnedOffChannelCountsAsNoNotifications() {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+        shadowOf(manager).setNotificationsEnabled(false)
+        AppUpdateHandoff.ensureChannel(context)
+        assertTrue(manager.getNotificationChannel("app_updates") != null)
+        assertEquals(false, AppUpdateHandoff.notificationsShown(context))
+        shadowOf(manager).setNotificationsEnabled(true)
+        assertEquals(true, AppUpdateHandoff.notificationsShown(context))
+        manager.deleteNotificationChannel("app_updates")
+        manager.createNotificationChannel(android.app.NotificationChannel("app_updates", "App updates", android.app.NotificationManager.IMPORTANCE_NONE))
+        assertEquals(false, AppUpdateHandoff.notificationsShown(context))
+    }
 }
