@@ -244,68 +244,55 @@ export function dueForUpdateCheck(now: number, nextAt: number | null): boolean {
 
 export type UpdateStatus = "idle" | "checking" | "current" | "available" | "incomplete" | "failed";
 
-export type UpdateHandoff = "downloading" | "verifying" | "ready" | "needs_permission" | "installing" | "failed" | "refused" | "browser" | "unavailable";
+export type UpdateHandoff = "downloading" | "verifying" | "ready" | "needs_permission" | "installing" | "failed" | "refused" | "unchecked" | "unprepared" | "install_failed" | "browser" | "unavailable";
 
-export type UpdateRowAction = "check" | "download" | "refresh" | "install" | "permission";
+export type UpdateRowAction = "check" | "download" | "install" | "permission" | "copy" | "none";
 
-export const updateOfferMessage = (offer: OfferedRelease) => `Ardia ${offer.version} is available`;
-
-export const updateDownloadingMessage = (offer: OfferedRelease) => `Downloading Ardia ${offer.version}. Ardia lets you know when it’s ready.`;
+export type UpdateRow = { title: string; detail: string | undefined; actionLabel: string | undefined; action: UpdateRowAction };
 
 export const updateReadyMessage = (offer: OfferedRelease) => `Ardia ${offer.version} is ready to install`;
 
-export const updateCopyFailedMessage = () => "Couldn’t prepare the update. Try again.";
+const TRY_AGAIN = "Try again";
 
-export const updateInstallFailedMessage = () => "Couldn’t install the update. Try again.";
+export const progressDetail = (progress: number | null | undefined) => (typeof progress === "number" && Number.isFinite(progress) && progress >= 0 && progress <= 1 ? `${Math.floor(progress * 100)}%` : undefined);
 
-export const updateUnavailableMessage = () => "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases.";
-
-export const updatePermissionMessage = () => "Allow Ardia to install apps, then come back to finish the update.";
-
-export const updateRefusedMessage = (offer: OfferedRelease) => `The Ardia ${offer.version} download didn’t match the release, so it was deleted.`;
-
-export const updateUnverifiedMessage = () => "Couldn’t check the download. Try again.";
-
-export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null): { title: string; detail: string | undefined } {
+export function updateRow(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null, progress: number | null = null): UpdateRow {
   if (offer && status !== "current") {
     const v = offer.version;
     switch (handoff) {
       case "downloading":
-        return { title: `Downloading Ardia ${v}`, detail: "Ardia lets you know when it’s ready to install." };
+        return { title: `Downloading Ardia ${v}…`, detail: progressDetail(progress), actionLabel: undefined, action: "none" };
       case "verifying":
-        return { title: `Installing Ardia ${v}`, detail: "Checking the download…" };
+        return { title: `Checking Ardia ${v}…`, detail: undefined, actionLabel: undefined, action: "none" };
       case "ready":
-        return { title: `Install Ardia ${v}`, detail: "Downloaded. Tap to install." };
-      case "needs_permission":
-        return { title: `Install Ardia ${v}`, detail: "Allow Ardia to install apps in Settings, then come back." };
+        return { title: updateReadyMessage(offer), detail: undefined, actionLabel: "Install", action: "install" };
       case "installing":
-        return { title: `Install Ardia ${v}`, detail: "Confirm the update in Android’s installer. Tap to start it again." };
+        return { title: updateReadyMessage(offer), detail: "Confirm in Android’s installer.", actionLabel: "Install", action: "install" };
+      case "needs_permission":
+        return { title: "Allow Ardia to install apps", detail: undefined, actionLabel: "Open settings", action: "permission" };
       case "failed":
-        return { title: `Download Ardia ${v}`, detail: "The download didn’t finish. Tap to download it again." };
+        return { title: "The download didn’t finish", detail: undefined, actionLabel: TRY_AGAIN, action: "download" };
       case "refused":
-        return { title: `Download Ardia ${v}`, detail: "The download didn’t match the release, so it was deleted. Tap to download it again." };
+        return { title: "The download didn’t match the release", detail: undefined, actionLabel: TRY_AGAIN, action: "download" };
+      case "unchecked":
+        return { title: "Couldn’t check the download", detail: undefined, actionLabel: TRY_AGAIN, action: "install" };
+      case "unprepared":
+        return { title: "Couldn’t prepare the update", detail: undefined, actionLabel: TRY_AGAIN, action: "install" };
+      case "install_failed":
+        return { title: "Couldn’t install the update", detail: undefined, actionLabel: TRY_AGAIN, action: "install" };
       case "unavailable":
-        return { title: `Download Ardia ${v}`, detail: "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases." };
+        return { title: "Couldn’t start the download", detail: undefined, actionLabel: "Copy link", action: "copy" };
       default:
-        return { title: `Download Ardia ${v}`, detail: "A newer version is out. Ardia downloads it, then Android installs it." };
+        return { title: `Ardia ${v} is available`, detail: undefined, actionLabel: "Download", action: "download" };
     }
   }
-  if (status === "checking") return { title: "Check for updates", detail: "Checking…" };
-  if (status === "current") return { title: "Check for updates", detail: "Ardia is up to date." };
-  if (status === "incomplete") return { title: "Check for updates", detail: "Some releases weren’t checked yet. Try again in a few minutes." };
-  if (status === "failed") return { title: "Check for updates", detail: "Couldn’t check. Try again later." };
-  return { title: "Check for updates", detail: undefined };
+  if (status === "checking") return { title: "Checking for updates…", detail: undefined, actionLabel: undefined, action: "none" };
+  if (status === "current") return { title: "Ardia is up to date", detail: undefined, actionLabel: "Check", action: "check" };
+  if (status === "incomplete" || status === "failed") return { title: "Couldn’t check for updates", detail: undefined, actionLabel: TRY_AGAIN, action: "check" };
+  return { title: "Check for updates", detail: undefined, actionLabel: undefined, action: "check" };
 }
 
-export function updateRowAction(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null): UpdateRowAction {
-  if (!offer || status === "current") return "check";
-  if (handoff === "downloading" || handoff === "verifying") return "refresh";
-  if (handoff === "ready" || handoff === "installing") return "install";
-  if (handoff === "needs_permission") return "permission";
-  return "download";
-}
-
-export const updateRowOpensDownload = (status: UpdateStatus, offer: OfferedRelease | null) => offer !== null && status !== "current";
+export const updateDotShown = (status: UpdateStatus, offer: OfferedRelease | null, seenVersion: string | null) => offer !== null && status !== "current" && offer.version !== seenVersion;
 
 export type HandOffResult = { handoff: "downloading"; id: string } | { handoff: "browser" | "unavailable"; id: null };
 

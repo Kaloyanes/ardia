@@ -83,6 +83,8 @@ class DownloadsModule : Module() {
 
         AsyncFunction("appUpdateStatus") { id: String -> AppUpdateHandoff.status(context, id) }
 
+        AsyncFunction("appUpdateProgress") { id: String -> AppUpdateHandoff.progress(context, id) }
+
         AsyncFunction("verifyAppUpdate") { id: String, sha256: String, fileName: String -> AppUpdateHandoff.verify(context, id, sha256, fileName) }
 
         AsyncFunction("installVerifiedUpdate") { fileName: String, sha256: String, downloadId: String -> AppUpdateHandoff.installVerified(context, fileName, sha256, downloadId) }

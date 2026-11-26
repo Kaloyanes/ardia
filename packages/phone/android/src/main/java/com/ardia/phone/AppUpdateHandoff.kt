@@ -73,6 +73,19 @@ internal object AppUpdateHandoff {
         }.getOrDefault("gone")
     }
 
+    fun progress(context: Context, id: String): Double {
+        val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return -1.0
+        val manager = context.getSystemService(DownloadManager::class.java) ?: return -1.0
+        return runCatching {
+            manager.query(DownloadManager.Query().setFilterById(number))?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use -1.0
+                val done = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                if (total > 0 && done >= 0) (done.toDouble() / total).coerceIn(0.0, 1.0) else -1.0
+            } ?: -1.0
+        }.getOrDefault(-1.0)
+    }
+
     fun verify(context: Context, id: String, sha256: String, fileName: String): String {
         if (!SHA256.matches(sha256) || !APK_FILE.matches(fileName)) return "failed"
         val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return "gone"

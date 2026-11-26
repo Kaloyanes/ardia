@@ -42,10 +42,10 @@ import {
   installSessionOf,
   parseCommittedInstall,
   parseReleaseChecksum,
-  updateRowAction,
+  progressDetail,
+  updateDotShown,
   updateOfferWanted,
-  updateRowOpensDownload,
-  updateRowWords,
+  updateRow,
   withOfferedVersion,
   type GitHubJsonAnswer,
   type ReleaseVersion,
@@ -284,26 +284,47 @@ test("the check is up to date when nothing newer is published, and fails quietly
   assert.deepEqual(await findUpdate(v("1.0.2"), malformed.fetchJson), { kind: "current", unpublished: ["1.0.3"] });
 });
 
-test("the Settings row says what the check found and where the download went", () => {
+test("the About row is the one place the update shows: each state is one line with its one action", () => {
   const offer = offerOf("1.0.4");
-  assert.equal(updateRowWords("idle", null, null).title, "Check for updates");
-  assert.equal(updateRowWords("checking", null, null).detail, "Checking…");
-  assert.equal(updateRowWords("current", null, null).detail, "Ardia is up to date.");
-  assert.equal(updateRowWords("incomplete", null, null).detail, "Some releases weren’t checked yet. Try again in a few minutes.");
-  assert.equal(updateRowWords("failed", null, null).detail, "Couldn’t check. Try again later.");
-  assert.equal(updateRowWords("available", offer, null).title, "Download Ardia 1.0.4");
-  assert.match(updateRowWords("available", offer, "downloading").detail ?? "", /lets you know when it’s ready/);
-  assert.match(updateRowWords("available", offer, "unavailable").detail ?? "", /github\.com\/ardia-browser\/ardia\/releases/);
-  assert.equal(updateRowWords("failed", offer, null).title, "Download Ardia 1.0.4", "a failed refresh keeps the download it already validated");
-  assert.equal(updateRowWords("incomplete", offer, null).title, "Download Ardia 1.0.4");
-  assert.equal(updateRowOpensDownload("failed", offer), true);
-  assert.equal(updateRowOpensDownload("current", offer), false);
-  assert.equal(updateRowOpensDownload("failed", null), false);
-  assert.match(updateRowWords("available", offer, "downloading").title, /^Downloading Ardia 1\.0\.4$/);
-  assert.equal(updateRowWords("available", offer, "ready").title, "Install Ardia 1.0.4");
-  assert.match(updateRowWords("available", offer, "needs_permission").detail ?? "", /Allow Ardia to install apps/);
-  assert.match(updateRowWords("available", offer, "failed").detail ?? "", /didn’t finish/);
-  assert.match(updateRowWords("available", offer, "refused").detail ?? "", /didn’t match the release/);
+  const row = (status: Parameters<typeof updateRow>[0], handoff: Parameters<typeof updateRow>[2], progress: number | null = null) => {
+    const { title, actionLabel, action } = updateRow(status, status === "idle" || status === "checking" ? null : offer, handoff, progress);
+    return [title, actionLabel, action];
+  };
+  assert.deepEqual(row("idle", null), ["Check for updates", undefined, "check"]);
+  assert.deepEqual(row("checking", null), ["Checking for updates…", undefined, "none"]);
+  assert.deepEqual(row("current", "ready"), ["Ardia is up to date", "Check", "check"]);
+  assert.deepEqual(updateRow("failed", null, null).title, "Couldn’t check for updates");
+  assert.deepEqual(updateRow("incomplete", null, null).action, "check");
+  assert.deepEqual(row("available", null), ["Ardia 1.0.4 is available", "Download", "download"]);
+  assert.deepEqual(row("failed", null), ["Ardia 1.0.4 is available", "Download", "download"], "a failed refresh keeps the download it already validated");
+  assert.deepEqual(row("available", "downloading"), ["Downloading Ardia 1.0.4…", undefined, "none"]);
+  assert.equal(updateRow("available", offer, "downloading", 0.426).detail, "42%");
+  assert.deepEqual(row("available", "verifying"), ["Checking Ardia 1.0.4…", undefined, "none"]);
+  assert.deepEqual(row("available", "ready"), ["Ardia 1.0.4 is ready to install", "Install", "install"]);
+  assert.deepEqual(row("available", "installing"), ["Ardia 1.0.4 is ready to install", "Install", "install"]);
+  assert.deepEqual(row("available", "needs_permission"), ["Allow Ardia to install apps", "Open settings", "permission"]);
+  assert.deepEqual(row("available", "failed"), ["The download didn’t finish", "Try again", "download"]);
+  assert.deepEqual(row("available", "refused"), ["The download didn’t match the release", "Try again", "download"]);
+  assert.deepEqual(row("available", "unchecked"), ["Couldn’t check the download", "Try again", "install"]);
+  assert.deepEqual(row("available", "unprepared"), ["Couldn’t prepare the update", "Try again", "install"]);
+  assert.deepEqual(row("available", "install_failed"), ["Couldn’t install the update", "Try again", "install"]);
+  assert.deepEqual(row("available", "unavailable"), ["Couldn’t start the download", "Copy link", "copy"]);
+});
+
+test("download progress reads only as a fraction from 0 to 1", () => {
+  assert.equal(progressDetail(0), "0%");
+  assert.equal(progressDetail(1), "100%");
+  for (const value of [-1, 1.2, Number.NaN, Number.POSITIVE_INFINITY, null, undefined]) assert.equal(progressDetail(value), undefined, String(value));
+});
+
+test("the dot shows for a found update until its About row is seen, and never once Ardia is current", () => {
+  const offer = offerOf("1.0.4");
+  assert.equal(updateDotShown("available", offer, null), true);
+  assert.equal(updateDotShown("available", offer, "1.0.3"), true, "a newer version brings the dot back");
+  assert.equal(updateDotShown("available", offer, "1.0.4"), false);
+  assert.equal(updateDotShown("current", offer, null), false);
+  assert.equal(updateDotShown("available", null, null), false);
+  assert.equal(updateDotShown("idle", null, null), false);
 });
 
 test("the download action builds its request only from this repo's exact APK address and its own version: the shared hostile list never reaches the sink", () => {
@@ -391,19 +412,6 @@ test("native answers about the download and the install map onto a few known sta
   assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.3")), false);
   assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.4")), true);
   assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.5-nightly.1")), true);
-});
-
-test("the About row acts on where the update is: check, download, look at the download, install, or ask for the install permission", () => {
-  const offer = offerOf("1.0.4");
-  assert.equal(updateRowAction("current", offer, "ready"), "check");
-  assert.equal(updateRowAction("available", null, null), "check");
-  assert.equal(updateRowAction("available", offer, null), "download");
-  assert.equal(updateRowAction("failed", offer, "failed"), "download");
-  assert.equal(updateRowAction("available", offer, "refused"), "download");
-  assert.equal(updateRowAction("available", offer, "downloading"), "refresh");
-  assert.equal(updateRowAction("available", offer, "ready"), "install");
-  assert.equal(updateRowAction("available", offer, "installing"), "install");
-  assert.equal(updateRowAction("available", offer, "needs_permission"), "permission");
 });
 
 test("GitHub's own digest of the APK asset rides along with the offer, read only as sha256:<64 hex>", () => {

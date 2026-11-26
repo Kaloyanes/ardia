@@ -8,6 +8,7 @@ import { MaterialDialog, useMaterialRipple } from "../ui/MaterialSurfaces";
 import { useMaterialTheme } from "../ui/materialTheme";
 import { MATERIAL_SEGMENT_GAP, materialSegmentCorners, materialShape, materialSize, materialType } from "../ui/materialTokens";
 import { dismissWords } from "../../lib/sharedWords";
+import { NoticeDot, withUpdateWords } from "./UpdateDot";
 
 const AVATAR = 40;
 const RADIO = 20;
@@ -166,13 +167,14 @@ type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: bool
 
 const rowStyle = (supporting: unknown) => [styles.row, supporting ? styles.rowTwoLine : null];
 
-export function MaterialNavRow({ title, icon, value, detail, onPress }: RowBase & { value?: string; detail?: string; onPress: () => void }) {
+export function MaterialNavRow({ title, icon, value, detail, dot = false, onPress }: RowBase & { value?: string; detail?: string; dot?: boolean; onPress: () => void }) {
   const ripple = useMaterialRipple();
   const supporting = value ?? detail;
   return (
-    <Pressable testID={`materialSettingsRow:${title}`} accessibilityRole="button" accessibilityLabel={detail ? `${title}, ${detail}` : title} accessibilityValue={value ? { text: value } : undefined} android_ripple={ripple} onPress={onPress} style={rowStyle(supporting)}>
+    <Pressable testID={`materialSettingsRow:${title}`} accessibilityRole="button" accessibilityLabel={withUpdateWords(detail ? `${title}, ${detail}` : title, dot)} accessibilityValue={value ? { text: value } : undefined} android_ripple={ripple} onPress={onPress} style={rowStyle(supporting)}>
       <MaterialSettingsLeading icon={icon} />
       <ItemText title={title} supporting={supporting} />
+      {dot ? <NoticeDot /> : null}
     </Pressable>
   );
 }

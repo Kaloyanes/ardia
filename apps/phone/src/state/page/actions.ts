@@ -705,7 +705,7 @@ function downloadEvent(event: DownloadEvent) {
     return;
   }
   const uri = event.uri;
-  const open = opensInInstaller(Platform.OS, event.fileName) && downloads.installsPackages() ? (target: string) => quietly(() => installDownloadedPackage(target)) : (target: string) => quietly(() => downloads.open(target));
+  const open = opensInInstaller(Platform.OS, event.fileName) && downloads.installsPackages() ? (target: string) => quietly(async () => (await installDownloadedPackage(target)) || showToast("Couldn’t open the installer.", "warning")) : (target: string) => quietly(() => downloads.open(target));
   showToast(downloadedToast(event.fileName), "download", TOAST_LONG_DURATION_MS, uri ? { label: actionWords.open, run: () => open(uri) } : null);
 }
 

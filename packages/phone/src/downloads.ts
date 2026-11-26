@@ -17,6 +17,7 @@ type DownloadsNative = {
   share?(uri: string): Promise<boolean>;
   handOffAppUpdate?(url: string, title: string): Promise<unknown>;
   appUpdateStatus?(id: string): Promise<unknown>;
+  appUpdateProgress?(id: string): Promise<unknown>;
   verifyAppUpdate?(id: string, sha256: string, fileName: string): Promise<unknown>;
   installVerifiedUpdate?(fileName: string, sha256: string, downloadId: string): Promise<unknown>;
   updateNotificationsShown?(): boolean;
@@ -48,6 +49,7 @@ export const downloads = {
   handsOffAppUpdates: (): boolean => typeof native().handOffAppUpdate === "function",
   handOffAppUpdate: (url: string, title: string): Promise<unknown> => native().handOffAppUpdate?.(url, title) ?? Promise.resolve({ handoff: "unavailable" }),
   appUpdateStatus: (id: string): Promise<unknown> => native().appUpdateStatus?.(id) ?? Promise.resolve("gone"),
+  appUpdateProgress: (id: string): Promise<unknown> => native().appUpdateProgress?.(id) ?? Promise.resolve(-1),
   verifyAppUpdate: (id: string, sha256: string, fileName: string): Promise<unknown> => native().verifyAppUpdate?.(id, sha256, fileName) ?? Promise.resolve("failed"),
   installVerifiedUpdate: (fileName: string, sha256: string, downloadId: string): Promise<unknown> => native().installVerifiedUpdate?.(fileName, sha256, downloadId) ?? Promise.resolve({ result: "failed" }),
   updateNotificationsShown: (): boolean => native().updateNotificationsShown?.() ?? false,

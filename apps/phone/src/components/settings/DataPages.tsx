@@ -9,8 +9,8 @@ import { copy } from "../../lib/platformCopy";
 import { libraryCredits } from "../../state/settings/libraryCredits";
 import { ButtonRow, Divider, Group, NavRow, PickerRow, SettingsPage, ToggleRow, ValueRow } from "./SettingsKit";
 import { destinationWords } from "../../lib/sharedWords";
-import { updateRowAction, updateRowWords } from "../../lib/appUpdate";
-import { appUpdatesOffered, checkForUpdate, openUpdate, refreshDownload, useAppUpdate } from "../../state/appUpdate/store";
+import { updateRow } from "../../lib/appUpdate";
+import { appUpdatesOffered, markUpdateSeen, openUpdate, pollDownloadProgress, refreshDownload, showingUpdateRow, useAppUpdate } from "../../state/appUpdate/store";
 
 export function ClearDataPage({ onBack = popSettings }: { onBack?: () => void }) {
   const [range, setRange] = useState<ClearRange>("today");
@@ -68,17 +68,30 @@ function LinkRow({ title, icon, url, divider }: { title: string; icon: SymbolNam
   );
 }
 
+const PROGRESS_POLL_MS = 1000;
+
 function UpdateGroup() {
   const status = useAppUpdate((s) => s.status);
   const offer = useAppUpdate((s) => s.offer);
   const handoff = useAppUpdate((s) => s.handoff);
-  const words = updateRowWords(status, offer, handoff);
+  const progress = useAppUpdate((s) => s.progress);
+  const row = updateRow(status, offer, handoff, progress);
   useEffect(() => {
     void refreshDownload(false);
+    return showingUpdateRow();
   }, []);
+  useEffect(() => {
+    if (offer) markUpdateSeen();
+  }, [offer, status]);
+  useEffect(() => {
+    if (handoff !== "downloading") return;
+    void pollDownloadProgress();
+    const timer = setInterval(() => void pollDownloadProgress(), PROGRESS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [handoff]);
   return (
     <Group>
-      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={updateRowAction(status, offer, handoff) === "check" ? checkForUpdate : () => void openUpdate()} />
+      <NavRow title={row.title} icon="arrowDownCircle" detail={row.detail} value={row.actionLabel} chevron={false} onPress={() => void openUpdate()} />
     </Group>
   );
 }

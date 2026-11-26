@@ -170,7 +170,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["page_summaries_chatgpt", "page_summaries_chatgpt_fallbacks"],
       },
       {
-        text: "In the same daily counts, on Android: how often Ardia checked GitHub for a newer version of the app, how often it offered you one, how often you opened that download, how often the phone had nothing that could download it, how often Ardia started Android’s install of a checked download, how often that install was cancelled, failed or finished, and how often a download didn’t match the release’s checksum and was deleted. Counts only, never which version it offered",
+        text: "In the same daily counts, on Android: how often Ardia checked GitHub for a newer version of the app, how often a new version first put its dot on Settings, how often you tapped Download in Settings › About, how often the phone had nothing that could download it, how often Ardia started Android’s install of a checked download, how often that install was cancelled, failed or finished, and how often a download didn’t match the release’s checksum and was deleted. Counts only, never which version it offered",
         fields: ["app_update_checks", "app_update_offers_shown", "app_update_offers_opened", "app_update_handoffs_failed", "app_update_installs_started", "app_update_installs_cancelled", "app_update_installs_failed", "app_update_installs_completed", "app_update_checksums_refused"],
       },
       {
