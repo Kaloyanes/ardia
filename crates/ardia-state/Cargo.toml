@@ -1,0 +1,20 @@
+[package]
+name = "ardia-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ardia-theme.workspace = true
+ardia-sync-core = { workspace = true, features = ["rustcrypto"] }
+ardia-import-core.workspace = true
+ardia-update-core = { workspace = true, features = ["rustcrypto"] }
+ardia-shell-migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+url.workspace = true
+parking_lot.workspace = true
