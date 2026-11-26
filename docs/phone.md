@@ -14,8 +14,8 @@ apps/phone/                 the app, and the root of its own pnpm workspace with
                             arm64-v8a and x86_64)
   src/                      the Mac's folder rules (docs/conventions.md): components/ui, components/<feature>,
                             state/<domain>, platform, lib
-  ios/                      the iPhone and iPad project, checked in (bundle id com.ardia.browser.ios, the SwiftUI
-                            app's, iOS 27, React Native's prebuilt core)
+  ios/                      the iPhone project, checked in (bundle id com.ardia.browser.ios, the SwiftUI app's,
+                            iOS 27, React Native's prebuilt core); iPhone only, so an iPad runs it as an iPhone app
   scripts/gradle-locked     Gradle under one lock, so one Android build runs at a time
 packages/phone/             @ardia/phone-native, the Expo module package
   src/                      the TypeScript side: PageView and its types
@@ -2581,13 +2581,15 @@ Decided 2026-11-16: main has landscape and the Duo layouts, so the Expo app gets
 `SearchHomeView`, and the tokens in `ArdiaDesign/{BrowseTokens,TabsTokens,TabsDeckGeometry,Tokens}.swift`). Native
 side: the iPhone agent. Screens: the screens agent. Numbers are points.
 
-**Orientations.** On iPhone, portrait, landscape left and landscape right; never upside down. On iPad all four,
-so the app takes part in Split View and Slide Over (`TARGETED_DEVICE_FAMILY = "1,2"` on the app and its three
-extensions, no `UIRequiresFullScreen`). In Expo that is `UISupportedInterfaceOrientations` and
-`UISupportedInterfaceOrientations~ipad` in `apps/phone/ios/Ardia/Info.plist` (by hand: `app.json`'s `"default"` would
-add upside down on iPhone; `supportsTablet` there only records the choice). An iPad window at least 600 pt both ways
-gets the `wide` layout; a narrower one (a Split View third, Slide Over) gets `phone`, from the same probe
-as the Duo, never the device model. A new device joining sync on an iPad is named "iPad" (`SyncMeta.deviceName`).
+**Orientations.** Portrait, landscape left and landscape right; never upside down. The app is iPhone only (the
+owner, 2026-11-26, for the first App Store release): `TARGETED_DEVICE_FAMILY = 1` on the app and its three
+extensions, `supportsTablet: false` in `app.json`, and only `UISupportedInterfaceOrientations` in
+`apps/phone/ios/Ardia/Info.plist` (by hand: `app.json`'s `"default"` would add upside down; there is no `~ipad` key, since
+an iPad runs an iPhone-only app in its iPhone window with the iPhone's orientations). The iPhone Duo is an iPhone, so
+it keeps every layout below. The `wide` layout and the iPad notes that follow stay in the code for a later iPad
+release: they come from the same probe as the Duo, never the device model, so an iPad window at least 600 pt both
+ways would get `wide` and a narrower one `phone`. A new device joining sync on an iPad is named "iPad"
+(`SyncMeta.deviceName`).
 From @mantrakp04's #2263 on the SwiftUI app. In a window (Windowed Apps, Split View, Slide Over) iPadOS draws its
 window controls over the window's top-left corner; `WindowControlsClearance` (SceneDelegate.swift) adds the extra the
 corner-adapted safe area asks for (43 pt on an iPad Pro 11-inch) to the root view controller's top safe area, so
