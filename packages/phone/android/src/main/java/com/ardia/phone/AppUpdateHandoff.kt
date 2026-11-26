@@ -44,7 +44,10 @@ internal object AppUpdateHandoff {
 
     fun start(context: Context, activity: Activity?, url: String, title: String): Map<String, Any?> {
         val fileName = releaseApkName(url) ?: return mapOf("handoff" to "unavailable")
-        enqueue(context, url, fileName, title)?.let { return mapOf("handoff" to "notifications", "id" to it.toString()) }
+        enqueue(context, url, fileName, title)?.let {
+            runCatching { notificationsShown(context) }
+            return mapOf("handoff" to "notifications", "id" to it.toString())
+        }
         if (openElsewhere(context, activity, url, title)) return mapOf("handoff" to "browser")
         return mapOf("handoff" to "unavailable")
     }
