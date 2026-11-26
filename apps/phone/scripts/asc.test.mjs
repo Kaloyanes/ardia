@@ -226,6 +226,8 @@ function fakeAppStore() {
     }
     if (path === "/v1/apps/app/appStoreVersions") {
       versionReads++;
+      if (state.submittedOnce && state.afterSubmit === "fail") return new Response(JSON.stringify({ errors: [{ detail: "The API key in use does not allow this request" }] }), { status: 403 });
+      if (state.submittedOnce && state.afterSubmit === "hide") return reply(state.versions.filter((row) => row.id !== "v101").map(versionRow), 200, []);
       if (state.mutate && versionReads === state.mutate.after + 1) Object.assign(state.versions.find((row) => row.id === state.mutate.id), state.mutate.changes);
       return reply(state.versions.map(versionRow), 200, state.builds.map((build) => ({ id: build.id, type: "builds", attributes: { version: build.number } })));
     }
@@ -294,8 +296,9 @@ function fakeAppStore() {
         })),
       );
     }
-    if (submission && method === "PATCH" && body.data.attributes.submitted && state.swapBuildOnSubmit) {
-      state.versions.find((row) => submission.items.includes(row.id)).build = state.swapBuildOnSubmit;
+    if (submission && method === "PATCH" && body.data.attributes.submitted) {
+      state.submittedOnce = true;
+      if (state.swapBuildOnSubmit) state.versions.find((row) => submission.items.includes(row.id)).build = state.swapBuildOnSubmit;
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) {
@@ -793,15 +796,44 @@ test("app-store still stops before submitting when the release type, build or re
   }
 });
 
-test("app-store checks the build again after submitting, and cancels its submission when another build went with it", () => {
-  const run = appStore(ready101({ swapBuildOnSubmit: "b9" }));
-  assert.equal(run.code, 1, run.out);
-  assert.match(run.err, /went to App Review with build 9, not 12/);
-  const submit = run.writes.findIndex((write) => write.body?.data?.attributes?.submitted);
-  assert.ok(submit >= 0);
-  assert.deepEqual(run.writes.slice(submit + 1), [
-    { method: "PATCH", path: "/v1/reviewSubmissions/made-1", body: { data: { type: "reviewSubmissions", id: "made-1", attributes: { canceled: true } } } },
-  ]);
+test("app-store checks the build again after submitting and only reports what Apple shows, never cancelling", () => {
+  const afterSubmit = (run) => run.writes.slice(run.writes.findIndex((write) => write.body?.data?.attributes?.submitted) + 1);
+  const swapped = appStore(ready101({ swapBuildOnSubmit: "b9" }));
+  assert.equal(swapped.code, 1, swapped.out);
+  assert.match(swapped.err, /review submission made-1/);
+  assert.match(swapped.err, /submitted build 12/);
+  assert.match(swapped.err, /App Store Connect shows build 9/);
+  assert.match(swapped.err, /cancel it in App Store Connect/);
+  assert.deepEqual(afterSubmit(swapped), []);
+  for (const failure of ["hide", "fail"]) {
+    const unverified = appStore(ready101({ afterSubmit: failure }));
+    assert.equal(unverified.code, 1, `${failure}: ${unverified.out}`);
+    assert.match(unverified.err, /review submission made-1/);
+    assert.match(unverified.err, /submitted build 12/);
+    assert.match(unverified.err, /couldn't confirm/);
+    assert.deepEqual(afterSubmit(unverified), [], failure);
+    assert.ok(!unverified.writes.some((write) => write.body?.data?.attributes?.canceled), failure);
+  }
   const clean = appStore(ready101());
-  assert.ok(!clean.writes.some((write) => write.body?.data?.attributes?.canceled));
+  assert.equal(clean.code, 0, clean.err);
+  assert.deepEqual(afterSubmit(clean), []);
+});
+
+test("app-store reads the attached build again after finding the version in review, and counts it done only with the requested build", () => {
+  const builds = [...appStoreState().builds, { id: "b13", number: "13", version: "1.0.1", processing: [] }];
+  const inReview = (mutate) =>
+    appStoreState({
+      builds,
+      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build: "b12" })],
+      localizations: { v101: [{ id: "loc", ...listing }] },
+      submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }],
+      mutate,
+    });
+  const switched = appStore(inReview({ after: 1, id: "v101", changes: { build: "b13" } }));
+  assert.equal(switched.code, 1, switched.out);
+  assert.match(switched.err, /with build 13, not 12/);
+  assert.deepEqual(switched.writes, []);
+  const same = appStore(inReview(undefined));
+  assert.equal(same.code, 0, same.err);
+  assert.deepEqual(same.writes, []);
 });

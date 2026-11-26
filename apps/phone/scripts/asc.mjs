@@ -1000,9 +1000,10 @@ async function appStore(args) {
   const early = planSubmission(submissions, plan.version?.id ?? null, versionNames);
   if (early.act === "refuse") refuse(early.message);
   if (early.act === "done") {
-    if (plan.version.buildId !== build.id) {
+    const reviewed = (await listAppStoreVersions(app.id)).find((row) => row.id === plan.version.id);
+    if (reviewed?.buildId !== build.id) {
       refuse(
-        `version ${versionString} is in a review submission that is ${early.submission.state} with build ${plan.version.build ?? "none"}, not ${number}; ` +
+        `version ${versionString} is in a review submission that is ${early.submission.state} with build ${reviewed?.build ?? "none"}, not ${number}; ` +
           "remove it from review in App Store Connect before sending another build",
       );
     }
@@ -1129,10 +1130,27 @@ async function appStore(args) {
   const held = await requireVersionUnchanged(app.id, expected);
   await onlyThisVersion();
   const sent = await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { submitted: true } } });
-  const reviewed = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
-  if (reviewed?.buildId !== build.id) {
-    await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { canceled: true } } });
-    refuse(`version ${versionString} went to App Review with build ${reviewed?.build ?? "none"}, not ${number}, so its review submission was cancelled; run this again`);
+  let reviewed;
+  try {
+    reviewed = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
+  } catch (error) {
+    if (!(error instanceof ApiError)) throw error;
+    refuse(
+      `review submission ${submission.id} was sent with version ${versionString}, submitted build ${number}, but this run couldn't confirm the build ` +
+        `App Store Connect holds (${error.message}); check it there and cancel it in App Store Connect if it's wrong`,
+    );
+  }
+  if (!reviewed) {
+    refuse(
+      `review submission ${submission.id} was sent with version ${versionString}, submitted build ${number}, but this run couldn't confirm the build: ` +
+        "App Store Connect didn't list the version; check it there and cancel it in App Store Connect if it's wrong",
+    );
+  }
+  if (reviewed.buildId !== build.id) {
+    refuse(
+      `review submission ${submission.id} was sent with version ${versionString}: submitted build ${number}, but App Store Connect shows build ` +
+        `${reviewed.build ?? "none"}; cancel it in App Store Connect if that's wrong`,
+    );
   }
   console.log(
     `version ${versionString} (${number}) submitted for App Review: ${sent?.attributes?.state ?? "WAITING_FOR_REVIEW"}. ` +
