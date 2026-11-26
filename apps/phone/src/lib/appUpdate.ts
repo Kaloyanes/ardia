@@ -273,7 +273,7 @@ export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | nul
       case "needs_permission":
         return { title: `Install Ardia ${v}`, detail: "Allow Ardia to install apps in Settings, then come back." };
       case "installing":
-        return { title: `Install Ardia ${v}`, detail: "Android’s installer is open. Tap to open it again." };
+        return { title: `Install Ardia ${v}`, detail: "Opened Android’s installer. Tap to open it again." };
       case "failed":
         return { title: `Download Ardia ${v}`, detail: "The download didn’t finish. Tap to download it again." };
       case "refused":

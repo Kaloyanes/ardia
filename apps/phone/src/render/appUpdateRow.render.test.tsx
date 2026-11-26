@@ -161,7 +161,7 @@ test("when the download completes, Ardia checks it against the release's SHA-256
   await settle();
   expect(checksum).toHaveBeenCalledWith(`${APK("1.0.4")}.sha256`, expect.anything());
   expect(installed).toHaveBeenCalledWith("41", SHA, "Ardia-1.0.4.apk");
-  expect(textOf(root)).toContain("Android’s installer is open");
+  expect(textOf(root)).toContain("Opened Android’s installer");
   await act(async () => completed({ id: "99" }));
   await settle();
   expect(installed).toHaveBeenCalledTimes(1);
