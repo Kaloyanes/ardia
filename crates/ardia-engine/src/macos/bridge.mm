@@ -11,6 +11,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <map>
+#include <pthread.h>
+#include <utility>
 
 namespace {
 
@@ -217,6 +220,232 @@ ArdiaCoreEngine *SharedEngine() {
 
 }
 
+namespace guard {
+bool Owns(Class cls, SEL selector);
+}
+
+namespace hosted {
+
+const void *const kHostedClassKey = &kHostedClassKey;
+ArdiaHostedWindowHooks gHooks = {};
+std::atomic<bool> gActive{false};
+
+struct Patch {
+  IMP ours = nullptr;
+  IMP original = nullptr;
+  bool added = false;
+  bool live = false;
+  std::atomic<uint64_t> generation{0};
+};
+
+using PatchKey = std::pair<uintptr_t, uintptr_t>;
+
+std::map<PatchKey, Patch> &Patches() {
+  static std::map<PatchKey, Patch> patches;
+  return patches;
+}
+
+PatchKey KeyOf(Class cls, SEL selector) {
+  return {reinterpret_cast<uintptr_t>((__bridge void *)cls), reinterpret_cast<uintptr_t>(selector)};
+}
+
+NSHashTable<NSWindow *> *Attached() {
+  static NSHashTable *attached = [NSHashTable weakObjectsHashTable];
+  return attached;
+}
+
+bool Active() {
+  return gActive.load(std::memory_order_acquire);
+}
+
+bool Routes(id window, Class cls) {
+  return window && Active() && pthread_main_np() != 0 &&
+         (__bridge void *)objc_getAssociatedObject(window, kHostedClassKey) == (__bridge void *)cls;
+}
+
+IMP Next(Class cls, SEL selector, IMP original) {
+  return original ?: class_getMethodImplementation(class_getSuperclass(cls), selector);
+}
+
+struct VoidCall {
+  IMP imp;
+  __unsafe_unretained id target;
+  SEL selector;
+  __unsafe_unretained id argument;
+  bool called;
+  __strong id thrown;
+};
+
+struct BoolCall {
+  IMP imp;
+  __unsafe_unretained id target;
+  SEL selector;
+  __unsafe_unretained id argument;
+  bool called;
+  bool result;
+  __strong id thrown;
+};
+
+void CallVoid(void *thunk) {
+  VoidCall *call = static_cast<VoidCall *>(thunk);
+  if (!call || call->called) return;
+  call->called = true;
+  @try {
+    reinterpret_cast<void (*)(id, SEL, id)>(call->imp)(call->target, call->selector, call->argument);
+  } @catch (id thrown) {
+    call->thrown = thrown;
+  }
+}
+
+bool CallBool(void *thunk) {
+  BoolCall *call = static_cast<BoolCall *>(thunk);
+  if (!call) return false;
+  if (call->called) return call->result;
+  call->called = true;
+  @try {
+    call->result = reinterpret_cast<BOOL (*)(id, SEL, id)>(call->imp)(call->target, call->selector, call->argument);
+  } @catch (id thrown) {
+    call->thrown = thrown;
+  }
+  return call->result;
+}
+
+using VoidHook = void (*)(void *, void *, void *, ArdiaHostedVoidSuper, void *);
+using BoolHook = bool (*)(void *, void *, void *, ArdiaHostedBoolSuper, void *);
+
+using Generation = const std::atomic<uint64_t> *;
+
+bool Current(Generation current, uint64_t generation) {
+  return current->load(std::memory_order_acquire) == generation;
+}
+
+IMP VoidBlock(Class cls, SEL selector, IMP original, Generation current, uint64_t generation,
+              VoidHook ArdiaHostedWindowHooks::*slot) {
+  return imp_implementationWithBlock(^(NSWindow *window, NSEvent *event) {
+    IMP next = Next(cls, selector, original);
+    const bool routes = event && Current(current, generation) && Routes(window, cls);
+    const ArdiaHostedWindowHooks hooks = routes ? gHooks : ArdiaHostedWindowHooks{};
+    VoidHook hook = hooks.*slot;
+    if (!hook) {
+      reinterpret_cast<void (*)(id, SEL, id)>(next)(window, selector, event);
+      return;
+    }
+    VoidCall call{next, window, selector, event, false, nil};
+    hook(hooks.context, (__bridge void *)window, (__bridge void *)event, CallVoid, &call);
+    if (call.thrown) @throw call.thrown;
+  });
+}
+
+IMP BoolBlock(Class cls, SEL selector, IMP original, Generation current, uint64_t generation,
+              BoolHook ArdiaHostedWindowHooks::*slot, bool needsArgument) {
+  return imp_implementationWithBlock(^BOOL(NSWindow *window, id argument) {
+    IMP next = Next(cls, selector, original);
+    const bool routes = (argument || !needsArgument) && Current(current, generation) && Routes(window, cls);
+    const ArdiaHostedWindowHooks hooks = routes ? gHooks : ArdiaHostedWindowHooks{};
+    BoolHook hook = hooks.*slot;
+    if (!hook) {
+      return reinterpret_cast<BOOL (*)(id, SEL, id)>(next)(window, selector, argument);
+    }
+    BoolCall call{next, window, selector, argument, false, false, nil};
+    const bool answer = hook(hooks.context, (__bridge void *)window, (__bridge void *)argument, CallBool, &call);
+    if (call.thrown) @throw call.thrown;
+    return answer ? YES : NO;
+  });
+}
+
+IMP MakeHook(Class cls, SEL selector, IMP original, Generation current, uint64_t generation) {
+  if (selector == @selector(sendEvent:))
+    return VoidBlock(cls, selector, original, current, generation, &ArdiaHostedWindowHooks::send_event);
+  if (selector == @selector(keyDown:))
+    return VoidBlock(cls, selector, original, current, generation, &ArdiaHostedWindowHooks::key_down);
+  if (selector == @selector(makeFirstResponder:))
+    return BoolBlock(cls, selector, original, current, generation, &ArdiaHostedWindowHooks::make_first_responder,
+                     false);
+  return BoolBlock(cls, selector, original, current, generation, &ArdiaHostedWindowHooks::perform_key_equivalent,
+                   true);
+}
+
+const SEL *Selectors(size_t *count) {
+  static const SEL selectors[] = {@selector(sendEvent:), @selector(keyDown:), @selector(makeFirstResponder:),
+                                  @selector(performKeyEquivalent:)};
+  *count = sizeof(selectors) / sizeof(selectors[0]);
+  return selectors;
+}
+
+bool Install(Class cls, SEL selector) {
+  Method inherited = class_getInstanceMethod(cls, selector);
+  if (!inherited) return false;
+  Patch &patch = Patches()[KeyOf(cls, selector)];
+  const bool owns = guard::Owns(cls, selector);
+  IMP current = method_getImplementation(inherited);
+  if (owns && patch.ours && current == patch.ours) {
+    patch.live = true;
+    return true;
+  }
+  const uint64_t generation = patch.generation.load(std::memory_order_relaxed) + 1;
+  IMP ours = MakeHook(cls, selector, owns ? current : nullptr, &patch.generation, generation);
+  if (owns) {
+    method_setImplementation(inherited, ours);
+  } else if (!class_addMethod(cls, selector, ours, method_getTypeEncoding(inherited))) {
+    imp_removeBlock(ours);
+    return false;
+  }
+  patch.generation.store(generation, std::memory_order_release);
+  patch.ours = ours;
+  patch.original = owns ? current : nullptr;
+  patch.added = !owns;
+  patch.live = true;
+  return true;
+}
+
+uint64_t RestoreAll() {
+  uint64_t restored = 0;
+  for (auto &entry : Patches()) {
+    Patch &patch = entry.second;
+    if (!patch.live) continue;
+    patch.live = false;
+    if (patch.added) continue;
+    Class cls = (__bridge Class)reinterpret_cast<void *>(entry.first.first);
+    SEL selector = reinterpret_cast<SEL>(entry.first.second);
+    Method method = guard::Owns(cls, selector) ? class_getInstanceMethod(cls, selector) : nullptr;
+    if (method && method_getImplementation(method) == patch.ours) {
+      method_setImplementation(method, patch.original);
+      restored++;
+    }
+  }
+  return restored;
+}
+
+ArdiaBridgeStatus Attach(NSWindow *window) {
+  if (!Active()) return ARDIA_BRIDGE_NO_HOST;
+  if (![window isKindOfClass:NSWindow.class]) return ARDIA_BRIDGE_BAD_ARGUMENT;
+  Class cls = [window class];
+  size_t count = 0;
+  const SEL *selectors = Selectors(&count);
+  for (size_t i = 0; i < count; i++)
+    if (!Install(cls, selectors[i])) return ARDIA_BRIDGE_FAILED;
+  objc_setAssociatedObject(window, kHostedClassKey, cls, OBJC_ASSOCIATION_ASSIGN);
+  [Attached() addObject:window];
+  return ARDIA_BRIDGE_OK;
+}
+
+void Detach(NSWindow *window) {
+  objc_setAssociatedObject(window, kHostedClassKey, nil, OBJC_ASSOCIATION_ASSIGN);
+  [Attached() removeObject:window];
+}
+
+void AttachIfActive(NSWindow *window) {
+  if (window && Active() && Attach(window) != ARDIA_BRIDGE_OK)
+    NSLog(@"[ardia-engine] couldn't route input for window %ld", (long)window.windowNumber);
+}
+
+bool SameHooks(const ArdiaHostedWindowHooks &a, const ArdiaHostedWindowHooks &b) {
+  return a.context == b.context && a.send_event == b.send_event && a.key_down == b.key_down &&
+         a.make_first_responder == b.make_first_responder && a.perform_key_equivalent == b.perform_key_equivalent;
+}
+
+}
+
 @interface ABCompletion : NSObject
 - (instancetype)initWithRequest:(uint64_t)request;
 - (void)finish:(nullable NSDictionary *)payload;
@@ -266,6 +495,7 @@ ArdiaCoreEngine *SharedEngine() {
 - (nullable id)objectFor:(uint64_t)ident;
 - (void)hold:(uint64_t)ident;
 - (void)drop:(uint64_t)ident;
+- (NSArray *)liveObjects;
 @end
 
 @implementation ABRegistry {
@@ -310,6 +540,10 @@ ArdiaCoreEngine *SharedEngine() {
 
 - (void)drop:(uint64_t)ident {
   [_strong removeObjectForKey:@(ident)];
+}
+
+- (NSArray *)liveObjects {
+  return _objects.objectEnumerator.allObjects;
 }
 
 @end
@@ -418,15 +652,29 @@ void ObserveClose(ArdiaCoreWindow *coreWindow, uint64_t ident) {
                                                                    }];
 }
 
+void StyleBrowserWindow(NSWindow *window) {
+  const NSRect frame = window.frame;
+  window.styleMask |= NSWindowStyleMaskFullSizeContentView;
+  if (!NSEqualRects(window.frame, frame)) [window setFrame:frame display:NO];
+  window.titlebarAppearsTransparent = YES;
+  window.titleVisibility = NSWindowTitleHidden;
+  window.title = @"Ardia";
+  window.contentMinSize = NSMakeSize(500, 460);
+  window.releasedWhenClosed = NO;
+  window.tabbingMode = NSWindowTabbingModeDisallowed;
+}
+
 ArdiaCoreWindow *MakeWindow(NSRect rect) {
   Class windowClass = WindowClass();
   if (!windowClass) return nil;
   ArdiaCoreWindow *window = [[windowClass alloc] initWithContentRect:rect];
   if (!window || !window.window) return nil;
+  StyleBrowserWindow(window.window);
   window.delegate = WindowDelegate();
   const uint64_t ident = [Windows() idFor:window];
   [Windows() hold:ident];
   ObserveClose(window, ident);
+  hosted::AttachIfActive(window.window);
   return window;
 }
 
@@ -1663,7 +1911,9 @@ extern "C" ArdiaBridgeStatus ardia_bridge_tab_view(uint64_t tabId, uint32_t whic
     ArdiaCoreTab *tab = TabFor(tabId);
     if (!tab) return ARDIA_BRIDGE_UNKNOWN_TAB;
     NSView *view = which == 0 ? tab.view : which == 1 ? tab.devToolsView : nil;
-    if (view) *out_view = (__bridge_retained void *)view;
+    if (!view) return ARDIA_BRIDGE_OK;
+    view.hidden = NO;
+    *out_view = (__bridge_retained void *)view;
     return ARDIA_BRIDGE_OK;
   });
 }
@@ -2383,4 +2633,80 @@ extern "C" ArdiaBridgeStatus ardia_bridge_set_handoff(void *window, const char *
     if (target.isKeyWindow) [activity becomeCurrent];
     return ARDIA_BRIDGE_OK;
   });
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_hosted_hooks_install(const ArdiaHostedWindowHooks *hooks) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    if (!hooks || hooks->size < sizeof(ArdiaHostedWindowHooks) || !hooks->send_event || !hooks->key_down ||
+        !hooks->make_first_responder || !hooks->perform_key_equivalent)
+      return ARDIA_BRIDGE_BAD_ARGUMENT;
+    if (hosted::Active()) return hosted::SameHooks(hosted::gHooks, *hooks) ? ARDIA_BRIDGE_OK : ARDIA_BRIDGE_ALREADY_RUNNING;
+    hosted::gHooks = *hooks;
+    hosted::gHooks.size = sizeof(ArdiaHostedWindowHooks);
+    hosted::gActive.store(true, std::memory_order_release);
+    for (ArdiaCoreWindow *window in [Windows() liveObjects]) hosted::AttachIfActive(window.window);
+    return ARDIA_BRIDGE_OK;
+  });
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_hosted_hooks_remove(uint64_t *restored) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    for (NSWindow *window in hosted::Attached().allObjects) hosted::Detach(window);
+    [hosted::Attached() removeAllObjects];
+    hosted::gActive.store(false, std::memory_order_release);
+    hosted::gHooks = {};
+    const uint64_t count = hosted::RestoreAll();
+    if (restored) *restored = count;
+    return ARDIA_BRIDGE_OK;
+  });
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_style_browser_window(void *window) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    NSWindow *target = (__bridge NSWindow *)window;
+    if (![target isKindOfClass:NSWindow.class]) return ARDIA_BRIDGE_BAD_ARGUMENT;
+    StyleBrowserWindow(target);
+    return ARDIA_BRIDGE_OK;
+  });
+}
+
+extern "C" bool ardia_bridge_hosted_hooks_installed(void) {
+  return hosted::Active();
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_hosted_window_attach(void *window) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    if (!window) return ARDIA_BRIDGE_BAD_ARGUMENT;
+    return hosted::Attach((__bridge NSWindow *)window);
+  });
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_hosted_window_attach_engine(uint64_t windowId) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    if (!hosted::Active()) return ARDIA_BRIDGE_NO_HOST;
+    ArdiaCoreWindow *window = [Windows() objectFor:windowId];
+    if (!window || !window.window) return ARDIA_BRIDGE_UNKNOWN_WINDOW;
+    return hosted::Attach(window.window);
+  });
+}
+
+extern "C" ArdiaBridgeStatus ardia_bridge_hosted_window_detach(void *window) {
+  return Guarded([&]() -> ArdiaBridgeStatus {
+    NSWindow *target = (__bridge NSWindow *)window;
+    if (![target isKindOfClass:NSWindow.class]) return ARDIA_BRIDGE_BAD_ARGUMENT;
+    hosted::Detach(target);
+    return ARDIA_BRIDGE_OK;
+  });
+}
+
+extern "C" bool ardia_bridge_hosted_window_attached(void *window) {
+  if (!window || !NSThread.isMainThread) return false;
+  return objc_getAssociatedObject((__bridge id)window, hosted::kHostedClassKey) != nil;
+}
+
+extern "C" uint64_t ardia_bridge_hosted_window_count(void) {
+  if (!NSThread.isMainThread) return 0;
+  @autoreleasepool {
+    return hosted::Attached().allObjects.count;
+  }
 }

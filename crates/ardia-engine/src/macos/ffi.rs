@@ -17,6 +17,44 @@ pub const NO_HOST: Status = 11;
 
 pub const CREATE_WINDOW: u64 = u64::MAX;
 
+pub type HostedVoidSuper = unsafe extern "C" fn(thunk: *mut c_void);
+pub type HostedBoolSuper = unsafe extern "C" fn(thunk: *mut c_void) -> bool;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HostedHookTable {
+    pub size: u32,
+    pub context: *mut c_void,
+    pub send_event: unsafe extern "C" fn(
+        context: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: HostedVoidSuper,
+        thunk: *mut c_void,
+    ),
+    pub key_down: unsafe extern "C" fn(
+        context: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: HostedVoidSuper,
+        thunk: *mut c_void,
+    ),
+    pub make_first_responder: unsafe extern "C" fn(
+        context: *mut c_void,
+        window: *mut c_void,
+        responder: *mut c_void,
+        call_super: HostedBoolSuper,
+        thunk: *mut c_void,
+    ) -> bool,
+    pub perform_key_equivalent: unsafe extern "C" fn(
+        context: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: HostedBoolSuper,
+        thunk: *mut c_void,
+    ) -> bool,
+}
+
 #[repr(C)]
 pub struct BridgeHost {
     pub size: u32,
@@ -122,4 +160,13 @@ unsafe extern "C" {
         url: *const c_char,
         title: *const c_char,
     ) -> Status;
+    pub fn ardia_bridge_style_browser_window(window: *mut c_void) -> Status;
+    pub fn ardia_bridge_hosted_hooks_install(hooks: *const HostedHookTable) -> Status;
+    pub fn ardia_bridge_hosted_hooks_remove(restored: *mut u64) -> Status;
+    pub fn ardia_bridge_hosted_hooks_installed() -> bool;
+    pub fn ardia_bridge_hosted_window_attach(window: *mut c_void) -> Status;
+    pub fn ardia_bridge_hosted_window_attach_engine(window: u64) -> Status;
+    pub fn ardia_bridge_hosted_window_detach(window: *mut c_void) -> Status;
+    pub fn ardia_bridge_hosted_window_attached(window: *mut c_void) -> bool;
+    pub fn ardia_bridge_hosted_window_count() -> u64;
 }

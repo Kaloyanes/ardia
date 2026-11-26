@@ -1,1 +1,3 @@
-fn main() { println!("Ardia GPUI {}", ardia_ui::ui_version()); }
+fn main() {
+    std::process::exit(ardia_app::run(std::env::args_os()));
+}

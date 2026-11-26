@@ -87,6 +87,28 @@ ArdiaBridgeStatus ardia_bridge_workspace(const char *json, char **out_json);
 ArdiaBridgeStatus ardia_bridge_install_app_events(bool urls, bool reopen);
 ArdiaBridgeStatus ardia_bridge_set_handoff(void *window, const char *url, const char *title);
 
+typedef void (*ArdiaHostedVoidSuper)(void *thunk);
+typedef bool (*ArdiaHostedBoolSuper)(void *thunk);
+
+typedef struct ArdiaHostedWindowHooks {
+  uint32_t size;
+  void *context;
+  void (*send_event)(void *context, void *window, void *event, ArdiaHostedVoidSuper call_super, void *thunk);
+  void (*key_down)(void *context, void *window, void *event, ArdiaHostedVoidSuper call_super, void *thunk);
+  bool (*make_first_responder)(void *context, void *window, void *responder, ArdiaHostedBoolSuper call_super, void *thunk);
+  bool (*perform_key_equivalent)(void *context, void *window, void *event, ArdiaHostedBoolSuper call_super, void *thunk);
+} ArdiaHostedWindowHooks;
+
+ArdiaBridgeStatus ardia_bridge_style_browser_window(void *window);
+ArdiaBridgeStatus ardia_bridge_hosted_hooks_install(const ArdiaHostedWindowHooks *hooks);
+ArdiaBridgeStatus ardia_bridge_hosted_hooks_remove(uint64_t *restored);
+bool ardia_bridge_hosted_hooks_installed(void);
+ArdiaBridgeStatus ardia_bridge_hosted_window_attach(void *window);
+ArdiaBridgeStatus ardia_bridge_hosted_window_attach_engine(uint64_t window);
+ArdiaBridgeStatus ardia_bridge_hosted_window_detach(void *window);
+bool ardia_bridge_hosted_window_attached(void *window);
+uint64_t ardia_bridge_hosted_window_count(void);
+
 #ifdef __cplusplus
 }
 #endif

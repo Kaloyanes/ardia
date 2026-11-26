@@ -31,6 +31,10 @@ use crate::services::{SecretValue, ServiceArgs, ServiceName};
 use crate::types::*;
 
 pub use decode::decode_bridge_event;
+pub use hosted::{
+    HostedWindowHooks, HostedWindowRoutes, SuperCall, hosted_hooks_installed,
+    install_hosted_window_hooks, style_browser_window,
+};
 
 pub(crate) static REQUESTS: LazyLock<PendingRequests> = LazyLock::new(PendingRequests::new);
 
@@ -1285,6 +1289,573 @@ impl BrowserEngine for MacEngine {
             Ok(())
         } else {
             Err(status_error(status, || EngineError::NotStarted))
+        }
+    }
+}
+
+mod hosted {
+    use std::cell::{Cell, RefCell};
+    use std::ffi::c_void;
+    use std::marker::PhantomData;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::ptr::NonNull;
+    use std::rc::Rc;
+
+    use super::{ffi, is_main_thread, status_error};
+    use crate::error::{EngineError, EngineResult};
+    use crate::types::{EngineWindowId, NativeWindow};
+
+    pub trait HostedWindowRoutes: 'static {
+        fn send_event(
+            &self,
+            window: NonNull<c_void>,
+            event: NonNull<c_void>,
+            call_super: SuperCall<'_, ()>,
+        );
+
+        fn key_down(
+            &self,
+            window: NonNull<c_void>,
+            event: NonNull<c_void>,
+            call_super: SuperCall<'_, ()>,
+        );
+
+        fn make_first_responder(
+            &self,
+            window: NonNull<c_void>,
+            responder: Option<NonNull<c_void>>,
+            call_super: SuperCall<'_, bool>,
+        ) -> bool;
+
+        fn perform_key_equivalent(
+            &self,
+            window: NonNull<c_void>,
+            event: NonNull<c_void>,
+            call_super: SuperCall<'_, bool>,
+        ) -> bool;
+    }
+
+    pub struct SuperCall<'a, R: Copy> {
+        invoke: unsafe extern "C" fn(*mut c_void) -> R,
+        thunk: *mut c_void,
+        done: &'a Cell<Option<R>>,
+    }
+
+    impl<R: Copy> SuperCall<'_, R> {
+        pub fn call(self) -> R {
+            if let Some(value) = self.done.get() {
+                return value;
+            }
+            let value = unsafe { (self.invoke)(self.thunk) };
+            self.done.set(Some(value));
+            value
+        }
+
+        pub fn was_called(&self) -> bool {
+            self.done.get().is_some()
+        }
+    }
+
+    thread_local! {
+        static ROUTES: RefCell<Option<Rc<dyn HostedWindowRoutes>>> = const { RefCell::new(None) };
+    }
+
+    fn current_routes() -> Option<Rc<dyn HostedWindowRoutes>> {
+        ROUTES
+            .try_with(|routes| routes.try_borrow().ok().and_then(|routes| routes.clone()))
+            .ok()
+            .flatten()
+    }
+
+    fn take_routes() {
+        let routes = ROUTES
+            .try_with(|routes| {
+                routes
+                    .try_borrow_mut()
+                    .ok()
+                    .and_then(|mut slot| slot.take())
+            })
+            .ok()
+            .flatten();
+        drop(routes);
+    }
+
+    fn route<R: Copy>(
+        invoke: unsafe extern "C" fn(*mut c_void) -> R,
+        thunk: *mut c_void,
+        body: impl FnOnce(&dyn HostedWindowRoutes, SuperCall<'_, R>) -> R,
+    ) -> R {
+        let done = Cell::new(None);
+        let routed = current_routes().and_then(|routes| {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                body(
+                    routes.as_ref(),
+                    SuperCall {
+                        invoke,
+                        thunk,
+                        done: &done,
+                    },
+                )
+            }));
+            if outcome.is_err() {
+                log::error!("a hosted window input route panicked, so the window handled it");
+            }
+            outcome.ok()
+        });
+        routed.unwrap_or_else(|| {
+            SuperCall {
+                invoke,
+                thunk,
+                done: &done,
+            }
+            .call()
+        })
+    }
+
+    unsafe extern "C" fn routed_send_event(
+        _: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: ffi::HostedVoidSuper,
+        thunk: *mut c_void,
+    ) {
+        match (NonNull::new(window), NonNull::new(event)) {
+            (Some(window), Some(event)) => route(call_super, thunk, |routes, call_super| {
+                routes.send_event(window, event, call_super)
+            }),
+            _ => unsafe { call_super(thunk) },
+        }
+    }
+
+    unsafe extern "C" fn routed_key_down(
+        _: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: ffi::HostedVoidSuper,
+        thunk: *mut c_void,
+    ) {
+        match (NonNull::new(window), NonNull::new(event)) {
+            (Some(window), Some(event)) => route(call_super, thunk, |routes, call_super| {
+                routes.key_down(window, event, call_super)
+            }),
+            _ => unsafe { call_super(thunk) },
+        }
+    }
+
+    unsafe extern "C" fn routed_make_first_responder(
+        _: *mut c_void,
+        window: *mut c_void,
+        responder: *mut c_void,
+        call_super: ffi::HostedBoolSuper,
+        thunk: *mut c_void,
+    ) -> bool {
+        match NonNull::new(window) {
+            Some(window) => route(call_super, thunk, |routes, call_super| {
+                routes.make_first_responder(window, NonNull::new(responder), call_super)
+            }),
+            None => unsafe { call_super(thunk) },
+        }
+    }
+
+    unsafe extern "C" fn routed_perform_key_equivalent(
+        _: *mut c_void,
+        window: *mut c_void,
+        event: *mut c_void,
+        call_super: ffi::HostedBoolSuper,
+        thunk: *mut c_void,
+    ) -> bool {
+        match (NonNull::new(window), NonNull::new(event)) {
+            (Some(window), Some(event)) => route(call_super, thunk, |routes, call_super| {
+                routes.perform_key_equivalent(window, event, call_super)
+            }),
+            _ => unsafe { call_super(thunk) },
+        }
+    }
+
+    fn hook_table() -> ffi::HostedHookTable {
+        ffi::HostedHookTable {
+            size: std::mem::size_of::<ffi::HostedHookTable>() as u32,
+            context: std::ptr::null_mut(),
+            send_event: routed_send_event,
+            key_down: routed_key_down,
+            make_first_responder: routed_make_first_responder,
+            perform_key_equivalent: routed_perform_key_equivalent,
+        }
+    }
+
+    fn checked(status: ffi::Status, gone: impl FnOnce() -> EngineError) -> EngineResult<()> {
+        if status == ffi::OK {
+            Ok(())
+        } else {
+            Err(status_error(status, gone))
+        }
+    }
+
+    pub fn hosted_hooks_installed() -> bool {
+        unsafe { ffi::ardia_bridge_hosted_hooks_installed() }
+    }
+
+    pub fn style_browser_window(window: &NativeWindow) -> EngineResult<()> {
+        let object = window
+            .live_object()
+            .ok_or_else(|| EngineError::bad_argument("only a live AppKit window can be styled"))?;
+        if !is_main_thread() {
+            return Err(EngineError::WrongThread);
+        }
+        let status = unsafe { ffi::ardia_bridge_style_browser_window(object) };
+        checked(status, || EngineError::bad_argument("that isn't a window"))
+    }
+
+    #[must_use = "dropping the hooks hands every hosted window its own input handling back"]
+    pub struct HostedWindowHooks {
+        active: Cell<bool>,
+        _main_thread_only: PhantomData<*const ()>,
+    }
+
+    impl std::fmt::Debug for HostedWindowHooks {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("HostedWindowHooks")
+                .field("active", &self.active.get())
+                .finish()
+        }
+    }
+
+    pub fn install_hosted_window_hooks(
+        routes: impl HostedWindowRoutes,
+    ) -> EngineResult<HostedWindowHooks> {
+        if !is_main_thread() {
+            return Err(EngineError::WrongThread);
+        }
+        if ROUTES.with_borrow(Option::is_some) || hosted_hooks_installed() {
+            return Err(EngineError::AlreadyRunning);
+        }
+        ROUTES.with_borrow_mut(|slot| *slot = Some(Rc::new(routes)));
+        let table = hook_table();
+        let status = unsafe { ffi::ardia_bridge_hosted_hooks_install(&table) };
+        if let Err(error) = checked(status, || {
+            EngineError::failed("the hosted window hooks didn't install")
+        }) {
+            take_routes();
+            return Err(error);
+        }
+        Ok(HostedWindowHooks {
+            active: Cell::new(true),
+            _main_thread_only: PhantomData,
+        })
+    }
+
+    fn appkit_window(window: &NativeWindow) -> EngineResult<*mut c_void> {
+        window
+            .live_object()
+            .ok_or_else(|| EngineError::bad_argument("only a live AppKit window can route input"))
+    }
+
+    impl HostedWindowHooks {
+        pub fn attach(&self, window: &NativeWindow) -> EngineResult<()> {
+            let object = appkit_window(window)?;
+            checked(
+                unsafe { ffi::ardia_bridge_hosted_window_attach(object) },
+                || EngineError::bad_argument("that isn't a window"),
+            )
+        }
+
+        pub fn attach_engine_window(&self, window: EngineWindowId) -> EngineResult<()> {
+            checked(
+                unsafe { ffi::ardia_bridge_hosted_window_attach_engine(window.get()) },
+                || EngineError::UnknownWindow(window),
+            )
+        }
+
+        pub fn detach(&self, window: &NativeWindow) -> EngineResult<()> {
+            let object = appkit_window(window)?;
+            checked(
+                unsafe { ffi::ardia_bridge_hosted_window_detach(object) },
+                || EngineError::bad_argument("that isn't a window"),
+            )
+        }
+
+        pub fn is_attached(&self, window: &NativeWindow) -> bool {
+            window
+                .live_object()
+                .is_some_and(|object| unsafe { ffi::ardia_bridge_hosted_window_attached(object) })
+        }
+
+        pub fn attached_count(&self) -> usize {
+            usize::try_from(unsafe { ffi::ardia_bridge_hosted_window_count() })
+                .unwrap_or(usize::MAX)
+        }
+
+        pub fn uninstall(self) -> EngineResult<u64> {
+            self.remove()
+        }
+
+        fn remove(&self) -> EngineResult<u64> {
+            if !self.active.replace(false) {
+                return Ok(0);
+            }
+            let mut restored = 0;
+            let status = unsafe { ffi::ardia_bridge_hosted_hooks_remove(&mut restored) };
+            take_routes();
+            checked(status, || {
+                EngineError::failed("the hosted window hooks didn't come off")
+            })
+            .map(|()| restored)
+        }
+    }
+
+    impl Drop for HostedWindowHooks {
+        fn drop(&mut self) {
+            if let Err(error) = self.remove() {
+                log::warn!("the hosted window hooks didn't come off cleanly: {error}");
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::types::NativeWindowHandle;
+
+        #[test]
+        fn only_a_live_appkit_window_can_be_styled() {
+            let token = NativeWindow::borrowed(NativeWindowHandle(0x22 as *mut c_void));
+            assert!(matches!(
+                style_browser_window(&token),
+                Err(EngineError::BadArgument(_))
+            ));
+        }
+
+        struct Routes {
+            calls_super: u8,
+            panics_after: bool,
+            seen: Rc<Cell<u32>>,
+            answer: bool,
+        }
+
+        impl Routes {
+            fn passing(times: u8, seen: &Rc<Cell<u32>>) -> Self {
+                Self {
+                    calls_super: times,
+                    panics_after: false,
+                    seen: seen.clone(),
+                    answer: false,
+                }
+            }
+
+            fn run<R: Copy>(&self, call_super: SuperCall<'_, R>, fallback: R) -> R {
+                self.seen.set(self.seen.get() + 1);
+                if self.calls_super > 1 {
+                    call_super.copied().call();
+                }
+                let value = if self.calls_super > 0 {
+                    call_super.call()
+                } else {
+                    fallback
+                };
+                if self.panics_after {
+                    panic!("a route broke");
+                }
+                value
+            }
+        }
+
+        impl<R: Copy> SuperCall<'_, R> {
+            fn copied(&self) -> Self {
+                SuperCall {
+                    invoke: self.invoke,
+                    thunk: self.thunk,
+                    done: self.done,
+                }
+            }
+        }
+
+        impl HostedWindowRoutes for Routes {
+            fn send_event(
+                &self,
+                _: NonNull<c_void>,
+                _: NonNull<c_void>,
+                call_super: SuperCall<'_, ()>,
+            ) {
+                self.run(call_super, ())
+            }
+
+            fn key_down(
+                &self,
+                _: NonNull<c_void>,
+                _: NonNull<c_void>,
+                call_super: SuperCall<'_, ()>,
+            ) {
+                self.run(call_super, ())
+            }
+
+            fn make_first_responder(
+                &self,
+                _: NonNull<c_void>,
+                _: Option<NonNull<c_void>>,
+                call_super: SuperCall<'_, bool>,
+            ) -> bool {
+                self.run(call_super, self.answer)
+            }
+
+            fn perform_key_equivalent(
+                &self,
+                _: NonNull<c_void>,
+                _: NonNull<c_void>,
+                call_super: SuperCall<'_, bool>,
+            ) -> bool {
+                self.run(call_super, self.answer)
+            }
+        }
+
+        unsafe extern "C" fn count_void(thunk: *mut c_void) {
+            let count = unsafe { &*(thunk as *const Cell<u32>) };
+            count.set(count.get() + 1);
+        }
+
+        unsafe extern "C" fn count_bool(thunk: *mut c_void) -> bool {
+            let count = unsafe { &*(thunk as *const Cell<u32>) };
+            count.set(count.get() + 1);
+            true
+        }
+
+        fn thunk(count: &Cell<u32>) -> *mut c_void {
+            count as *const Cell<u32> as *mut c_void
+        }
+
+        fn with_routes<R>(routes: Routes, body: impl FnOnce() -> R) -> R {
+            ROUTES.with_borrow_mut(|slot| *slot = Some(Rc::new(routes)));
+            let out = body();
+            take_routes();
+            out
+        }
+
+        fn fake() -> *mut c_void {
+            NonNull::<u8>::dangling().as_ptr().cast()
+        }
+
+        #[test]
+        fn unrouted_events_reach_the_window_exactly_once() {
+            let supers = Cell::new(0);
+            unsafe {
+                routed_send_event(fake(), fake(), fake(), count_void, thunk(&supers));
+                routed_key_down(fake(), fake(), fake(), count_void, thunk(&supers));
+                assert!(routed_make_first_responder(
+                    fake(),
+                    fake(),
+                    std::ptr::null_mut(),
+                    count_bool,
+                    thunk(&supers)
+                ));
+                assert!(routed_perform_key_equivalent(
+                    fake(),
+                    fake(),
+                    fake(),
+                    count_bool,
+                    thunk(&supers)
+                ));
+            }
+            assert_eq!(supers.get(), 4);
+        }
+
+        #[test]
+        fn routes_decide_whether_the_window_sees_an_event() {
+            let seen = Rc::new(Cell::new(0));
+            let supers = Cell::new(0);
+            with_routes(Routes::passing(0, &seen), || unsafe {
+                routed_send_event(fake(), fake(), fake(), count_void, thunk(&supers));
+                assert!(!routed_perform_key_equivalent(
+                    fake(),
+                    fake(),
+                    fake(),
+                    count_bool,
+                    thunk(&supers)
+                ));
+            });
+            assert_eq!((seen.get(), supers.get()), (2, 0));
+            with_routes(Routes::passing(2, &seen), || unsafe {
+                routed_key_down(fake(), fake(), fake(), count_void, thunk(&supers));
+                assert!(routed_make_first_responder(
+                    fake(),
+                    fake(),
+                    fake(),
+                    count_bool,
+                    thunk(&supers)
+                ));
+            });
+            assert_eq!(
+                (seen.get(), supers.get()),
+                (4, 2),
+                "a route that asks twice still reaches the window once"
+            );
+        }
+
+        #[test]
+        fn a_panicking_route_still_lets_the_window_handle_the_event_once() {
+            let seen = Rc::new(Cell::new(0));
+            let supers = Cell::new(0);
+            let before = Routes {
+                panics_after: true,
+                ..Routes::passing(0, &seen)
+            };
+            with_routes(before, || unsafe {
+                routed_send_event(fake(), fake(), fake(), count_void, thunk(&supers));
+            });
+            assert_eq!(supers.get(), 1);
+            let after = Routes {
+                panics_after: true,
+                ..Routes::passing(1, &seen)
+            };
+            let answer = with_routes(after, || unsafe {
+                routed_perform_key_equivalent(fake(), fake(), fake(), count_bool, thunk(&supers))
+            });
+            assert!(answer, "the window's own answer survives the panic");
+            assert_eq!((seen.get(), supers.get()), (2, 2));
+        }
+
+        #[test]
+        fn null_windows_and_events_skip_the_routes() {
+            let seen = Rc::new(Cell::new(0));
+            let supers = Cell::new(0);
+            with_routes(Routes::passing(0, &seen), || unsafe {
+                routed_send_event(
+                    fake(),
+                    std::ptr::null_mut(),
+                    fake(),
+                    count_void,
+                    thunk(&supers),
+                );
+                routed_key_down(
+                    fake(),
+                    fake(),
+                    std::ptr::null_mut(),
+                    count_void,
+                    thunk(&supers),
+                );
+                routed_make_first_responder(
+                    fake(),
+                    std::ptr::null_mut(),
+                    fake(),
+                    count_bool,
+                    thunk(&supers),
+                );
+            });
+            assert_eq!((seen.get(), supers.get()), (0, 3));
+        }
+
+        #[test]
+        fn hooks_install_only_on_the_main_thread() {
+            if is_main_thread() {
+                return;
+            }
+            let seen = Rc::new(Cell::new(0));
+            assert!(matches!(
+                install_hosted_window_hooks(Routes::passing(1, &seen)),
+                Err(EngineError::WrongThread)
+            ));
+            assert!(
+                current_routes().is_none(),
+                "a refused install keeps no routes"
+            );
         }
     }
 }

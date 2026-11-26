@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "ardia_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ardia"
 path = "src/main.rs"
@@ -14,7 +18,35 @@ ardia-theme.workspace = true
 ardia-state.workspace = true
 ardia-engine.workspace = true
 ardia-ui.workspace = true
+ardia-import-core.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 anyhow.workspace = true
 log.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+uuid.workspace = true
+base64 = { workspace = true, features = ["std"] }
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico", "bmp", "jpeg", "gif", "webp"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+raw-window-handle = "0.6"
+gpui = { workspace = true, features = ["test-support"] }
+gpui_macos = { workspace = true, features = ["font-kit"] }
+
+[[test]]
+name = "hosted_input"
+path = "tests/hosted_input.rs"
+harness = false

@@ -41,7 +41,13 @@ pub trait UiHost: Send + Sync + 'static {
     fn download_command(&self, download_id: String, command: DownloadCommand);
     fn reveal_path(&self, path: String);
     fn resolve_permission(&self, request_id: String, result: PermissionResult, remember: bool);
-    fn resolve_password_prompt(&self, tab_id: TabId, action: String, username: Option<String>, password: Option<String>);
+    fn resolve_password_prompt(
+        &self,
+        tab_id: TabId,
+        action: String,
+        username: Option<String>,
+        password: Option<String>,
+    );
     fn resolve_autofill_prompt(&self, tab_id: TabId, prompt_id: i64, action: String);
     fn execute_extension_action(&self, tab_id: TabId, extension_id: String);
     fn open_little_ardia_in_main(&self, window_id: WindowId);
@@ -59,4 +65,6 @@ pub enum UtilityWindowKind {
     Onboarding,
 }
 
-pub fn bind_global_keybindings(_cx: &mut App) {}
+pub fn bind_global_keybindings(cx: &mut App) {
+    crate::keybindings::bind_defaults(cx);
+}
