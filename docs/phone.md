@@ -3166,7 +3166,7 @@ zeros, nightly 1 to 998) and orders them by versionCode.
 - **When.** 8 s after launch once the app is idle, and when it comes back to the front, only while it is in the front.
   `app_update_next_check_at` holds the next automatic check: 6 hours after an answer, 10 minutes after an unfinished
   walk (below), GitHub's own `Retry-After` or `x-ratelimit-reset` after a rate limit (kept between 1 minute and a day),
-  and nothing after no answer (offline or past the 10 s deadline), so the next launch tries again. A next check more
+  30 minutes after an error or malformed answer without one, and nothing after no answer (offline or past the 10 s deadline), so the next launch tries again. A next check more
   than a day out means the clock moved, and it checks. Settings › About › Check for updates checks at once and shows
   Checking…, up to date, Download Ardia <version>, unfinished, or couldn’t check.
 - **What it reads.** Unauthenticated: `git/matching-refs/tags/android-v` for the tags, then

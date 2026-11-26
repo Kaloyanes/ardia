@@ -4,6 +4,7 @@ export const RELEASE_REPO = "ardia-browser/ardia";
 export const RELEASE_TAG_PREFIX = "android-v";
 export const UPDATE_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 export const UPDATE_RETRY_INCOMPLETE_MS = 10 * 60 * 1000;
+export const UPDATE_RETRY_FAILED_MS = 30 * 60 * 1000;
 export const UPDATE_CHECK_LONGEST_WAIT_MS = 24 * 60 * 60 * 1000;
 export const UPDATE_RETRY_SOONEST_MS = 60 * 1000;
 export const UNPUBLISHED_REMEMBERED_MS = 6 * 60 * 60 * 1000;
@@ -193,7 +194,7 @@ export function nextCheckAt(result: UpdateCheckResult, now: number): number | nu
   if (result.kind === "available" || result.kind === "current") return now + UPDATE_CHECK_EVERY_MS;
   if (result.kind === "incomplete") return now + UPDATE_RETRY_INCOMPLETE_MS;
   if (!result.answered) return null;
-  if (result.retryAt === null) return now + UPDATE_CHECK_EVERY_MS;
+  if (result.retryAt === null) return now + UPDATE_RETRY_FAILED_MS;
   return Math.min(now + UPDATE_CHECK_LONGEST_WAIT_MS, Math.max(now + UPDATE_RETRY_SOONEST_MS, result.retryAt));
 }
 
@@ -220,7 +221,7 @@ export const updateDownloadingMessage = (offer: OfferedRelease) => `Downloading 
 export const updateUnavailableMessage = () => "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases.";
 
 export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null): { title: string; detail: string | undefined } {
-  if (status === "available" && offer) {
+  if (offer && status !== "current") {
     if (handoff === "notifications") return { title: `Download Ardia ${offer.version}`, detail: "Downloading. When it’s done, tap its notification to install." };
     if (handoff === "unavailable") return { title: `Download Ardia ${offer.version}`, detail: "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases." };
     return { title: `Download Ardia ${offer.version}`, detail: "A newer version is out. It downloads to your notifications, then Android installs it." };
@@ -231,5 +232,7 @@ export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | nul
   if (status === "failed") return { title: "Check for updates", detail: "Couldn’t check. Try again later." };
   return { title: "Check for updates", detail: undefined };
 }
+
+export const updateRowOpensDownload = (status: UpdateStatus, offer: OfferedRelease | null) => offer !== null && status !== "current";
 
 export const updateHandoffOf = (value: unknown): UpdateHandoff => (value === "notifications" || value === "browser" ? value : "unavailable");

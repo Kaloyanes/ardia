@@ -9,7 +9,7 @@ import { copy } from "../../lib/platformCopy";
 import { libraryCredits } from "../../state/settings/libraryCredits";
 import { ButtonRow, Divider, Group, NavRow, PickerRow, SettingsPage, ToggleRow, ValueRow } from "./SettingsKit";
 import { destinationWords } from "../../lib/sharedWords";
-import { updateRowWords } from "../../lib/appUpdate";
+import { updateRowOpensDownload, updateRowWords } from "../../lib/appUpdate";
 import { appUpdatesOffered, checkForUpdate, openUpdate, useAppUpdate } from "../../state/appUpdate/store";
 
 export function ClearDataPage({ onBack = popSettings }: { onBack?: () => void }) {
@@ -75,7 +75,7 @@ function UpdateGroup() {
   const words = updateRowWords(status, offer, handoff);
   return (
     <Group>
-      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={status === "available" ? () => void openUpdate() : checkForUpdate} />
+      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={updateRowOpensDownload(status, offer) ? () => void openUpdate() : checkForUpdate} />
     </Group>
   );
 }

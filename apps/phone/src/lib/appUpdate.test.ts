@@ -26,10 +26,12 @@ import {
   UNPUBLISHED_REMEMBERED_MS,
   UPDATE_CHECK_EVERY_MS,
   UPDATE_CHECK_LONGEST_WAIT_MS,
+  UPDATE_RETRY_FAILED_MS,
   UPDATE_RETRY_INCOMPLETE_MS,
   updateDownloadRequest,
   updateHandoffOf,
   updateOfferWanted,
+  updateRowOpensDownload,
   updateRowWords,
   withOfferedVersion,
   type GitHubJsonAnswer,
@@ -174,7 +176,7 @@ test("the automatic check waits 6 hours after an answer, 10 minutes after an unf
   assert.equal(nextCheckAt({ kind: "available", offer: { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) }, unpublished: [] }, NOW), NOW + UPDATE_CHECK_EVERY_MS);
   assert.equal(nextCheckAt({ kind: "incomplete", unpublished: [] }, NOW), NOW + UPDATE_RETRY_INCOMPLETE_MS);
   assert.equal(nextCheckAt({ kind: "failed", answered: false, retryAt: null, unpublished: [] }, NOW), null);
-  assert.equal(nextCheckAt({ kind: "failed", answered: true, retryAt: null, unpublished: [] }, NOW), NOW + UPDATE_CHECK_EVERY_MS);
+  assert.equal(nextCheckAt({ kind: "failed", answered: true, retryAt: null, unpublished: [] }, NOW), NOW + UPDATE_RETRY_FAILED_MS, "a 5xx or malformed answer without a retry time stays retryable within the half hour");
   assert.equal(parseCheckAt(String(NOW)), NOW);
   for (const text of [null, undefined, "", "-1", "0", "1e12", "12.5", "abc", " 1", "99999999999999999"]) assert.equal(parseCheckAt(text), null, String(text));
 });
@@ -274,6 +276,11 @@ test("the Settings row says what the check found and where the download went", (
   assert.equal(updateRowWords("available", offer, null).title, "Download Ardia 1.0.4");
   assert.match(updateRowWords("available", offer, "notifications").detail ?? "", /notification/);
   assert.match(updateRowWords("available", offer, "unavailable").detail ?? "", /github\.com\/ardia-browser\/ardia\/releases/);
+  assert.equal(updateRowWords("failed", offer, null).title, "Download Ardia 1.0.4", "a failed refresh keeps the download it already validated");
+  assert.equal(updateRowWords("incomplete", offer, null).title, "Download Ardia 1.0.4");
+  assert.equal(updateRowOpensDownload("failed", offer), true);
+  assert.equal(updateRowOpensDownload("current", offer), false);
+  assert.equal(updateRowOpensDownload("failed", null), false);
   assert.equal(updateHandoffOf("notifications"), "notifications");
   assert.equal(updateHandoffOf("browser"), "browser");
   for (const { id, value } of HOSTILE_VALUES) assert.equal(updateHandoffOf(value), "unavailable", id);
