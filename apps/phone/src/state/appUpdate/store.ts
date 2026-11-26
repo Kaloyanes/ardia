@@ -14,7 +14,7 @@ import {
   handOffResultOf,
   installOutcomeOf,
   parseDownloadRecord,
-  parseReleaseChecksum,
+  checksumVerdict,
   updateDownloadingMessage,
   updateDownloadRequest,
   updateOfferMessage,
@@ -26,6 +26,7 @@ import {
   updateUnverifiedMessage,
   UPDATE_CHECK_TIMEOUT_MS,
   UPDATE_CHECKSUM_TIMEOUT_MS,
+  UPDATE_CHECKSUM_WITH_DIGEST_TIMEOUT_MS,
   withOfferedVersion,
   type HandOffResult,
   type OfferedRelease,
@@ -226,21 +227,21 @@ async function installDownloaded(offer: OfferedRelease, id: string) {
   installing = true;
   setHandoff(offer.version, "verifying");
   const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), UPDATE_CHECKSUM_TIMEOUT_MS);
+  const deadline = setTimeout(() => controller.abort(), request.sha256 ? UPDATE_CHECKSUM_WITH_DIGEST_TIMEOUT_MS : UPDATE_CHECKSUM_TIMEOUT_MS);
   try {
     const answer = await fetchReleaseChecksum(request.checksumUrl, controller.signal);
     clearTimeout(deadline);
-    if (answer.kind === "unreachable") {
+    const verdict = checksumVerdict(answer, request.version, request.sha256);
+    if (verdict.kind === "unverified") {
       setHandoff(offer.version, "ready");
       showToast(updateUnverifiedMessage(), "warning");
       return;
     }
-    const sha256 = answer.kind === "text" ? parseReleaseChecksum(answer.text, request.version) : null;
-    if (!sha256) {
+    if (verdict.kind === "refused") {
       await refuse(offer, id);
       return;
     }
-    const outcome = installOutcomeOf(await downloads.installAppUpdate(id, sha256, request.fileName).catch(() => "failed"));
+    const outcome = installOutcomeOf(await downloads.installAppUpdate(id, verdict.sha256, request.fileName).catch(() => "failed"));
     if (outcome === "refused") {
       await refuse(offer, id);
       return;

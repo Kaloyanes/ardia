@@ -10,6 +10,7 @@ export const UPDATE_RETRY_SOONEST_MS = 60 * 1000;
 export const UNPUBLISHED_REMEMBERED_MS = 6 * 60 * 60 * 1000;
 export const UPDATE_CHECK_TIMEOUT_MS = 10_000;
 export const UPDATE_CHECKSUM_TIMEOUT_MS = 30_000;
+export const UPDATE_CHECKSUM_WITH_DIGEST_TIMEOUT_MS = 10_000;
 export const MAX_RELEASE_LOOKUPS = 3;
 export const MAX_GITHUB_BODY_CHARS = 1_000_000;
 
@@ -25,7 +26,7 @@ export type ReleaseVersion = AndroidRelease;
 
 export type ReleaseChannel = AndroidReleaseChannel;
 
-export type OfferedRelease = { version: string; downloadUrl: string; checksumUrl: string };
+export type OfferedRelease = { version: string; downloadUrl: string; checksumUrl: string; sha256: string | null };
 
 export const parseAndroidVersion = (text: unknown): ReleaseVersion | null => parseAndroidRelease(text);
 
@@ -93,11 +94,31 @@ export function releaseOfDownloadUrl(url: unknown): ReleaseVersion | null {
 
 export const isReleaseDownloadUrl = (url: unknown): url is string => releaseOfDownloadUrl(url) !== null;
 
-export function updateDownloadRequest(offer: { version?: unknown; downloadUrl?: unknown; checksumUrl?: unknown } | null | undefined): { url: string; checksumUrl: string; fileName: string; title: string; version: ReleaseVersion } | null {
+export function updateDownloadRequest(offer: { version?: unknown; downloadUrl?: unknown; checksumUrl?: unknown; sha256?: unknown } | null | undefined): { url: string; checksumUrl: string; fileName: string; title: string; version: ReleaseVersion; sha256: string | null } | null {
   if (!offer || typeof offer !== "object") return null;
   const version = releaseOfDownloadUrl(offer.downloadUrl);
   if (!version || offer.version !== version.text || offer.checksumUrl !== apkChecksumUrl(version)) return null;
-  return { url: apkDownloadUrl(version), checksumUrl: apkChecksumUrl(version), fileName: apkName(version), title: `Ardia ${version.text}`, version };
+  const sha256 = "sha256" in offer && typeof offer.sha256 === "string" && /^[0-9a-f]{64}$/.test(offer.sha256) ? offer.sha256 : null;
+  return { url: apkDownloadUrl(version), checksumUrl: apkChecksumUrl(version), fileName: apkName(version), title: `Ardia ${version.text}`, version, sha256 };
+}
+
+const SHA256 = /^[0-9a-f]{64}$/;
+
+export function assetDigest(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^sha256:([0-9a-f]{64})$/.exec(value);
+  return match ? match[1]! : null;
+}
+
+export type ChecksumVerdict = { kind: "verified"; sha256: string } | { kind: "refused" } | { kind: "unverified" };
+
+export function checksumVerdict(answer: { kind: "text"; text: string } | { kind: "missing" } | { kind: "unreachable" }, version: ReleaseVersion, apiDigest: string | null): ChecksumVerdict {
+  const digest = typeof apiDigest === "string" && SHA256.test(apiDigest) ? apiDigest : null;
+  if (answer.kind === "unreachable") return digest ? { kind: "verified", sha256: digest } : { kind: "unverified" };
+  if (answer.kind === "missing") return { kind: "refused" };
+  const fromFile = parseReleaseChecksum(answer.text, version);
+  if (!fromFile || (digest !== null && digest !== fromFile)) return { kind: "refused" };
+  return { kind: "verified", sha256: fromFile };
 }
 
 export function parseReleaseChecksum(text: unknown, version: ReleaseVersion): string | null {
@@ -120,9 +141,10 @@ export function publishedRelease(body: unknown, version: ReleaseVersion): Offere
   const assets = body.assets;
   if (!Array.isArray(assets)) return null;
   const expectedUrl = apkDownloadUrl(version);
-  const uploaded = (name: string, url: string) => assets.slice(0, MAX_ASSETS).some((asset: unknown) => isRecord(asset) && asset.name === name && asset.state === "uploaded" && asset.browser_download_url === url);
+  const uploadedAsset = (name: string, url: string) => assets.slice(0, MAX_ASSETS).find((asset: unknown): asset is Record<string, unknown> => isRecord(asset) && asset.name === name && asset.state === "uploaded" && asset.browser_download_url === url);
+  const uploaded = (name: string, url: string) => uploadedAsset(name, url) !== undefined;
   if (!uploaded(apkName(version), expectedUrl) || !uploaded(`${apkName(version)}.sha256`, apkChecksumUrl(version)) || !isReleaseDownloadUrl(expectedUrl)) return null;
-  return { version: version.text, downloadUrl: expectedUrl, checksumUrl: apkChecksumUrl(version) };
+  return { version: version.text, downloadUrl: expectedUrl, checksumUrl: apkChecksumUrl(version), sha256: assetDigest(uploadedAsset(apkName(version), expectedUrl)?.digest) };
 }
 
 export type UnpublishedMemo = Record<string, number>;

@@ -29,6 +29,8 @@ import {
   UPDATE_RETRY_FAILED_MS,
   UPDATE_RETRY_INCOMPLETE_MS,
   updateDownloadRequest,
+  assetDigest,
+  checksumVerdict,
   handOffResultOf,
   downloadProgressOf,
   installOutcomeOf,
@@ -64,7 +66,7 @@ const release = (version: string, overrides: Record<string, unknown> = {}) => ({
 
 const NOW = 1_800_000_000_000;
 
-const offerOf = (version: string) => ({ version, downloadUrl: apkDownloadUrl(v(version)), checksumUrl: `${apkDownloadUrl(v(version))}.sha256` });
+const offerOf = (version: string) => ({ version, downloadUrl: apkDownloadUrl(v(version)), checksumUrl: `${apkDownloadUrl(v(version))}.sha256`, sha256: null });
 
 test("versions sort nightlies below the stable of the same base and above the stable before it", () => {
   const ordered = ["1.0.2", "1.0.3-nightly.1", "1.0.3-nightly.2", "1.0.3-nightly.10", "1.0.3", "1.0.4-nightly.1", "1.0.4", "1.1.0", "2.0.0"];
@@ -115,7 +117,7 @@ test("tag listings that aren't a list of Android release tags offer nothing", ()
 
 test("a release is offered only when published, for its own tag, with its uploaded APK on this repo's release download", () => {
   const version = v("1.0.3");
-  assert.deepEqual(publishedRelease(release("1.0.3"), version), { version: "1.0.3", downloadUrl: "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk", checksumUrl: "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk.sha256" });
+  assert.deepEqual(publishedRelease(release("1.0.3"), version), { version: "1.0.3", downloadUrl: "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk", checksumUrl: "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk.sha256", sha256: null });
   assert.equal(publishedRelease(release("1.0.3", { assets: [apk("1.0.3")] }), version), null, "a release without its checksum asset is never offered");
   assert.equal(publishedRelease(release("1.0.3", { assets: [apk("1.0.3"), { ...apk("1.0.3"), name: "Ardia-1.0.3.apk.sha256", browser_download_url: "https://example.com/Ardia-1.0.3.apk.sha256" }] }), version), null);
   assert.equal(publishedRelease(release("1.0.3", { assets: [apk("1.0.3"), { ...apk("1.0.3"), name: "Ardia-1.0.3.apk.sha256", state: "new", browser_download_url: `${apk("1.0.3").browser_download_url}.sha256` }] }), version), null);
@@ -368,4 +370,30 @@ test("the About row acts on where the update is: check, download, look at the do
   assert.equal(updateRowAction("available", offer, "ready"), "install");
   assert.equal(updateRowAction("available", offer, "installing"), "install");
   assert.equal(updateRowAction("available", offer, "needs_permission"), "permission");
+});
+
+test("GitHub's own digest of the APK asset rides along with the offer, read only as sha256:<64 hex>", () => {
+  const digest = `sha256:${SHA}`;
+  const version = v("1.0.3");
+  const withDigest = publishedRelease(release("1.0.3", { assets: [{ ...apk("1.0.3"), digest }, { ...apk("1.0.3"), name: "Ardia-1.0.3.apk.sha256", browser_download_url: `${apk("1.0.3").browser_download_url}.sha256`, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }] }), version);
+  assert.equal(withDigest?.sha256, SHA);
+  assert.equal(assetDigest(digest), SHA);
+  for (const value of [SHA, `sha1:${SHA.slice(0, 40)}`, `sha256:${SHA.toUpperCase()}`, `sha256:${SHA}\n`, `SHA256:${SHA}`, `sha256:${SHA.slice(2)}`]) assert.equal(assetDigest(value), null, value);
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(assetDigest(value), null, id);
+});
+
+test("the checksum verdict: the release's .sha256 file decides, GitHub's digest must agree with it, and stands in only when the file can't be reached", () => {
+  const version = v("1.0.4");
+  const file = { kind: "text" as const, text: `${SHA}  Ardia-1.0.4.apk\n` };
+  const other = "0".repeat(64);
+  assert.deepEqual(checksumVerdict(file, version, null), { kind: "verified", sha256: SHA });
+  assert.deepEqual(checksumVerdict(file, version, SHA), { kind: "verified", sha256: SHA });
+  assert.deepEqual(checksumVerdict(file, version, other), { kind: "refused" }, "the file and GitHub's digest disagree");
+  assert.deepEqual(checksumVerdict({ kind: "missing" }, version, SHA), { kind: "refused" }, "a release whose checksum file is gone is refused even with a digest");
+  assert.deepEqual(checksumVerdict({ kind: "text", text: "<html>" }, version, SHA), { kind: "refused" });
+  assert.deepEqual(checksumVerdict({ kind: "unreachable" }, version, SHA), { kind: "verified", sha256: SHA });
+  assert.deepEqual(checksumVerdict({ kind: "unreachable" }, version, null), { kind: "unverified" });
+  for (const { id, value } of HOSTILE_VALUES) assert.deepEqual(checksumVerdict({ kind: "unreachable" }, version, value as never), { kind: "unverified" }, id);
+  assert.equal(updateDownloadRequest({ ...offerOf("1.0.4"), sha256: SHA })?.sha256, SHA);
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(updateDownloadRequest({ ...offerOf("1.0.4"), sha256: value })?.sha256, null, id);
 });

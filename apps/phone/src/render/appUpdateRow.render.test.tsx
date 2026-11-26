@@ -21,7 +21,7 @@ const opened = openExternal as jest.MockedFunction<typeof openExternal>;
 const releaseBuild = Platform.OS === "android" && !__DEV__;
 const APK = (version: string) => `https://github.com/ardia-browser/ardia/releases/download/android-v${version}/Ardia-${version}.apk`;
 const SHA = "9f1eca24627f7475f34591c3738ca6b6418f08dec4929774d72158e7dfc1a5ca";
-const offerOf = (version: string) => ({ version, downloadUrl: APK(version), checksumUrl: `${APK(version)}.sha256` });
+const offerOf = (version: string) => ({ version, downloadUrl: APK(version), checksumUrl: `${APK(version)}.sha256`, sha256: null });
 
 jest.spyOn(pages, "appRelease").mockReturnValue({ releaseVersion: "1.0.3", build: "100003999", receiptName: null });
 jest.spyOn(downloads, "handsOffAppUpdates").mockReturnValue(true);
@@ -46,6 +46,8 @@ jest.spyOn(AppState, "addEventListener").mockImplementation(((type: string, list
   return { remove: () => undefined };
 }) as never);
 
+let withDigest = false;
+
 const publishedAnswers = (version: string) => async (url: string) => {
   if (url.endsWith("/git/matching-refs/tags/android-v")) return { kind: "json" as const, body: [{ ref: "refs/tags/android-v1.0.3" }, { ref: `refs/tags/android-v${version}` }, { ref: "refs/tags/android-v1.0.5-nightly.1" }] };
   if (url.endsWith(`/releases/tags/android-v${version}`)) {
@@ -56,7 +58,7 @@ const publishedAnswers = (version: string) => async (url: string) => {
         draft: false,
         published_at: "2026-11-26T01:00:00Z",
         assets: [
-          { name: `Ardia-${version}.apk`, state: "uploaded", browser_download_url: APK(version) },
+          { name: `Ardia-${version}.apk`, state: "uploaded", browser_download_url: APK(version), ...(withDigest ? { digest: `sha256:${SHA}` } : {}) },
           { name: `Ardia-${version}.apk.sha256`, state: "uploaded", browser_download_url: `${APK(version)}.sha256` },
         ],
       },
@@ -96,6 +98,7 @@ beforeEach(() => {
   installedFile.mockReset();
   installedFile.mockResolvedValue("launched");
   appState = "active";
+  withDigest = false;
   useAppUpdate.setState({ status: "idle", offer: null, handoff: null });
   useToasts.setState({ toast: null });
   useOnboarding.setState({ showing: false });
@@ -205,6 +208,35 @@ test("no connection while checking the download keeps the file and says so", asy
   expect(discarded).not.toHaveBeenCalled();
   expect(useToasts.getState().toast?.message).toBe("Couldn’t check the download. Try again.");
   expect(textOf(root)).toContain("Install Ardia 1.0.4");
+  unmount(root);
+});
+
+test("when the checksum file can't be reached, GitHub's digest of the APK stands in; without one the file is kept and you're asked to try again", async () => {
+  if (!releaseBuild) return;
+  withDigest = true;
+  checksum.mockResolvedValue({ kind: "unreachable" });
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  statusOf.mockResolvedValue("successful");
+  await act(async () => completed({ id: "41" }));
+  await settle();
+  expect(installed).toHaveBeenCalledWith("41", SHA, "Ardia-1.0.4.apk");
+  expect(discarded).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+test("a checksum file that disagrees with GitHub's digest deletes the download", async () => {
+  if (!releaseBuild) return;
+  withDigest = true;
+  checksum.mockResolvedValue({ kind: "text", text: `${"0".repeat(64)}  Ardia-1.0.4.apk\n` });
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  statusOf.mockResolvedValue("successful");
+  await act(async () => completed({ id: "41" }));
+  await settle();
+  expect(installed).not.toHaveBeenCalled();
+  expect(discarded).toHaveBeenCalledWith("41");
+  expect(textOf(root)).toContain("didn’t match the release");
   unmount(root);
 });
 
