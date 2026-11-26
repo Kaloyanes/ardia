@@ -3,6 +3,7 @@ import { isFields } from "../../lib/decode";
 import type { PluginManifest } from "../../lib/pluginManifest";
 import { pageReadScript } from "../../lib/pluginPageRead";
 import { withoutFragment } from "../../lib/url";
+import { byteLength } from "./stateEventPacking";
 import { minimizedUrl } from "../../lib/urlParts";
 import { webviews } from "../../platform/webviews";
 import { useBrowser } from "../browser/store";
@@ -67,6 +68,38 @@ type Read = { text?: unknown; markdown?: unknown; selection?: unknown; lang?: un
 
 const flag = (params: Record<string, unknown>, key: string) => params[key] === true;
 
+export const READ_REPLY_BYTES = 900 * 1024;
+
+function cutToBytes(text: string, max: number): string {
+  if (max <= 0) return "";
+  let out = text;
+  let size = byteLength(out);
+  while (size > max && out.length) {
+    let cut = Math.max(0, Math.floor(out.length * (max / size) * 0.98));
+    const unit = out.charCodeAt(cut - 1);
+    if (unit >= 0xd800 && unit <= 0xdbff) cut--;
+    out = out.slice(0, cut);
+    size = byteLength(out);
+  }
+  return out;
+}
+
+export function fittedRead(result: Record<string, unknown>, max = READ_REPLY_BYTES): Record<string, unknown> {
+  const out = { ...result };
+  const over = () => byteLength(JSON.stringify(out)) - max;
+  for (const key of ["markdown", "text"] as const) {
+    const value = out[key];
+    if (over() <= 0) return out;
+    if (typeof value === "string") out[key] = cutToBytes(value, byteLength(JSON.stringify(value)) - over() - 1024);
+  }
+  if (over() > 0 && out.screenshot) {
+    delete out.screenshot;
+    out.screenshotOmitted = true;
+  }
+  for (const key of ["forms", "links", "headings"] as const) if (over() > 0 && Array.isArray(out[key])) out[key] = [];
+  return out;
+}
+
 export function minimizedMarkdown(markdown: string): string {
   let out = "";
   let at = 0;
@@ -118,7 +151,7 @@ async function readTab(c: Caller, m: PluginManifest, tab: Tab, grant: Grant, par
   notePlugin("plugin_page_reads", consent);
   if (shot) notePlugin("plugin_page_screenshots", consent);
   return {
-    result: {
+    result: fittedRead({
       tabId: now.id,
       url: full ? now.url : minimizedUrl(now.url),
       title: now.customTitle || now.title,
@@ -128,7 +161,7 @@ async function readTab(c: Caller, m: PluginManifest, tab: Tab, grant: Grant, par
       lang: typeof read.lang === "string" ? read.lang.slice(0, 35) : "",
       ...(metadata ? { metadata, headings: Array.isArray(read.headings) ? read.headings : [], links: links ?? [], forms: Array.isArray(read.forms) ? read.forms : [] } : {}),
       ...(shot ? { screenshot: { mimeType: "image/jpeg", data: shot.data, width: Math.round(shot.frame[2]), height: Math.round(shot.frame[3]) } } : {}),
-    },
+    }),
   };
 }
 

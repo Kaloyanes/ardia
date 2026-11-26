@@ -26,7 +26,8 @@ export function pageRouteOfView(name: string, viewUrl: string): string | null {
   const m = VIEW_URL.exec(viewUrl);
   if (!m || m[1]!.toLowerCase() !== name) return null;
   const route = new URLSearchParams(m[2] ?? "").get("ardiaPath");
-  return route !== null && isPagePath(route) ? route : null;
+  if (route === null) return "";
+  return isPagePath(route) ? route : null;
 }
 
 export function pluginPageOf(url: string | null | undefined): string | null {

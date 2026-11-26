@@ -1,6 +1,6 @@
 import { urlMatches } from "@ardia/plugin-sdk/manifest";
 import type { PluginManifest } from "../../lib/pluginManifest";
-import { MAX_WORLD_EVENT, STYLE_WORLD, pluginOfWorld, worldBootstrap, worldDeliver, worldMessagesOf, worldOf, worldScript, worldStyles, worldTeardown } from "../../lib/pluginWorlds";
+import { MAX_WORLD_EVENT, STYLE_WORLD, unitOfWorld, worldBootstrap, worldDeliver, worldMessagesOf, worldOf, worldScript, worldStyles, worldTeardown } from "../../lib/pluginWorlds";
 import { on } from "../../platform/engine";
 import { sendToPlugin } from "../../platform/plugins";
 import { onWebviewsChanged, webviews } from "../../platform/webviews";
@@ -19,7 +19,8 @@ import { activeManifest, currentPlugins, usePlugins } from "./store";
 
 type ScriptSpec = { id: string; js: string[]; css: string[]; start: boolean };
 type Wanted = { scripts: ScriptSpec[]; styles: { id: string; css: string }[] };
-type PluginState = { token: string; scripts: string; styles: string; booted: boolean; ran: Set<string> };
+type Unit = { token: string; booted: boolean; ran: boolean };
+type PluginState = { scripts: string; styles: string; units: Map<string, Unit> };
 type TabState = { document: string; href: string; plugins: Map<string, PluginState> };
 
 const MAX_FILE_CHARS = 2 * 1024 * 1024;
@@ -79,10 +80,13 @@ function wantedOn(tabId: string, name: string): Wanted | null {
 
 const wantsScript = (tabId: string, name: string, scriptId: string) => !!wantedOn(tabId, name)?.scripts.some((s) => s.id === scriptId);
 
-function outlived(tabId: string, name: string, plugin: PluginState): boolean {
+function outlivedUnits(tabId: string, name: string, plugin: PluginState): string[] {
   const wanted = wantedOn(tabId, name);
-  return [...plugin.ran].some((id) => !wanted?.scripts.some((s) => s.id === id));
+  return [...plugin.units.keys()].filter((id) => !wanted?.scripts.some((s) => s.id === id));
 }
+
+const ranAny = (plugin: PluginState | undefined) => !!plugin && [...plugin.units.values()].some((u) => u.ran);
+const ranIds = (plugin: PluginState) => [...plugin.units].flatMap(([id, u]) => (u.ran ? [id] : []));
 
 function pluginsForTab(tabId: string): Map<string, Wanted> {
   const out = new Map<string, Wanted>();
@@ -107,25 +111,34 @@ function fileOf(name: string, path: string): Promise<string | null> {
   return read;
 }
 
+function teardownUnit(tabId: string, name: string, plugin: PluginState, scriptId: string) {
+  const unit = plugin.units.get(scriptId);
+  const world = worldOf(name, scriptId);
+  plugin.units.delete(scriptId);
+  const web = webviews.get(tabId);
+  if (unit?.booted && world && web) void web.removePluginWorld(world, worldTeardown(unit.token)).catch(() => undefined);
+}
+
 function teardown(tabId: string, state: TabState, name: string) {
   const plugin = state.plugins.get(name);
   const world = worldOf(name);
   const web = webviews.get(tabId);
   state.plugins.delete(name);
   if (!plugin || !world || !web) return;
-  if (plugin.booted) void web.removePluginWorld(world, worldTeardown(plugin.token)).catch(() => undefined);
+  const ran = ranAny(plugin);
+  for (const id of [...plugin.units.keys()]) teardownUnit(tabId, name, plugin, id);
   if (plugin.styles !== "[]") void web.runPluginWorld(STYLE_WORLD, worldStyles(world, [], null), state.document).catch(() => false);
-  if (plugin.ran.size && !pluginAllowedOnTab(tabId, name)) void web.reload().catch(() => undefined);
+  if (ran && !pluginAllowedOnTab(tabId, name)) void web.reload().catch(() => undefined);
 }
 
 async function applyPlugin(tabId: string, state: TabState, name: string, wanted: Wanted, consent: ConsentToken | null) {
   const web = webviews.get(tabId);
   const world = worldOf(name);
   if (!web || !world) return;
-  const plugin = state.plugins.get(name) ?? { token: newToken(), scripts: "", styles: "[]", booted: false, ran: new Set<string>() };
+  const plugin = state.plugins.get(name) ?? { scripts: "", styles: "[]", units: new Map<string, Unit>() };
   state.plugins.set(name, plugin);
   const here = () => tabs.get(tabId) === state && state.plugins.get(name) === plugin && useBrowser.getState().tabs[tabId]?.url === state.href;
-  const live = () => here() && !!wantedOn(tabId, name) && !outlived(tabId, name, plugin);
+  const live = () => here() && !!wantedOn(tabId, name);
   const styles = JSON.stringify(wanted.styles.map((s) => s.id).concat(wanted.scripts.flatMap((s) => s.css.map((c) => `${s.id}:${c}`))));
   if (plugin.styles !== styles) {
     plugin.styles = styles;
@@ -136,26 +149,27 @@ async function applyPlugin(tabId: string, state: TabState, name: string, wanted:
     }
   }
   const scripts = JSON.stringify(wanted.scripts);
-  if (plugin.scripts !== scripts) {
-    plugin.scripts = scripts;
-    for (const id of [...plugin.ran]) if (!wanted.scripts.some((s) => s.id === id)) plugin.ran.delete(id);
-  }
-  const due = wanted.scripts.filter((s) => !plugin.ran.has(s.id) && (s.start || !loading(tabId)));
-  if (!due.length) return;
-  if (!plugin.booted) {
-    if (!live()) return;
-    const booted = await web.runPluginWorld(world, worldBootstrap(world, engineOf(tabId), plugin.token, state.href, state.document), state.document).catch(() => false);
-    if (!booted || !live()) return;
-    plugin.booted = true;
-  }
+  if (plugin.scripts !== scripts) plugin.scripts = scripts;
+  const due = wanted.scripts.filter((s) => !plugin.units.get(s.id)?.ran && (s.start || !loading(tabId)));
   for (const script of due) {
-    if (plugin.ran.has(script.id)) continue;
-    plugin.ran.add(script.id);
+    const scriptWorld = worldOf(name, script.id);
+    if (!scriptWorld) continue;
+    const unit = plugin.units.get(script.id) ?? { token: newToken(), booted: false, ran: false };
+    plugin.units.set(script.id, unit);
+    const unitLive = () => live() && plugin.units.get(script.id) === unit && wantsScript(tabId, name, script.id);
+    if (unit.ran || !unitLive()) continue;
+    if (!unit.booted) {
+      const booted = await web.runPluginWorld(scriptWorld, worldBootstrap(scriptWorld, engineOf(tabId), unit.token, state.href, state.document), state.document).catch(() => false);
+      if (!booted || !unitLive()) continue;
+      unit.booted = true;
+    }
+    if (unit.ran) continue;
+    unit.ran = true;
     for (const path of script.js) {
       const code = await fileOf(name, path);
       if (code === null) continue;
-      if (!live() || plugin.scripts !== scripts || !wantsScript(tabId, name, script.id)) return;
-      if (await web.runPluginWorld(world, worldScript({ id: script.id, code }, plugin.token, state.href), state.document).catch(() => false)) notePlugin("plugin_content_injections", consent);
+      if (!unitLive()) break;
+      if (await web.runPluginWorld(scriptWorld, worldScript({ id: script.id, code }, unit.token, state.href), state.document).catch(() => false)) notePlugin("plugin_content_injections", consent);
     }
   }
 }
@@ -163,7 +177,10 @@ async function applyPlugin(tabId: string, state: TabState, name: string, wanted:
 const tabChains = new Map<string, Promise<void>>();
 
 function dropOutlived(tabId: string, state: TabState) {
-  for (const [name, plugin] of [...state.plugins]) if (!wantedOn(tabId, name) || outlived(tabId, name, plugin)) teardown(tabId, state, name);
+  for (const [name, plugin] of [...state.plugins]) {
+    if (!wantedOn(tabId, name)) teardown(tabId, state, name);
+    else for (const id of outlivedUnits(tabId, name, plugin)) teardownUnit(tabId, name, plugin, id);
+  }
 }
 
 export function reconcileTab(tabId: string, consent: ConsentToken | null): Promise<void> {
@@ -209,16 +226,17 @@ export function pausePluginScripts(name: string, pause: boolean) {
   void reconcileAllTabs(consentToken());
 }
 
-export const injectedTabsOf = (name: string): string[] => [...tabs].flatMap(([tabId, state]) => ((state.plugins.get(name)?.ran.size ?? 0) > 0 ? [tabId] : []));
+export const injectedTabsOf = (name: string): string[] => [...tabs].flatMap(([tabId, state]) => (ranAny(state.plugins.get(name)) ? [tabId] : []));
 
 export function postToContent(name: string, tabId: string, message: unknown, scriptId?: string): string | null {
-  const world = worldOf(name);
   const state = tabs.get(tabId);
   const web = webviews.get(tabId);
   const plugin = state?.plugins.get(name);
-  if (!world || !state || !plugin?.ran.size || !web || !wantedOn(tabId, name)) return "That tab has none of this plugin's content scripts.";
-  if (useBrowser.getState().tabs[tabId]?.url !== state.href || outlived(tabId, name, plugin)) return "That tab's page changed, so its content scripts are being set up again.";
-  if (scriptId !== undefined && (!plugin.ran.has(scriptId) || !wantsScript(tabId, name, scriptId))) return "That tab has no content script with that id running.";
+  if (!state || !plugin || !ranAny(plugin) || !web || !wantedOn(tabId, name)) return "That tab has none of this plugin's content scripts.";
+  if (useBrowser.getState().tabs[tabId]?.url !== state.href) return "That tab's page changed, so its content scripts are being set up again.";
+  if (scriptId !== undefined && (!plugin.units.get(scriptId)?.ran || !wantsScript(tabId, name, scriptId))) return "That tab has no content script with that id running.";
+  const targets = (scriptId !== undefined ? [scriptId] : ranIds(plugin)).filter((id) => wantsScript(tabId, name, id));
+  if (!targets.length) return "That tab has no content script that matches its page now.";
   let json: string;
   try {
     json = JSON.stringify({ ...(scriptId ? { scriptId } : {}), message: message ?? null });
@@ -226,7 +244,11 @@ export function postToContent(name: string, tabId: string, message: unknown, scr
     return "message isn't JSON.";
   }
   if (json.length > 256 * 1024) return "message is over 256 KB.";
-  void web.postPluginWorld(world, worldDeliver(plugin.token, json), state.document).catch(() => undefined);
+  for (const id of targets) {
+    const world = worldOf(name, id);
+    const unit = plugin.units.get(id);
+    if (world && unit) void web.postPluginWorld(world, worldDeliver(unit.token, json, state.href), state.document).catch(() => undefined);
+  }
   return null;
 }
 
@@ -242,15 +264,17 @@ function withinBudget(name: string, bytes: number, now = Date.now()): boolean {
 }
 
 export function receiveWorldMessage(tabId: string, world: string, document: string, json: string, consent: ConsentToken | null) {
-  const name = pluginOfWorld(world);
+  const from = unitOfWorld(world);
+  const name = from?.plugin ?? null;
   const state = tabs.get(tabId);
   if (!name || typeof json !== "string" || json.length > MAX_WORLD_EVENT || !withinBudget(name, json.length)) return notePlugin("plugin_content_refusals", consent);
   const plugin = state?.plugins.get(name);
-  if (!state || !plugin || state.document !== document || !plugin.ran.size || !wantedOn(tabId, name)) return notePlugin("plugin_content_refusals", consent);
+  const unit = from?.scriptId ? plugin?.units.get(from.scriptId) : undefined;
+  if (!state || !plugin || !unit?.ran || state.document !== document || !wantedOn(tabId, name)) return notePlugin("plugin_content_refusals", consent);
   const run = pluginReadyRun(name);
   if (run === null) return;
   for (const { doc, scriptId, message } of worldMessagesOf(json)) {
-    if (doc !== plugin.token || !scriptId || !plugin.ran.has(scriptId) || !wantsScript(tabId, name, scriptId) || useBrowser.getState().tabs[tabId]?.url !== state.href) {
+    if (doc !== unit.token || !scriptId || scriptId !== from?.scriptId || plugin.units.get(scriptId) !== unit || !wantsScript(tabId, name, scriptId) || useBrowser.getState().tabs[tabId]?.url !== state.href) {
       notePlugin("plugin_content_refusals", consent);
       continue;
     }

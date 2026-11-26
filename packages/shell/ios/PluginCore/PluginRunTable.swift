@@ -61,6 +61,10 @@ final class PluginRunTable<Value> {
     locked { entries[Self.key(name, run, id)]?.token == token }
   }
 
+  func untaken(_ name: String, _ run: Int, _ id: String, by token: UInt64) -> Bool {
+    locked { entries[Self.key(name, run, id)].map { $0.token == token } ?? true }
+  }
+
   func value(_ name: String, _ run: Int, _ id: String) -> Value? {
     locked { entries[Self.key(name, run, id)]?.value }
   }

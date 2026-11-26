@@ -93,6 +93,7 @@ export type PluginPageProps = ViewProps & {
   run: number;
   context: string;
   themeCss?: string;
+  storeKey?: string;
   onLoaded?: (e: PluginPageEvent<{ url: string; title: string }>) => void;
   onTitleChange?: (e: PluginPageEvent<{ title: string }>) => void;
   onNavigationChange?: (e: PluginPageEvent<{ url: string; title: string; canGoBack: boolean; canGoForward: boolean }>) => void;

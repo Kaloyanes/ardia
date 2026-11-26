@@ -38,6 +38,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
   var pageMedia = WebKitPageMedia()
   var life = WebKitTabLife()
   var documentSerial = 0
+  var pluginNonces: [String: (serial: Int, nonce: String)] = [:]
   var sightObserver: NSObjectProtocol?
   var errorURL: URL?
   private var committedAt: Double = 0

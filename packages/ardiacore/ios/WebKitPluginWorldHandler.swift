@@ -14,10 +14,29 @@ final class WebKitPluginWorldHandler: NSObject, WKScriptMessageHandler {
   }
 
   static func isPluginWorld(_ world: String) -> Bool {
-    world.hasPrefix(prefix) && world.count <= prefix.count + 81 && world.dropFirst(prefix.count).allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    guard world.hasPrefix(prefix), world.count <= prefix.count + 123 else { return false }
+    let parts = world.dropFirst(prefix.count).split(separator: "~", omittingEmptySubsequences: false)
+    let ascii = { (c: Character) in c.isASCII && (c.isLetter || c.isNumber || c == "-" || c == "_") }
+    guard (1...2).contains(parts.count), let key = parts.first, (1...82).contains(key.count), key.allSatisfy({ ascii($0) && !$0.isUppercase }) else { return false }
+    return parts.count == 1 || ((1...40).contains(parts[1].count) && parts[1].allSatisfy(ascii))
   }
 
   static func document(of tab: WebKitTab) -> String { "wk-\(tab.browserId)-\(tab.documentSerial)" }
+
+  static let nonceScript =
+    "(() => { if (!Object.prototype.hasOwnProperty.call(globalThis, '__ardiaDocNonce')) { const bytes = new Uint8Array(16); crypto.getRandomValues(bytes); "
+    + "Object.defineProperty(globalThis, '__ardiaDocNonce', { value: Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(''), writable: false, configurable: false }); } "
+    + "return globalThis.__ardiaDocNonce; })()"
+  static let stale = "__ardia_stale__"
+
+  static func isNonce(_ value: Any?) -> String? {
+    guard let text = value as? String, text.count == 32, text.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+    return text
+  }
+
+  static func guarded(_ nonce: String, _ expression: String) -> String {
+    "(() => { if (globalThis.__ardiaDocNonce !== \"\(nonce)\") return \"\(stale)\"; return (\n\(expression)\n); })()"
+  }
 
   static func staleTeardown(_ document: String) -> String? {
     guard !document.isEmpty, document.count <= 120, document.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }

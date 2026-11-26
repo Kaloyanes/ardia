@@ -31,6 +31,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSArray<NSDictionary<NSString *, NSString *> *> *pageMenuItems;
 @property (nonatomic, copy, nullable) NSString *pageMenuDocument;
 @property (nonatomic, strong, nullable) NSMutableArray<dispatch_block_t> *pageMenuWaiting;
+@property (nonatomic) NSUInteger pageMenuGeneration;
+@property (nonatomic) NSInteger pageMenuDocumentCount;
 @property (nonatomic, readonly) BOOL discarded;
 @property (nonatomic) BOOL frozen;
 @property (nonatomic, readonly) int browserId;

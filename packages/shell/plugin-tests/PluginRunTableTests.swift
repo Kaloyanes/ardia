@@ -45,6 +45,48 @@ final class PluginRunTableTests: XCTestCase {
     XCTAssertEqual(table.count("p"), 0)
   }
 
+  func testAnEventQueuedForACancelledStreamCantLandOnItsReplacement() {
+    let table = PluginRunTable<Box>()
+    guard case .admitted(let first) = table.admit("p", 1, "s", cap: 8, make: { _ in Box("first") }) else { return XCTFail("refused") }
+    XCTAssertTrue(table.untaken("p", 1, "s", by: first))
+    _ = table.take("p", 1, "s")
+    XCTAssertTrue(table.untaken("p", 1, "s", by: first), "a free id takes the cancelled stream's last event")
+    guard case .admitted = table.admit("p", 1, "s", cap: 8, make: { _ in Box("second") }) else { return XCTFail("refused") }
+    XCTAssertFalse(table.current("p", 1, "s", token: first), "a chunk queued by the first stream is dropped at write time")
+    XCTAssertFalse(table.untaken("p", 1, "s", by: first), "and so is its end or error")
+  }
+
+  func testAdmissionAndExitOnTheHostQueueNeverDeadlock() {
+    let live = PluginLiveRuns()
+    let table = PluginRunTable<Box>()
+    let handles = PluginFileHandles()
+    let host = DispatchQueue(label: "test.host")
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent("live-\(UUID().uuidString)").path
+    FileManager.default.createFile(atPath: path, contents: Data(repeating: 1, count: 16))
+    defer { unlink(path) }
+    let work = DispatchGroup()
+    for run in 1...200 {
+      live.replace(with: [(name: "p", run: run)])
+      for i in 0..<8 {
+        DispatchQueue.global().async(group: work) {
+          _ = table.admit("p", run, "s\(i)", cap: 8, live: { live.contains("p", run: run) }) { _ in Box("\(i)") }
+          if case .success(let file) = PluginBoundedFile.openRegular(path) {
+            _ = handles.addRead("p", run, fd: file.fd, size: file.size, live: { live.contains("p", run: run) })
+          }
+        }
+      }
+      host.async(group: work) {
+        live.markClosed("p", run: run)
+        _ = table.closeRun("p", run: run)
+        handles.closeAll("p", run: run)
+        _ = table.untaken("p", run, "s0", by: 0)
+      }
+    }
+    XCTAssertEqual(work.wait(timeout: .now() + 20), .success, "admission and exit finish: nothing waits on the host queue while holding a table lock")
+    for run in 1...200 { XCTAssertEqual(handles.count("p", run), 0) }
+    XCTAssertEqual(table.count("p"), 0)
+  }
+
   func testAFallingBehindSocketSaysSoBeforeClosing() {
     XCTAssertEqual(PluginWebSocketCodec.fellBehind.code, "backpressure")
     XCTAssertEqual(PluginWebSocketCodec.fellBehind.close, 1008)
@@ -95,6 +137,31 @@ final class PluginFileHandleTests: XCTestCase {
     XCTAssertFalse(handles.isOpen("p", 1, id))
     XCTAssertFalse(isOpen(opened.fd), "the descriptor is closed once the last read ends")
     XCTAssertEqual(handles.readChunk("p", 1, id, offset: 0, length: 10)["ok"] as? Bool, false)
+  }
+
+  func testConcurrentSaveChunksEachLandAtTheirOwnOffset() throws {
+    let handles = PluginFileHandles()
+    let destination = folder.appendingPathComponent("saved.bin")
+    let temporary = folder.appendingPathComponent(".saved.part").path
+    let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+    XCTAssertGreaterThanOrEqual(fd, 0)
+    guard let id = handles.addWrite("p", 1, fd: fd, temporary: temporary, destination: destination) else { return XCTFail("no handle") }
+    let chunk = 4096
+    let count = 128
+    DispatchQueue.concurrentPerform(iterations: count) { i in
+      let answer = handles.writeChunk("p", 1, id, data: Data(repeating: UInt8(i % 251), count: chunk))
+      XCTAssertEqual(answer["ok"] as? Bool, true)
+    }
+    XCTAssertEqual(handles.finish("p", 1, id, commit: true)["saved"] as? Bool, true)
+    let saved = try Data(contentsOf: destination)
+    XCTAssertEqual(saved.count, chunk * count, "no chunk overwrote another")
+    var blocks: [UInt8] = []
+    for start in stride(from: 0, to: saved.count, by: chunk) {
+      let block = saved[start..<(start + chunk)]
+      XCTAssertTrue(block.allSatisfy { $0 == block.first }, "every reserved range holds exactly one chunk")
+      blocks.append(block.first!)
+    }
+    XCTAssertEqual(blocks.sorted(), (0..<count).map { UInt8($0 % 251) }.sorted())
   }
 
   func testAStoppedRunCantRegisterAHandleAndTheDescriptorIsClosed() throws {
@@ -151,5 +218,21 @@ final class PluginFileHandleTests: XCTestCase {
     let reply = try JSONSerialization.data(withJSONObject: ["ok": true, "files": opened.files])
     XCTAssertLessThan(reply.count, 768 * 1024)
     handles.discard("p", 1, opened.handles)
+  }
+}
+
+final class PluginPageStoresTests: XCTestCase {
+  func testProfileStoresAreRememberedSoRemovingThePluginClearsEveryOne() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("page-stores-\(UUID().uuidString)/page-stores.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let stores = PluginPageStores(file: file)
+    stores.record("notes", key: "profile-a")
+    stores.record("notes", key: "profile-b")
+    stores.record("notes", key: "profile-a")
+    stores.record("notes", key: "../escape")
+    XCTAssertEqual(stores.keys("notes"), ["profile-a", "profile-b"])
+    XCTAssertEqual(PluginPageStores(file: file).keys("notes"), ["profile-a", "profile-b"], "the keys survive a relaunch")
+    stores.forget("notes")
+    XCTAssertEqual(PluginPageStores(file: file).keys("notes"), [])
   }
 }

@@ -171,7 +171,7 @@ test("native document binding: Chromium rechecks the loader after creating the w
   assert.ok(poll.indexOf("frameOfTab:liveTab") >= 0 && poll.indexOf("frameOfTab:liveTab") < poll.indexOf("_messages(world, document, value)"), "a poll checks the current loader before it hands messages on");
   const menu = readFileSync(new URL("ArdiaWebView+ContextMenu.mm", root), "utf8");
   const command = menu.slice(menu.indexOf("contextMenuCommand:(NSString *)itemId"));
-  assert.ok(command.indexOf("whenPageMenuDocument:") >= 0 && command.indexOf("whenPageMenuDocument:") < command.indexOf("@\"document\" : strong.pageMenuDocument"), "a pick that beats the loader lookup waits for it instead of sending an empty document");
+  assert.ok(command.indexOf("whenPageMenuDocument:") >= 0 && command.indexOf("whenPageMenuDocument:") < command.indexOf("@\"document\" : document"), "a pick that beats the loader lookup waits for it instead of sending an empty document");
   const webkit = readFileSync(new URL("WebKitTab+PluginWorlds.swift", root), "utf8");
   const run = webkit.slice(webkit.indexOf("func runPluginWorld"), webkit.indexOf("func postPluginWorld"));
   assert.ok(run.indexOf("document(of: self) == document") < run.indexOf("evaluateJavaScript"), "WebKit refuses before it evaluates");
@@ -208,9 +208,10 @@ test("an SPA move from /inbox to /settings stops the inbox script, keeps the add
   assert.equal(postToContent("spa", tab, { x: 1 }, "settings"), null);
   const before = host.events.length;
   const message = (scriptId, doc = secondToken) => JSON.stringify([JSON.stringify({ doc, scriptId, message: scriptId })]);
-  receiveWorldMessage(tab, worldOf("spa"), "doc-spa", message("inbox"), consentToken());
-  receiveWorldMessage(tab, worldOf("spa"), "doc-spa", message("settings", firstToken), consentToken());
-  receiveWorldMessage(tab, worldOf("spa"), "doc-spa", message("settings"), consentToken());
+  receiveWorldMessage(tab, worldOf("spa", "inbox"), "doc-spa", message("inbox", firstToken), consentToken());
+  receiveWorldMessage(tab, worldOf("spa", "settings"), "doc-spa", message("settings", firstToken), consentToken());
+  receiveWorldMessage(tab, worldOf("spa", "settings"), "doc-spa", message("inbox"), consentToken());
+  receiveWorldMessage(tab, worldOf("spa", "settings"), "doc-spa", message("settings"), consentToken());
   const delivered = host.events.slice(before).map((e) => JSON.parse(e.line)).filter((e) => e.event === "page.contentMessage");
   assert.deepEqual(delivered.map((e) => e.data.scriptId), ["settings"], "only the eligible contribution's own world reaches the plugin");
   assert.equal(run, P().processes.spa.run);
@@ -419,10 +420,10 @@ test("plugin page tabs: scoped keys round-trip, in-page routes update the addres
   assert.equal(S().tabs[tab].url, "ardia://reader/inbox");
   assert.equal(routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html?ardiaPath=%2Fthread%2F7"), true);
   assert.equal(S().tabs[tab].url, "ardia://reader/thread/7", "the address follows the page's own route");
-  assert.equal(isSelfRouted(tab, S().tabs[tab].url), true, "and the page isn't reloaded for a route it set itself");
+  assert.equal(isSelfRouted(tab), true, "and the page isn't reloaded for a route it set itself");
   assert.equal(pluginPagePath(S().tabs[tab].url), "/thread/7");
   S().updateTab(tab, { url: "ardia://reader/typed" });
-  assert.equal(isSelfRouted(tab, S().tabs[tab].url), false, "an address you type loads the page fresh");
+  assert.equal(isSelfRouted(tab), false, "an address you type loads the page fresh");
   keepPluginPage(tab);
   const second = S().newTab(w, { url: "https://b.example/" });
   S().activate(second);

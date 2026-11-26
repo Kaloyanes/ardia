@@ -1132,8 +1132,10 @@ turning a permission off takes effect at once. macOS serves all of it; Linux and
   whose encoded request wouldn't fit the plugin's own 1 MB line, before anything is written, so one big send can't
   end the plugin's connection; `net.ws.send` takes 64 waiting. `net.ws.close` takes 1000, 1001, 1008, 1009 or
   3000–4999. A stream or socket starts only on a live run, checked, counted and registered in one step, each under its
-  own token, so a cancelled stream's late completion or backpressure can't touch a new one reusing its id
-  (`PluginRunTable`); every one closes when the run stops, and a stream the plugin stops reading or the host fails
+  own token, so a cancelled stream's late completion, backpressure or queued chunk can't touch a new one reusing its id
+  (`PluginRunTable`; the token is checked again when the event is written). Liveness is a leaf lock (`PluginLiveRuns`)
+  the host updates before it closes a run's resources, so admission never waits on the host queue; every one closes
+  when the run stops, and a stream the plugin stops reading or the host fails
   ends with `net.fetch.error` (`plugin_net_sockets`, `plugin_net_socket_failures`).
 - `permissions.network` may list `localhost:<port>` or `127.0.0.1:<port>` (1–65535). Only that port on loopback opens,
   over http or https; a bare `localhost` never does, and every other private, link-local and metadata address stays
@@ -1191,7 +1193,10 @@ can't call Ardia's API, restarts after a crash (1, 4 and 16 s, then gives up), a
 - `page.readActive {markdown?, metadata?, selection?, screenshot?}` reads the page you used the plugin from, as
   `tabs.readActivePage` does, adding Markdown (article or main), metadata (description, site name, author, published
   time, image, language, canonical URL), headings, links and form fields (names, types and labels, never values),
-  and with `activePage.screenshot` a JPEG of the visible page. Without `fullUrls`, every URL (links, images, the
+  and with `activePage.screenshot` a JPEG of the visible page. Sizes are counted in encoded UTF-8 bytes, so a page of
+  CJK text or emoji is trimmed (text and Markdown up to 300 KB each, the whole read up to 760 KB in the page and
+  900 KB on the host) instead of failing; when the screenshot no longer fits it's left out with
+  `screenshotOmitted: true`. Without `fullUrls`, every URL (links, images, the
   canonical URL and each Markdown link and image) loses its query and fragment inside the read itself, before the
   Markdown is written, with `(`, `)`, `<`, `>` and spaces escaped in each destination; Markdown is cut at whole blocks
   only, so a link is never left half-written, and the host runs a parenthesis-aware pass over it again
@@ -1203,18 +1208,22 @@ can't call Ardia's API, restarts after a crash (1, 4 and 16 s, then gives up), a
   and without `fullUrls` the URLs inside the Markdown are minimized like every other URL.
 - `contributes.pageStyles` and `contributes.contentScripts` run on pages that both their `matches` and
   `permissions.pages` cover, and never in a private window, on Ardia's own pages, on anything but http and https, or
-  on a site where Site Controls › **Plugin scripts** is off (`Plugins/site-script-blocks.json`). Each plugin gets its
-  own isolated world (`ardia-plugin:<key>`): a `WKContentWorld` on WebKit, a DevTools-created isolated world on
+  on a site where Site Controls › **Plugin scripts** is off (`Plugins/site-script-blocks.json`). Each content script
+  contribution gets its own isolated world (`ardia-plugin:<key>~<id>`), so a plugin's contributions share the DOM but
+  not globals: a `WKContentWorld` on WebKit, a DevTools-created isolated world on
   Chromium (`ArdiaPluginWorlds.mm`, no engine change), neither able to see the page's scripts. Styles go in one
-  shared styles world. Every injection is bound to the document it was meant for: native refuses it once that
-  document is gone (Chromium checks the main frame's loader id before and after creating the world, before caching
-  its context and before each poll hands messages on; WebKit checks its commit serial before evaluating, and a run
-  that lands in a newer document tears down the world it started there), the world carries a per-document token every
-  script and message must match, and the plugin's access is checked again right before each step. Each contribution is
-  tracked on its own: when a same-document move (`pushState`) takes a page out of a script's `matches`, that plugin's
-  world is torn down and rebuilt with a new token for the scripts that still match, the stored address follows the
-  move so newly matching styles and scripts apply, and bridge messages and `page.sendToContent` reach only a
-  contribution that matches the current address. `document_start` scripts
+  shared styles world. Every injection is bound to the document it was meant for. Native refuses it once that
+  document is gone: Chromium checks the main frame's loader id before and after creating the world, before caching its
+  context and before each poll hands messages on; WebKit checks its commit serial before evaluating, and a run that
+  lands in a newer document tears down the world it started there. On top of that, each world is stamped with a random
+  per-document nonce the first time Ardia uses it on a document, and every script, style, delivery and poll runs inside
+  a guard that compares it first, so an operation that reaches a replacement document (a same-address reload, or a
+  reused execution context id) returns without touching it. The world also carries a per-contribution token every
+  script and message must match, and the plugin's access is checked again right before each step. When a same-document
+  move (`pushState`) takes the page out of one contribution's `matches`, only that contribution's world is torn down;
+  the others keep running and never run twice. The stored address follows the move so newly matching styles and
+  scripts apply, and bridge messages and `page.sendToContent` reach only a contribution that matches the current
+  address (the world checks the address again before it dispatches). `document_start` scripts
   run as soon as the document is there, `document_idle` ones once it has loaded, each stage on its own. Turning the
   plugin off, pausing it, revoking it or blocking the site tears its world down at once (its timers, intervals,
   animation frames, mutation observers and event listeners stop) and reloads a tab its scripts ran in, so nothing it
@@ -1256,7 +1265,8 @@ shows beside the list), `Grid`, `Table`, `Tabs`, `CodeBlock` (highlighted, with 
 an https URL on the plugin's hosts, fetched by the host with every redirect checked, or an image file inside the
 plugin's own folder; PNG, JPEG, GIF or WebP up to 4 MB), `TagList` and `FileDropZone` (click to pick, or drop files
 on it through Ardia's `FileDropArea`; needs `files: picker`; `accept` (extensions like `.png`, or MIME types like
-`image/*`) filters both the picker and the drop; the files go to the surface only if the same mounted instance,
+`image/*`) filters both the picker and the drop, before a single-file zone takes its one file; the files go to the
+surface only if the same mounted instance,
 window, profile and run are still there, and otherwise their handles are closed) (`SurfaceRich.tsx`,
 `surfaceMedia.ts`, `codeTokens.ts`).
 
@@ -1282,7 +1292,11 @@ tabs?}` (`inputModes.ts`, `plugin_input_modes`).
   you're on another tab, so its view keeps its state (up to the 6 most recently shown, `keptPages.ts`). Its page's
   title becomes the tab's, and Back and Forward step through its own history. When the page sets its route with
   `?ardiaPath=` (`history.pushState`), the address follows it without reloading the page; an address you type loads it
-  fresh. It's a tab like any other, so it can lead a group.
+  fresh, even when it's the address the tab already shows, and Back to the page's root document puts the root address
+  back. A tab in a profile the plugin isn't on in (typed, or restored after its grant was removed) shows a notice and
+  never wakes the plugin. A profile-scoped plugin's page keeps a separate WebKit data store per profile (cookies,
+  storage, IndexedDB), all removed with the plugin (`Plugins/page-stores.json`). It's a tab like any other, so it can
+  lead a group.
 
 ### Not done yet (each needs an engine rebuild)
 
@@ -1328,9 +1342,10 @@ tabs?}` (`inputModes.ts`, `plugin_input_modes`).
   `lib/pluginPageRead.ts` build the injected scripts; natively `PluginNetChannels.swift`, `PluginWebSocket.swift`,
   `PluginAuthSession.swift`, `PluginFilePanels.swift`, `PluginsModule+Runtime.swift`, `PluginCore/PluginAuthRequest`,
   `PluginUtf8Chunks`, `PluginUsage`, `PluginWebSocketCodec`, `PluginBoundedFile`, `PluginImageBytes` and
-  `ControlLineBudget`, `PluginRunTable`, `PluginFileHandles`, `PluginFileBatch`, `PluginImageLoader.swift`, and in `packages/ardiacore/ios` `ArdiaPluginWorlds.mm`,
+  `ControlLineBudget`, `PluginRunTable`, `PluginLiveRuns`, `PluginFileHandles`, `PluginFileBatch`, `PluginPageStores`, `PluginImageLoader.swift`, and in `packages/ardiacore/ios` `ArdiaPluginWorlds.mm`,
   `ArdiaWebView+PluginWorlds.mm`, `WebKitTab+PluginWorlds.swift` and `WebKitPluginWorldHandler.swift`;
-  `state/plugins/runtimeV3.test.mjs`, `runtimeV3Round2.test.mjs` and `runtimeV3Review2.test.mjs`; natively
+  `state/plugins/runtimeV3.test.mjs`, `runtimeV3Round2.test.mjs`, `runtimeV3Review2.test.mjs` and
+  `runtimeV3Review3.test.mjs`; natively
   `plugin-tests/PluginRunTableTests.swift`.
 - The example plugin used by the tests: `tests/fixtures/plugins/example/`.
 

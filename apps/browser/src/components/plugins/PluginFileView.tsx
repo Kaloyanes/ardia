@@ -4,7 +4,8 @@ import { updateLive, updateTab } from "../../state/tabs/actions";
 import { registerPageNavigator } from "../../state/tabs/navigation";
 import { routePluginPage } from "../../state/plugins/actions";
 import { PluginPageView } from "../ui";
-import { usePluginApproval, usePluginFolderId, usePluginNetwork, usePluginPageRun } from "../../state/plugins/hooks";
+import { usePluginApproval, usePluginFolderId, usePluginNetwork, usePluginPageRun, usePluginStoreKey } from "../../state/plugins/hooks";
+import { useWindowId } from "../../state/browser/hooks";
 import { usePluginThemeCss } from "./pluginThemeCss";
 
 type PluginFileViewProps = {
@@ -38,6 +39,7 @@ export function PluginFileView({ plugin, url, context = "", themed = true, style
   const run = usePluginPageRun(plugin);
   const approved = usePluginApproval(plugin);
   const themeCss = usePluginThemeCss();
+  const storeKey = usePluginStoreKey(plugin, tabId ?? null, useWindowId());
   return (
     <PluginPageView
       // @ts-expect-error expo view managers accept a ref to their AsyncFunctions
@@ -47,6 +49,7 @@ export function PluginFileView({ plugin, url, context = "", themed = true, style
       url={url}
       network={network}
       folderId={folderId}
+      storeKey={storeKey}
       approved={approved}
       run={run}
       context={context}

@@ -121,6 +121,7 @@ export type PageReadResult = {
   metadata?: PageMetadata;
   selection?: string;
   screenshot?: { mimeType: "image/png" | "image/jpeg"; data: string; width: number; height: number };
+  screenshotOmitted?: true;
 };
 
 export type ContentMessageEvent = { tabId: string; frameId?: number; scriptId?: string; message: unknown };

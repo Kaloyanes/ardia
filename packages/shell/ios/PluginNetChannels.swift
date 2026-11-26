@@ -26,9 +26,9 @@ final class PluginNetChannels {
     (eventData(event, data)?.count ?? Int.max) <= lineRoom
   }
 
-  static func send(_ name: String, _ run: Int, _ event: String, _ data: [String: Any], waits: Int = 0, ready: @escaping (Bool) -> Void) {
+  static func send(_ name: String, _ run: Int, _ event: String, _ data: [String: Any], waits: Int = 0, still: @escaping () -> Bool = { true }, ready: @escaping (Bool) -> Void) {
     guard let json = eventData(event, data), json.count <= lineRoom else { return ready(false) }
-    PluginHost.shared.deliver(name, run: run, String(decoding: json, as: UTF8.self)) { backlog in
+    PluginHost.shared.deliver(name, run: run, String(decoding: json, as: UTF8.self), still: still) { backlog in
       guard let backlog else { return ready(false) }
       if backlog <= maxBacklog { return ready(true) }
       waitForRoom(name, run, waits: waits, ready: ready)
@@ -54,18 +54,18 @@ final class PluginNetChannels {
       let stream = PluginHostFetch.Stream(
         chunk: { [weak self] text, ready in
           guard streams.current(name, run, id, token: token) else { return }
-          Self.send(name, run, "net.fetch.chunk", ["stream": id, "data": text]) { delivered in
+          Self.send(name, run, "net.fetch.chunk", ["stream": id, "data": text], still: { streams.current(name, run, id, token: token) }) { delivered in
             if delivered { return ready() }
             self?.failStream(name, run, id, token: token, reason: "the plugin didn't read the stream in time", code: "backpressure")
           }
         },
         end: {
           guard streams.remove(name, run, id, token: token) else { return }
-          Self.send(name, run, "net.fetch.end", ["stream": id]) { _ in }
+          Self.send(name, run, "net.fetch.end", ["stream": id], still: { streams.untaken(name, run, id, by: token) }) { _ in }
         },
         fail: { reason in
           guard streams.remove(name, run, id, token: token) else { return }
-          Self.send(name, run, "net.fetch.error", ["stream": id, "message": reason, "code": "failed"]) { _ in }
+          Self.send(name, run, "net.fetch.error", ["stream": id, "message": reason, "code": "failed"], still: { streams.untaken(name, run, id, by: token) }) { _ in }
         })
       return PluginHostFetch.run(spec, stream: stream) { body in
         if (body["ok"] as? Bool) != true { streams.remove(name, run, id, token: token) }
@@ -87,7 +87,8 @@ final class PluginNetChannels {
   func failStream(_ name: String, _ run: Int, _ id: String, token: UInt64, reason: String, code: String) {
     guard let found = streams.removeValue(name, run, id, token: token) else { return }
     found.cancel()
-    Self.send(name, run, "net.fetch.error", ["stream": id, "message": reason, "code": code]) { _ in }
+    let streams = self.streams
+    Self.send(name, run, "net.fetch.error", ["stream": id, "message": reason, "code": code], still: { streams.untaken(name, run, id, by: token) }) { _ in }
   }
 
   func connect(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
@@ -99,7 +100,7 @@ final class PluginNetChannels {
       let made = PluginWebSocket.make(spec, events: PluginWebSocket.Events(
         send: { event, data, ready in
           guard sockets.current(name, run, id, token: token) else { return ready(false) }
-          Self.send(name, run, event, data.merging(["socket": id]) { $1 }, ready: ready)
+          Self.send(name, run, event, data.merging(["socket": id]) { $1 }, still: { sockets.untaken(name, run, id, by: token) }, ready: ready)
         },
         fits: { event, data in Self.fits(event, data.merging(["socket": id]) { $1 }) },
         closed: { sockets.remove(name, run, id, token: token) }))

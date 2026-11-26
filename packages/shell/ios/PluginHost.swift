@@ -8,22 +8,21 @@ final class PluginHost {
   typealias Sink = (_ name: String, _ body: [String: Any]) -> Void
 
   private let queue = DispatchQueue(label: "ardia.plugins", qos: .userInitiated)
-  private static let queueKey = DispatchSpecificKey<Bool>()
   private var sink: (owner: ObjectIdentifier, send: Sink)?
   private var attachment = 0
   private let runs = PluginRuns<PluginProcess>()
+  private let live = PluginLiveRuns()
   private let lifecycle = PluginLifecycle()
   private let outbox = PluginPageOutbox()
   private var nextRun = 0
   private var quitObserver: NSObjectProtocol?
 
-  private init() {
-    queue.setSpecific(key: Self.queueKey, value: true)
-  }
+  private init() {}
 
-  func isLive(_ name: String, run: Int) -> Bool {
-    let check = { [self] in runs.current[name].map { $0.run == run && !$0.exited && $0.connection?.closed == false } ?? false }
-    return DispatchQueue.getSpecific(key: Self.queueKey) == true ? check() : queue.sync(execute: check)
+  func isLive(_ name: String, run: Int) -> Bool { live.contains(name, run: run) }
+
+  private func publishLive() {
+    live.replace(with: runs.current.values.filter { !$0.exited && $0.connection?.closed == false }.map { (name: $0.name, run: $0.run) })
   }
 
   func attach(_ owner: AnyObject, send: @escaping Sink) {
@@ -53,6 +52,7 @@ final class PluginHost {
     attachment += 1
     let all = runs.all
     runs.removeAll()
+    publishLive()
     for process in all { process.terminateForQuit(within: Self.quitGrace / Double(max(1, all.count))) }
   }
 
@@ -60,6 +60,7 @@ final class PluginHost {
     queue.async { [self] in
       lifecycle.enqueue(spec.runKey, .start, cancelled: { done(["ok": false, "reason": "a later stop or removal replaced this start"]) }) { [self] complete in
         runs.stopAll(spec.runKey, graceMs: 0) { [self] in
+          publishLive()
           let attached = attachment
           PluginProcess.prepareCertificates(for: spec, deliverOn: queue) { [self] certificates in
             if attachment == attached {
@@ -70,6 +71,7 @@ final class PluginHost {
             complete()
           }
         }
+        publishLive()
       }
     }
   }
@@ -84,7 +86,9 @@ final class PluginHost {
       },
       onExit: { [weak self] process, status, signal, overMemory in
         guard let self else { return }
+        self.live.markClosed(process.name, run: process.run)
         self.runs.exited(process)
+        self.publishLive()
         PluginNetChannels.shared.closeAll(process.name, run: process.run)
         self.sink?.send(
           "onExit",
@@ -93,6 +97,7 @@ final class PluginHost {
     switch result {
     case .success(let process):
       runs.installed(process)
+      publishLive()
       process.onPagePost = { [weak self] process, post in self?.post(post, from: process) }
       done(["ok": true, "run": process.run, "pid": Int(process.pid)])
     case .failure(let failure):
@@ -143,10 +148,12 @@ final class PluginHost {
   func stop(_ name: String, run: Int, graceMs: Int, done: @escaping () -> Void) {
     queue.async { [self] in
       lifecycle.enqueue(name, run == 0 ? .stop : .stopRun) { [self] complete in
-        runs.stopAll(name, onlyRun: run, graceMs: graceMs) {
+        runs.stopAll(name, onlyRun: run, graceMs: graceMs) { [self] in
+          publishLive()
           done()
           complete()
         }
+        publishLive()
       }
     }
   }
@@ -173,10 +180,10 @@ final class PluginHost {
     }
   }
 
-  func deliver(_ name: String, run: Int, _ line: String, then: @escaping (_ backlog: Int?) -> Void) {
+  func deliver(_ name: String, run: Int, _ line: String, still: @escaping () -> Bool = { true }, then: @escaping (_ backlog: Int?) -> Void) {
     let data = Self.framed(line)
     queue.async { [self] in
-      guard let process = runs.current[name], process.run == run, !process.exited, let connection = process.connection, !connection.closed else { return then(nil) }
+      guard still(), let process = runs.current[name], process.run == run, !process.exited, let connection = process.connection, !connection.closed else { return then(nil) }
       connection.send(data)
       then(connection.closed ? nil : connection.pendingBytes)
     }

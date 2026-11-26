@@ -113,7 +113,7 @@ test("a content script runs only in the document it was bound to, and a navigati
   const web = fakeWeb("loader-1");
   webviews.set(tab, web);
   await reconcileTab(tab, consentToken());
-  const scripts = web.calls.filter((c) => c.world === worldOf("pages") && c.source?.includes("(function (ardia) {"));
+  const scripts = web.calls.filter((c) => c.world === worldOf("pages", "badge") && c.source?.includes("(function (ardia) {"));
   assert.equal(scripts.length, 1);
   assert.equal(scripts[0].doc, "loader-1");
   assert.deepEqual(injectedTabsOf("pages"), [tab]);
@@ -121,7 +121,7 @@ test("a content script runs only in the document it was bound to, and a navigati
   assert.equal(postToContent("pages", tab, { hi: 1 }), null);
   assert.equal(web.calls.at(-1).doc, "loader-1", "a post names the document it targets, which native refuses once that document is gone");
   web.calls.length = 0;
-  receiveWorldMessage(tab, worldOf("pages"), "loader-1", JSON.stringify([JSON.stringify({ doc: "wrong-token-0", message: 1 })]), consentToken());
+  receiveWorldMessage(tab, worldOf("pages", "badge"), "loader-1", JSON.stringify([JSON.stringify({ doc: "wrong-token-0", message: 1 })]), consentToken());
   assert.equal(host.events.filter((e) => e.line.includes("page.contentMessage")).length, 0, "a message carrying another document's token goes nowhere");
   webviews.delete(tab);
 });

@@ -8,7 +8,7 @@ import { manifestInProfile, windowProfileId } from "./profileScope";
 import { activeNames } from "./store";
 import { runPluginCommand, type CommandContext } from "./commands";
 import { urlParts } from "../../lib/urlParts";
-import { useBrowser } from "../browser/store";
+import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId, isIncognitoProfile, viewTabIds } from "../browser/model";
 import { groupOf } from "../pins/tabGrouping";
 import { splitOf } from "../splits/splits";
@@ -60,8 +60,7 @@ export async function runPluginMenuChoice(choice: string, windowId: string, cont
 
 const PAGE_MENU_LIMIT = 8;
 
-function pageMenuContext(tabId: string): { windowId: string; profileId: string; url: string; context: PluginMenuContext } | null {
-  const s = useBrowser.getState();
+function pageMenuContext(tabId: string, s: BrowserState = useBrowser.getState()): { windowId: string; profileId: string; url: string; context: PluginMenuContext } | null {
   const tab = s.tabs[tabId];
   if (!tab || isIncognitoProfile(tab.profileId) || !/^https?:/i.test(tab.url)) return null;
   const parts = urlParts(tab.url);
@@ -75,6 +74,11 @@ function pageMenuContext(tabId: string): { windowId: string; profileId: string; 
     tabCount: viewTabIds(s, tab.windowId).length,
   };
   return { windowId: tab.windowId, profileId: tab.profileId, url: tab.url, context: { when, data: { tabId, windowId: tab.windowId } } };
+}
+
+export function pageMenuKey(s: BrowserState, tabId: string): string {
+  const found = pageMenuContext(tabId, s);
+  return found ? JSON.stringify([found.url, found.profileId, found.windowId, found.context.when]) : "";
 }
 
 const documentOf = (tabId: string) => webviews.get(tabId)?.pluginDocument().catch(() => null) ?? Promise.resolve(null);

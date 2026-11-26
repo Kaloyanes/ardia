@@ -123,7 +123,8 @@ export const pickFilesForPluginView = (plugin: string, surfaceId: string, window
   filesForView(plugin, surfaceId, windowId, options, (name, run) => pickPluginFiles({ name, run, multiple: options.multiple, types: options.accept.slice(0, 32), ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
 
 export function dropFilesOnPluginView(plugin: string, surfaceId: string, windowId: string, paths: string[], options: ViewFiles) {
-  const wanted = (extensionsOnly(options.accept) ? paths.filter((path) => acceptsFile(options.accept, { name: path.slice(path.lastIndexOf("/") + 1) })) : paths).slice(0, options.multiple ? 16 : 1);
+  const byName = extensionsOnly(options.accept);
+  const wanted = (byName ? paths.filter((path) => acceptsFile(options.accept, { name: path.slice(path.lastIndexOf("/") + 1) })) : paths).slice(0, options.multiple || !byName ? 16 : 1);
   if (!wanted.length) return Promise.resolve(null);
   return filesForView(plugin, surfaceId, windowId, options, (name, run) => openDroppedPluginFiles({ name, run, paths: wanted, ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
 }

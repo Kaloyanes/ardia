@@ -5,15 +5,20 @@ export const MAX_WORLD_OUTBOX = 64;
 export const MAX_WORLD_EVENT = MAX_WORLD_MESSAGE * MAX_WORLD_OUTBOX + 1024;
 
 const WORLD_KEY = /^[a-z0-9][a-z0-9-]{0,39}(?:__[a-z0-9][a-z0-9-]{0,39})?$/;
+const UNIT_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const TOKEN = /^[A-Za-z0-9_-]{8,80}$/;
 
-export const worldOf = (plugin: string): string | null => (WORLD_KEY.test(plugin) ? `${WORLD_PREFIX}${plugin}` : null);
+export const worldOf = (plugin: string, scriptId?: string): string | null =>
+  WORLD_KEY.test(plugin) && (scriptId === undefined || UNIT_ID.test(scriptId)) ? `${WORLD_PREFIX}${plugin}${scriptId === undefined ? "" : `~${scriptId}`}` : null;
 
-export const pluginOfWorld = (world: string): string | null => {
+export function unitOfWorld(world: string): { plugin: string; scriptId: string | null } | null {
   if (!world.startsWith(WORLD_PREFIX)) return null;
-  const plugin = world.slice(WORLD_PREFIX.length);
-  return WORLD_KEY.test(plugin) ? plugin : null;
-};
+  const [plugin = "", scriptId, ...rest] = world.slice(WORLD_PREFIX.length).split("~");
+  if (rest.length || !WORLD_KEY.test(plugin) || (scriptId !== undefined && !UNIT_ID.test(scriptId))) return null;
+  return { plugin, scriptId: scriptId ?? null };
+}
+
+export const pluginOfWorld = (world: string): string | null => unitOfWorld(world)?.plugin ?? null;
 
 export const isWorldToken = (token: unknown): token is string => typeof token === "string" && TOKEN.test(token);
 
@@ -120,8 +125,9 @@ export function worldBootstrap(world: string, transport: "webkit" | "poll", toke
     flush();
   };
   const take = () => disposed ? Promise.resolve(null) : outbox.length ? Promise.resolve(JSON.stringify(outbox.splice(0))) : new Promise((resolve) => { waiting = resolve; realSetTimeout(() => { if (waiting === resolve) { waiting = null; resolve("[]"); } }, 20000); });
-  const deliver = (given, json) => {
+  const deliver = (given, json, href) => {
     if (disposed || given !== doc || typeof json !== "string" || json.length > max) return false;
+    if (typeof href === "string" && String(location.href).split("#")[0] !== href.split("#")[0]) return false;
     let parsed;
     try { parsed = JSON.parse(json); } catch { return false; }
     for (const listener of [...listeners]) { if (parsed.scriptId && listener.scriptId && parsed.scriptId !== listener.scriptId) continue; try { listener.fn(parsed.message); } catch (error) { console.error(error); } }
@@ -181,7 +187,7 @@ export function worldStyles(world: string, sheets: { id: string; css: string }[]
 })()`;
 }
 
-export const worldDeliver = (token: string, json: string) => `globalThis.__ardiaWorld ? globalThis.__ardiaWorld.deliver(${literal(token)}, ${literal(json)}) : false`;
+export const worldDeliver = (token: string, json: string, href: string) => `globalThis.__ardiaWorld ? globalThis.__ardiaWorld.deliver(${literal(token)}, ${literal(json)}, ${literal(href)}) : false`;
 
 export const WORLD_TAKE = "globalThis.__ardiaWorld ? globalThis.__ardiaWorld.take() : Promise.resolve(null)";
 

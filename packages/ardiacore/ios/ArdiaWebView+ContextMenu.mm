@@ -355,17 +355,24 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
 
 - (void)notePageMenuDocument {
   self.pageMenuDocument = nil;
-  if (!self.pageMenuItems.count || self.pageMenuWaiting) return;
-  self.pageMenuWaiting = [NSMutableArray array];
+  if (!self.pageMenuItems.count) return;
+  const NSUInteger generation = ++self.pageMenuGeneration;
+  const NSInteger count = (NSInteger)_tab.committedDocumentCount;
+  self.pageMenuDocumentCount = count;
+  if (!self.pageMenuWaiting) self.pageMenuWaiting = [NSMutableArray array];
   __weak ArdiaWebView *weakSelf = self;
   [self pluginDocument:^(NSString *document) {
     ArdiaWebView *strong = weakSelf;
-    if (!strong) return;
-    strong.pageMenuDocument = document ?: @"";
+    if (!strong || strong.pageMenuGeneration != generation) return;
+    strong.pageMenuDocument = [strong pageMenuStillOn:count] ? (document ?: @"") : @"";
     NSArray<dispatch_block_t> *waiting = strong.pageMenuWaiting ?: @[];
     strong.pageMenuWaiting = nil;
     for (dispatch_block_t send in waiting) send();
   }];
+}
+
+- (BOOL)pageMenuStillOn:(NSInteger)count {
+  return !_tab.closed && (NSInteger)_tab.committedDocumentCount == count;
 }
 
 - (void)whenPageMenuDocument:(dispatch_block_t)send {
@@ -390,7 +397,7 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
 }
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)tab:(ArdiaCoreTab *)tab contextMenuItemsForPage:(NSString *)url {
-  if (!self.pageMenuDocument && !self.pageMenuWaiting) [self notePageMenuDocument];
+  if (!self.pageMenuWaiting || ![self pageMenuStillOn:self.pageMenuDocumentCount]) [self notePageMenuDocument];
   NSMutableArray *items = [NSMutableArray array];
   for (NSDictionary *item in self.pageMenuItems) {
     NSString *itemId = Field<NSString>(item, @"id");
@@ -417,7 +424,8 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
       [self whenPageMenuDocument:^{
         ArdiaWebView *strong = weakSelf;
         if (!strong) return;
-        [strong emit:@"command" payload:@{@"command" : itemId, @"text" : text, @"document" : strong.pageMenuDocument ?: @""}];
+        NSString *document = [strong pageMenuStillOn:strong.pageMenuDocumentCount] ? (strong.pageMenuDocument ?: @"") : @"";
+        [strong emit:@"command" payload:@{@"command" : itemId, @"text" : text, @"document" : document}];
         strong.pageMenuDocument = nil;
       }];
       return;

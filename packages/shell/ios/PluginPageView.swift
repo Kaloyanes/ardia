@@ -55,6 +55,7 @@ final class PluginPageView: ExpoView, WKNavigationDelegate, WKUIDelegate {
   var url = "" { didSet { if url != oldValue { gate.wantsLoad() } } }
   var network = false { didSet { if network != oldValue { rebuild() } } }
   var folderId = "" { didSet { if folderId != oldValue { rebuild() } } }
+  var storeKey = "" { didSet { if storeKey != oldValue { rebuild() } } }
   var approved = "" { didSet { if approved != oldValue { rebuild() } } }
   var run = 0 { didSet { if run != oldValue { rebuild() } } }
   var context = "" { didSet { if context != oldValue { handOver() } } }
@@ -108,16 +109,27 @@ final class PluginPageView: ExpoView, WKNavigationDelegate, WKUIDelegate {
     bridge?.revoke()
   }
 
-  static func storeIdentifier(_ plugin: String) -> UUID {
+  static let stores = PluginPageStores(file: LaunchConfig.shared.dataDirectory.map { URL(fileURLWithPath: $0).appendingPathComponent("Plugins/page-stores.json") })
+
+  static func storeIdentifier(_ plugin: String, key: String = "") -> UUID {
     let scope = LaunchConfig.shared.dataDirectory ?? ""
-    var bytes = Array(SHA256.hash(data: Data("ardia.plugin-page|\(scope)|\(plugin)".utf8)).prefix(16))
+    let seed = key.isEmpty ? "ardia.plugin-page|\(scope)|\(plugin)" : "ardia.plugin-page|\(scope)|\(plugin)|profile|\(key)"
+    var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
     bytes[6] = (bytes[6] & 0x0F) | 0x50
     bytes[8] = (bytes[8] & 0x3F) | 0x80
     return bytes.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress!) as UUID }
   }
 
   static func removeData(_ plugin: String, done: @escaping () -> Void) {
-    PluginPageData.remove(storeIdentifier(plugin)) { _ in done() }
+    let identifiers = [storeIdentifier(plugin)] + stores.keys(plugin).map { storeIdentifier(plugin, key: $0) }
+    stores.forget(plugin)
+    var left = identifiers.count
+    for identifier in identifiers {
+      PluginPageData.remove(identifier) { _ in
+        left -= 1
+        if left == 0 { done() }
+      }
+    }
   }
 
   private func rebuild() {
@@ -130,7 +142,9 @@ final class PluginPageView: ExpoView, WKNavigationDelegate, WKUIDelegate {
     web = nil
     guard PluginFolders.isName(plugin) else { return }
     let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier(plugin))
+    let key = PluginPageStores.isKey(storeKey) ? storeKey : ""
+    if !key.isEmpty { Self.stores.record(plugin, key: key) }
+    configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeIdentifier(plugin, key: key))
     configuration.setURLSchemeHandler(
       PluginSchemeHandler(plugin: plugin, folderId: folderId, approved: approved, policy: network ? nil : Self.offlinePolicy), forURLScheme: PluginSchemeHandler.scheme)
     configuration.userContentController.addUserScript(pageScript())

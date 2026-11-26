@@ -103,11 +103,11 @@ final class PluginFileHandles {
     guard let handle = begin(name, run, id, writes: true) else { return ["ok": false, "reason": "that file isn't open for saving"] }
     defer { end(handle) }
     lock.lock()
-    let room = data.count <= Self.maxChunk && handle.written + data.count <= Self.maxSaveBytes
-    if room { handle.written += data.count }
+    let offset = handle.written
+    let room = data.count <= Self.maxChunk && offset + data.count <= Self.maxSaveBytes
+    if room { handle.written = offset + data.count }
     lock.unlock()
     guard room else { return ["ok": false, "reason": "the file would be over \(Self.maxSaveBytes >> 20) MB"] }
-    let offset = handle.written - data.count
     var done = 0
     while done < data.count {
       let step = data.withUnsafeBytes { pwrite(handle.fd, $0.baseAddress!.advanced(by: done), data.count - done, off_t(offset + done)) }
