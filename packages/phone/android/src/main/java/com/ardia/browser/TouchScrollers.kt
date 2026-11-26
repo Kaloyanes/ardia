@@ -51,6 +51,7 @@ object TouchScrollers {
   const scrolls = (overflow) => /(auto|scroll|overlay)/.test(overflow);
   let watchShadowRoot = null;
   const parentAcrossShadow = (node) => {
+    if (node.assignedSlot) return node.assignedSlot;
     if (node.parentElement) return node.parentElement;
     const rootNode = node.getRootNode();
     if (!rootNode || rootNode === document || !rootNode.host) return null;
