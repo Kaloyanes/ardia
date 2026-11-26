@@ -149,10 +149,12 @@ function needsFetch(name: string): boolean {
   return officialListing(s, name)?.folderId !== pinned.folderId;
 }
 
-function fetchOfficialCandidate(name: string, consent: ConsentToken | null, quiet = false): Promise<InstallResult & { code?: string }> {
+const LEFT = { ok: false, reason: "Cancelled.", cancelled: true } as const;
+
+function fetchOfficialCandidate(name: string, consent: ConsentToken | null, quiet = false, alive?: () => boolean): Promise<InstallResult & { code?: string }> {
   if (!needsFetch(name)) return Promise.resolve({ ok: true });
   const running = inFlight.get(name);
-  if (running && cancelling.has(name)) return running.then(() => fetchOfficialCandidate(name, consent, quiet));
+  if (running && cancelling.has(name)) return running.then(() => (alive && !alive() ? LEFT : fetchOfficialCandidate(name, consent, quiet, alive)));
   if (running) return running;
   watchProgress();
   if (!quiet) setOfficialFetch(name, { state: "fetching", received: 0, total: 0 });
@@ -212,9 +214,9 @@ export function installOfficialPlugin(name: string, options: InstallOptions = {}
     });
   }
   if (!needsFetch(name)) return askToInstall(name, options);
-  return fetchOfficialCandidate(name, consentToken()).then((fetched) => {
+  return fetchOfficialCandidate(name, consentToken(), false, options.alive).then((fetched) => {
     if (!fetched.ok) return fetched;
-    if (options.alive && !options.alive()) return { ok: false, reason: "Cancelled.", cancelled: true };
+    if (options.alive && !options.alive()) return LEFT;
     return askToInstall(name, options);
   });
 }

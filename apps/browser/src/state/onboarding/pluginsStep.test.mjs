@@ -282,6 +282,29 @@ test("coming back while the cancelled download is still winding down and pressin
   useOnboarding.setState({ windowId: null });
 });
 
+test("leaving again while the new attempt waits for the cancelled download starts no second download and asks nothing", async () => {
+  await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
+  let release;
+  host.officialFetchGate = new Promise((resolve) => (release = resolve));
+  const first = step.installPickedPlugins(offered());
+  await settle();
+  goToStep("home");
+  step.leavePluginsStep();
+  goToStep("plugins");
+  const again = step.installPickedPlugins(offered());
+  await settle();
+  goToStep("home");
+  step.leavePluginsStep();
+  release();
+  await Promise.all([first, again]);
+  await settle();
+  assert.deepEqual(host.officialFetchLog, ["cli"]);
+  assert.equal(P().consent, null);
+  assert.equal(P().records.cli, undefined);
+  assert.equal(O().step, "home");
+  useOnboarding.setState({ windowId: null });
+});
+
 test("plugin folder changes that keep coming while it installs don't hold it on Installing", async () => {
   await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
   const done = step.installPickedPlugins(offered());

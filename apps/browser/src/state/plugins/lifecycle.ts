@@ -25,6 +25,7 @@ import { forgetPluginGestures } from "./gestures";
 import { sendValues } from "./channel";
 import { adoptLegacyInstalls, reconcilePrograms, removePrograms } from "./programs";
 import { isBundledRetiredRecord, noteRetiredRecords, RETIRED_OFFICIAL_PLUGINS } from "./retiredOfficial";
+import { passAfterEachRequest } from "./scanPasses";
 import { ownValue } from "../../lib/decode";
 
 const MAX_PLUGINS = 64;
@@ -151,11 +152,6 @@ function applyListings(given: PluginListing[], consent: ConsentToken | null, can
   void adoptLegacyInstalls(consent).then((adopted) => adopted && reconcilePlugins(consent));
 }
 
-type QueuedScan = { consent: ConsentToken | null; done: Promise<void>; settle: (pass: Promise<void>) => void };
-
-let scanning = false;
-let queuedScan: QueuedScan | null = null;
-
 async function scanOnce(asked: ConsentToken | null) {
   const entries = await listPluginFolders().catch((error: unknown) => {
     warnFor(asked, "[plugins] couldn't list the plugins folder", error);
@@ -177,30 +173,7 @@ async function scanOnce(asked: ConsentToken | null) {
   if (!currentPlugins().scanned) usePlugins.setState({ scanned: true });
 }
 
-function startScan(consent: ConsentToken | null): Promise<void> {
-  scanning = true;
-  const pass = scanOnce(consent);
-  const next = () => {
-    const queued = queuedScan;
-    queuedScan = null;
-    scanning = !!queued;
-    if (queued) queued.settle(startScan(queued.consent));
-  };
-  pass.then(next, next);
-  return pass;
-}
-
-export function rescanPlugins(consent: ConsentToken | null): Promise<void> {
-  if (!scanning) return startScan(consent);
-  if (queuedScan) {
-    queuedScan.consent = consent;
-    return queuedScan.done;
-  }
-  let settle!: QueuedScan["settle"];
-  const done = new Promise<void>((resolve, reject) => (settle = (pass) => pass.then(resolve, reject)));
-  queuedScan = { consent, done, settle };
-  return done;
-}
+export const rescanPlugins = passAfterEachRequest(scanOnce);
 
 let lastConsentId = 0;
 
