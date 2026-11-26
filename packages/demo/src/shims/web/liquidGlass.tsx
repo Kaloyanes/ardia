@@ -7,6 +7,7 @@ import { GLASS_OPTICS, RIM_MIRROR, rgb, tintedGlass, type GlassOptics, type Liqu
 const PAD_SIDE = 8;
 const PAD_TOP = 10;
 const PAGE_REFRESH_MS = 120;
+const MOVE_CHECK_MS = 16;
 const OWN_CONTROL_SLACK = 2;
 const FADED_RIM_FLOOR = 0.25;
 const layer: CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
@@ -106,6 +107,8 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
   let own: Element = host;
   let faded = 1;
   let ready = false;
+  let drawnAt = "";
+  let settling = 0;
   const page = { canvas: document.createElement("canvas"), ctx: null as CanvasRenderingContext2D | null, key: "", at: 0, stale: true, fill: "" };
   const skip = (el: Element) => el === own || el === host || el.hasAttribute("data-glass-skip") || fixedBehind(el, own);
   const dirty = () => {
@@ -237,6 +240,14 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
       scale: rect.width / Math.max(w, 1e-3),
     };
   };
+  const placeOf = () => {
+    const r = host.getBoundingClientRect();
+    return `${Math.round(r.left * 2)}:${Math.round(r.top * 2)}:${Math.round(r.width * 2)}:${Math.round(r.height * 2)}`;
+  };
+  const settle = () => {
+    settling = 0;
+    if (placeOf() !== drawnAt) invalidate();
+  };
   const view: GlassView = {
     canvas,
     ctx,
@@ -245,6 +256,8 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     step: () => false,
     lens,
     drawn: () => {
+      drawnAt = placeOf();
+      settling ||= window.setTimeout(settle, MOVE_CHECK_MS);
       if (ready) return;
       ready = true;
       onReady(true);
@@ -270,6 +283,8 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     ro.disconnect();
     if (trailing) window.clearTimeout(trailing);
     trailing = 0;
+    if (settling) window.clearTimeout(settling);
+    settling = 0;
   };
   observe(true);
   engine.add(view);

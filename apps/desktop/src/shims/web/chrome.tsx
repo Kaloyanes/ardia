@@ -14,7 +14,7 @@ import { OutsidePressIgnoreContext } from "../../outsidePressScope";
 import { markWindowDrag, WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import type { MiddleClickEvent } from "./MouseArea";
 import { LiquidGlassLayer } from "./liquidGlass";
-import { backdropKeyOf } from "./liquidGlassOptics";
+import { backdropKeyOf, DOCK_GLASS, glassGlow } from "./liquidGlassOptics";
 import { nativeLiquidGlass, webLiquidGlassAllowed } from "../../liquidGlassSupport";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
@@ -434,8 +434,19 @@ export function WindowDragRegion({
   return <View {...props} ref={(view) => void (node.current = view as unknown as HTMLElement | null)} />;
 }
 
-export type DockSelectionProps = ViewProps & { fill?: string; stroke?: string; cornerRadius?: number; strokeWidth?: number; dark: boolean; outline?: boolean };
+export type DockSelectionProps = ViewProps & { image?: string; emoji?: string; theme?: string; fill?: string; stroke?: string; cornerRadius?: number; strokeWidth?: number; iconSize?: number; dark: boolean; glass?: boolean; colorRing?: boolean; outline?: boolean };
 
-export function DockSelection({ fill, stroke, cornerRadius, strokeWidth, dark: _dark, outline, style, ...props }: DockSelectionProps & Record<string, unknown>) {
-  return <View {...props} style={[{ backgroundColor: outline ? undefined : fill, borderColor: stroke, borderWidth: stroke ? (strokeWidth ?? 1) : 0, borderRadius: cornerRadius }, style]} />;
+export function DockSelection({ fill, stroke, cornerRadius, strokeWidth, dark, glass, colorRing, outline, image: _image, emoji: _emoji, theme: _theme, iconSize: _iconSize, style, ...props }: DockSelectionProps & Record<string, unknown>) {
+  if (!glass) return <View {...props} style={[{ backgroundColor: outline ? undefined : fill, borderColor: stroke, borderWidth: stroke ? (strokeWidth ?? 1) : 0, borderRadius: cornerRadius }, style]} />;
+  const look = dark ? "dark" : "light";
+  const glow = outline || !fill ? null : glassGlow(parseColor(fill));
+  const ringWidth = colorRing ? (strokeWidth ?? 1) : 0;
+  const shape: React.CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none", borderRadius: cornerRadius };
+  return (
+    <View pointerEvents="none" {...props} style={[{ borderRadius: cornerRadius }, style]}>
+      {glow ? <div style={{ ...shape, background: glow, opacity: DOCK_GLASS.hue[look] }} /> : null}
+      {outline ? null : <div style={{ ...shape, background: `linear-gradient(to bottom, rgba(255,255,255,${DOCK_GLASS.sheen[look]}), rgba(255,255,255,0) ${DOCK_GLASS.sheenEnd}%)` }} />}
+      {ringWidth > 0 ? <div style={{ ...shape, boxSizing: "border-box", border: `${ringWidth}px solid ${stroke ?? `rgba(255,255,255,${DOCK_GLASS.ring[look]})`}`, mixBlendMode: stroke ? undefined : "soft-light" }} /> : null}
+    </View>
+  );
 }

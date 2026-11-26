@@ -75,3 +75,15 @@ export function tintedGlass(base: Rgb, frost: number, tint: Rgba | null): { colo
   const share = alpha / cover;
   return { color: [0, 1, 2].map((i) => base[i]! * (1 - share) + tint[i]! * share) as Rgb, frost: cover };
 }
+
+export const DOCK_GLASS = { hue: { light: 0.3, dark: 0.35 }, sheen: { light: 0.4, dark: 0.12 }, sheenEnd: 60, ring: { light: 0.9, dark: 0.5 } };
+
+export function glassGlow(color: readonly number[] | null): string | null {
+  if (!color) return null;
+  const rgb = [color[0]! / 255, color[1]! / 255, color[2]! / 255];
+  const top = Math.max(...rgb);
+  const strength = Math.min(1, (top - Math.min(...rgb)) * 1.5);
+  if (top <= 0 || strength <= 0) return null;
+  const lifted = rgb.map((c) => Math.round((c / top + (1 - c / top) * 0.35) * 255));
+  return `rgba(${lifted[0]},${lifted[1]},${lifted[2]},${+strength.toFixed(4)})`;
+}

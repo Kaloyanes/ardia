@@ -276,7 +276,7 @@ globalThis.location = { href: "chrome://ardia/", origin: "chrome://ardia" };
 const { getGlassEngine } = await import("../../../third_party/liquid-glass/engine.ts");
 const { drawDom } = await import("../../../third_party/liquid-glass/dom-snapshot.ts");
 const { attachGlass, mountGlass, invalidateLiquidGlass } = await import("./shims/web/liquidGlass.tsx");
-const { backdropKeyOf, GLASS_OPTICS } = await import("./shims/web/liquidGlassOptics.ts");
+const { backdropKeyOf, GLASS_OPTICS, glassGlow } = await import("./shims/web/liquidGlassOptics.ts");
 const { glassAppearanceSupported, nativeLiquidGlass, webLiquidGlassAllowed } = await import("./liquidGlassSupport.ts");
 
 function mountTile(left = 20) {
@@ -532,4 +532,53 @@ test("an image that fails to load releases every snapshot callback waiting on it
   assert.ok(copy, "the snapshot waits on its own copy of the image");
   copy.dispatchEvent({ type: "error" });
   assert.equal(copy.listenerCount, 0, "a failed image keeps no listener, and with it no surface's callback");
+});
+
+test("glass that slides into view keeps retaking its picture while it moves, with no event to say so, and goes quiet once still", () => {
+  const { glass, host, outer } = mountTile();
+  const isMoveCheck = (run) => !!run && String(run).includes("placeOf()");
+  const moveChecks = () => timers.filter(isMoveCheck).length;
+  const runMoveChecks = () => {
+    const due = timers.filter(isMoveCheck);
+    for (let i = 0; i < timers.length; i++) if (isMoveCheck(timers[i])) timers[i] = null;
+    for (const run of due) run();
+  };
+  runFrames();
+  runTimers();
+  runFrames();
+  assert.equal(moveChecks(), 0, "glass that stayed put leaves no move check behind");
+  const slide = (by) => {
+    for (const node of [outer, outer.children[0], host]) node.rect = { ...node.rect, left: node.rect.left + by };
+  };
+  slide(70);
+  intersections.at(-1).callback([{ isIntersecting: true }]);
+  runFrames();
+  slide(70);
+  runFrames();
+  const entered = snapshotWalks;
+  runMoveChecks();
+  runFrames();
+  assert.ok(snapshotWalks > entered, "the picture is taken again where the glass slid on to");
+  runMoveChecks();
+  runFrames();
+  const settled = snapshotWalks;
+  runMoveChecks();
+  runFrames();
+  assert.equal(snapshotWalks, settled, "once still, it takes no further picture");
+  assert.equal(moveChecks(), 0, "and no move check is left running");
+  glass.stop();
+});
+
+test("the glass has no flat outline: its edge is a still key light from the top left, and a white pinned tile adds no white slab", () => {
+  for (const theme of ["light", "dark"])
+    for (const style of ["regular", "clear"]) {
+      const optics = GLASS_OPTICS[theme][style];
+      assert.ok(optics.borderAlpha <= 0.04, `${theme} ${style}: no uniform 1 px line around the control`);
+      assert.ok(optics.rimLean > 0.5 && optics.rimAngle < -Math.PI / 2 && optics.rimAngle > -Math.PI, `${theme} ${style}: the rim is lit from the top left`);
+    }
+  assert.equal(glassGlow([255, 255, 255, 1]), null, "white (a template icon's fill) gives no glow");
+  assert.equal(glassGlow([40, 40, 40, 1]), null, "grey gives no glow");
+  assert.match(glassGlow([230, 30, 30, 1]) ?? "", /^rgba\(255,1\d\d,1\d\d,1\)$/, "a saturated colour glows in a lifted tint of itself");
+  const chrome = readFileSync(new URL("./shims/web/chrome.tsx", import.meta.url), "utf8");
+  assert.match(chrome, /if \(!glass\) return <View \{\.\.\.props\} style=\{\[\{ backgroundColor: outline \? undefined : fill/, "only the non-glass selection paints its fill");
 });
