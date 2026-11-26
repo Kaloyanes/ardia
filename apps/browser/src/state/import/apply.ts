@@ -12,7 +12,7 @@ import {
   type SafariExport,
   type SpaceSuggestion,
 } from "../../platform/importModule";
-import { passwordImportTally } from "../telemetry/passwordSaves";
+import { passwordImportTally, type PasswordSaveResult } from "../telemetry/passwordSaves";
 import { withPresetChosen } from "../../lib/presetLook";
 import { noteHistoryImport, noteRepeatBookmarks } from "../telemetry/importRuns";
 import { reloadEngineHistory } from "../history/engineSync";
@@ -88,20 +88,23 @@ export async function importHistory(
   return added;
 }
 
-export async function saveLogins(logins: readonly Omit<LoginToSave, "browserId">[]): Promise<boolean[]> {
-  const tally = passwordImportTally("browser");
-  const saved: boolean[] = [];
-  for (const l of logins) saved.push(await tally.attempt(savePassword(engineProfile(useBrowser.getState(), l.profileId), l.origin, l.username, asSecret("password", l.password))));
+export async function saveLogins(logins: readonly Omit<LoginToSave, "browserId">[], consent: ConsentToken | null, signal?: AbortSignal): Promise<PasswordSaveResult[]> {
+  const tally = passwordImportTally("browser", consent);
+  const results: PasswordSaveResult[] = [];
+  for (const l of logins) {
+    if (signal?.aborted) break;
+    results.push(await tally.settle(savePassword(engineProfile(useBrowser.getState(), l.profileId), l.origin, l.username, asSecret("password", l.password))));
+  }
   tally.done();
-  return saved;
+  return results;
 }
 
-async function importPasswords(profileId: string, credentials: Credential[]): Promise<number> {
+async function importPasswords(profileId: string, credentials: Credential[], consent: ConsentToken | null): Promise<number> {
   const logins = credentials.flatMap((c) => {
     const origin = loginOrigin(c);
     return origin && c.password ? [{ profileId, origin, username: c.username, password: c.password }] : [];
   });
-  return (await saveLogins(logins)).filter(Boolean).length;
+  return (await saveLogins(logins, consent)).filter((r) => r === "saved").length;
 }
 
 async function importNative(
@@ -166,7 +169,7 @@ export async function applyResult(
   Object.assign(counts, await importNative(profileId, result.vaultToken, native, onFailed));
   if (result.tabs.length && !result.spaces.length) counts.tabs += importTabs(profileId, result.tabs, "Imported");
   if (result.favorites.length) counts.tabs += importTabs(profileId, result.favorites.map((t) => ({ ...t, pinned: true })), null, "tiles");
-  if (result.credentials.length) counts.passwords += await importPasswords(profileId, result.credentials);
+  if (result.credentials.length) counts.passwords += await importPasswords(profileId, result.credentials, consent ?? null);
   return counts;
 }
 
@@ -177,7 +180,7 @@ export async function applySafari(profileId: string, data: SafariExport, cookies
   counts.history = await importHistory(profileId, history, onFailed, consent);
   Object.assign(counts, await importNative(profileId, data.vaultToken, cookies ? ["cookies", "autofill"] : ["autofill"], onFailed));
   if (data.tabs.length) counts.tabs += importTabs(profileId, data.tabs, "Imported");
-  counts.passwords = await importPasswords(profileId, data.credentials);
+  counts.passwords = await importPasswords(profileId, data.credentials, consent ?? null);
   return counts;
 }
 

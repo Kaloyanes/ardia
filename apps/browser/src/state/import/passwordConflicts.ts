@@ -1,4 +1,5 @@
 import { hostOf } from "@ardia/core";
+import { originOf, urlParts } from "../../lib/urlParts";
 import type { Credential } from "../../platform/importModule";
 import { originOfLogin } from "../site/savedPasswords";
 
@@ -17,6 +18,11 @@ export type LoginPlan = {
 };
 
 export const loginOrigin = (c: Credential) => originOfLogin(c.realm?.startsWith("http") ? c.realm : c.url);
+export function sameOriginKey(origin: string): string {
+  const parts = urlParts(origin);
+  return parts?.authority && parts.host ? originOf(parts) : origin.toLowerCase();
+}
+
 export const loginAge = (c: Pick<Credential, "created" | "lastUsed">) => Math.max(c.lastUsed ?? 0, c.created ?? 0);
 
 type Held = { login: LoginToSave; at: number };
@@ -26,7 +32,7 @@ export function planLogins(collected: readonly CollectedLogin[], order: readonly
   for (const { browserId, profileId, credential } of collected) {
     const origin = loginOrigin(credential);
     if (!origin || !credential.password) continue;
-    const key = JSON.stringify([profileId, origin, credential.username]);
+    const key = JSON.stringify([profileId, sameOriginKey(origin), credential.username]);
     const byBrowser = groups.get(key) ?? new Map<string, Held>();
     const at = loginAge(credential);
     const earlier = byBrowser.get(browserId);
@@ -50,7 +56,8 @@ export function planLogins(collected: readonly CollectedLogin[], order: readonly
       continue;
     }
     const id = `conflict-${conflicts.length}`;
-    const { profileId, origin, username } = first.login;
+    const { profileId, username } = first.login;
+    const origin = sameOriginKey(first.login.origin);
     conflicts.push({ id, profileId, origin, site: hostOf(origin) || origin, username, versions: held.map((h) => ({ browserId: h.login.browserId, at: h.at })) });
     versions.set(id, new Map(held.map((h) => [h.login.browserId, h.login])));
   }
@@ -83,7 +90,17 @@ export const changedChoices = (from: ConflictChoices, to: ConflictChoices) => Ob
 export function matchingConflicts(conflicts: readonly PasswordConflict[], filter: string): PasswordConflict[] {
   const text = filter.trim().toLowerCase();
   if (!text) return [...conflicts];
-  return conflicts.filter((c) => c.site.toLowerCase().includes(text) || c.username.toLowerCase().includes(text));
+  return conflicts.filter((c) => c.origin.toLowerCase().includes(text) || c.username.toLowerCase().includes(text));
+}
+
+export type ConflictRow = { conflict: PasswordConflict; title: string; showsProfile: boolean };
+
+export function conflictRows(conflicts: readonly PasswordConflict[]): ConflictRow[] {
+  const showsProfile = new Set(conflicts.map((c) => c.profileId)).size > 1;
+  const reads = (c: PasswordConflict) => JSON.stringify([c.site, c.username, showsProfile ? c.profileId : ""]);
+  const seen = new Map<string, number>();
+  for (const c of conflicts) seen.set(reads(c), (seen.get(reads(c)) ?? 0) + 1);
+  return conflicts.map((conflict) => ({ conflict, title: seen.get(reads(conflict))! > 1 ? conflict.origin : conflict.site, showsProfile }));
 }
 
 export function resolvedLogins(plan: LoginPlan, choices: ConflictChoices): LoginToSave[] {

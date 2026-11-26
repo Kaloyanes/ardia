@@ -89,23 +89,34 @@ const multiCounts = {
   import_multi_skipped: 0,
   import_passwords_merged: 0,
   import_password_conflicts: 0,
+  import_passwords_kept_existing: 0,
   import_conflicts_newest: 0,
   import_conflicts_browser: 0,
   import_conflicts_custom: 0,
   import_conflict_rows_changed: 0,
 };
 
-type MultiImport = { browsers: number; skipped: number; conflicts: number; merged: number; resolution: "newest" | "browser" | "custom" | null; changedByHand: number };
-
-export function noteMultiImport(run: MultiImport, consent?: ConsentToken | null) {
-  countFor(consentOrNow(consent), () => {
+export function noteMultiImport(run: { browsers: number; skipped: number; merged: number; conflicts: number }, consent: ConsentToken | null) {
+  countFor(consent, () => {
     multiCounts.import_multi_runs += 1;
     multiCounts.import_multi_browsers += run.browsers;
     multiCounts.import_multi_skipped += run.skipped;
     multiCounts.import_passwords_merged += run.merged;
     multiCounts.import_password_conflicts += run.conflicts;
-    if (run.resolution) multiCounts[`import_conflicts_${run.resolution}`] += 1;
-    multiCounts.import_conflict_rows_changed += run.changedByHand;
+  });
+}
+
+export function noteConflictsResolved(choice: { resolution: "newest" | "browser" | "custom"; changedByHand: number }, consent: ConsentToken | null) {
+  countFor(consent, () => {
+    multiCounts[`import_conflicts_${choice.resolution}`] += 1;
+    multiCounts.import_conflict_rows_changed += choice.changedByHand;
+  });
+}
+
+export function notePasswordsKeptExisting(count: number, consent: ConsentToken | null) {
+  if (!count) return;
+  countFor(consent, () => {
+    multiCounts.import_passwords_kept_existing += count;
   });
 }
 

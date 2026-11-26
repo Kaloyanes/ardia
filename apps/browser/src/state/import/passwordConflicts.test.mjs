@@ -101,3 +101,33 @@ test("a resolution reads as newest, one browser, or custom", () => {
   assert.equal(resolutionOf("custom"), "custom");
   assert.equal(resolutionOf("arc"), "browser");
 });
+
+test("one origin written with a different host case or its default port is the same account", () => {
+  const plan = planLogins(
+    [login("chrome", "p", "https://accounts.example.test/", "me", "a", { created: 1 }), login("arc", "p", "https://ACCOUNTS.EXAMPLE.TEST:443/sign-in", "me", "b", { created: 2 })],
+    ORDER,
+  );
+  assert.equal(plan.conflicts.length, 1);
+  assert.equal(plan.conflicts[0].origin, "https://accounts.example.test");
+  assert.equal(plan.clean.length, 0);
+  const same = planLogins([login("chrome", "p", "http://Site.example:80/", "me", "x"), login("arc", "p", "http://site.example/a", "me", "x")], ORDER);
+  assert.deepEqual([same.clean.length, same.merged], [1, 1]);
+  const ports = planLogins([login("chrome", "p", "https://site.example:8443/", "me", "x"), login("arc", "p", "https://site.example/", "me", "y")], ORDER);
+  assert.deepEqual([ports.clean.length, ports.conflicts.length], [2, 0], "a different port is a different origin");
+});
+
+test("rows that would read the same show their full origin, and the profile shows only when the conflicts span several", async () => {
+  const { conflictRows } = await import("./passwordConflicts.ts");
+  const plan = planLogins(
+    [
+      login("chrome", "p", "https://www.site.example/", "me", "1"),
+      login("arc", "p", "https://www.site.example/", "me", "2"),
+      login("chrome", "p", "http://site.example/", "me", "3"),
+      login("arc", "p", "http://site.example/", "me", "4"),
+    ],
+    ORDER,
+  );
+  assert.deepEqual(conflictRows(plan.conflicts).map((r) => [r.title, r.showsProfile]), [["https://www.site.example", false], ["http://site.example", false]]);
+  const two = planLogins([login("chrome", "a", "https://x.example/", "me", "1"), login("arc", "a", "https://x.example/", "me", "2"), login("chrome", "b", "https://x.example/", "me", "3"), login("arc", "b", "https://x.example/", "me", "4")], ORDER);
+  assert.deepEqual(conflictRows(two.conflicts).map((r) => [r.title, r.showsProfile]), [["x.example", true], ["x.example", true]]);
+});

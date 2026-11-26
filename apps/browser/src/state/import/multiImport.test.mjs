@@ -6,17 +6,30 @@ globalThis.require = createRequire(import.meta.url);
 const link = (url) => ({ type: "url", title: url, url });
 const DAY = 86_400_000;
 let reads = {};
+let readCalls = [];
+let unlocked = true;
+let duringRead = () => {};
+const native = { listBrowsers: async () => "[]", importSafariExport: async () => "{}", unlockBrowser: async () => null };
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+};
 
 globalThis.acTestNativeModules = {
   ArdiaImport: {
     addListener: () => ({ remove() {} }),
     cancelImport() {},
     forgetUnlockedKeys() {},
-    unlockBrowser: async () => {},
-    isBrowserUnlocked: () => true,
+    unlockBrowser: (...args) => native.unlockBrowser(...args),
+    isBrowserUnlocked: () => unlocked,
     safariHasFullDiskAccess: () => false,
+    listBrowsers: () => native.listBrowsers(),
+    importSafariExport: (_job, path) => native.importSafariExport(path),
     listExtensions: async () => "[]",
     importData: async (_job, browserId, profileId) => {
+      readCalls.push(browserId);
+      await duringRead(browserId);
       const read = reads[browserId];
       if (!read) throw Object.assign(new Error("The import failed"), { code: "unreadable" });
       return JSON.stringify({
@@ -33,7 +46,9 @@ globalThis.acTestNativeModules = {
 const stub = await import("../../test-native/index.ts");
 const { useBrowser } = await import("../browser/store.ts");
 const flow = await import("./flow.ts");
-const { continueImport, skipSource } = await import("./runImport.ts");
+const { continueImport, recheckAccess, skipEncryptedData, skipSource, unlockAndImport } = await import("./runImport.ts");
+const { importSafariExport } = await import("./fileImports.ts");
+const { saveLogins } = await import("./apply.ts");
 const outcome = await import("./importOutcome.ts");
 const { takeImportRuns } = await import("../telemetry/importRuns.ts");
 const telemetry = await import("../telemetry/client.ts");
@@ -58,6 +73,9 @@ async function until(name) {
 }
 
 beforeEach(() => {
+  readCalls = [];
+  unlocked = true;
+  duringRead = () => {};
   stub.passwordStores.set(null, new Map());
   useBrowser.setState({ bookmarks: { nodes: {} } });
   S().hydrate({});
@@ -168,4 +186,110 @@ test("a kind only some ticked browsers have is offered once, a kind left unticke
   flow.backTo("choose");
   assert.equal(flow.useImportFlow.getState().run, null);
   assert.deepEqual([...flow.useImportFlow.getState().kinds].sort(), chosen);
+});
+
+const settle = async () => {
+  for (let tick = 0; tick < 50; tick++) await new Promise((r) => setTimeout(r, 0));
+};
+const safariExport = (credentials) => JSON.stringify({ bookmarks: { type: "folder", title: "Bookmarks", children: [] }, profiles: [], tabs: [], credentials });
+
+test("a Safari export still being read when its window closed never reaches the next import run", async () => {
+  reads = { chrome: { bookmarks: [], tabs: [], credentials: [] }, brave: { bookmarks: [], tabs: [], credentials: [] } };
+  const late = deferred();
+  native.importSafariExport = () => late.promise;
+  pick([SAFARI, chromium("chrome", "Chrome")], ["safari", "chrome"]);
+  continueImport();
+  await until("safari");
+  void importSafariExport("/tmp/old.zip");
+  native.listBrowsers = async () => JSON.stringify([chromium("chrome", "Chrome"), chromium("brave", "Brave")]);
+  flow.startImport(0);
+  await settle();
+  flow.useImportFlow.setState({ target: "default" });
+  flow.pickSources(["chrome", "brave"]);
+  continueImport();
+  const done = await until("done");
+  late.resolve(safariExport([cred("https://old.example/", "me", "stale", now)]));
+  await settle();
+  assert.deepEqual(storedLogins(), []);
+  assert.equal(step(), done, "the finished run is left as it was");
+});
+
+test("pressing Continue twice starts each browser's read once", async () => {
+  reads = { chrome: { bookmarks: [], tabs: [], credentials: [] }, brave: { bookmarks: [], tabs: [], credentials: [] } };
+  pick([chromium("chrome", "Chrome"), chromium("brave", "Brave")], ["chrome", "brave"]);
+  continueImport();
+  continueImport();
+  await until("done");
+  assert.deepEqual(readCalls, ["chrome", "brave"]);
+  assert.equal(takeImportRuns().import_runs, 2);
+});
+
+test("a Full Disk Access check that answers after the browser was skipped doesn't start it again", async () => {
+  reads = { chrome: { bookmarks: [], tabs: [], credentials: [] }, locked: { bookmarks: [], tabs: [], credentials: [] } };
+  const answer = deferred();
+  native.listBrowsers = () => answer.promise;
+  pick([{ ...chromium("locked", "Locked"), needsFullDiskAccess: true }, chromium("chrome", "Chrome")], ["locked", "chrome"]);
+  continueImport();
+  await until("access");
+  const checking = recheckAccess();
+  skipSource();
+  await until("done");
+  answer.resolve(JSON.stringify([chromium("locked", "Locked"), chromium("chrome", "Chrome")]));
+  await checking;
+  await settle();
+  assert.deepEqual(readCalls, ["chrome"]);
+  assert.equal(step().name, "done");
+});
+
+test("a keychain unlock that finishes after Skip Encrypted Data doesn't import a second time", async () => {
+  reads = { chrome: { bookmarks: [], tabs: [], credentials: [] } };
+  unlocked = false;
+  const unlock = deferred();
+  native.unlockBrowser = () => unlock.promise;
+  pick([{ ...chromium("chrome", "Chrome"), needsKeychain: true }], ["chrome"]);
+  continueImport();
+  await until("unlock");
+  const unlocking = unlockAndImport();
+  skipEncryptedData();
+  await until("done");
+  unlock.resolve(null);
+  await unlocking;
+  await settle();
+  assert.deepEqual(readCalls, ["chrome"]);
+  native.unlockBrowser = async () => null;
+});
+
+test("a password save stops as soon as the import is cancelled", async () => {
+  const cancelled = new AbortController();
+  cancelled.abort();
+  const results = await saveLogins([{ profileId: "default", origin: "https://a.example", username: "me", password: "x" }], null, cancelled.signal);
+  assert.deepEqual(results, []);
+  assert.deepEqual(storedLogins(), []);
+});
+
+test("counts that span the run need every browser's consent, and a password Ardia kept is reported", async () => {
+  stub.passwordStores.get(null).set("https://mail.example\nme", { origin: "https://mail.example/", url: "https://mail.example", username: "me", password: "already", created: 1 });
+  reads = {
+    chrome: { bookmarks: [], tabs: [], credentials: [cred("https://mail.example/", "me", "imported", now)] },
+    brave: { bookmarks: [], tabs: [], credentials: [] },
+  };
+  pick([chromium("chrome", "Chrome"), chromium("brave", "Brave")], ["chrome", "brave"]);
+  continueImport();
+  const done = await until("done");
+  assert.deepEqual(done.notes, ["1 password wasn't changed: Ardia already has a different one saved for that account."]);
+  assert.equal(done.sources[0].counts.passwords, 0);
+  let sent = takeImportRuns();
+  assert.deepEqual([sent.import_multi_runs, sent.import_passwords_kept_existing], [1, 1]);
+
+  stub.passwordStores.set(null, new Map());
+  duringRead = (id) => {
+    if (id !== "chrome") return;
+    telemetry.setSharing(false, "settings");
+    telemetry.setSharing(true, "settings");
+  };
+  pick([chromium("chrome", "Chrome"), chromium("brave", "Brave")], ["chrome", "brave"]);
+  continueImport();
+  await until("done");
+  sent = takeImportRuns();
+  assert.deepEqual([sent.import_runs, sent.import_multi_runs, sent.import_multi_browsers], [1, 0, 0], "only Brave's own run counts: Chrome's consent was from before the change");
 });

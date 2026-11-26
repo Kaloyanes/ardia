@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Animated, View } from "react-native";
+import { Animated, ScrollView, View } from "react-native";
 import { allArcHolders, restoreArcFolders } from "../../../state/bookmarks/bookmarkGroups";
 import { useBookmarks } from "../../../state/bookmarks/hooks";
 import { plural } from "../../../state/browser/model";
 import { useProfileOrder, useProfileRecords } from "../../../state/profiles/hooks";
-import type { ImportCounts } from "../../../state/import/apply";
+import type { BrowserSource, ImportCounts } from "../../../state/import/apply";
 import { backTo, closeImport, openFoundExtensions, type ImportFlow, type SourceTally } from "../../../state/import/flow";
 import { spokenList } from "../../../lib/lists";
 import { takeOfferedEngine } from "../../../state/import/searchEngine";
@@ -12,6 +12,7 @@ import { useOnboarding } from "../../../state/onboarding/onboarding";
 import { Button, space, Symbol, Text, useTheme } from "../../ui";
 import { APP, kindTitle } from "../model";
 import { Spacer, Title } from "../Parts";
+import { BrowserIcon } from "../Rows";
 import { ExtensionListingView } from "./ExtensionListing";
 import { importLayout, importMotion, importType } from "../tokens";
 
@@ -37,33 +38,41 @@ function sourceNameOf({ source, step }: ImportFlow) {
   return source?.name ?? "Your browser";
 }
 
-function SourceTable({ sources, counts }: { sources: SourceTally[]; counts: ImportCounts }) {
+function SourceTable({ sources, counts, browsers }: { sources: SourceTally[]; counts: ImportCounts; browsers: BrowserSource[] }) {
   const rows = COUNTED.filter((c) => counts[c.key]);
   if (!rows.length) return null;
-  const cell = { width: importLayout.tallyColumn, textAlign: "right" } as const;
+  const column = { width: importLayout.tallyColumn, alignItems: "center" } as const;
+  const label = { width: importLayout.tallyLabel } as const;
   return (
-    <View style={{ alignSelf: "stretch", marginTop: space.l, gap: space.xs }}>
-      <View style={{ flexDirection: "row", gap: space.m }}>
-        <View style={{ flex: 1 }} />
-        {sources.map((s) => (
-          <Text key={s.id} size="small" weight="semibold" numberOfLines={1} style={cell}>
-            {s.name}
-          </Text>
-        ))}
-      </View>
-      {rows.map((c) => (
-        <View key={c.key} style={{ flexDirection: "row", gap: space.m }}>
-          <Text size="small" tone="textSecondary" style={{ flex: 1 }}>
-            {c.title}
-          </Text>
+    <ScrollView horizontal style={{ alignSelf: "stretch", marginTop: space.l }} contentContainerStyle={{ flexGrow: 1, justifyContent: "center" }}>
+      <View style={{ gap: space.xs }}>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space.m, marginBottom: space.xs }}>
+          <View style={label} />
           {sources.map((s) => (
-            <Text key={s.id} size="small" tone={s.counts[c.key] ? "textPrimary" : "textTertiary"} style={cell}>
-              {s.counts[c.key] ? s.counts[c.key].toLocaleString("en-US") : "–"}
-            </Text>
+            <View key={s.id} style={{ ...column, gap: space.xs }}>
+              <BrowserIcon iconPath={browsers.find((b) => b.id === s.id)?.iconPath} size={importLayout.tallyIcon} />
+              <Text size="small" weight="semibold" style={{ textAlign: "center" }}>
+                {s.name}
+              </Text>
+            </View>
           ))}
         </View>
-      ))}
-    </View>
+        {rows.map((c) => (
+          <View key={c.key} style={{ flexDirection: "row", alignItems: "center", gap: space.m }}>
+            <Text size="small" tone="textSecondary" style={label}>
+              {c.title}
+            </Text>
+            {sources.map((s) => (
+              <View key={s.id} style={column}>
+                <Text size="small" tone={s.counts[c.key] ? "textPrimary" : "textTertiary"}>
+                  {s.counts[c.key] ? s.counts[c.key].toLocaleString("en-US") : "–"}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -162,7 +171,7 @@ export function DoneBody({ flow }: { flow: ImportFlow }) {
           </Text>
         ))}
         {table ? (
-          <SourceTable sources={table} counts={counts} />
+          <SourceTable sources={table} counts={counts} browsers={flow.browsers} />
         ) : (
           summary.length > 0 && <Text size="small" tone="textSecondary" style={{ marginTop: space.l }}>{`Imported ${summary.join(", ")}.`}</Text>
         )}
@@ -185,7 +194,7 @@ export function DoneBody({ flow }: { flow: ImportFlow }) {
           <Text tone="textSecondary" style={{ textAlign: "center" }}>
             {summary.length ? fromLine : `${fromLine}: there was nothing new to import.`}
           </Text>
-          <SourceTable sources={table} counts={counts} />
+          <SourceTable sources={table} counts={counts} browsers={flow.browsers} />
         </>
       ) : (
         <Text tone="textSecondary" style={{ textAlign: "center" }}>

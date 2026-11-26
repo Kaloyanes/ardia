@@ -14,7 +14,8 @@ import {
   pickConflictVersions,
   setConflictFilter,
 } from "../../../state/import/importOutcome";
-import { conflictBrowsers, matchingConflicts, newerCounts } from "../../../state/import/passwordConflicts";
+import { conflictBrowsers, conflictRows, matchingConflicts, newerCounts } from "../../../state/import/passwordConflicts";
+import { useProfileRecords } from "../../../state/profiles/hooks";
 import { Button, Group, Row, SearchField, Segmented, space, Symbol, Text, useTheme } from "../../ui";
 import { Spacer, Title } from "../Parts";
 import { BrowserIcon, ChoiceRow } from "../Rows";
@@ -82,7 +83,8 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
   const browsers = involved(flow, step);
   const nameOf = (id: string) => browsers.find((b) => b.id === id)?.name ?? id;
   const iconOf = (id: string) => browsers.find((b) => b.id === id)?.iconPath;
-  const shown = matchingConflicts(step.conflicts, step.filter);
+  const profiles = useProfileRecords();
+  const shown = conflictRows(matchingConflicts(step.conflicts, step.filter));
   const choices = step.draft.choices;
   const now = Date.now();
   return (
@@ -92,7 +94,7 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
         <View style={{ flex: 1 }}>
           <SearchField value={step.filter} onChangeText={setConflictFilter} placeholder={`Search ${plural(step.conflicts.length, "account")}`} />
         </View>
-        <Text size="small" tone="textSecondary">
+        <Text tone="textSecondary" ardiaCentersCapitals>
           All:
         </Text>
         {browsers.map((b) => (
@@ -101,17 +103,25 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
       </View>
       {shown.length ? (
         <Group>
-          {shown.map((c) => (
-            <Row key={c.id} title={c.site} description={c.username || "No username"}>
+          {shown.map(({ conflict: c, title, showsProfile }) => (
+            <Row
+              key={c.id}
+              title={title}
+              description={[c.username || "No username", showsProfile ? `into ${profiles[c.profileId]?.name ?? "another profile"}` : ""].filter(Boolean).join(" · ")}
+            >
               <Segmented
                 value={choices[c.id] ?? c.versions[0]!.browserId}
                 onChange={(id) => chooseConflictVersion(c.id, id)}
-                options={c.versions.map((v) => ({
-                  value: v.browserId,
-                  title: v.at ? shortAgo(v.at, now) : "no date",
-                  label: `${nameOf(v.browserId)}, ${v.at ? shortAgo(v.at, now) : "no date"}`,
-                  lead: <BrowserIcon iconPath={iconOf(v.browserId)} size={importLayout.segmentIcon} />,
-                }))}
+                options={c.versions.map((v) => {
+                  const age = v.at ? shortAgo(v.at, now) : "no date";
+                  const icon = iconOf(v.browserId);
+                  return {
+                    value: v.browserId,
+                    title: icon ? age : `${nameOf(v.browserId)} ${age}`,
+                    label: `${nameOf(v.browserId)}, ${age}`,
+                    lead: icon ? <BrowserIcon iconPath={icon} size={importLayout.segmentIcon} /> : undefined,
+                  };
+                })}
               />
             </Row>
           ))}

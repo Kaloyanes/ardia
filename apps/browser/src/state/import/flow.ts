@@ -6,6 +6,7 @@ import { defaultTarget, openInWebStore, type BrowserProfile, type BrowserSource,
 import type { ExtensionGroup, ExtensionListing } from "./extensionListing";
 import { importModule } from "./importApi";
 import type { ConflictPick, PasswordConflict } from "./passwordConflicts";
+import type { ConsentToken } from "../telemetry/choice";
 
 export type KindStatus = "pending" | "active" | "done" | "failed";
 type ImportStatus = Partial<Record<ImportKind, KindStatus>>;
@@ -31,6 +32,7 @@ export type SourceOutcome = {
   extensions: { profileId: string; found: ImportedExtension[]; groups: ExtensionGroup[] };
   engines: { profile: BrowserProfile; engine?: ImportedSearchEngine }[];
   skipped: boolean;
+  consent: ConsentToken | null;
 };
 
 export type ImportRun = { ids: string[]; at: number; chosen: ImportKind[]; offered: ImportKind[]; outcomes: SourceOutcome[] };

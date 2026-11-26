@@ -16,7 +16,7 @@ import { arcNotes, importArcArchive, importArcRouting, withArcGlyph } from "./ar
 import { planSidebar } from "./sidebarPlan";
 import { APP_TAB_KINDS, ARC_ONCE_KINDS, DIA_SIDEBAR_KINDS, importNow, IMPORT_KINDS, importSignal, importsBySpaces, startProgress, updateStatus, type SourceOutcome } from "./flow";
 import { importModule } from "./importApi";
-import { collectLogins } from "./importOutcome";
+import type { HeldLogins } from "./importOutcome";
 import type { ExtensionGroup } from "./extensionListing";
 
 async function destination(target: string, index: number, name: string, color?: string, emoji?: string, shareWith?: string | null, shareTopApps?: boolean): Promise<string> {
@@ -111,7 +111,7 @@ const nothingRead = (browserId: string, profileId: string, failed: ImportKind[])
   warnings: [],
 });
 
-export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<ImportKind>, withoutKey: boolean, consent: ConsentToken | null, collecting: boolean): Promise<SourceOutcome | undefined> {
+export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<ImportKind>, withoutKey: boolean, consent: ConsentToken | null, collecting: boolean): Promise<{ outcome: SourceOutcome; logins: HeldLogins } | undefined> {
   const { sourceProfiles, spaces, target } = importNow();
   const api = importModule();
   const signal = importSignal();
@@ -150,9 +150,10 @@ export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<Im
   let secretsLeft = 0;
   let withheld = 0;
   const app: { read: Promise<AppTabs> | null } = { read: null };
+  const held: HeldLogins = [];
   const withLogins = (dest: string, r: ImportResult): ImportResult => {
     if (!collecting || !r.credentials.length) return r;
-    collectLogins(source.id, dest, r.credentials);
+    held.push({ profileId: dest, credentials: r.credentials });
     return { ...r, credentials: [] };
   };
   const askApp = () => (app.read ??= readAppTabs());
@@ -324,13 +325,17 @@ export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<Im
   api.forgetUnlockedKeys();
   noteImportRun({ done: order.filter((k) => !failed.has(k)).length, failed: failed.size, secretsLeft, withheld }, consent);
   return {
-    source: { id: source.id, name: source.name, family: source.family },
-    counts: total,
-    failures: [...failed].map(([kind, names]) => ({ kind, profiles: selected.length > 1 ? names : [] })),
-    notes: [...new Set(left)],
-    extensions: { profileId: extensionsProfile, found: [...found.values()], groups: extensionGroups },
-    engines,
-    skipped: false,
+    outcome: {
+      source: { id: source.id, name: source.name, family: source.family },
+      counts: total,
+      failures: [...failed].map(([kind, names]) => ({ kind, profiles: selected.length > 1 ? names : [] })),
+      notes: [...new Set(left)],
+      extensions: { profileId: extensionsProfile, found: [...found.values()], groups: extensionGroups },
+      engines,
+      skipped: false,
+      consent,
+    },
+    logins: held,
   };
 }
 

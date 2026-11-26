@@ -1,7 +1,7 @@
 import { orWarn } from "../../lib/fallback";
 import { useBrowser } from "../browser/store";
-import type { ConsentToken } from "../telemetry/client";
-import { noteMultiImport } from "../telemetry/importRuns";
+import { consentToken, type ConsentToken } from "../telemetry/client";
+import { noteConflictsResolved, noteMultiImport, notePasswordsKeptExisting } from "../telemetry/importRuns";
 import { emptyCounts, saveLogins, type Credential, type ImportCounts, type ImportedExtension } from "./apply";
 import { finishImport, importNow, patchImport, showAfterDoneDelay, type ConflictChoiceSet, type ImportFailure, type SourceOutcome, type SourceTally } from "./flow";
 import { listFoundExtensions } from "./listedExtensions";
@@ -13,14 +13,15 @@ import {
   resolvedLogins,
   type CollectedLogin,
   type ConflictPick,
-  type ConflictResolution,
   type LoginPlan,
   type LoginToSave,
 } from "./passwordConflicts";
 import { adoptImportedEngine } from "./searchEngine";
 
+export type HeldLogins = { profileId: string; credentials: readonly Credential[] }[];
+
 const collected: CollectedLogin[] = [];
-let unresolvedRun: { outcomes: SourceOutcome[]; plan: LoginPlan; consent: ConsentToken | null; signal: AbortSignal } | null = null;
+let unresolvedRun: { outcomes: SourceOutcome[]; plan: LoginPlan; signal: AbortSignal } | null = null;
 
 export function collectLogins(browserId: string, profileId: string, credentials: readonly Credential[]) {
   for (const credential of credentials) collected.push({ browserId, profileId, credential });
@@ -49,10 +50,15 @@ export async function finishSource(outcome: SourceOutcome, consent: ConsentToken
   });
 }
 
-export async function finishRun(outcomes: SourceOutcome[], consent: ConsentToken | null, signal: AbortSignal) {
+const runConsent = (outcomes: SourceOutcome[]): ConsentToken | null =>
+  outcomes.length && outcomes.every((o) => o.consent === outcomes[0]!.consent) ? outcomes[0]!.consent : null;
+
+export async function finishRun(outcomes: SourceOutcome[], signal: AbortSignal) {
   const plan = planLogins(collected.splice(0), outcomes.map((o) => o.source.id));
-  if (!plan.conflicts.length) return completeRun(outcomes, plan, resolvedLogins(plan, {}), null, 0, consent, signal);
-  unresolvedRun = { outcomes, plan, consent, signal };
+  const consent = runConsent(outcomes);
+  noteMultiImport({ browsers: outcomes.length, skipped: outcomes.filter((o) => o.skipped).length, merged: plan.merged, conflicts: plan.conflicts.length }, consent);
+  if (!plan.conflicts.length) return completeRun(outcomes, resolvedLogins(plan, {}), consent, signal);
+  unresolvedRun = { outcomes, plan, signal };
   const none: ConflictChoiceSet = { choices: {}, base: {} };
   showAfterDoneDelay(signal, { name: "conflicts", conflicts: plan.conflicts, pick: "newest", custom: null, view: "summary", draft: none, filter: "", saving: false });
 }
@@ -63,22 +69,20 @@ function addCounts(into: ImportCounts, from: ImportCounts) {
   for (const k of Object.keys(into) as (keyof ImportCounts)[]) into[k] += from[k];
 }
 
-async function completeRun(
-  outcomes: SourceOutcome[],
-  plan: LoginPlan,
-  logins: LoginToSave[],
-  resolution: ConflictResolution | null,
-  changedByHand: number,
-  consent: ConsentToken | null,
-  signal: AbortSignal,
-) {
-  const saved = await saveLogins(logins);
+const KEPT_EXISTING = (n: number) =>
+  `${n === 1 ? "1 password wasn't" : `${n} passwords weren't`} changed: Ardia already has a different one saved for ${n === 1 ? "that account" : "those accounts"}.`;
+
+async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], saveConsent: ConsentToken | null, signal: AbortSignal) {
+  const results = await saveLogins(logins, saveConsent, signal);
   if (signal.aborted) return;
+  const keptExisting = results.filter((r) => r === "refused").length;
+  notePasswordsKeptExisting(keptExisting, saveConsent);
+  const consent = runConsent(outcomes);
   const imported = outcomes.filter((o) => !o.skipped);
   const tallies: SourceTally[] = imported.map((o) => ({ id: o.source.id, name: o.source.name, counts: { ...o.counts } }));
   logins.forEach((l, i) => {
     const tally = tallies.find((t) => t.id === l.browserId);
-    if (saved[i] && tally) tally.counts.passwords += 1;
+    if (results[i] === "saved" && tally) tally.counts.passwords += 1;
   });
   const total = emptyCounts();
   for (const t of tallies) addCounts(total, t.counts);
@@ -86,17 +90,14 @@ async function completeRun(
   const listing = await listFoundExtensions(imported.flatMap((o) => o.extensions.groups), consent).catch(orWarn(null));
   if (signal.aborted) return;
   const offering = imported.find((o) => adoptable(o) && o.engines.some((e) => e.engine)) ?? imported.find(adoptable);
-  const engine = offering ? adoptImportedEngine(offering.source, offering.engines, consent) : null;
+  const engine = offering ? adoptImportedEngine(offering.source, offering.engines, offering.consent) : null;
   const found = new Map<string, ImportedExtension>();
   for (const o of imported) for (const e of o.extensions.found) if (!found.has(e.id)) found.set(e.id, e);
-  noteMultiImport(
-    { browsers: outcomes.length, skipped: outcomes.length - imported.length, conflicts: plan.conflicts.length, merged: plan.merged, resolution, changedByHand },
-    consent,
-  );
   const failures: ImportFailure[] = imported.flatMap((o) => o.failures.map((f) => ({ ...f, browser: o.source.name })));
   const notes = [
     ...outcomes.filter((o) => o.skipped).map((o) => `${o.source.name} was skipped.`),
     ...imported.flatMap((o) => o.notes.map((n) => `${o.source.name}: ${n}`)),
+    ...(keptExisting ? [KEPT_EXISTING(keptExisting)] : []),
   ];
   finishImport(signal, {
     counts: total,
@@ -169,8 +170,10 @@ export async function importChosenPasswords() {
   const custom = step.view === "list" ? step.draft : step.pick === "custom" ? step.custom : null;
   const pick: ConflictPick = step.view === "list" ? "custom" : step.pick;
   const choices = currentChoices(step);
-  const { outcomes, plan, consent, signal } = unresolvedRun;
+  const consent = consentToken();
+  const { outcomes, plan, signal } = unresolvedRun;
   unresolvedRun = null;
   patchImport({ step: { ...step, saving: true } });
-  await completeRun(outcomes, plan, resolvedLogins(plan, choices), resolutionOf(pick), handChanges(custom), consent, signal);
+  noteConflictsResolved({ resolution: resolutionOf(pick), changedByHand: handChanges(custom) }, consent);
+  await completeRun(outcomes, resolvedLogins(plan, choices), consent, signal);
 }
