@@ -20,10 +20,11 @@ class DownloadsModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ArdiaPhoneDownloads")
 
-        Events("onDownloadEvent", "onAppUpdateDownloaded")
+        Events("onDownloadEvent", "onAppUpdateDownloaded", "onAppUpdateInstallStatus")
 
         OnCreate {
             PhonePages.downloadSink = { sendEvent("onDownloadEvent", it) }
+            AppUpdateInstaller.statusSink = { sendEvent("onAppUpdateInstallStatus", it) }
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(received: Context, intent: Intent) {
                     val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
@@ -38,6 +39,7 @@ class DownloadsModule : Module() {
 
         OnDestroy {
             PhonePages.downloadSink = null
+            AppUpdateInstaller.statusSink = null
             completions?.let { receiver -> runCatching { appContext.reactContext?.unregisterReceiver(receiver) } }
             completions = null
         }
@@ -83,9 +85,13 @@ class DownloadsModule : Module() {
 
         AsyncFunction("verifyAppUpdate") { id: String, sha256: String, fileName: String -> AppUpdateHandoff.verify(context, id, sha256, fileName) }
 
-        AsyncFunction("installVerifiedUpdate") { fileName: String ->
-            AppUpdateHandoff.installVerified(context, appContext.currentActivity, fileName)
-        }.runOnQueue(Queues.MAIN)
+        AsyncFunction("installVerifiedUpdate") { fileName: String, sha256: String -> AppUpdateHandoff.installVerified(context, fileName, sha256) }
+
+        Function("updateNotificationsShown") { AppUpdateHandoff.notificationsShown(context) }
+
+        Function("takeInstallRequest") { AppUpdateHandoff.takeInstallRequest(appContext.currentActivity) }
+
+        Function("takeInstallStatus") { AppUpdateInstaller.takeUnreported() }
 
         AsyncFunction("notifyUpdateReady") { fileName: String, title: String, text: String -> AppUpdateHandoff.notifyReady(context, fileName, title, text) }
 
@@ -97,9 +103,9 @@ class DownloadsModule : Module() {
 
         AsyncFunction("openInstallPermission") { AppUpdateHandoff.openInstallPermission(context, appContext.currentActivity) }.runOnQueue(Queues.MAIN)
 
-        AsyncFunction("installDownloadedFile") { uri: String ->
-            AppUpdateHandoff.installDownloadedFile(context, appContext.currentActivity, uri)
-        }.runOnQueue(Queues.MAIN)
+        AsyncFunction("installDownloadedFile") { uri: String -> AppUpdateHandoff.installDownloadedFile(context, uri) }
+
+        OnNewIntent { intent -> AppUpdateHandoff.noteInstallRequest(intent) }
 
         AsyncFunction("files") { -> DownloadedFiles.list(context) }
 

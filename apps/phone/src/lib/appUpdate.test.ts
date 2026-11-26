@@ -38,6 +38,7 @@ import {
   downloadRecordText,
   downloadOutlivedBy,
   verifyOutcomeOf,
+  installStatusOf,
   parseReleaseChecksum,
   updateRowAction,
   updateOfferWanted,
@@ -349,8 +350,12 @@ test("native answers about the download and the install map onto a few known sta
   assert.equal(downloadProgressOf("paused"), "downloading");
   assert.equal(downloadProgressOf("successful"), "ready");
   assert.equal(downloadProgressOf("failed"), "failed");
-  assert.equal(installOutcomeOf("launched"), "installing");
-  assert.equal(installOutcomeOf("mismatch"), "failed");
+  assert.equal(installOutcomeOf("committed"), "installing");
+  assert.equal(installOutcomeOf("launched"), "failed");
+  assert.equal(installOutcomeOf("mismatch"), "refused");
+  assert.deepEqual(installStatusOf({ kind: "update", status: "aborted" }), { kind: "update", status: "aborted" });
+  assert.deepEqual(installStatusOf({ kind: "file", status: "failure" }), { kind: "file", status: "failure" });
+  for (const value of [null, {}, { kind: "update" }, { kind: "other", status: "success" }, { kind: "update", status: "installed" }]) assert.equal(installStatusOf(value), null, JSON.stringify(value));
   assert.equal(verifyOutcomeOf("verified"), "verified");
   assert.equal(verifyOutcomeOf("mismatch"), "refused");
   assert.equal(verifyOutcomeOf("copy_failed"), "copy_failed");
@@ -362,6 +367,8 @@ test("native answers about the download and the install map onto a few known sta
     assert.equal(downloadProgressOf(value), "gone", id);
     assert.equal(installOutcomeOf(value), "failed", id);
     assert.equal(verifyOutcomeOf(value), "failed", id);
+    assert.equal(installStatusOf(value), null, id);
+    assert.equal(installStatusOf({ kind: "update", status: value }), null, id);
   }
   const kept = downloadRecordText({ ...offerOf("1.0.4"), sha256: SHA }, "41");
   assert.deepEqual(parseDownloadRecord(kept), { version: "1.0.4", id: "41", offer: { ...offerOf("1.0.4"), sha256: SHA } });

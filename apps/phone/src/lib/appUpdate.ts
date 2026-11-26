@@ -256,6 +256,8 @@ export const updateReadyMessage = (offer: OfferedRelease) => `Ardia ${offer.vers
 
 export const updateCopyFailedMessage = () => "Couldn’t prepare the update. Try again.";
 
+export const updateInstallFailedMessage = () => "Couldn’t install the update. Try again.";
+
 export const updateUnavailableMessage = () => "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases.";
 
 export const updatePermissionMessage = () => "Allow Ardia to install apps, then come back to finish the update.";
@@ -277,7 +279,7 @@ export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | nul
       case "needs_permission":
         return { title: `Install Ardia ${v}`, detail: "Allow Ardia to install apps in Settings, then come back." };
       case "installing":
-        return { title: `Install Ardia ${v}`, detail: "Opened Android’s installer. Tap to open it again." };
+        return { title: `Install Ardia ${v}`, detail: "Confirm the update in Android’s installer. Tap to start it again." };
       case "failed":
         return { title: `Download Ardia ${v}`, detail: "The download didn’t finish. Tap to download it again." };
       case "refused":
@@ -324,12 +326,22 @@ export function downloadProgressOf(value: unknown): DownloadProgress {
   return "gone";
 }
 
-export type InstallOutcome = "installing" | "needs_permission" | "gone" | "failed";
+export type InstallOutcome = "installing" | "needs_permission" | "gone" | "refused" | "failed";
 
 export function installOutcomeOf(value: unknown): InstallOutcome {
-  if (value === "launched") return "installing";
-  if (value === "needs_permission" || value === "gone") return value;
+  if (value === "committed") return "installing";
+  if (value === "needs_permission" || value === "gone" || value === "refused") return value;
+  if (value === "mismatch") return "refused";
   return "failed";
+}
+
+export type InstallStatus = { kind: "update" | "file"; status: "confirming" | "success" | "aborted" | "failure" };
+
+export function installStatusOf(value: unknown): InstallStatus | null {
+  if (!isRecord(value)) return null;
+  const kind = value.kind === "update" || value.kind === "file" ? value.kind : null;
+  const status = value.status === "confirming" || value.status === "success" || value.status === "aborted" || value.status === "failure" ? value.status : null;
+  return kind && status ? { kind, status } : null;
 }
 
 export type VerifyOutcome = "verified" | "refused" | "gone" | "copy_failed" | "failed";

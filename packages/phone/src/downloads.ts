@@ -18,7 +18,10 @@ type DownloadsNative = {
   handOffAppUpdate?(url: string, title: string): Promise<unknown>;
   appUpdateStatus?(id: string): Promise<unknown>;
   verifyAppUpdate?(id: string, sha256: string, fileName: string): Promise<unknown>;
-  installVerifiedUpdate?(fileName: string): Promise<unknown>;
+  installVerifiedUpdate?(fileName: string, sha256: string): Promise<unknown>;
+  updateNotificationsShown?(): boolean;
+  takeInstallRequest?(): unknown;
+  takeInstallStatus?(): unknown;
   notifyUpdateReady?(fileName: string, title: string, text: string): Promise<boolean>;
   askForUpdateNotifications?(): Promise<void>;
   discardAppUpdate?(id: string): Promise<boolean>;
@@ -26,6 +29,7 @@ type DownloadsNative = {
   openInstallPermission?(): Promise<boolean>;
   installDownloadedFile?(uri: string): Promise<unknown>;
   addListener(eventName: "onAppUpdateDownloaded", listener: (event: { id: string }) => void): Subscription;
+  addListener(eventName: "onAppUpdateInstallStatus", listener: (event: unknown) => void): Subscription;
 };
 
 let loaded: DownloadsNative | undefined;
@@ -45,7 +49,11 @@ export const downloads = {
   handOffAppUpdate: (url: string, title: string): Promise<unknown> => native().handOffAppUpdate?.(url, title) ?? Promise.resolve({ handoff: "unavailable" }),
   appUpdateStatus: (id: string): Promise<unknown> => native().appUpdateStatus?.(id) ?? Promise.resolve("gone"),
   verifyAppUpdate: (id: string, sha256: string, fileName: string): Promise<unknown> => native().verifyAppUpdate?.(id, sha256, fileName) ?? Promise.resolve("failed"),
-  installVerifiedUpdate: (fileName: string): Promise<unknown> => native().installVerifiedUpdate?.(fileName) ?? Promise.resolve("failed"),
+  installVerifiedUpdate: (fileName: string, sha256: string): Promise<unknown> => native().installVerifiedUpdate?.(fileName, sha256) ?? Promise.resolve("failed"),
+  updateNotificationsShown: (): boolean => native().updateNotificationsShown?.() ?? false,
+  takeInstallRequest: (): unknown => native().takeInstallRequest?.() ?? null,
+  takeInstallStatus: (): unknown => native().takeInstallStatus?.() ?? null,
+  addInstallStatusListener: (listener: (event: unknown) => void): Subscription => native().addListener("onAppUpdateInstallStatus", listener),
   notifyUpdateReady: (fileName: string, title: string, text: string): Promise<boolean> => native().notifyUpdateReady?.(fileName, title, text) ?? Promise.resolve(false),
   askForUpdateNotifications: (): Promise<void> => native().askForUpdateNotifications?.() ?? Promise.resolve(),
   discardAppUpdate: (id: string): Promise<boolean> => native().discardAppUpdate?.(id) ?? Promise.resolve(false),

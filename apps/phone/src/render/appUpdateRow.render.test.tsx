@@ -30,6 +30,13 @@ const statusOf = jest.spyOn(downloads, "appUpdateStatus");
 const verified = jest.spyOn(downloads, "verifyAppUpdate");
 const installed = jest.spyOn(downloads, "installVerifiedUpdate");
 const notified = jest.spyOn(downloads, "notifyUpdateReady");
+const installRequest = jest.spyOn(downloads, "takeInstallRequest");
+jest.spyOn(downloads, "takeInstallStatus").mockReturnValue(null);
+let installStatusEvent: (event: unknown) => void = () => undefined;
+jest.spyOn(downloads, "addInstallStatusListener").mockImplementation((listener) => {
+  installStatusEvent = listener;
+  return { remove: () => undefined };
+});
 jest.spyOn(downloads, "askForUpdateNotifications").mockResolvedValue(undefined);
 const discarded = jest.spyOn(downloads, "discardAppUpdate");
 const canInstall = jest.spyOn(downloads, "canInstallPackages");
@@ -93,7 +100,7 @@ beforeEach(() => {
   verified.mockReset();
   verified.mockResolvedValue("verified");
   installed.mockReset();
-  installed.mockResolvedValue("launched");
+  installed.mockResolvedValue("committed");
   notified.mockReset();
   notified.mockResolvedValue(true);
   discarded.mockReset();
@@ -103,7 +110,9 @@ beforeEach(() => {
   permission.mockReset();
   permission.mockResolvedValue(true);
   installedFile.mockReset();
-  installedFile.mockResolvedValue("launched");
+  installedFile.mockResolvedValue("committed");
+  installRequest.mockReset();
+  installRequest.mockReturnValue(null);
   appState = "active";
   withDigest = false;
   useAppUpdate.setState({ status: "idle", offer: null, handoff: null });
@@ -184,9 +193,9 @@ test("when the download completes in the front, Ardia checks it against the rele
   expect(useToasts.getState().toast?.message).toBe("Ardia 1.0.4 is ready to install");
   expect(useToasts.getState().toast?.action?.label).toBe("Install");
   await runToast();
-  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk");
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
   expect(verified).toHaveBeenCalledTimes(1);
-  expect(textOf(root)).toContain("Opened Android’s installer");
+  expect(textOf(root)).toContain("Confirm the update in Android’s installer");
   await act(async () => completed({ id: "99" }));
   await settle();
   expect(verified).toHaveBeenCalledTimes(1);
@@ -281,7 +290,7 @@ test("round 3 P2: a copy that fails keeps the original download and its id, and 
   verified.mockResolvedValue("verified");
   await pressRow(root, /^Install Ardia 1\.0\.4/);
   expect(verified).toHaveBeenCalledTimes(2);
-  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk");
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
   unmount(root);
 });
 
@@ -322,7 +331,7 @@ test("without the install permission Ardia explains, opens its settings page, an
   expect(textOf(root)).toContain("Allow Ardia to install apps in Settings");
   canInstall.mockReturnValue(true);
   await foreground();
-  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk");
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
   unmount(root);
 });
 
@@ -342,7 +351,7 @@ test("round 3 P2: backing out of the permission page ends the resume; allowing i
   expect(installed).not.toHaveBeenCalled();
   expect(textOf(root)).toContain("Downloaded. Tap to install.");
   await pressRow(root, /^Install Ardia 1\.0\.4/);
-  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk");
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
   unmount(root);
 });
 
@@ -532,5 +541,96 @@ test("cleaning up a failed download never clears a newer download that replaced 
   });
   await foreground();
   expect(JSON.parse(readPreference(browserDatabase(), UPDATE_DOWNLOAD_KEY) ?? "null")).toMatchObject({ id: "42", offer: { version: "1.0.4" } });
+  unmount(root);
+});
+
+test("round 4 P1: Install hands the checked copy and its SHA-256 to Android's session installer, and the row follows what the installer reports", async () => {
+  if (!releaseBuild) return;
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  await completeDownload();
+  await runToast();
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
+  expect(textOf(root)).toContain("Confirm the update in Android’s installer");
+  await act(async () => installStatusEvent({ kind: "update", status: "confirming" }));
+  expect(textOf(root)).toContain("Confirm the update in Android’s installer");
+  await act(async () => installStatusEvent({ kind: "update", status: "aborted" }));
+  await settle();
+  expect(textOf(root)).toContain("Downloaded. Tap to install.");
+  await pressRow(root, /^Install Ardia 1\.0\.4/);
+  expect(installed).toHaveBeenCalledTimes(2);
+  await act(async () => installStatusEvent({ kind: "update", status: "failure" }));
+  await settle();
+  expect(useToasts.getState().toast?.message).toBe("Couldn’t install the update. Try again.");
+  expect(textOf(root)).toContain("Downloaded. Tap to install.");
+  for (const bad of [null, "failure", { kind: "update" }, { kind: "x", status: "failure" }, { kind: "update", status: "done" }]) await act(async () => installStatusEvent(bad));
+  installed.mockResolvedValueOnce("mismatch");
+  await pressRow(root, /^Install Ardia 1\.0\.4/);
+  expect(discarded).toHaveBeenCalledWith("41");
+  expect(textOf(root)).toContain("didn’t match the release");
+  unmount(root);
+});
+
+test("round 4 P1: the ready notification opens Ardia, which installs the checked copy without showing the ready toast over it", async () => {
+  if (!releaseBuild) return;
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  appState = "background";
+  act(() => useToasts.setState({ toast: null }));
+  await completeDownload();
+  expect(notified).toHaveBeenCalled();
+  installRequest.mockReturnValueOnce("Ardia-1.0.4.apk");
+  appState = "active";
+  await foreground();
+  expect(installed).toHaveBeenCalledWith("Ardia-1.0.4.apk", SHA);
+  expect(useToasts.getState().toast?.message).not.toBe("Ardia 1.0.4 is ready to install");
+  installRequest.mockReturnValueOnce("Ardia-9.9.9.apk");
+  await foreground();
+  expect(installed).toHaveBeenCalledTimes(1);
+  unmount(root);
+});
+
+test("round 4 P2: a download that finished while Ardia was gone is checked when Ardia comes back, and the ready toast shows in front", async () => {
+  if (!releaseBuild) return;
+  writePreference(browserDatabase(), UPDATE_DOWNLOAD_KEY, JSON.stringify({ id: "51", offer: offerOf("1.0.4") }));
+  statusOf.mockResolvedValue("successful");
+  const root = renderSurface(<AboutPage />);
+  await settle();
+  expect(fetched).not.toHaveBeenCalled();
+  expect(verified).toHaveBeenCalledWith("51", SHA, "Ardia-1.0.4.apk");
+  expect(useToasts.getState().toast?.message).toBe("Ardia 1.0.4 is ready to install");
+  await foreground();
+  expect(verified).toHaveBeenCalledTimes(1);
+  unmount(root);
+});
+
+test("round 4 P2: with notifications or the App updates channel off, the ready prompt waits for the front instead of being dropped", async () => {
+  if (!releaseBuild) return;
+  notified.mockResolvedValue(false);
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  appState = "background";
+  act(() => useToasts.setState({ toast: null }));
+  await completeDownload();
+  expect(useToasts.getState().toast).toBeNull();
+  appState = "active";
+  await foreground();
+  expect(useToasts.getState().toast?.message).toBe("Ardia 1.0.4 is ready to install");
+  unmount(root);
+});
+
+test("round 4 P2: a check that finishes after a newer download replaced its own never touches the newer one", async () => {
+  if (!releaseBuild) return;
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  verified.mockImplementation(async () => {
+    writePreference(browserDatabase(), UPDATE_DOWNLOAD_KEY, JSON.stringify({ id: "42", offer: offerOf("1.0.4") }));
+    return "mismatch";
+  });
+  await completeDownload();
+  expect(JSON.parse(readPreference(browserDatabase(), UPDATE_DOWNLOAD_KEY) ?? "null")).toMatchObject({ id: "42" });
+  expect(textOf(root)).not.toContain("didn’t match the release");
+  expect(useToasts.getState().toast?.message).not.toBe("The Ardia 1.0.4 download didn’t match the release, so it was deleted.");
+  expect(installed).not.toHaveBeenCalled();
   unmount(root);
 });

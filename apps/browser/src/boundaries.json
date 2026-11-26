@@ -2743,7 +2743,7 @@
   {
    "id": "phone-update:findUpdate",
    "source": "release-list",
-   "guard": "Android release builds only, in the front; a 10 s deadline and a 1,000,000-character cap on each answer; tags must be refs/tags/android-v<release version> (androidRelease.ts, the parser the release script uses) on the installed build's channel and newer than it, at most 3 looked up a check; a release is offered only when draft is false, its tag_name is that tag, published_at is a real UTC time and an asset in state uploaded named Ardia-<version>.apk has exactly the download URL the app builds itself; stored memory (next check, offered versions, unpublished tags) is re-validated on read; the download request is rebuilt from that URL (updateDownloadRequest) and AppUpdateHandoff.kt checks it again before the DownloadManager or another browser gets it. The shared hostile list runs through every guard and the download request in apps/phone/src/lib/appUpdate.test.ts; the install reads the release's Ardia-<version>.apk.sha256 asset (required for an offer, at the URL the app builds) only as one sha256sum line for that file name, and AppUpdateHandoff.kt installs only a cache copy whose SHA-256 matches it, deleting the download otherwise; GitHub's asset digest is taken only as sha256:<64 lowercase hex> and must agree with the checksum file, standing in for it only when the file can't be reached",
+   "guard": "Android release builds only, in the front; a 10 s deadline and a 1,000,000-character cap on each answer; tags must be refs/tags/android-v<release version> (androidRelease.ts, the parser the release script uses) on the installed build's channel and newer than it, at most 3 looked up a check; a release is offered only when draft is false, its tag_name is that tag, published_at is a real UTC time and an asset in state uploaded named Ardia-<version>.apk has exactly the download URL the app builds itself; stored memory (next check, offered versions, unpublished tags) is re-validated on read; the download request is rebuilt from that URL (updateDownloadRequest) and AppUpdateHandoff.kt checks it again before the DownloadManager or another browser gets it. The shared hostile list runs through every guard and the download request in apps/phone/src/lib/appUpdate.test.ts; the install reads the release's Ardia-<version>.apk.sha256 asset (required for an offer, at the URL the app builds) only as one sha256sum line for that file name, and AppUpdateHandoff.kt installs only a cache copy whose SHA-256 matches it, deleting the download otherwise; GitHub's asset digest is taken only as sha256:<64 lowercase hex> and must agree with the checksum file, standing in for it only when the file can't be reached; the install streams that copy into a PackageInstaller session for Ardia's own package, hashing it again and abandoning the session on a mismatch, and takes the status only from Ardia's own unexported receiver",
    "checks": [
     "apps/phone/src/lib/appUpdate.ts#newerTaggedVersions",
     "apps/phone/src/lib/appUpdate.ts#publishedRelease",
@@ -2758,7 +2758,8 @@
     "packages/phone/android/src/main/java/com/ardia/phone/AppUpdateHandoff.kt#verifiedCopy",
     "apps/phone/src/lib/appUpdate.test.ts#the release checksum file is read only in sha256sum's own form",
     "apps/phone/src/lib/appUpdate.ts#assetDigest",
-    "apps/phone/src/lib/appUpdate.ts#checksumVerdict"
+    "apps/phone/src/lib/appUpdate.ts#checksumVerdict",
+    "packages/phone/android/src/main/java/com/ardia/phone/AppUpdateInstaller.kt#install"
    ],
    "detected": false
   }

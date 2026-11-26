@@ -18,14 +18,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
-
-class AppUpdateFileProvider : FileProvider()
 
 internal object AppUpdateHandoff {
     const val APK_MIME = "application/vnd.android.package-archive"
@@ -33,6 +30,7 @@ internal object AppUpdateHandoff {
     private const val UPDATES_DIR = "updates"
     private const val CHANNEL = "app_updates"
     private const val NOTIFICATION_ID = 4378
+    private const val EXTRA_INSTALL_REQUEST = "com.ardia.phone.INSTALL_UPDATE"
     private val RELEASE_APK = Regex("^https://github\\.com/ardia-browser/ardia/releases/download/android-v((?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})(?:-nightly\\.(?:0|[1-9][0-9]{0,8}))?)/Ardia-([0-9A-Za-z.-]{1,40})\\.apk$")
     private val APK_FILE = Regex("^Ardia-[0-9A-Za-z.-]{1,40}\\.apk$")
     private val SHA256 = Regex("^[0-9a-f]{64}$")
@@ -82,10 +80,10 @@ internal object AppUpdateHandoff {
         return result
     }
 
-    fun installVerified(context: Context, activity: Activity?, fileName: String): String {
+    fun installVerified(context: Context, fileName: String, sha256: String): String {
         val copy = verifiedFile(context, fileName) ?: return "gone"
         clearReadyNotification(context)
-        return launchInstaller(context, activity, FileProvider.getUriForFile(context, "${context.packageName}.updates", copy))
+        return AppUpdateInstaller.installFile(context, copy, sha256)
     }
 
     fun discard(context: Context, id: String): Boolean {
@@ -121,17 +119,20 @@ internal object AppUpdateHandoff {
         }
     }
 
-    fun notifyReady(context: Context, fileName: String, title: String, text: String): Boolean {
-        val copy = verifiedFile(context, fileName) ?: return false
+    fun notificationsShown(context: Context): Boolean {
         val notifications = NotificationManagerCompat.from(context)
         if (!notifications.areNotificationsEnabled()) return false
-        context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT),
-        )
-        val install = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(FileProvider.getUriForFile(context, "${context.packageName}.updates", copy), APK_MIME)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        val tap = PendingIntent.getActivity(context, NOTIFICATION_ID, install, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT))
+        return (manager.getNotificationChannel(CHANNEL)?.importance ?: NotificationManager.IMPORTANCE_NONE) != NotificationManager.IMPORTANCE_NONE
+    }
+
+    fun notifyReady(context: Context, fileName: String, title: String, text: String): Boolean {
+        if (verifiedFile(context, fileName) == null || !notificationsShown(context)) return false
+        val notifications = NotificationManagerCompat.from(context)
+        val open = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return false
+        open.putExtra(EXTRA_INSTALL_REQUEST, fileName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val tap = PendingIntent.getActivity(context, NOTIFICATION_ID, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(title)
@@ -140,6 +141,19 @@ internal object AppUpdateHandoff {
             .setAutoCancel(true)
             .build()
         return runCatching { notifications.notify(NOTIFICATION_ID, notification) }.isSuccess
+    }
+
+    @Volatile private var installRequest: String? = null
+
+    fun noteInstallRequest(intent: Intent?) {
+        val fileName = intent?.getStringExtra(EXTRA_INSTALL_REQUEST) ?: return
+        intent.removeExtra(EXTRA_INSTALL_REQUEST)
+        if (APK_FILE.matches(fileName)) installRequest = fileName
+    }
+
+    fun takeInstallRequest(activity: Activity?): String? {
+        noteInstallRequest(activity?.intent)
+        return installRequest.also { installRequest = null }
     }
 
     fun clearReadyNotification(context: Context) {
@@ -164,16 +178,13 @@ internal object AppUpdateHandoff {
         return startFrom(context, activity, intent)
     }
 
-    fun installDownloadedFile(context: Context, activity: Activity?, uri: String): String {
+    fun installDownloadedFile(context: Context, uri: String): String {
         val parsed = Uri.parse(uri)
         if (parsed.scheme != "content") return "failed"
-        return launchInstaller(context, activity, parsed)
-    }
-
-    private fun launchInstaller(context: Context, activity: Activity?, uri: Uri): String {
         if (!canInstallPackages(context)) return "needs_permission"
-        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, APK_MIME).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        return if (startFrom(context, activity, intent)) "launched" else "failed"
+        val length = runCatching { context.contentResolver.openAssetFileDescriptor(parsed, "r")?.use { it.length } }.getOrNull() ?: -1L
+        val input = runCatching { context.contentResolver.openInputStream(parsed) }.getOrNull() ?: return "failed"
+        return AppUpdateInstaller.installStream(context, input, length)
     }
 
     private fun startFrom(context: Context, activity: Activity?, intent: Intent): Boolean {

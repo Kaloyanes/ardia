@@ -45,14 +45,8 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/browsing_capture_paths" />
         </provider>
-        <provider
-            android:name="com.ardia.phone.AppUpdateFileProvider"
-            android:authorities="${applicationId}.updates"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/app_update_paths" />
-        </provider>
+        <receiver
+            android:name="com.ardia.phone.AppUpdateInstallReceiver"
+            android:exported="false" />
     </application>
 </manifest>
