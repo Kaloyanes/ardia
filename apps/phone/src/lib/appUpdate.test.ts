@@ -35,6 +35,9 @@ import {
   downloadProgressOf,
   installOutcomeOf,
   parseDownloadRecord,
+  downloadRecordText,
+  downloadOutlivedBy,
+  verifyOutcomeOf,
   parseReleaseChecksum,
   updateRowAction,
   updateOfferWanted,
@@ -286,7 +289,7 @@ test("the Settings row says what the check found and where the download went", (
   assert.equal(updateRowWords("incomplete", null, null).detail, "Some releases weren’t checked yet. Try again in a few minutes.");
   assert.equal(updateRowWords("failed", null, null).detail, "Couldn’t check. Try again later.");
   assert.equal(updateRowWords("available", offer, null).title, "Download Ardia 1.0.4");
-  assert.match(updateRowWords("available", offer, "downloading").detail ?? "", /notification/);
+  assert.match(updateRowWords("available", offer, "downloading").detail ?? "", /lets you know when it’s ready/);
   assert.match(updateRowWords("available", offer, "unavailable").detail ?? "", /github\.com\/ardia-browser\/ardia\/releases/);
   assert.equal(updateRowWords("failed", offer, null).title, "Download Ardia 1.0.4", "a failed refresh keeps the download it already validated");
   assert.equal(updateRowWords("incomplete", offer, null).title, "Download Ardia 1.0.4");
@@ -347,16 +350,29 @@ test("native answers about the download and the install map onto a few known sta
   assert.equal(downloadProgressOf("successful"), "ready");
   assert.equal(downloadProgressOf("failed"), "failed");
   assert.equal(installOutcomeOf("launched"), "installing");
-  assert.equal(installOutcomeOf("mismatch"), "refused");
+  assert.equal(installOutcomeOf("mismatch"), "failed");
+  assert.equal(verifyOutcomeOf("verified"), "verified");
+  assert.equal(verifyOutcomeOf("mismatch"), "refused");
+  assert.equal(verifyOutcomeOf("copy_failed"), "copy_failed");
+  assert.equal(verifyOutcomeOf("gone"), "gone");
   assert.equal(installOutcomeOf("needs_permission"), "needs_permission");
   for (const { id, value } of HOSTILE_VALUES) {
     assert.deepEqual(handOffResultOf(value), { handoff: "unavailable", id: null }, id);
     if (!(typeof value === "string" && /^[1-9]\d{0,18}$/.test(value))) assert.deepEqual(handOffResultOf({ handoff: "notifications", id: value }), { handoff: "unavailable", id: null }, id);
     assert.equal(downloadProgressOf(value), "gone", id);
     assert.equal(installOutcomeOf(value), "failed", id);
+    assert.equal(verifyOutcomeOf(value), "failed", id);
   }
-  assert.deepEqual(parseDownloadRecord('{"version":"1.0.4","id":"41"}'), { version: "1.0.4", id: "41" });
-  for (const text of ["", "{}", '{"version":"1.0.4","id":41}', '{"version":"1.0.04","id":"41"}', '{"version":"1.0.4","id":"0"}']) assert.equal(parseDownloadRecord(text), null, text);
+  const kept = downloadRecordText({ ...offerOf("1.0.4"), sha256: SHA }, "41");
+  assert.deepEqual(parseDownloadRecord(kept), { version: "1.0.4", id: "41", offer: { ...offerOf("1.0.4"), sha256: SHA } });
+  for (const text of ["", "{}", '{"version":"1.0.4","id":"41"}', JSON.stringify({ id: 41, offer: offerOf("1.0.4") }), JSON.stringify({ id: "0", offer: offerOf("1.0.4") }), JSON.stringify({ id: "41", offer: { ...offerOf("1.0.4"), downloadUrl: "https://example.com/Ardia-1.0.4.apk" } }), JSON.stringify({ id: "41", offer: { ...offerOf("1.0.4"), checksumUrl: "https://example.com/x" } })]) {
+    assert.equal(parseDownloadRecord(text), null, text);
+  }
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(parseDownloadRecord(JSON.stringify({ id: "41", offer: { ...offerOf("1.0.4"), downloadUrl: value } })), null, id);
+  assert.equal(parseDownloadRecord(JSON.stringify({ id: "41", offer: { ...offerOf("1.0.4"), sha256: "<script>" } }))?.offer.sha256, null);
+  assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.3")), false);
+  assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.4")), true);
+  assert.equal(downloadOutlivedBy(parseDownloadRecord(kept)!, v("1.0.5-nightly.1")), true);
 });
 
 test("the About row acts on where the update is: check, download, look at the download, install, or ask for the install permission", () => {

@@ -81,9 +81,15 @@ class DownloadsModule : Module() {
 
         AsyncFunction("appUpdateStatus") { id: String -> AppUpdateHandoff.status(context, id) }
 
-        AsyncFunction("installAppUpdate") { id: String, sha256: String, fileName: String ->
-            AppUpdateHandoff.install(context, appContext.currentActivity, id, sha256, fileName)
-        }
+        AsyncFunction("verifyAppUpdate") { id: String, sha256: String, fileName: String -> AppUpdateHandoff.verify(context, id, sha256, fileName) }
+
+        AsyncFunction("installVerifiedUpdate") { fileName: String ->
+            AppUpdateHandoff.installVerified(context, appContext.currentActivity, fileName)
+        }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("notifyUpdateReady") { fileName: String, title: String, text: String -> AppUpdateHandoff.notifyReady(context, fileName, title, text) }
+
+        AsyncFunction("askForUpdateNotifications") { AppUpdateHandoff.askForNotifications(appContext.currentActivity) }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("discardAppUpdate") { id: String -> AppUpdateHandoff.discard(context, id) }
 

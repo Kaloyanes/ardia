@@ -41,11 +41,31 @@ class AppUpdateHandoffTest {
         val directory = Files.createTempDirectory("updates").toFile()
         val apk = ByteArray(300_000) { (it * 31).toByte() }
         val copy = directory.resolve("Ardia-1.0.2.apk")
-        assertTrue(AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(apk), copy, sha256(apk)))
+        assertEquals("verified", AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(apk), copy, sha256(apk)))
         assertTrue(copy.readBytes().contentEquals(apk))
         val tampered = apk.copyOf().also { it[1234] = (it[1234] + 1).toByte() }
-        assertFalse(AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(tampered), copy, sha256(apk)))
+        assertEquals("mismatch", AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(tampered), copy, sha256(apk)))
         assertFalse(copy.exists())
+        assertEquals(emptyList<String>(), directory.list()!!.toList())
+        directory.deleteRecursively()
+    }
+
+    @Test
+    fun aCopyThatFailsHalfwayLeavesNothingBehindAndSaysSo() {
+        val directory = Files.createTempDirectory("updates").toFile()
+        val apk = ByteArray(300_000) { (it * 7).toByte() }
+        val breaking = object : java.io.InputStream() {
+            private var served = 0
+            override fun read(): Int = throw UnsupportedOperationException()
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                if (served > 100_000) throw java.io.IOException("storage went away")
+                val count = minOf(length, apk.size - served)
+                System.arraycopy(apk, served, buffer, offset, count)
+                served += count
+                return count
+            }
+        }
+        assertEquals("copy_failed", AppUpdateHandoff.verifiedCopy(breaking, directory.resolve("Ardia-1.0.2.apk"), sha256(apk)))
         assertEquals(emptyList<String>(), directory.list()!!.toList())
         directory.deleteRecursively()
     }

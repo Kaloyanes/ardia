@@ -12,8 +12,13 @@ import {
   rememberUnpublished,
   downloadProgressOf,
   handOffResultOf,
+  downloadOutlivedBy,
+  downloadRecordText,
   installOutcomeOf,
   parseDownloadRecord,
+  updateCopyFailedMessage,
+  updateReadyMessage,
+  verifyOutcomeOf,
   checksumVerdict,
   updateDownloadingMessage,
   updateDownloadRequest,
@@ -99,6 +104,10 @@ function offerInFront() {
   if (status !== "available" || !offerable()) return;
   const offered = parseOfferedVersions(readStored(UPDATE_OFFERED_KEY));
   if (!updateOfferWanted(offer, offered)) return;
+  if (parseDownloadRecord(readStored(UPDATE_DOWNLOAD_KEY))?.version === offer.version) {
+    writeStored(UPDATE_OFFERED_KEY, JSON.stringify(withOfferedVersion(offered, offer.version)));
+    return;
+  }
   showToast(updateOfferMessage(offer), "download", OFFER_TOAST_MS, { label: "Download", run: openUpdate });
   writeStored(UPDATE_OFFERED_KEY, JSON.stringify(withOfferedVersion(offered, offer.version)));
   countUsage("app_update_offers_shown");
@@ -120,7 +129,7 @@ async function runCheck(version: ReleaseVersion, automatic: boolean) {
     if (result.kind === "available") {
       const same = useAppUpdate.getState().offer?.version === result.offer.version;
       useAppUpdate.setState({ status: "available", offer: result.offer, handoff: same ? useAppUpdate.getState().handoff : null });
-      if (storedDownload()?.version === result.offer.version) await refreshDownload(false);
+      if (storedDownload()?.version === result.offer.version && !same) await refreshDownload(false);
       if (automatic) offerInFront();
       return;
     }
@@ -154,12 +163,16 @@ export function startUpdateChecks() {
   watchUpdateDownloads();
   if (started || !appUpdatesOffered()) return;
   started = true;
+  void restoreDownload();
   whenIdle(checkIfDue, LAUNCH_QUIET_MS, LAUNCH_IDLE_TIMEOUT_MS);
   AppState.addEventListener("change", (next) => {
     if (next === "active") checkIfDue();
   });
   useOnboarding.subscribe((now, before) => {
-    if (before.showing && !now.showing) offerInFront();
+    if (before.showing && !now.showing) {
+      offerInFront();
+      promptPendingReady();
+    }
   });
 }
 
@@ -197,11 +210,15 @@ async function startDownload(offer: OfferedRelease) {
   countUsage("app_update_offers_opened");
   const previous = storedDownload();
   if (previous) await downloads.discardAppUpdate(previous.id).catch(() => false);
+  readyPrompted = null;
+  readyWaiting = null;
+  verifiedId = null;
   const result = await handOff(request.url, request.title);
   if (result.handoff === "downloading") {
-    writeStored(UPDATE_DOWNLOAD_KEY, JSON.stringify({ version: offer.version, id: result.id }));
+    writeStored(UPDATE_DOWNLOAD_KEY, downloadRecordText(offer, result.id));
     setHandoff(offer.version, "downloading");
     showToast(updateDownloadingMessage(offer), "download", TOAST_LONG_DURATION_MS);
+    void downloads.askForUpdateNotifications().catch(() => undefined);
     return;
   }
   forgetDownload();
@@ -212,20 +229,14 @@ async function startDownload(offer: OfferedRelease) {
   }
 }
 
-let installing = false;
+let verifying = false;
+let verifiedId: string | null = null;
 
-async function installDownloaded(offer: OfferedRelease, id: string) {
+async function verifyDownloaded(offer: OfferedRelease, id: string): Promise<boolean> {
   const request = updateDownloadRequest(offer);
-  if (!request || installing) return;
-  if (!downloads.canInstallPackages()) {
-    setHandoff(offer.version, "needs_permission");
-    if (inFront()) {
-      showToast(updatePermissionMessage(), "download", TOAST_LONG_DURATION_MS);
-      await downloads.openInstallPermission().catch(() => false);
-    }
-    return;
-  }
-  installing = true;
+  if (!request || verifying) return false;
+  if (verifiedId === id) return true;
+  verifying = true;
   setHandoff(offer.version, "verifying");
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), request.sha256 ? UPDATE_CHECKSUM_WITH_DIGEST_TIMEOUT_MS : UPDATE_CHECKSUM_TIMEOUT_MS);
@@ -235,45 +246,131 @@ async function installDownloaded(offer: OfferedRelease, id: string) {
     const verdict = checksumVerdict(answer, request.version, request.sha256);
     if (verdict.kind === "unverified") {
       setHandoff(offer.version, "ready");
-      showToast(updateUnverifiedMessage(), "warning");
-      return;
+      if (inFront()) showToast(updateUnverifiedMessage(), "warning");
+      return false;
     }
     if (verdict.kind === "refused") {
       await refuse(offer, id);
-      return;
+      return false;
     }
-    const outcome = installOutcomeOf(await downloads.installAppUpdate(id, verdict.sha256, request.fileName).catch(() => "failed"));
+    const outcome = verifyOutcomeOf(await downloads.verifyAppUpdate(id, verdict.sha256, request.fileName).catch(() => "failed"));
     if (outcome === "refused") {
       await refuse(offer, id);
-      return;
+      return false;
     }
     if (outcome === "gone") {
       forgetDownload();
       setHandoff(offer.version, null);
-      return;
+      return false;
     }
-    if (outcome === "installing") countUsage("app_update_installs_started");
-    setHandoff(offer.version, outcome === "failed" ? "ready" : outcome);
+    setHandoff(offer.version, "ready");
+    if (outcome !== "verified") {
+      if (inFront()) showToast(updateCopyFailedMessage(), "warning");
+      return false;
+    }
+    verifiedId = id;
+    return true;
   } finally {
     clearTimeout(deadline);
-    installing = false;
+    verifying = false;
   }
 }
 
 async function refuse(offer: OfferedRelease, id: string) {
   countUsage("app_update_checksums_refused");
   await downloads.discardAppUpdate(id).catch(() => false);
+  if (verifiedId === id) verifiedId = null;
   forgetDownload();
   setHandoff(offer.version, "refused");
-  showToast(updateRefusedMessage(offer), "warning", TOAST_LONG_DURATION_MS);
+  if (inFront()) showToast(updateRefusedMessage(offer), "warning", TOAST_LONG_DURATION_MS);
 }
 
-export async function refreshDownload(installWhenReady: boolean) {
+let awaitingPermissionReturn = false;
+
+async function askForInstallPermission(offer: OfferedRelease) {
+  setHandoff(offer.version, "needs_permission");
+  if (!inFront()) return;
+  showToast(updatePermissionMessage(), "download", TOAST_LONG_DURATION_MS);
+  awaitingPermissionReturn = await downloads.openInstallPermission().catch(() => false);
+}
+
+async function installUpdate(offer: OfferedRelease, id: string) {
+  const request = updateDownloadRequest(offer);
+  if (!request) return;
+  if (!downloads.canInstallPackages()) {
+    await askForInstallPermission(offer);
+    return;
+  }
+  if (!(await verifyDownloaded(offer, id))) return;
+  const outcome = installOutcomeOf(await downloads.installVerifiedUpdate(request.fileName).catch(() => "failed"));
+  if (outcome === "needs_permission") {
+    await askForInstallPermission(offer);
+    return;
+  }
+  if (outcome === "gone") {
+    verifiedId = null;
+    setHandoff(offer.version, "ready");
+    return;
+  }
+  if (outcome === "installing") countUsage("app_update_installs_started");
+  setHandoff(offer.version, outcome === "installing" ? "installing" : "ready");
+}
+
+let readyPrompted: string | null = null;
+let readyWaiting: { offer: OfferedRelease; id: string } | null = null;
+
+function toastReady(offer: OfferedRelease, id: string) {
+  readyWaiting = null;
+  readyPrompted = id;
+  showToast(updateReadyMessage(offer), "download", OFFER_TOAST_MS, { label: "Install", run: () => void installUpdate(offer, id) });
+}
+
+async function promptReady(offer: OfferedRelease, id: string) {
+  if (readyPrompted === id) return;
+  if (offerable()) {
+    toastReady(offer, id);
+    return;
+  }
+  readyWaiting = { offer, id };
+  const request = updateDownloadRequest(offer);
+  if (!request) return;
+  const posted = await downloads.notifyUpdateReady(request.fileName, updateReadyMessage(offer), "Tap to install.").catch(() => false);
+  if (posted) {
+    readyPrompted = id;
+    readyWaiting = null;
+  }
+}
+
+function promptPendingReady() {
+  const waiting = readyWaiting;
+  if (waiting && offerable() && storedDownload()?.id === waiting.id) toastReady(waiting.offer, waiting.id);
+}
+
+async function restoreDownload() {
+  const record = storedDownload();
+  const version = installedVersion();
+  if (!record || !version) return;
+  if (downloadOutlivedBy(record, version)) {
+    await downloads.discardAppUpdate(record.id).catch(() => false);
+    if (storedDownload()?.id === record.id) forgetDownload();
+    return;
+  }
+  const { offer, status } = useAppUpdate.getState();
+  if (!offer || offer.version !== record.version) useAppUpdate.setState({ status: status === "checking" ? status : "available", offer: record.offer, handoff: null });
+  await refreshDownload(false);
+}
+
+export async function refreshDownload(completed: boolean) {
+  if (!useAppUpdate.getState().offer && storedDownload()) {
+    await restoreDownload();
+    return;
+  }
   const { offer, handoff } = useAppUpdate.getState();
   const record = storedDownload();
   if (!offer || !record || record.version !== offer.version) return;
   const progress = downloadProgressOf(await downloads.appUpdateStatus(record.id).catch(() => "gone"));
   if (progress === "gone") {
+    if (storedDownload()?.id !== record.id) return;
     forgetDownload();
     setHandoff(offer.version, null);
     return;
@@ -290,12 +387,9 @@ export async function refreshDownload(installWhenReady: boolean) {
     return;
   }
   if (handoff === "installing" || handoff === "verifying") return;
-  if (handoff === "needs_permission") {
-    if (downloads.canInstallPackages() && inFront()) await installDownloaded(offer, record.id);
-    return;
-  }
+  if (handoff === "needs_permission" && !downloads.canInstallPackages()) return;
   setHandoff(offer.version, "ready");
-  if (installWhenReady && inFront()) await installDownloaded(offer, record.id);
+  if (completed && (await verifyDownloaded(offer, record.id))) await promptReady(offer, record.id);
 }
 
 export async function openUpdate() {
@@ -307,12 +401,9 @@ export async function openUpdate() {
       await refreshDownload(false);
       return;
     case "install":
-      if (record && record.version === offer.version) await installDownloaded(offer, record.id);
-      else await startDownload(offer);
-      return;
     case "permission":
-      if (downloads.canInstallPackages() && record) await installDownloaded(offer, record.id);
-      else await downloads.openInstallPermission().catch(() => false);
+      if (record && record.version === offer.version) await installUpdate(offer, record.id);
+      else await startDownload(offer);
       return;
     case "download":
       await startDownload(offer);
@@ -327,9 +418,8 @@ let pendingPackage: string | null = null;
 export async function installDownloadedPackage(uri: string) {
   const outcome = await downloads.installDownloadedFile(uri).catch(() => "failed");
   if (outcome === "needs_permission") {
-    pendingPackage = uri;
     showToast(updatePermissionMessage(), "download", TOAST_LONG_DURATION_MS);
-    await downloads.openInstallPermission().catch(() => false);
+    pendingPackage = (await downloads.openInstallPermission().catch(() => false)) ? uri : null;
     return;
   }
   pendingPackage = null;
@@ -337,6 +427,23 @@ export async function installDownloadedPackage(uri: string) {
 }
 
 let watchingDownloads = false;
+
+async function returnedToFront() {
+  const package_ = pendingPackage;
+  pendingPackage = null;
+  if (package_ && downloads.canInstallPackages()) await installDownloadedPackage(package_);
+  if (awaitingPermissionReturn) {
+    awaitingPermissionReturn = false;
+    const { offer } = useAppUpdate.getState();
+    const record = storedDownload();
+    if (offer && record && record.version === offer.version && downloads.canInstallPackages()) {
+      await installUpdate(offer, record.id);
+      return;
+    }
+  }
+  await refreshDownload(false);
+  promptPendingReady();
+}
 
 export function watchUpdateDownloads() {
   if (watchingDownloads || Platform.OS !== "android") return;
@@ -349,12 +456,6 @@ export function watchUpdateDownloads() {
     watchingDownloads = false;
   }
   AppState.addEventListener("change", (next) => {
-    if (next !== "active") return;
-    void refreshDownload(false);
-    const waiting = pendingPackage;
-    if (waiting && downloads.canInstallPackages()) {
-      pendingPackage = null;
-      void installDownloadedPackage(waiting);
-    }
+    if (next === "active") void returnedToFront();
   });
 }

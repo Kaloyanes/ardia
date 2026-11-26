@@ -17,7 +17,10 @@ type DownloadsNative = {
   share?(uri: string): Promise<boolean>;
   handOffAppUpdate?(url: string, title: string): Promise<unknown>;
   appUpdateStatus?(id: string): Promise<unknown>;
-  installAppUpdate?(id: string, sha256: string, fileName: string): Promise<unknown>;
+  verifyAppUpdate?(id: string, sha256: string, fileName: string): Promise<unknown>;
+  installVerifiedUpdate?(fileName: string): Promise<unknown>;
+  notifyUpdateReady?(fileName: string, title: string, text: string): Promise<boolean>;
+  askForUpdateNotifications?(): Promise<void>;
   discardAppUpdate?(id: string): Promise<boolean>;
   canInstallPackages?(): boolean;
   openInstallPermission?(): Promise<boolean>;
@@ -41,7 +44,10 @@ export const downloads = {
   handsOffAppUpdates: (): boolean => typeof native().handOffAppUpdate === "function",
   handOffAppUpdate: (url: string, title: string): Promise<unknown> => native().handOffAppUpdate?.(url, title) ?? Promise.resolve({ handoff: "unavailable" }),
   appUpdateStatus: (id: string): Promise<unknown> => native().appUpdateStatus?.(id) ?? Promise.resolve("gone"),
-  installAppUpdate: (id: string, sha256: string, fileName: string): Promise<unknown> => native().installAppUpdate?.(id, sha256, fileName) ?? Promise.resolve("failed"),
+  verifyAppUpdate: (id: string, sha256: string, fileName: string): Promise<unknown> => native().verifyAppUpdate?.(id, sha256, fileName) ?? Promise.resolve("failed"),
+  installVerifiedUpdate: (fileName: string): Promise<unknown> => native().installVerifiedUpdate?.(fileName) ?? Promise.resolve("failed"),
+  notifyUpdateReady: (fileName: string, title: string, text: string): Promise<boolean> => native().notifyUpdateReady?.(fileName, title, text) ?? Promise.resolve(false),
+  askForUpdateNotifications: (): Promise<void> => native().askForUpdateNotifications?.() ?? Promise.resolve(),
   discardAppUpdate: (id: string): Promise<boolean> => native().discardAppUpdate?.(id) ?? Promise.resolve(false),
   canInstallPackages: (): boolean => native().canInstallPackages?.() ?? false,
   openInstallPermission: (): Promise<boolean> => native().openInstallPermission?.() ?? Promise.resolve(false),

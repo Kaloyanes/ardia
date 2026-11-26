@@ -3187,23 +3187,29 @@ zeros, nightly 1 to 998) and orders them by versionCode.
 - **The download and the install.** Ardia declares `REQUEST_INSTALL_PACKAGES` (browsers may; Chrome and Firefox do)
   and installs its own update, because on Android 10 to 13 the Downloads app hands an APK's install to the app that
   started the download. Download goes to `AppUpdateHandoff.kt`, which checks the address again and enqueues it with
-  the system DownloadManager (the exact URL, `application/vnd.android.package-archive`, the public Downloads folder,
-  a completion notification titled Ardia <version>); `app_update_download` keeps its id and version. When the
-  DownloadManager says it finished (`ACTION_DOWNLOAD_COMPLETE` for that id, or Install in the row), Ardia fetches the
-  release's `Ardia-<v>.apk.sha256` asset (a release without one is never offered) and reads it only in `sha256sum`'s
-  own form for that file name. GitHub's API also gives each asset's `digest` (`sha256:<hex>`) in the release answer the
-  check already fetched; the file must agree with it, and when the file's host can't be reached in 10 s the digest
-  stands in (on the Simlock emulator every connection to `release-assets.githubusercontent.com` took 12.5 s and the
-  app's fetch never got through, while the DownloadManager's did). With neither, it waits 30 s and asks to try again.
-  Then it copies the download into its cache while hashing it, and on a match opens Android's
-  installer on that copy through its `updates` FileProvider. A mismatch, a missing or unreadable checksum deletes the
-  download and says so; no connection keeps it and asks to try again. Without the install permission Ardia says so in
-  one line, opens Install unknown apps for itself, and finishes when you come back with it allowed. The row asks the
-  DownloadManager where the download is each time it shows and when Ardia comes back to the front, so a failed or
-  removed download turns back into Download. Where the DownloadManager is missing or disabled, the address opens in
-  another browser, with Ardia's own activities left out of the chooser; where nothing else can, the toast and row
-  give the release page (Copy Link). An APK you downloaded in Ardia opens through the same installer path (Open in
-  its toast), without a checksum, since it isn't Ardia's release.
+  the system DownloadManager: the exact URL, `application/vnd.android.package-archive`, a progress notification only
+  (`VISIBILITY_VISIBLE`, so the system posts nothing on completion that would open the file unchecked) and Ardia's own
+  app folder (`setDestinationInExternalFilesDir`, so Files doesn't list it). `app_update_download` keeps the
+  DownloadManager id with the offer, so a restart inside the 6-hour throttle still shows Downloading, Install or
+  failed from it. When the download finishes (`ACTION_DOWNLOAD_COMPLETE` for that id), Ardia fetches the release's
+  `Ardia-<v>.apk.sha256` asset (a release without one is never offered) and reads it only in `sha256sum`'s own form for
+  that file name. GitHub's API also gives each asset's `digest` (`sha256:<hex>`) in the release answer the check
+  already fetched; the file must agree with it, and when the file's host can't be reached in 10 s the digest stands in
+  (on the Simlock emulator every connection to `release-assets.githubusercontent.com` took 12.5 s and the app's fetch
+  never got through, while the DownloadManager's did). With neither, it waits 30 s and asks to try again. Then it
+  copies the download into its cache while hashing it (a failed copy leaves nothing behind and keeps the download, so
+  Install tries again) and prompts: a toast with Install when Ardia is in front, otherwise its own notification
+  "Ardia <version> is ready to install" (channel `app_updates`; `POST_NOTIFICATIONS` is asked for when a download
+  starts) whose tap opens Android's installer on the checked copy. With notifications off, the About row and the next
+  toast in front carry it. A mismatch, a missing or unreadable checksum deletes the download and says so. Without the
+  install permission Ardia says so in one line and opens Install unknown apps for itself; coming straight back with it
+  allowed continues, and any other return leaves Install in the row for a tap. The row asks the DownloadManager where
+  the download is each time it shows and when Ardia comes back to the front, so a failed or removed download turns
+  back into Download. A kept download is deleted once the installed version reaches it, and when a newer download
+  replaces it. Where the DownloadManager is missing or disabled, the address opens in another browser, with Ardia's
+  own activities left out of the chooser; where nothing else can, the toast and row give the release page (Copy
+  Link). An APK you downloaded in Ardia opens through the same installer path (Open in its toast), without a checksum,
+  since it isn't Ardia's release.
 - A Play build would drop this for Play's In-App Updates.
 
 ### The old Android app, cleaned out

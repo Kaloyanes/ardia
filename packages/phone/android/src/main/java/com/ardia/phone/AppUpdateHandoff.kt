@@ -1,17 +1,27 @@
 package com.ardia.phone
 
+import android.Manifest
 import android.app.Activity
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
 
@@ -21,6 +31,8 @@ internal object AppUpdateHandoff {
     const val APK_MIME = "application/vnd.android.package-archive"
     private const val DOWNLOADS_PROVIDER = "com.android.providers.downloads"
     private const val UPDATES_DIR = "updates"
+    private const val CHANNEL = "app_updates"
+    private const val NOTIFICATION_ID = 4378
     private val RELEASE_APK = Regex("^https://github\\.com/ardia-browser/ardia/releases/download/android-v((?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})(?:-nightly\\.(?:0|[1-9][0-9]{0,8}))?)/Ardia-([0-9A-Za-z.-]{1,40})\\.apk$")
     private val APK_FILE = Regex("^Ardia-[0-9A-Za-z.-]{1,40}\\.apk$")
     private val SHA256 = Regex("^[0-9a-f]{64}$")
@@ -57,49 +69,92 @@ internal object AppUpdateHandoff {
         }.getOrDefault("gone")
     }
 
-    fun install(context: Context, activity: Activity?, id: String, sha256: String, fileName: String): String {
+    fun verify(context: Context, id: String, sha256: String, fileName: String): String {
         if (!SHA256.matches(sha256) || !APK_FILE.matches(fileName)) return "failed"
         val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return "gone"
         if (status(context, id) != "successful") return "gone"
         val manager = context.getSystemService(DownloadManager::class.java) ?: return "gone"
         val directory = File(context.cacheDir, UPDATES_DIR).apply { mkdirs() }
         directory.listFiles()?.filter { it.name != fileName }?.forEach { it.delete() }
-        val copy = File(directory, fileName)
-        val matched = runCatching {
-            manager.openDownloadedFile(number).use { descriptor -> FileInputStream(descriptor.fileDescriptor).use { verifiedCopy(it, copy, sha256) } }
-        }.getOrNull() ?: return "gone"
-        if (!matched) {
-            runCatching { manager.remove(number) }
-            return "mismatch"
-        }
+        val descriptor = runCatching { manager.openDownloadedFile(number) }.getOrNull() ?: return "gone"
+        val result = runCatching { descriptor.use { FileInputStream(it.fileDescriptor).use { input -> verifiedCopy(input, File(directory, fileName), sha256) } } }.getOrDefault("copy_failed")
+        if (result == "mismatch") runCatching { manager.remove(number) }
+        return result
+    }
+
+    fun installVerified(context: Context, activity: Activity?, fileName: String): String {
+        val copy = verifiedFile(context, fileName) ?: return "gone"
+        clearReadyNotification(context)
         return launchInstaller(context, activity, FileProvider.getUriForFile(context, "${context.packageName}.updates", copy))
     }
 
     fun discard(context: Context, id: String): Boolean {
-        val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return false
+        clearReadyNotification(context)
         File(context.cacheDir, UPDATES_DIR).listFiles()?.forEach { it.delete() }
+        val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return false
         return runCatching { (context.getSystemService(DownloadManager::class.java)?.remove(number) ?: 0) > 0 }.getOrDefault(false)
     }
 
-    fun verifiedCopy(input: InputStream, destination: File, sha256: String): Boolean {
+    fun verifiedCopy(input: InputStream, destination: File, sha256: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val partial = File(destination.parentFile, "${destination.name}.part")
-        partial.outputStream().use { output ->
-            val buffer = ByteArray(64 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-                output.write(buffer, 0, read)
+        var kept = false
+        try {
+            partial.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                    output.write(buffer, 0, read)
+                }
             }
+            val found = digest.digest().joinToString("") { "%02x".format(it) }
+            destination.delete()
+            if (found != sha256) return "mismatch"
+            kept = partial.renameTo(destination)
+            return if (kept) "verified" else "copy_failed"
+        } catch (failure: IOException) {
+            return "copy_failed"
+        } finally {
+            if (!kept) partial.delete()
         }
-        val found = digest.digest().joinToString("") { "%02x".format(it) }
-        destination.delete()
-        if (found != sha256) {
-            partial.delete()
-            return false
-        }
-        return partial.renameTo(destination)
+    }
+
+    fun notifyReady(context: Context, fileName: String, title: String, text: String): Boolean {
+        val copy = verifiedFile(context, fileName) ?: return false
+        val notifications = NotificationManagerCompat.from(context)
+        if (!notifications.areNotificationsEnabled()) return false
+        context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+            NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        val install = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(FileProvider.getUriForFile(context, "${context.packageName}.updates", copy), APK_MIME)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        val tap = PendingIntent.getActivity(context, NOTIFICATION_ID, install, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(tap)
+            .setAutoCancel(true)
+            .build()
+        return runCatching { notifications.notify(NOTIFICATION_ID, notification) }.isSuccess
+    }
+
+    fun clearReadyNotification(context: Context) {
+        runCatching { NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID) }
+    }
+
+    fun askForNotifications(activity: Activity?) {
+        if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        runCatching { ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_ID) }
+    }
+
+    private fun verifiedFile(context: Context, fileName: String): File? {
+        if (!APK_FILE.matches(fileName)) return null
+        return File(File(context.cacheDir, UPDATES_DIR), fileName).takeIf { it.isFile }
     }
 
     fun canInstallPackages(context: Context): Boolean = runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
@@ -139,8 +194,8 @@ internal object AppUpdateHandoff {
             val request = DownloadManager.Request(Uri.parse(url))
                 .setMimeType(APK_MIME)
                 .setTitle(title)
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
             manager.enqueue(request)
         }.getOrNull()?.takeIf { it > 0 }
     }
