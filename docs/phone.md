@@ -3206,7 +3206,11 @@ zeros, nightly 1 to 998) and orders them by versionCode.
   streamed into a full-install session for Ardia's own package while hashed again, the session is abandoned if the
   hash differs, and it is committed with an explicit PendingIntent to Ardia's own receiver (mutable, because Android
   12 and later write the status into it). On `STATUS_PENDING_USER_ACTION` Ardia starts the confirmation screen the
-  system hands back; cancelled, failed and finished installs come back to the row and telemetry. No other app gets
+  system hands back; cancelled, failed and finished installs come back to the row and telemetry. Each session is
+  recorded against its download before commit and older ones are abandoned; the receiver drops any callback for a
+  session Ardia doesn't track, and a result applies only to the session and download that are current. The ready
+  notification carries a random token rather than a file name, and Ardia acts on it once, for the stored checked
+  download. `app_update_installs_completed` counts only when the new version matches a session Ardia committed. No other app gets
   the file or a grant to it. A download that finished while Ardia was gone is checked when Ardia comes back, with the
   ready toast in front, and every check or install result is dropped if a newer download replaced the one it was for. A mismatch, a missing or unreadable checksum deletes the download and says so. Without the
   install permission Ardia says so in one line and opens Install unknown apps for itself; coming straight back with it
