@@ -1,10 +1,11 @@
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, DisplayId, GpuSpecs,
-    HeadlessAtlas, KeyDownEvent, NativeViewId, Pixels, Platform, PlatformAtlas, PlatformDisplay,
-    PlatformHeadlessRenderer, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, RequestFrameOptions, Scene, Size, TestDisplay, TestPlatform,
-    TextInputConfiguration, TextInputStateChange, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowInsets, WindowParams, WindowVisibility,
+    AnyWindowHandle, BackdropLayerSpec, Bounds, Corners, Decorations, DevicePixels,
+    DispatchEventResult, DisplayId, GpuSpecs, HeadlessAtlas, KeyDownEvent, NativeViewId, Pixels,
+    Platform, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
+    TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
+    WindowVisibility,
 };
 use gpui_util::ResultExt as _;
 #[cfg(any(test, feature = "test-support"))]
@@ -65,6 +66,10 @@ pub(crate) struct TestWindowState {
     decorations: Decorations,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
+    background_appearance: WindowBackgroundAppearance,
+    composites_liquid_glass: bool,
+    backdrop_layer: Option<BackdropLayerSpec>,
+    native_view_corner_radii: Vec<(NativeViewId, Corners<Pixels>)>,
 }
 
 #[derive(Clone)]
@@ -147,6 +152,10 @@ impl TestWindow {
             decorations: Decorations::default(),
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
+            background_appearance: WindowBackgroundAppearance::Opaque,
+            composites_liquid_glass: false,
+            backdrop_layer: None,
+            native_view_corner_radii: Vec::new(),
         })))
     }
     pub fn simulate_close(&self) {
@@ -376,6 +385,24 @@ impl TestWindow {
     pub fn set_start_external_drag_result(&self, result: bool) {
         self.0.lock().start_external_drag_result = result;
     }
+
+    pub fn set_composites_liquid_glass(&self, composites: bool) {
+        self.0.lock().composites_liquid_glass = composites;
+    }
+
+    pub fn backdrop_layer(&self) -> Option<BackdropLayerSpec> {
+        self.0.lock().backdrop_layer
+    }
+
+    pub fn native_view_corner_radius(&self, id: NativeViewId) -> Option<Corners<Pixels>> {
+        self.0
+            .lock()
+            .native_view_corner_radii
+            .iter()
+            .rev()
+            .find(|(view, _)| *view == id)
+            .map(|(_, radius)| *radius)
+    }
 }
 
 impl PlatformWindow for TestWindow {
@@ -506,7 +533,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
-        WindowBackgroundAppearance::Opaque
+        self.0.lock().background_appearance
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
@@ -519,7 +546,21 @@ impl PlatformWindow for TestWindow {
 
     fn set_app_id(&mut self, _app_id: &str) {}
 
-    fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
+    fn set_background_appearance(&self, background: WindowBackgroundAppearance) {
+        self.0.lock().background_appearance = background;
+    }
+
+    fn composites_liquid_glass(&self) -> bool {
+        self.0.lock().composites_liquid_glass
+    }
+
+    fn set_backdrop_layer(&self, spec: Option<BackdropLayerSpec>) {
+        self.0.lock().backdrop_layer = spec;
+    }
+
+    fn set_native_view_corner_radius(&self, id: NativeViewId, radii: Corners<Pixels>) {
+        self.0.lock().native_view_corner_radii.push((id, radii));
+    }
 
     fn set_edited(&mut self, edited: bool) {
         self.0.lock().edited = edited;

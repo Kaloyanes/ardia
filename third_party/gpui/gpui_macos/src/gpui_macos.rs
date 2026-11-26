@@ -44,6 +44,12 @@ pub(crate) use window::*;
 
 pub use platform::MacPlatform;
 
+pub mod hosted_window {
+    pub use crate::window::hosted::{
+        key_down, make_first_responder, perform_key_equivalent, send_event,
+    };
+}
+
 trait BoolExt {
     fn to_objc(self) -> Bool;
 }

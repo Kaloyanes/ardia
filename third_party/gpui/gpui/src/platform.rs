@@ -1,4 +1,5 @@
 mod app_menu;
+mod backdrop;
 mod keyboard;
 mod keystroke;
 mod platform_info;
@@ -80,6 +81,7 @@ use strum::EnumIter;
 use uuid::Uuid;
 
 pub use app_menu::*;
+pub use backdrop::*;
 pub use keyboard::*;
 pub use keystroke::*;
 
@@ -1414,6 +1416,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
+    fn liquid_glass_available(&self) -> bool {
+        false
+    }
+    fn composites_liquid_glass(&self) -> bool {
+        false
+    }
+    fn set_backdrop_layer(&self, _spec: Option<BackdropLayerSpec>) {}
+    fn set_traffic_light_origin(&self, _origin: Point<Pixels>) {}
+    fn set_native_view_corner_radius(&self, _id: crate::NativeViewId, _radii: Corners<Pixels>) {}
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
@@ -2780,6 +2791,9 @@ pub struct WindowOptions {
 
     /// Whether to render the window using the Display P3 color space on macOS.
     pub use_display_p3: bool,
+
+    #[allow(missing_docs)]
+    pub host_window: Option<ExternalWindowHandle>,
 }
 
 /// The variables that can be configured when creating a new window
@@ -2848,6 +2862,36 @@ pub struct WindowParams {
 
     #[cfg(target_os = "macos")]
     pub use_display_p3: bool,
+
+    pub host_window: Option<ExternalWindowHandle>,
+}
+
+#[allow(missing_docs)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExternalWindowHandle {
+    window: usize,
+    host_view: Option<usize>,
+}
+
+#[allow(missing_docs, clippy::missing_safety_doc)]
+impl ExternalWindowHandle {
+    pub unsafe fn new(
+        window: std::ptr::NonNull<std::ffi::c_void>,
+        host_view: Option<std::ptr::NonNull<std::ffi::c_void>>,
+    ) -> Self {
+        Self {
+            window: window.as_ptr() as usize,
+            host_view: host_view.map(|view| view.as_ptr() as usize),
+        }
+    }
+
+    pub fn window_ptr(&self) -> *mut std::ffi::c_void {
+        self.window as *mut std::ffi::c_void
+    }
+
+    pub fn host_view_ptr(&self) -> Option<*mut std::ffi::c_void> {
+        self.host_view.map(|view| view as *mut std::ffi::c_void)
+    }
 }
 
 /// Represents the status of how a window should be opened.
@@ -2913,6 +2957,7 @@ impl Default for WindowOptions {
             window_decorations: None,
             tabbing_identifier: None,
             use_display_p3: false,
+            host_window: None,
         }
     }
 }
@@ -3013,6 +3058,8 @@ pub enum WindowBackgroundAppearance {
     MicaBackdrop,
     /// The Mica Alt backdrop material, supported on Windows 11.
     MicaAltBackdrop,
+    #[allow(missing_docs)]
+    LiquidGlass,
 }
 
 /// The text rendering mode to use for drawing glyphs.

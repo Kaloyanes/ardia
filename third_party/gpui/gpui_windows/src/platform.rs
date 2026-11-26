@@ -761,6 +761,11 @@ impl Platform for WindowsPlatform {
         if !self.is_windowed() {
             return Err(anyhow!("cannot open windows while headless"));
         }
+        if options.host_window.is_some() {
+            return Err(anyhow!(
+                "only macOS can host a GPUI window in an existing window"
+            ));
+        }
         let window = WindowsWindow::new(handle, options, self.generate_creation_info())?;
         let handle = window.get_raw_handle();
         self.raw_window_handles.write().push(TrackedWindow {

@@ -317,13 +317,20 @@ dependencies = [
 name = "ardia-engine"
 version = "0.3.0"
 dependencies = [
- "anyhow",
- "ardia-state",
+ "cc",
+ "futures",
+ "libc",
+ "libloading",
  "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "parking_lot",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -398,18 +405,23 @@ dependencies = [
 name = "ardia-state"
 version = "0.3.0"
 dependencies = [
- "anyhow",
  "ardia-import-core",
  "ardia-shell-migration",
  "ardia-sync-core",
  "ardia-theme",
  "ardia-update-core",
+ "idna",
+ "indexmap",
+ "libc",
  "parking_lot",
+ "percent-encoding",
+ "proptest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "url",
- "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -436,6 +448,7 @@ dependencies = [
 name = "ardia-theme"
 version = "0.3.0"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
 ]
@@ -2737,6 +2750,9 @@ dependencies = [
  "gpui_web",
  "gpui_wgpu",
  "gpui_windows",
+ "objc2 0.6.5",
+ "objc2-core-graphics",
+ "raw-window-handle",
 ]
 
 [[package]]

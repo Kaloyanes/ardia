@@ -19,6 +19,10 @@ use std::{
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NativeViewId(u64);
 
+impl NativeViewId {
+    pub(crate) const LIQUID_GLASS: Self = Self(u64::MAX);
+}
+
 #[cfg(any(test, feature = "test-support"))]
 impl NativeViewId {
     /// Makes an ID for a test that needs one without a window to attach a view to.
@@ -120,6 +124,11 @@ impl NativeView {
 }
 
 impl NativeView {
+    #[allow(missing_docs)]
+    pub fn id(&self) -> NativeViewId {
+        self.0.id
+    }
+
     /// Sets the color shown where the view has not caught up with its element.
     ///
     /// The platform moves the view through its own compositor, so for a frame
@@ -315,8 +324,7 @@ impl Window {
         let topmost = hit_test.ids.first()?;
         self.rendered_frame
             .scene
-            .native_views
-            .iter()
+            .attached_native_views()
             .find(|native_view| native_view.hitbox_id == *topmost)
             .map(|native_view| native_view.id)
     }
@@ -390,6 +398,19 @@ impl Window {
             .find(|view| view.id == id);
         if let Some(view) = view {
             self.focus(&view.focus_handle, cx);
+        }
+    }
+
+    #[allow(missing_docs)]
+    pub fn set_native_view_corner_radius(
+        &self,
+        view: &NativeView,
+        radii: impl Into<crate::Corners<Pixels>>,
+    ) {
+        if view.0.window == self.handle {
+            let radii = radii.into().map(|radius| (*radius).max(Pixels::ZERO));
+            self.platform_window
+                .set_native_view_corner_radius(view.0.id, radii);
         }
     }
 }

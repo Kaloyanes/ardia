@@ -247,6 +247,10 @@ impl PathHash {
         id.hash(&mut hasher);
         Self(hasher.finish())
     }
+
+    pub(crate) fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 impl GlobalElementId {
@@ -266,6 +270,10 @@ impl GlobalElementId {
 
     pub(crate) fn accesskit_node_id(&self) -> accesskit::NodeId {
         accesskit::NodeId(self.hash.0)
+    }
+
+    pub(crate) fn path_hash(&self) -> u64 {
+        self.hash.0
     }
 }
 

@@ -40,7 +40,7 @@ itertools = "0.14.0"
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSCell", "NSColor", "NSControl", "NSCursor", "NSDocumentController", "NSDragging", "NSDraggingItem", "NSEvent", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSScreen", "NSScroller", "NSTrackingArea", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers"] }
-objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["CGDirectDisplay", "CGColor", "objc2"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["CGBitmapContext", "CGColor", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGImage", "CGPath", "objc2"] }
 objc2-core-media = { version = "=0.3.2", default-features = false, features = ["CMSampleBuffer", "objc2-core-video"], optional = true }
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["CVBuffer", "CVImageBuffer", "CVHostTime"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [ "NSArray", "NSAttributedString", "NSBundle", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSNull", "NSObjCRuntime", "NSObject", "NSProcessInfo", "NSRange", "NSRunLoop", "NSSet", "NSString", "NSURL", "NSValue", "objc2-core-foundation", "std", ] }

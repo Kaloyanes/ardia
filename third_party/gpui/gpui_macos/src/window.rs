@@ -8,13 +8,14 @@ use anyhow::Result;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use gpui::{
-    AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalDragPayload,
-    ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Keystroke,
-    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowKind, WindowParams, WindowVisibility, point, px, size,
+    AnyWindowHandle, BackdropLayerSpec, BackgroundExecutor, Bounds, Capslock, CursorStyle,
+    ExternalDragPayload, ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource,
+    KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, SharedString, Size, SystemWindowTab, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowParams,
+    WindowVisibility, point, px, size,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -73,6 +74,9 @@ use std::{
     time::Duration,
 };
 
+mod backdrop;
+pub(crate) mod hosted;
+mod liquid_glass;
 mod native_views;
 
 const WINDOW_STATE_IVAR: &CStr = c"windowState";
@@ -365,11 +369,11 @@ extern "C" fn window_state_unarchiver_restoration_options(
     }
 }
 
-pub(crate) fn convert_mouse_position(position: NSPoint, window_height: Pixels) -> Point<Pixels> {
+pub(crate) fn convert_mouse_position(position: NSPoint, view_frame: NSRect) -> Point<Pixels> {
     point(
-        px(position.x as f32),
+        px((position.x - view_frame.origin.x) as f32),
         // macOS screen coordinates are relative to bottom left
-        window_height - px(position.y as f32),
+        px((view_frame.origin.y + view_frame.size.height - position.y) as f32),
     )
 }
 
@@ -387,19 +391,11 @@ pub(crate) unsafe fn set_active_window_cursor_style(style: CursorStyle) {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let key_window: *mut AnyObject = msg_send![app, keyWindow];
         let main_window: *mut AnyObject = msg_send![app, mainWindow];
-        let active_window = if !key_window.is_null() && is_gpui_window(key_window) {
-            Some(key_window)
-        } else if !main_window.is_null() && is_gpui_window(main_window) {
-            Some(main_window)
-        } else {
-            None
-        };
-
-        let Some(active_window) = active_window else {
+        let Some(window_state) =
+            window_state_of(key_window).or_else(|| window_state_of(main_window))
+        else {
             return;
         };
-
-        let window_state = get_window_state(&*active_window);
         let mut window_state = window_state.lock();
         if window_state.cursor_style != style {
             window_state.cursor_style = style;
@@ -714,9 +710,43 @@ struct MacWindowState {
     // The parent window if this window is a sheet (Dialog kind)
     sheet_parent: Option<*mut AnyObject>,
     native_views: native_views::NativeViews,
+    backdrop: Option<backdrop::Backdrop>,
+    backdrop_spec: Option<BackdropLayerSpec>,
+    liquid_glass: Option<liquid_glass::GlassHost>,
+    host: Option<hosted::Host>,
 }
 
 impl MacWindowState {
+    fn glass_appearance(&self) -> Option<gpui::BackdropAppearance> {
+        self.backdrop_spec
+            .filter(|_| self.background_appearance == WindowBackgroundAppearance::LiquidGlass)
+            .map(|spec| spec.appearance)
+    }
+
+    fn back_layers(&self) -> Vec<*const NSView> {
+        let blurred = self
+            .blurred_view
+            .map(|view| view.cast_const().cast::<NSView>());
+        blurred
+            .into_iter()
+            .chain(
+                self.backdrop
+                    .iter()
+                    .flat_map(|backdrop| backdrop.views())
+                    .map(|view| view as *const NSView),
+            )
+            .collect()
+    }
+
+    fn host_view(&self) -> Option<Retained<NSView>> {
+        unsafe { self.native_view.cast::<NSView>().as_ref().superview() }
+    }
+
+    fn view_frame(&self) -> NSRect {
+        let view = unsafe { self.native_view.cast::<NSView>().as_ref() };
+        view.convertRect_toView(view.bounds(), None)
+    }
+
     fn move_traffic_light(&mut self) {
         if !self.native_titlebar_visible {
             self.update_native_titlebar_visibility();
@@ -1006,8 +1036,8 @@ impl MacWindowState {
 
     fn content_size(&self) -> Size<Pixels> {
         let NSSize { width, height } = self
-            .native_window()
-            .contentView()
+            .host_view()
+            .or_else(|| self.native_window().contentView())
             .map_or_default(|view| view.frame().size);
         size(px(width as f32), px(height as f32))
     }
@@ -1052,6 +1082,7 @@ impl MacWindow {
             window_min_size,
             tabbing_identifier,
             use_display_p3,
+            host_window,
             ..
         }: WindowParams,
         cursor_visible: Arc<AtomicBool>,
@@ -1061,12 +1092,19 @@ impl MacWindow {
         marker: MainThreadMarker,
     ) -> Result<Self> {
         autoreleasepool(|_| unsafe {
+            if let Some(host) = host_window
+                && hosted::window_state(host.window_ptr().cast()).is_some()
+            {
+                anyhow::bail!("this NSWindow already hosts a GPUI window");
+            }
             let renderer = renderer::new_renderer(renderer_context, false, use_display_p3)?;
-            let allows_automatic_window_tabbing = tabbing_identifier.is_some();
-            if allows_automatic_window_tabbing {
-                let () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: Bool::YES];
-            } else {
-                let () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: Bool::NO];
+            let allows_automatic_window_tabbing =
+                host_window.is_none() && tabbing_identifier.is_some();
+            if host_window.is_none() {
+                let () = msg_send![
+                    class!(NSWindow),
+                    setAllowsAutomaticWindowTabbing: allows_automatic_window_tabbing.to_objc()
+                ];
             }
 
             let mut style_mask;
@@ -1088,19 +1126,15 @@ impl MacWindow {
                 style_mask = NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView;
             }
 
-            let native_window: *mut AnyObject = match kind {
-                WindowKind::Normal => {
-                    msg_send![WINDOW_CLASS, alloc]
-                }
+            let window_class = match kind {
+                WindowKind::Normal => WINDOW_CLASS,
                 // `AnchoredPopup` is rejected in `MacPlatform::open_window`, grouped here only
                 // for exhaustiveness.
                 WindowKind::PopUp | WindowKind::AnchoredPopup(_) => {
                     style_mask |= NSWindowStyleMask::NonactivatingPanel;
-                    msg_send![PANEL_CLASS, alloc]
+                    PANEL_CLASS
                 }
-                WindowKind::Floating | WindowKind::Dialog => {
-                    msg_send![PANEL_CLASS, alloc]
-                }
+                WindowKind::Floating | WindowKind::Dialog => PANEL_CLASS,
             };
 
             let display = display_id
@@ -1133,30 +1167,41 @@ impl MacWindow {
                 ),
             );
 
-            let native_window: *mut AnyObject = msg_send![
-                native_window,
-                initWithContentRect: window_rect,
-                styleMask: style_mask,
-                backing: NSBackingStoreType::Buffered,
-                defer: Bool::NO,
-                screen: target_screen.as_deref()
-            ];
-            assert!(!native_window.is_null());
-            #[expect(
-                deprecated,
-                reason = "File-drop decoding expects a property-list array of paths; replacing NSFilenamesPboardType requires migrating both registration and decoding to file URLs"
-            )]
-            let () = msg_send![
-                native_window,
-                registerForDraggedTypes:
-                    &*NSArray::from_slice(&[NSFilenamesPboardType])
-            ];
-            let () = msg_send![
-                native_window,
-                setReleasedWhenClosed: Bool::NO
-            ];
+            let native_window: *mut AnyObject = match host_window {
+                Some(host) => host.window_ptr().cast(),
+                None => {
+                    let native_window: *mut AnyObject = msg_send![window_class, alloc];
+                    let native_window: *mut AnyObject = msg_send![
+                        native_window,
+                        initWithContentRect: window_rect,
+                        styleMask: style_mask,
+                        backing: NSBackingStoreType::Buffered,
+                        defer: Bool::NO,
+                        screen: target_screen.as_deref()
+                    ];
+                    assert!(!native_window.is_null());
+                    #[expect(
+                        deprecated,
+                        reason = "File-drop decoding expects a property-list array of paths; replacing NSFilenamesPboardType requires migrating both registration and decoding to file URLs"
+                    )]
+                    let () = msg_send![
+                        native_window,
+                        registerForDraggedTypes:
+                            &*NSArray::from_slice(&[NSFilenamesPboardType])
+                    ];
+                    let () = msg_send![
+                        native_window,
+                        setReleasedWhenClosed: Bool::NO
+                    ];
+                    native_window
+                }
+            };
 
-            let content_view: *mut AnyObject = msg_send![native_window, contentView];
+            let content_view: *mut AnyObject =
+                match host_window.and_then(|host| host.host_view_ptr()) {
+                    Some(host_view) => host_view.cast(),
+                    None => msg_send![native_window, contentView],
+                };
             let native_view: *mut AnyObject = msg_send![VIEW_CLASS, alloc];
             let content_bounds: NSRect = msg_send![content_view, bounds];
             let native_view: *mut AnyObject = msg_send![native_view, initWithFrame: content_bounds];
@@ -1199,9 +1244,10 @@ impl MacWindow {
                 native_titlebar_visible: true,
                 traffic_light_frames: None,
                 pre_fullscreen_traffic_light_frames: None,
-                transparent_titlebar: titlebar
-                    .as_ref()
-                    .is_none_or(|titlebar| titlebar.appears_transparent),
+                transparent_titlebar: host_window.is_none()
+                    && titlebar
+                        .as_ref()
+                        .is_none_or(|titlebar| titlebar.appears_transparent),
                 previous_modifiers_changed_event: None,
                 keystroke_for_do_command: None,
                 do_command_handled: None,
@@ -1221,16 +1267,25 @@ impl MacWindow {
                 accesskit_adapter: None,
                 sheet_parent: None,
                 native_views: native_views::NativeViews::default(),
+                backdrop: None,
+                backdrop_spec: None,
+                liquid_glass: Some(liquid_glass::GlassHost::default()),
+                host: None,
             }));
             let mut window = Self(state, marker, metal_frames);
 
-            (*native_window)
-                .class()
-                .instance_variable(WINDOW_STATE_IVAR)
-                .expect("GPUI window state ivar")
-                .load_ptr::<*mut c_void>(&*native_window)
-                .write(Rc::into_raw(window.0.clone()).cast_mut().cast());
-            let _: () = msg_send![native_window, setDelegate: native_window];
+            if host_window.is_some() {
+                let host = hosted::Host::attach(&window.0, native_window, native_view);
+                window.0.lock().host = Some(host);
+            } else {
+                (*native_window)
+                    .class()
+                    .instance_variable(WINDOW_STATE_IVAR)
+                    .expect("GPUI window state ivar")
+                    .load_ptr::<*mut c_void>(&*native_window)
+                    .write(Rc::into_raw(window.0.clone()).cast_mut().cast());
+                let _: () = msg_send![native_window, setDelegate: native_window];
+            }
             (*native_view)
                 .class()
                 .instance_variable(WINDOW_STATE_IVAR)
@@ -1238,26 +1293,30 @@ impl MacWindow {
                 .load_ptr::<*mut c_void>(&*native_view)
                 .write(Rc::into_raw(window.0.clone()).cast_mut().cast());
 
-            if let Some(title) = titlebar
-                .as_ref()
-                .and_then(|t| t.title.as_ref().map(AsRef::as_ref))
-            {
-                window.set_title(title);
-            }
+            if host_window.is_none() {
+                if let Some(title) = titlebar
+                    .as_ref()
+                    .and_then(|t| t.title.as_ref().map(AsRef::as_ref))
+                {
+                    window.set_title(title);
+                }
 
-            let _: () = msg_send![native_window, setMovable: is_movable.to_objc()];
+                let _: () = msg_send![native_window, setMovable: is_movable.to_objc()];
 
-            if let Some(window_min_size) = window_min_size {
-                let _: () = msg_send![native_window, setContentMinSize: NSSize {
-                    width: window_min_size.width.to_f64(),
-                    height: window_min_size.height.to_f64(),
-                }];
-            }
+                if let Some(window_min_size) = window_min_size {
+                    let _: () = msg_send![native_window, setContentMinSize: NSSize {
+                        width: window_min_size.width.to_f64(),
+                        height: window_min_size.height.to_f64(),
+                    }];
+                }
 
-            if titlebar.is_none_or(|titlebar| titlebar.appears_transparent) {
-                let _: () = msg_send![native_window, setTitlebarAppearsTransparent: Bool::YES];
-                let _: () =
-                    msg_send![native_window, setTitleVisibility: NSWindowTitleVisibility::Hidden];
+                if titlebar.is_none_or(|titlebar| titlebar.appears_transparent) {
+                    let _: () = msg_send![native_window, setTitlebarAppearsTransparent: Bool::YES];
+                    let _: () = msg_send![
+                        native_window,
+                        setTitleVisibility: NSWindowTitleVisibility::Hidden
+                    ];
+                }
             }
 
             let _: () = msg_send![native_view, setAutoresizingMask: NSAutoresizingMaskOptions::ViewWidthSizable
@@ -1277,7 +1336,9 @@ impl MacWindow {
 
             let native_view: *mut AnyObject = msg_send![native_view, autorelease];
             let _: () = msg_send![content_view, addSubview: native_view];
-            let _: Bool = msg_send![native_window, makeFirstResponder: native_view];
+            if host_window.is_none() || focus {
+                let _: Bool = msg_send![native_window, makeFirstResponder: native_view];
+            }
 
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             let main_window: *mut AnyObject = msg_send![app, mainWindow];
@@ -1288,6 +1349,7 @@ impl MacWindow {
             let tracking_view = &*native_view.cast::<NSView>();
 
             match kind {
+                _ if host_window.is_some() => add_mouse_tracking_area(tracking_view),
                 WindowKind::Normal | WindowKind::Floating => {
                     if kind == WindowKind::Floating {
                         // Let the window float keep above normal windows.
@@ -1367,10 +1429,10 @@ impl MacWindow {
                 }
             }
 
-            if focus && show {
+            if focus && show && host_window.is_none() {
                 let _: () =
                     msg_send![native_window, makeKeyAndOrderFront: ptr::null_mut::<AnyObject>()];
-            } else if show {
+            } else if show && host_window.is_none() {
                 let _: () = msg_send![native_window, orderFront: ptr::null_mut::<AnyObject>()];
             }
 
@@ -1378,7 +1440,9 @@ impl MacWindow {
             // Although we already specified the position using `initWithContentRect_styleMask_backing_defer_screen_`,
             // the window position might be incorrect if the main screen (the screen that contains the window that has focus)
             //  is different from the primary screen.
-            let _: () = msg_send![native_window, setFrameTopLeftPoint: window_rect.origin];
+            if host_window.is_none() {
+                let _: () = msg_send![native_window, setFrameTopLeftPoint: window_rect.origin];
+            }
             {
                 let mut window_state = window.0.lock();
                 window_state.move_traffic_light();
@@ -1397,12 +1461,7 @@ impl MacWindow {
                 return None;
             }
 
-            if msg_send![main_window, isKindOfClass: WINDOW_CLASS] {
-                let handle = get_window_state(&*main_window).lock().handle;
-                Some(handle)
-            } else {
-                None
-            }
+            normal_window_state(main_window).map(|window_state| window_state.lock().handle)
         }
     }
 
@@ -1415,9 +1474,8 @@ impl MacWindow {
             let mut window_handles = Vec::new();
             for i in 0..count {
                 let window: *mut AnyObject = msg_send![windows, objectAtIndex:i];
-                if msg_send![window, isKindOfClass: WINDOW_CLASS] {
-                    let handle = get_window_state(&*window).lock().handle;
-                    window_handles.push(handle);
+                if let Some(window_state) = normal_window_state(window) {
+                    window_handles.push(window_state.lock().handle);
                 }
             }
 
@@ -1465,6 +1523,9 @@ impl Drop for MacWindow {
         // the adapter here so the native view, its `CAMetalLayer` and the
         // renderer's command queue are actually released with the window.
         drop(this.accesskit_adapter.take());
+        let glass = this.liquid_glass.take();
+        let backdrop = this.backdrop.take();
+        let native_views = this.native_views.detach_all();
         this.renderer.destroy();
         let window = this.native_window;
         let sheet_parent = this.sheet_parent.take();
@@ -1472,13 +1533,45 @@ impl Drop for MacWindow {
             FrameSource::Metal(metal_frames) => metal_frames.replace(None),
             FrameSource::DisplayLink(frame_source) => drop(frame_source.take()),
         }
-        unsafe {
-            let _: () = msg_send![this.native_window, setDelegate: ptr::null_mut::<AnyObject>()];
+        let detached = this.host.as_mut().and_then(hosted::Host::detach);
+        if this.host.is_none() {
+            unsafe {
+                let _: () =
+                    msg_send![this.native_window, setDelegate: ptr::null_mut::<AnyObject>()];
+            }
         }
         this.input_handler.take();
         // A delivery task queued by `report_visibility` may still run after the
         // GPUI window is gone; without a callback it has nothing to notify.
         this.visibility_callback.take();
+        if let Some(mut detached) = detached {
+            let host_closed = this.closed.load(Ordering::Acquire);
+            let blurred_view = this
+                .blurred_view
+                .take()
+                .and_then(|view| unsafe { Retained::retain(view.cast::<NSView>()) });
+            if !host_closed {
+                this.restore_traffic_light();
+            }
+            let foreground_executor = this.foreground_executor.clone();
+            drop(this);
+            if !host_closed {
+                detached.restore_chrome();
+            }
+            foreground_executor
+                .spawn(async move {
+                    detached.finish(native_views.into_iter().chain(blurred_view), host_closed);
+                    if let Some(glass) = glass {
+                        glass.remove();
+                    }
+                    if let Some(backdrop) = backdrop {
+                        backdrop.remove();
+                    }
+                })
+                .detach();
+            return;
+        }
+        drop((glass, backdrop, native_views));
         this.foreground_executor
             .spawn(async move {
                 unsafe {
@@ -1746,12 +1839,9 @@ impl PlatformWindow for MacWindow {
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
-        let position = self
-            .0
-            .lock()
-            .native_window()
-            .mouseLocationOutsideOfEventStream();
-        convert_mouse_position(position, self.content_size().height)
+        let lock = self.0.lock();
+        let position = lock.native_window().mouseLocationOutsideOfEventStream();
+        convert_mouse_position(position, lock.view_frame())
     }
 
     fn modifiers(&self) -> Modifiers {
@@ -1923,43 +2013,59 @@ impl PlatformWindow for MacWindow {
     fn set_app_id(&mut self, _app_id: &str) {}
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
-        let mut this = self.0.as_ref().lock();
-        this.background_appearance = background_appearance;
-
         let opaque = background_appearance == WindowBackgroundAppearance::Opaque;
-        this.renderer.update_transparency(!opaque);
+        let blurred = background_appearance == WindowBackgroundAppearance::Blurred;
+        let (native_window, content_view, removed_blur_view, adds_blur_view) = {
+            let mut this = self.0.as_ref().lock();
+            this.background_appearance = background_appearance;
+            this.renderer.update_transparency(!opaque);
+            this.native_views.background = None;
+            if let Some(host) = &mut this.host {
+                host.save_chrome();
+            }
+            let removed_blur_view = this.blurred_view.take_if(|_| !blurred);
+            let adds_blur_view = blurred && this.blurred_view.is_none();
+            (
+                this.native_window,
+                this.host_view(),
+                removed_blur_view,
+                adds_blur_view,
+            )
+        };
 
         unsafe {
-            let _: () = msg_send![this.native_window, setOpaque: opaque.to_objc()];
+            let _: () = msg_send![native_window, setOpaque: opaque.to_objc()];
             let background_color = if opaque {
                 NSColor::colorWithSRGBRed_green_blue_alpha(0f64, 0f64, 0f64, 1f64)
             } else {
                 // Not using `+[NSColor clearColor]` to avoid broken shadow.
                 NSColor::colorWithSRGBRed_green_blue_alpha(0f64, 0f64, 0f64, 0.0001)
             };
-            let _: () = msg_send![this.native_window, setBackgroundColor: &*background_color];
-            this.native_views.background = None;
-
-            if background_appearance != WindowBackgroundAppearance::Blurred {
-                if let Some(blur_view) = this.blurred_view {
-                    let _: () = msg_send![blur_view, removeFromSuperview];
-                    this.blurred_view = None;
-                }
-            } else if this.blurred_view.is_none() {
-                let content_view: *mut AnyObject = msg_send![this.native_window, contentView];
-                let frame: NSRect = msg_send![content_view, bounds];
+            let _: () = msg_send![native_window, setBackgroundColor: &*background_color];
+        }
+        update_backdrop(&self.0);
+        unsafe {
+            if let Some(blur_view) = removed_blur_view {
+                let _: () = msg_send![blur_view, removeFromSuperview];
+            }
+            if let Some(content_view) = content_view.filter(|_| adds_blur_view) {
+                let frame = content_view.bounds();
                 let blur_view: *mut AnyObject = msg_send![BLURRED_VIEW_CLASS, alloc];
                 let blur_view: *mut AnyObject = msg_send![blur_view, initWithFrame: frame];
                 let _: () = msg_send![blur_view, setAutoresizingMask: NSAutoresizingMaskOptions::ViewWidthSizable
                         | NSAutoresizingMaskOptions::ViewHeightSizable];
 
                 let _: () = msg_send![
-                    content_view,
+                    &*content_view,
                     addSubview: blur_view,
                     positioned: NSWindowOrderingMode::Below,
                     relativeTo: ptr::null_mut::<AnyObject>()
                 ];
-                this.blurred_view = Some(msg_send![blur_view, autorelease]);
+                let blur_view: *mut AnyObject = msg_send![blur_view, autorelease];
+                let stale = self.0.lock().blurred_view.replace(blur_view);
+                if let Some(stale) = stale {
+                    let _: () = msg_send![stale, removeFromSuperview];
+                }
             }
         }
     }
@@ -2186,6 +2292,14 @@ impl PlatformWindow for MacWindow {
 
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
+        if this.backdrop.is_some() {
+            let size = this.host_view().map(|host| host.bounds().size);
+            let scale_factor = f64::from(this.scale_factor());
+            let is_key = this.native_window().isKeyWindow();
+            if let (Some(size), Some(backdrop)) = (size, &mut this.backdrop) {
+                backdrop.relayout(size, scale_factor, is_key);
+            }
+        }
         let native_view_layout = native_views::plan_layout(&this, scene);
         native_views::update_background(&mut this, scene);
         native_views::scene_drawn(&mut this, scene);
@@ -2221,6 +2335,27 @@ impl PlatformWindow for MacWindow {
 
     fn on_key_down_before_native_view(&self, callback: Box<dyn FnMut(KeyDownEvent) -> bool>) {
         self.0.lock().native_views.key_down_before_callback = Some(callback);
+    }
+
+    fn liquid_glass_available(&self) -> bool {
+        liquid_glass::liquid_glass_available()
+    }
+
+    fn composites_liquid_glass(&self) -> bool {
+        true
+    }
+
+    fn set_backdrop_layer(&self, spec: Option<BackdropLayerSpec>) {
+        self.0.lock().backdrop_spec = spec.map(BackdropLayerSpec::sanitized);
+        update_backdrop(&self.0);
+    }
+
+    fn set_traffic_light_origin(&self, origin: Point<Pixels>) {
+        self.set_traffic_light_position(origin);
+    }
+
+    fn set_native_view_corner_radius(&self, id: gpui::NativeViewId, radii: gpui::Corners<Pixels>) {
+        native_views::set_corner_radius(&self.0, id, radii);
     }
 
     // GPUI calls this without waking the frame waker when a window only needs
@@ -2396,7 +2531,7 @@ impl PlatformWindow for MacWindow {
     }
 
     fn can_start_external_drag(&self) -> bool {
-        true
+        self.0.lock().host.is_none()
     }
 
     fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
@@ -2537,11 +2672,19 @@ impl PlatformWindow for MacWindow {
         let action_handler = A11yActionHandler(callbacks.action);
 
         let adapter = unsafe {
-            accesskit_macos::SubclassingAdapter::for_window(
-                lock.native_window as *mut c_void,
-                activation_handler,
-                action_handler,
-            )
+            if lock.host.is_some() {
+                accesskit_macos::SubclassingAdapter::new(
+                    lock.native_view.as_ptr().cast(),
+                    activation_handler,
+                    action_handler,
+                )
+            } else {
+                accesskit_macos::SubclassingAdapter::for_window(
+                    lock.native_window as *mut c_void,
+                    activation_handler,
+                    action_handler,
+                )
+            }
         };
 
         lock.accesskit_adapter = Some(adapter);
@@ -2599,6 +2742,37 @@ impl rwh::HasDisplayHandle for MacWindow {
     }
 }
 
+fn update_backdrop(window_state: &Mutex<MacWindowState>) {
+    let (host, backdrop, spec, scale_factor, is_key) = {
+        let mut lock = window_state.lock();
+        let liquid = lock.background_appearance == WindowBackgroundAppearance::LiquidGlass;
+        (
+            lock.host_view().filter(|_| liquid),
+            lock.backdrop.take(),
+            lock.backdrop_spec,
+            f64::from(lock.scale_factor()),
+            lock.native_window().isKeyWindow(),
+        )
+    };
+    let backdrop = match host {
+        Some(host) => {
+            let mut backdrop = backdrop.unwrap_or_else(|| backdrop::Backdrop::new(&host));
+            backdrop.update(&host, spec.as_ref(), scale_factor, is_key);
+            Some(backdrop)
+        }
+        None => {
+            if let Some(backdrop) = backdrop {
+                backdrop.remove();
+            }
+            None
+        }
+    };
+    let stale = std::mem::replace(&mut window_state.lock().backdrop, backdrop);
+    if let Some(stale) = stale {
+        stale.remove();
+    }
+}
+
 fn get_scale_factor(native_window: *mut AnyObject) -> f32 {
     let factor = unsafe {
         let screen: *mut AnyObject = msg_send![native_window, screen];
@@ -2652,6 +2826,32 @@ unsafe fn is_gpui_window(window: *mut AnyObject) -> bool {
     unsafe {
         msg_send![window, isKindOfClass: WINDOW_CLASS]
             || msg_send![window, isKindOfClass: PANEL_CLASS]
+    }
+}
+
+unsafe fn window_state_of(window: *mut AnyObject) -> Option<Rc<Mutex<MacWindowState>>> {
+    if window.is_null() {
+        return None;
+    }
+    unsafe {
+        if is_gpui_window(window) {
+            window_state_if_set(&*window)
+        } else {
+            hosted::window_state(window)
+        }
+    }
+}
+
+unsafe fn normal_window_state(window: *mut AnyObject) -> Option<Rc<Mutex<MacWindowState>>> {
+    if window.is_null() {
+        return None;
+    }
+    unsafe {
+        if msg_send![window, isKindOfClass: WINDOW_CLASS] {
+            window_state_if_set(&*window)
+        } else {
+            hosted::window_state(window)
+        }
     }
 }
 
@@ -2903,8 +3103,8 @@ extern "C" fn handle_key_event(
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.as_ref().lock();
 
-    let window_height = lock.content_size().height;
-    let event = unsafe { platform_input_from_native(native_event, Some(window_height)) };
+    let view_frame = lock.view_frame();
+    let event = unsafe { platform_input_from_native(native_event, Some(view_frame)) };
 
     let Some(event) = event else {
         return Bool::NO;
@@ -3052,7 +3252,7 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
     let window_state = unsafe { get_window_state(this) };
     let weak_window_state = Rc::downgrade(&window_state);
     let mut lock = window_state.as_ref().lock();
-    let window_height = lock.content_size().height;
+    let view_frame = lock.view_frame();
     let native_event_type: NSEventType = unsafe { msg_send![native_event, type] };
     match native_event_type {
         NSEventType::LeftMouseDown => {
@@ -3065,7 +3265,7 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
         }
         _ => {}
     }
-    let event = unsafe { platform_input_from_native(native_event, Some(window_height)) };
+    let event = unsafe { platform_input_from_native(native_event, Some(view_frame)) };
 
     if let Some(mut event) = event {
         // AppKit unhides the cursor on the next mouse movement; mirror that here.
@@ -3429,6 +3629,9 @@ extern "C" fn window_did_change_key_status(this: &AnyObject, selector: Sel, _: *
     }
 
     let executor = lock.foreground_executor.clone();
+    if let Some(backdrop) = &lock.backdrop {
+        backdrop.set_key(is_active);
+    }
     drop(lock);
 
     let a11y_events = {
@@ -4085,7 +4288,7 @@ fn drag_event_position(
     dragging_info: *mut AnyObject,
 ) -> Point<Pixels> {
     let drag_location: NSPoint = unsafe { msg_send![dragging_info, draggingLocation] };
-    convert_mouse_position(drag_location, window_state.lock().content_size().height)
+    convert_mouse_position(drag_location, window_state.lock().view_frame())
 }
 
 fn with_input_handler<F, R>(window: &AnyObject, f: F) -> Option<R>

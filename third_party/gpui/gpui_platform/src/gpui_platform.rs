@@ -21,6 +21,14 @@ pub fn headless() -> gpui::Application {
     gpui::Application::with_platform(current_platform(true))
 }
 
+#[cfg(target_os = "macos")]
+pub use gpui_macos::hosted_window as macos_hosted_window;
+
+#[cfg(target_os = "macos")]
+pub fn attached_macos_application() -> gpui::Application {
+    gpui::Application::with_platform(gpui_macos::MacPlatform::new_attached())
+}
+
 /// Returns a Linux app that may switch among `allowed_modes`.
 ///
 /// It starts windowed in the process's own environment, or headless if that names no allowed

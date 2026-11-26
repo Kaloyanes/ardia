@@ -2507,7 +2507,10 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     // since KDE Plasma 6.7.
     // https://invent.kde.org/plasma/kwin/-/commit/7f9e0aa1cd2c2ab4fea1097800893b6f780089eb
     if let Some(ref background_effects_manager) = state.globals.background_effects_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
+        if matches!(
+            state.background_appearance,
+            WindowBackgroundAppearance::Blurred | WindowBackgroundAppearance::LiquidGlass
+        ) {
             if state.background_effects.is_none() {
                 log::debug!("Using ext-background-effect protocol");
                 let background_effects = background_effects_manager.get_background_effect(
@@ -2531,7 +2534,10 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
             background_effects.destroy();
         }
     } else if let Some(ref blur_manager) = state.globals.kde_blur_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
+        if matches!(
+            state.background_appearance,
+            WindowBackgroundAppearance::Blurred | WindowBackgroundAppearance::LiquidGlass
+        ) {
             if state.kde_blur.is_none() {
                 log::debug!("Using kde-blur protocol");
                 let blur = blur_manager.create(&state.surface, &state.globals.qh, ());

@@ -937,6 +937,11 @@ impl PlatformWindow for WindowsWindow {
                 // DWMSBT_TABBEDWINDOW => MicaAlt
                 dwm_set_window_composition_attribute(hwnd, 4);
             }
+            WindowBackgroundAppearance::LiquidGlass => {
+                if !dwm_set_window_composition_attribute(hwnd, 2) {
+                    set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+                }
+            }
         }
     }
 
@@ -1601,27 +1606,24 @@ fn retrieve_window_placement(
     Ok(placement)
 }
 
-fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {
+fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) -> bool {
     let mut version = unsafe { std::mem::zeroed() };
     let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
 
     // DWMWA_SYSTEMBACKDROP_TYPE is available only on version 22621 or later
     // using SetWindowCompositionAttributeType as a fallback
     if !status.is_ok() || version.dwBuildNumber < 22621 {
-        return;
+        return false;
     }
 
     unsafe {
-        let result = DwmSetWindowAttribute(
+        DwmSetWindowAttribute(
             hwnd,
             DWMWA_SYSTEMBACKDROP_TYPE,
             &backdrop_type as *const _ as *const _,
             std::mem::size_of_val(&backdrop_type) as u32,
-        );
-
-        if !result.is_ok() {
-            return;
-        }
+        )
+        .is_ok()
     }
 }
 

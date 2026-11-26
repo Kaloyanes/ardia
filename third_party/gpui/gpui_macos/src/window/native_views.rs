@@ -11,12 +11,13 @@
 
 use super::{
     MacWindowState, convert_mouse_position, current_capslock, current_modifiers,
+    liquid_glass::{GlassLayout, new_layer, set_layer_color, with_disabled_actions},
     window_state_if_set, with_input_handler,
 };
 use crate::events::platform_input_from_native;
 use gpui::{
-    Bounds, KeyDownEvent, ModifiersChangedEvent, NativeViewId, Pixels, PlatformInput, Point, Rgba,
-    ScaledPixels, Scene, WindowBackgroundAppearance,
+    Bounds, DrawOrder, KeyDownEvent, ModifiersChangedEvent, NativeViewId, Pixels, PlatformInput,
+    Point, Rgba, ScaledPixels, Scene, WindowBackgroundAppearance,
 };
 use objc2::{
     class, msg_send,
@@ -25,7 +26,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{NSColor, NSEventType, NSView, NSWindowOrderingMode, NSWorkspace};
-use objc2_foundation::{NSComparisonResult, NSPoint, NSRect, NSSize};
+use objc2_core_graphics::{CGMutablePath, CGPath};
+use objc2_foundation::{NSComparisonResult, NSPoint, NSRect, NSSize, NSString};
 use parking_lot::Mutex;
 use std::{
     any::Any,
@@ -74,8 +76,7 @@ pub(super) struct NativeViews {
     /// The key equivalent GPUI was already offered once no view performed it.
     /// AppKit delivers it again as a key press, which must not reach GPUI twice.
     passed_up_key_equivalent: Option<Retained<AnyObject>>,
-    /// The views the last scene showed, from back to front.
-    stacking: Vec<NativeViewId>,
+    stacked: Vec<*const NSView>,
     /// The color the window was last given behind its native views.
     pub(super) background: Option<Rgba>,
     pub(super) hit_test_callback: Option<HitTestCallback>,
@@ -90,6 +91,8 @@ struct AttachedView {
     container: Retained<NSView>,
     /// Where the view was last placed, or `None` while it is hidden.
     placement: Option<Placement>,
+    corner_radii: [f64; 4],
+    corners: CornerShape,
 }
 
 /// Where a native view is shown, as `[x, y, width, height]` frames in points.
@@ -137,6 +140,15 @@ impl Placement {
 }
 
 impl NativeViews {
+    pub(super) fn detach_all(&mut self) -> Vec<Retained<NSView>> {
+        self.focused = None;
+        self.stacked.clear();
+        self.views
+            .drain(..)
+            .map(|attached| attached.container)
+            .collect()
+    }
+
     fn shown(&self, id: NativeViewId) -> Option<&AttachedView> {
         self.views
             .iter()
@@ -285,6 +297,8 @@ pub(super) unsafe fn attach(
         view,
         container,
         placement: None,
+        corner_radii: [0.; 4],
+        corners: CornerShape::Square,
     });
     Some(Box::new(Attachment {
         window_state: Rc::downgrade(window_state),
@@ -336,8 +350,7 @@ pub(super) fn update_background(state: &mut MacWindowState, scene: &Scene) {
         return;
     }
     let background = scene
-        .native_views
-        .iter()
+        .attached_native_views()
         .rev()
         .map(|native_view| Rgba::from(native_view.background))
         .find(|background| background.a > 0.);
@@ -365,15 +378,13 @@ fn background_color(color: Option<Rgba>) -> Retained<NSColor> {
 pub(super) struct Layout {
     /// Views to place somewhere new, or to hide for `None`.
     placements: Vec<(NativeViewId, Option<Placement>)>,
-    /// The views the scene shows, from back to front, if that order changed.
-    stacking: Option<Vec<NativeViewId>>,
+    shown: Vec<(DrawOrder, NativeViewId)>,
+    glass: GlassLayout,
+    idle: bool,
 }
 
 /// Works out which attached views the scene moves, shows, hides, or restacks.
 pub(super) fn plan_layout(state: &MacWindowState, scene: &Scene) -> Layout {
-    if state.native_views.views.is_empty() {
-        return Layout::default();
-    }
     let scale_factor = state.scale_factor() as f64;
     // SAFETY: The GPUI view is live for as long as the window state.
     let gpui_frame: NSRect = unsafe { msg_send![state.native_view.as_ptr(), frame] };
@@ -383,12 +394,41 @@ pub(super) fn plan_layout(state: &MacWindowState, scene: &Scene) -> Layout {
         gpui_frame.size.width,
         gpui_frame.size.height,
     ];
+    let glass = GlassLayout::new(
+        &scene.liquid_glass_regions,
+        scene.attached_native_views().map(|native_view| {
+            (
+                native_view.order,
+                native_view
+                    .bounds
+                    .intersect(&native_view.content_mask.bounds),
+            )
+        }),
+        scale_factor,
+        gpui_frame,
+        state.glass_appearance(),
+    );
+    let glass_idle = state
+        .liquid_glass
+        .as_ref()
+        .is_none_or(|glass| glass.is_idle());
+    if state.native_views.views.is_empty() && glass.is_empty() && glass_idle {
+        return Layout {
+            idle: true,
+            ..Layout::default()
+        };
+    }
+    if state.native_views.views.is_empty() {
+        return Layout {
+            glass,
+            ..Layout::default()
+        };
+    }
 
     let mut placements = Vec::new();
     for attached in &state.native_views.views {
         let placement = scene
-            .native_views
-            .iter()
+            .attached_native_views()
             .find(|native_view| native_view.id == attached.id)
             .and_then(|native_view| {
                 Placement::new(
@@ -405,26 +445,27 @@ pub(super) fn plan_layout(state: &MacWindowState, scene: &Scene) -> Layout {
 
     // The scene's native views are sorted by draw order, so the ones painted
     // later, which belong in front, come last.
-    let mut stacking = Vec::new();
-    for placement in &scene.native_views {
-        if !stacking.contains(&placement.id) {
-            stacking.push(placement.id);
+    let mut shown: Vec<(DrawOrder, NativeViewId)> = Vec::new();
+    for native_view in scene.attached_native_views() {
+        if !shown.iter().any(|(_, id)| *id == native_view.id) {
+            shown.push((native_view.order, native_view.id));
         }
     }
-    let stacking = (stacking != state.native_views.stacking).then_some(stacking);
     Layout {
         placements,
-        stacking,
+        shown,
+        glass,
+        idle: false,
     }
 }
 
 /// Applies a planned layout. The window state must be unlocked, because AppKit
 /// calls back into it when a view's frame or first responder changes.
 pub(super) fn apply_layout(window_state: &Rc<Mutex<MacWindowState>>, layout: Layout) {
-    if layout.placements.is_empty() && layout.stacking.is_none() {
+    if layout.idle {
         return;
     }
-    let (native_window, gpui_view, placements, stacking) = {
+    let (native_window, gpui_view, placements, shown, glass) = {
         let mut lock = window_state.lock();
         let mut placements = Vec::new();
         for (id, placement) in layout.placements {
@@ -435,46 +476,48 @@ pub(super) fn apply_layout(window_state: &Rc<Mutex<MacWindowState>>, layout: Lay
                 .find(|attached| attached.id == id)
             {
                 attached.placement = placement;
-                placements.push((attached.view.clone(), attached.container.clone(), placement));
+                let corners = placement
+                    .map(|placement| CornerShape::new(&placement, attached.corner_radii))
+                    .filter(|corners| *corners != attached.corners);
+                if let Some(corners) = corners {
+                    attached.corners = corners;
+                }
+                placements.push((
+                    attached.view.clone(),
+                    attached.container.clone(),
+                    placement,
+                    corners,
+                ));
             }
         }
-        let stacking = layout.stacking.map(|stacking| {
-            let current = Vec::new();
-            let front_to_back = stacking
-                .iter()
-                .rev()
-                .filter_map(|id| lock.native_views.views.iter().find(|view| view.id == *id))
-                .map(|attached| Retained::as_ptr(&attached.container))
-                .collect();
-            let attached = lock
-                .native_views
-                .views
-                .iter()
-                .map(|attached| Retained::as_ptr(&attached.container))
-                .collect();
-            lock.native_views.stacking = stacking;
-            Stacking {
-                gpui_view: lock.native_view.as_ptr().cast_const().cast(),
-                front_to_back,
-                attached,
-                current,
-            }
-        });
+        let shown = layout
+            .shown
+            .iter()
+            .filter_map(|(order, id)| {
+                let attached = lock.native_views.views.iter().find(|view| view.id == *id)?;
+                Some((*order, attached.container.clone()))
+            })
+            .collect::<Vec<_>>();
         (
             lock.native_window,
             lock.native_view.as_ptr(),
             placements,
-            stacking,
+            shown,
+            lock.liquid_glass.take(),
         )
     };
+    let placed_any = !placements.is_empty();
     let to_rect = |[x, y, width, height]: [f64; 4]| {
         NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
     };
-    for (view, container, placement) in placements {
+    for (view, container, placement, corners) in placements {
         match placement {
             Some(placement) => {
                 container.setFrame(to_rect(placement.container));
                 view.setFrame(to_rect(placement.view));
+                if let Some(corners) = corners {
+                    with_disabled_actions(|| corners.apply(&container));
+                }
                 container.setHidden(false);
             }
             None => {
@@ -484,6 +527,57 @@ pub(super) fn apply_layout(window_state: &Rc<Mutex<MacWindowState>>, layout: Lay
             }
         }
     }
+    let gpui_ns_view = unsafe { &*gpui_view.cast::<NSView>() };
+    let glass = match glass {
+        Some(glass) if layout.glass.is_empty() && glass.is_idle() => {
+            window_state.lock().liquid_glass = Some(glass);
+            None
+        }
+        glass => glass,
+    };
+    let host = glass
+        .as_ref()
+        .and_then(|_| unsafe { gpui_ns_view.superview() });
+    let glass_units = match (host, glass) {
+        (Some(host), Some(mut glass)) => {
+            let units = with_disabled_actions(|| glass.sync(&layout.glass, &host, gpui_ns_view));
+            window_state.lock().liquid_glass = Some(glass);
+            units
+        }
+        (_, glass) => {
+            if glass.is_some() {
+                window_state.lock().liquid_glass = glass;
+            }
+            Vec::new()
+        }
+    };
+    let stacked = merge_by_order(glass_units, shown)
+        .iter()
+        .map(Retained::as_ptr)
+        .collect::<Vec<_>>();
+    let stacking = {
+        let mut lock = window_state.lock();
+        (lock.native_views.stacked != stacked).then(|| {
+            lock.native_views.stacked = stacked.clone();
+            let mut attached = lock
+                .native_views
+                .views
+                .iter()
+                .map(|attached| Retained::as_ptr(&attached.container))
+                .collect::<Vec<_>>();
+            if let Some(glass) = &lock.liquid_glass {
+                attached.extend(glass.owned_views().map(Retained::as_ptr));
+            }
+            Stacking {
+                gpui_view: gpui_view.cast_const().cast(),
+                front_to_back: stacked.iter().rev().copied().collect(),
+                attached,
+                back_layers: lock.back_layers(),
+                current: Vec::new(),
+            }
+        })
+    };
+    let restacked = stacking.is_some();
     if let Some(mut stacking) = stacking
         && stacking.front_to_back.len() > 1
     {
@@ -506,7 +600,262 @@ pub(super) fn apply_layout(window_state: &Rc<Mutex<MacWindowState>>, layout: Lay
         }
     }
     // A view that GPUI focused while it was hidden can take keyboard input now.
-    reconcile_first_responder(window_state);
+    if placed_any || restacked {
+        reconcile_first_responder(window_state);
+    }
+}
+
+fn merge_by_order<V>(glass: Vec<(DrawOrder, V)>, native: Vec<(DrawOrder, V)>) -> Vec<V> {
+    let mut merged = Vec::with_capacity(glass.len() + native.len());
+    let mut glass = glass.into_iter().peekable();
+    let mut native = native.into_iter().peekable();
+    loop {
+        let take_glass = match (glass.peek(), native.peek()) {
+            (Some((glass_order, _)), Some((native_order, _))) => glass_order <= native_order,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        let next = if take_glass {
+            glass.next()
+        } else {
+            native.next()
+        };
+        merged.extend(next.map(|(_, view)| view));
+    }
+    merged
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CornerShape {
+    Square,
+    Rounded {
+        radius: f64,
+        corners: usize,
+    },
+    Masked {
+        frame: [f64; 4],
+        radius: f64,
+        corners: usize,
+    },
+    Shaped {
+        container: [f64; 2],
+        frame: [f64; 4],
+        radii: [f64; 4],
+    },
+}
+
+impl CornerShape {
+    fn new(placement: &Placement, radii: [f64; 4]) -> Self {
+        let [x, y, width, height] = placement.view;
+        let radii = clamped_radii(radii, width, height);
+        let mut corners = 0;
+        let mut radius: f64 = 0.;
+        for (corner_radius, corner) in radii.into_iter().zip([4, 8, 2, 1]) {
+            if corner_radius > 0. {
+                corners |= corner;
+                radius = radius.max(corner_radius);
+            }
+        }
+        if radius <= 0. {
+            Self::Square
+        } else if radii.iter().any(|corner| *corner > 0. && *corner != radius) {
+            Self::Shaped {
+                container: [placement.container[2], placement.container[3]],
+                frame: placement.view,
+                radii,
+            }
+        } else if x == 0. && y == 0. && [width, height] == placement.container[2..] {
+            Self::Rounded { radius, corners }
+        } else {
+            Self::Masked {
+                frame: placement.view,
+                radius,
+                corners,
+            }
+        }
+    }
+
+    fn apply(self, container: &NSView) {
+        container.setWantsLayer(true);
+        let layer: Option<Retained<AnyObject>> = unsafe { msg_send![container, layer] };
+        let Some(layer) = layer else {
+            return;
+        };
+        let continuous = NSString::from_str("continuous");
+        unsafe {
+            let (radius, corners, mask) = match self {
+                Self::Square => (0., 15, None),
+                Self::Rounded { radius, corners } => (radius, corners, None),
+                Self::Masked {
+                    frame,
+                    radius,
+                    corners,
+                } => {
+                    let mask = new_layer();
+                    let [x, y, width, height] = frame;
+                    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
+                    let _: () = msg_send![&*mask, setFrame: frame];
+                    let _: () = msg_send![&*mask, setCornerRadius: radius];
+                    let _: () = msg_send![&*mask, setCornerCurve: &*continuous];
+                    let _: () = msg_send![&*mask, setMaskedCorners: corners];
+                    set_layer_color(&mask, Some(&NSColor::blackColor()));
+                    (0., 15, Some(mask))
+                }
+                Self::Shaped {
+                    container: [width, height],
+                    frame,
+                    radii,
+                } => {
+                    let mask: Retained<AnyObject> = msg_send![class!(CAShapeLayer), layer];
+                    let bounds = NSRect::new(NSPoint::new(0., 0.), NSSize::new(width, height));
+                    let _: () = msg_send![&*mask, setFrame: bounds];
+                    set_rounded_path(&mask, frame, radii);
+                    (0., 15, Some(mask))
+                }
+            };
+            let _: () = msg_send![&*layer, setCornerRadius: radius];
+            let _: () = msg_send![&*layer, setCornerCurve: &*continuous];
+            let _: () = msg_send![&*layer, setMaskedCorners: corners];
+            if radius > 0. {
+                let _: () = msg_send![&*layer, setMasksToBounds: Bool::YES];
+            }
+            let _: () = msg_send![&*layer, setMask: mask.as_deref()];
+        }
+    }
+}
+
+fn clamped_radii(radii: [f64; 4], width: f64, height: f64) -> [f64; 4] {
+    let limit = width.min(height) / 2.;
+    radii.map(|radius| radius.max(0.).min(limit))
+}
+
+unsafe fn set_rounded_path(
+    mask: &AnyObject,
+    [left, bottom, width, height]: [f64; 4],
+    [top_left, top_right, bottom_right, bottom_left]: [f64; 4],
+) {
+    let (right, top) = (left + width, bottom + height);
+    let path = CGMutablePath::new();
+    let no_transform = ptr::null();
+    unsafe {
+        CGMutablePath::move_to_point(Some(&path), no_transform, left + top_left, top);
+        CGMutablePath::add_arc_to_point(
+            Some(&path),
+            no_transform,
+            right,
+            top,
+            right,
+            top - top_right,
+            top_right,
+        );
+        CGMutablePath::add_arc_to_point(
+            Some(&path),
+            no_transform,
+            right,
+            bottom,
+            right - bottom_right,
+            bottom,
+            bottom_right,
+        );
+        CGMutablePath::add_arc_to_point(
+            Some(&path),
+            no_transform,
+            left,
+            bottom,
+            left,
+            bottom + bottom_left,
+            bottom_left,
+        );
+        CGMutablePath::add_arc_to_point(
+            Some(&path),
+            no_transform,
+            left,
+            top,
+            left + top_left,
+            top,
+            top_left,
+        );
+    }
+    CGMutablePath::close_subpath(Some(&path));
+    let path: *const CGPath = &**path;
+    unsafe {
+        let _: () = msg_send![mask, setPath: path];
+    }
+}
+
+fn rounded_rect_contains([width, height]: [f64; 2], radii: [f64; 4], [x, y]: [f64; 2]) -> bool {
+    if !((0. ..=width).contains(&x) && (0. ..=height).contains(&y)) {
+        return false;
+    }
+    let [top_left, top_right, bottom_right, bottom_left] = clamped_radii(radii, width, height);
+    [
+        (top_left, [top_left, height - top_left], [-1., 1.]),
+        (top_right, [width - top_right, height - top_right], [1., 1.]),
+        (
+            bottom_right,
+            [width - bottom_right, bottom_right],
+            [1., -1.],
+        ),
+        (bottom_left, [bottom_left, bottom_left], [-1., -1.]),
+    ]
+    .into_iter()
+    .all(|(radius, [center_x, center_y], [side_x, side_y])| {
+        let (dx, dy) = (x - center_x, y - center_y);
+        dx * side_x <= 0. || dy * side_y <= 0. || dx * dx + dy * dy <= radius * radius
+    })
+}
+
+impl AttachedView {
+    fn covers(&self, position_in_window: NSPoint) -> bool {
+        let Some(placement) = self.placement else {
+            return false;
+        };
+        let point = self
+            .container
+            .convertPoint_fromView(position_in_window, None);
+        let [x, y, width, height] = placement.view;
+        rounded_rect_contains(
+            [width, height],
+            self.corner_radii,
+            [point.x - x, point.y - y],
+        )
+    }
+}
+
+pub(super) fn set_corner_radius(
+    window_state: &Rc<Mutex<MacWindowState>>,
+    id: NativeViewId,
+    radii: gpui::Corners<Pixels>,
+) {
+    let change = {
+        let mut lock = window_state.lock();
+        let Some(attached) = lock
+            .native_views
+            .views
+            .iter_mut()
+            .find(|attached| attached.id == id)
+        else {
+            return;
+        };
+        attached.corner_radii = [
+            radii.top_left,
+            radii.top_right,
+            radii.bottom_right,
+            radii.bottom_left,
+        ]
+        .map(|radius| radius.to_f64().max(0.));
+        let corners = attached.placement.map_or(CornerShape::Square, |placement| {
+            CornerShape::new(&placement, attached.corner_radii)
+        });
+        (attached.corners != corners && attached.placement.is_some()).then(|| {
+            attached.corners = corners;
+            (attached.container.clone(), corners)
+        })
+    };
+    if let Some((container, corners)) = change {
+        with_disabled_actions(|| corners.apply(&container));
+    }
 }
 
 /// The order to give the content view's subviews.
@@ -515,6 +864,7 @@ struct Stacking {
     /// The containers of the views the scene shows, starting with the one painted last.
     front_to_back: Vec<*const NSView>,
     attached: Vec<*const NSView>,
+    back_layers: Vec<*const NSView>,
     /// The subviews as they are ordered now, from the back. Those that aren't
     /// native views keep their places among themselves and their side of the
     /// GPUI view.
@@ -532,13 +882,13 @@ impl Stacking {
             (2, self.front_to_back.len() - index)
         } else if self.attached.contains(&view) {
             (1, 0)
+        } else if let Some(index) = self.back_layers.iter().position(|layer| *layer == view) {
+            (0, index)
         } else if place(view) > place(self.gpui_view) {
             // A view the app put in front of GPUI's content stays there.
             (4, place(view).unwrap_or_default())
         } else {
-            // Other views, such as the blur behind a translucent window, stay
-            // at the back.
-            (0, place(view).unwrap_or_default())
+            (0, self.back_layers.len() + place(view).unwrap_or_default())
         }
     }
 }
@@ -796,13 +1146,17 @@ fn hit_test_native_view(
     if !lock.native_views.is_showing_any() {
         return None;
     }
-    let position = convert_mouse_position(position_in_window, lock.content_size().height);
+    let position = convert_mouse_position(position_in_window, lock.view_frame());
     let mut callback = lock.native_views.hit_test_callback.take()?;
     drop(lock);
     let id = callback(position);
     let mut lock = window_state.lock();
     lock.native_views.hit_test_callback = Some(callback);
-    id.filter(|id| lock.native_views.shown(*id).is_some())
+    id.filter(|id| {
+        lock.native_views
+            .shown(*id)
+            .is_some_and(|attached| attached.covers(position_in_window))
+    })
 }
 
 /// Lets mouse events that GPUI routes to a native view fall through to it.
@@ -832,11 +1186,27 @@ extern "C" fn hit_test(this: &AnyObject, _: Sel, point: NSPoint) -> *mut AnyObje
 /// GPUI is also given the mouse-down, which reaches nothing behind the view but
 /// lets the window's own content notice a press outside it.
 extern "C" fn send_event(this: &AnyObject, _: Sel, event: *mut AnyObject) {
+    let superclass = window_superclass(this);
     // SAFETY: `this` is a live GPUI window and `event` a live `NSEvent`.
     unsafe {
-        let superclass = window_superclass(this);
-        let Some(window_state) = window_state_if_set(this) else {
-            return msg_send![super(this, superclass), sendEvent: event];
+        route_send_event(
+            this,
+            window_state_if_set(this),
+            event,
+            || msg_send![super(this, superclass), sendEvent: event],
+        )
+    }
+}
+
+pub(super) unsafe fn route_send_event(
+    this: &AnyObject,
+    window_state: Option<Rc<Mutex<MacWindowState>>>,
+    event: *mut AnyObject,
+    call_super: impl FnOnce(),
+) {
+    unsafe {
+        let Some(window_state) = window_state else {
+            return call_super();
         };
         if let Some(key_down) = key_down_for_native_view(&window_state, this, event) {
             let key_code: u16 = msg_send![event, keyCode];
@@ -846,7 +1216,7 @@ extern "C" fn send_event(this: &AnyObject, _: Sel, event: *mut AnyObject) {
             }
             note_key_taken_before_view(&window_state, key_code, false);
             window_state.lock().native_views.delivering_key_down = true;
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
+            call_super();
             window_state.lock().native_views.delivering_key_down = false;
             return;
         }
@@ -870,7 +1240,7 @@ extern "C" fn send_event(this: &AnyObject, _: Sel, event: *mut AnyObject) {
         if event_type == NSEventType::FlagsChanged {
             // The view with keyboard input is sent the change, and GPUI isn't,
             // though what GPUI draws can depend on the modifiers held.
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
+            call_super();
             if let Some(modifiers_changed) =
                 modifiers_changed_beside_view(&window_state, this, event)
             {
@@ -907,29 +1277,29 @@ extern "C" fn send_event(this: &AnyObject, _: Sel, event: *mut AnyObject) {
                     let mut lock = window_state.try_lock()?;
                     lock.native_views
                         .take_button_pressed_in_view(button)
-                        .then(|| lock.content_size().height)
+                        .then(|| lock.view_frame())
                 })
                 .flatten()
-                .and_then(|window_height| platform_input_from_native(event, Some(window_height)));
-            let _: () = msg_send![super(this, superclass), sendEvent: event];
+                .and_then(|view_frame| platform_input_from_native(event, Some(view_frame)));
+            call_super();
             if let Some(release) = release {
                 pass_input_to_gpui(&window_state, release);
             }
             return;
         }
         let button: isize = msg_send![event, buttonNumber];
-        let window_height = {
+        let view_frame = {
             let mut lock = window_state.lock();
             lock.native_views.clicked = clicked;
             lock.native_views.note_button_pressed_in_view(button);
-            lock.content_size().height
+            lock.view_frame()
         };
         // GPUI goes first, so that focus it moves in response, such as a dismissed
         // popover restoring focus, doesn't take keyboard input back from the view.
-        if let Some(mouse_down) = platform_input_from_native(event, Some(window_height)) {
+        if let Some(mouse_down) = platform_input_from_native(event, Some(view_frame)) {
             pass_input_to_gpui(&window_state, mouse_down);
         }
-        let _: () = msg_send![super(this, superclass), sendEvent: event];
+        call_super();
         window_state.lock().native_views.clicked = None;
     }
 }
@@ -993,7 +1363,8 @@ fn update_pointer_over_view(window_state: &Rc<Mutex<MacWindowState>>, position_i
 pub(super) fn scene_drawn(state: &mut MacWindowState, scene: &Scene) {
     let views = &mut state.native_views;
     // A scene that shows no view can only take the pointer off one.
-    views.drew_since_pointer_check = views.pointer_over_view || !scene.native_views.is_empty();
+    views.drew_since_pointer_check =
+        views.pointer_over_view || scene.attached_native_views().next().is_some();
 }
 
 /// Looks again for whether the pointer is over a native view, if a scene was
@@ -1027,19 +1398,35 @@ pub(super) fn native_view_sets_cursor(state: &MacWindowState) -> bool {
 }
 
 extern "C" fn make_first_responder(this: &AnyObject, _: Sel, responder: *mut AnyObject) -> Bool {
+    let superclass = window_superclass(this);
     // SAFETY: `this` is a live GPUI window and `responder` is null or a live responder.
     unsafe {
-        let superclass = window_superclass(this);
-        let Some(window_state) = window_state_if_set(this) else {
-            return msg_send![super(this, superclass), makeFirstResponder: responder];
+        route_make_first_responder(
+            this,
+            window_state_if_set(this),
+            responder,
+            || msg_send![super(this, superclass), makeFirstResponder: responder],
+        )
+    }
+}
+
+pub(super) unsafe fn route_make_first_responder(
+    this: &AnyObject,
+    window_state: Option<Rc<Mutex<MacWindowState>>>,
+    responder: *mut AnyObject,
+    call_super: impl FnOnce() -> Bool,
+) -> Bool {
+    unsafe {
+        let Some(window_state) = window_state else {
+            return call_super();
         };
         // The state is locked while a window is still being set up, before it has native views.
         let Some(lock) = window_state.try_lock() else {
-            return msg_send![super(this, superclass), makeFirstResponder: responder];
+            return call_super();
         };
         if lock.native_views.views.is_empty() {
             drop(lock);
-            return msg_send![super(this, superclass), makeFirstResponder: responder];
+            return call_super();
         }
         let views = &lock.native_views;
         let gpui_view = lock.native_view.as_ptr();
@@ -1060,7 +1447,7 @@ extern "C" fn make_first_responder(this: &AnyObject, _: Sel, responder: *mut Any
             return Bool::NO;
         }
 
-        let accepted: Bool = msg_send![super(this, superclass), makeFirstResponder: responder];
+        let accepted = call_super();
         if !accepted.as_bool() {
             return accepted;
         }
@@ -1134,9 +1521,9 @@ unsafe fn key_down_for_native_view(
         }
         let first_responder: *mut AnyObject = msg_send![window, firstResponder];
         lock.native_views.containing(first_responder)?;
-        let window_height = lock.content_size().height;
+        let view_frame = lock.view_frame();
         drop(lock);
-        match platform_input_from_native(event, Some(window_height))? {
+        match platform_input_from_native(event, Some(view_frame))? {
             PlatformInput::KeyDown(key_down) => Some(key_down),
             _ => None,
         }
@@ -1239,14 +1626,30 @@ extern "C" fn window_perform_key_equivalent(
     _: Sel,
     event: *mut AnyObject,
 ) -> Bool {
+    let superclass = window_superclass(this);
     // SAFETY: `this` is a live GPUI window and `event` a live `NSEvent`.
     unsafe {
-        let superclass = window_superclass(this);
-        let Some(window_state) = window_state_if_set(this) else {
-            return msg_send![super(this, superclass), performKeyEquivalent: event];
+        route_perform_key_equivalent(
+            this,
+            window_state_if_set(this),
+            event,
+            || msg_send![super(this, superclass), performKeyEquivalent: event],
+        )
+    }
+}
+
+pub(super) unsafe fn route_perform_key_equivalent(
+    this: &AnyObject,
+    window_state: Option<Rc<Mutex<MacWindowState>>>,
+    event: *mut AnyObject,
+    call_super: impl FnOnce() -> Bool,
+) -> Bool {
+    unsafe {
+        let Some(window_state) = window_state else {
+            return call_super();
         };
         let Some(key_down) = key_down_for_native_view(&window_state, this, event) else {
-            return msg_send![super(this, superclass), performKeyEquivalent: event];
+            return call_super();
         };
         let delivering_key_down = window_state.lock().native_views.delivering_key_down;
         if !delivering_key_down
@@ -1265,7 +1668,7 @@ extern "C" fn window_perform_key_equivalent(
         };
         if !performed.as_bool() {
             // The rest of the window is asked next, such as a control in the titlebar.
-            performed = msg_send![super(this, superclass), performKeyEquivalent: event];
+            performed = call_super();
         }
         window_state.lock().native_views.routing_key_equivalent = false;
         if performed.as_bool() || delivering_key_down {
@@ -1299,14 +1702,30 @@ unsafe fn native_view_with_keyboard_input(
 
 /// Gives GPUI a key press that came back up the responder chain unused.
 extern "C" fn window_key_down(this: &AnyObject, _: Sel, event: *mut AnyObject) {
+    let superclass = window_superclass(this);
     // SAFETY: `this` is a live GPUI window and `event` a live `NSEvent`.
     unsafe {
-        let superclass = window_superclass(this);
-        let Some(window_state) = window_state_if_set(this) else {
-            return msg_send![super(this, superclass), keyDown: event];
+        route_key_down(
+            this,
+            window_state_if_set(this),
+            event,
+            || msg_send![super(this, superclass), keyDown: event],
+        )
+    }
+}
+
+pub(super) unsafe fn route_key_down(
+    this: &AnyObject,
+    window_state: Option<Rc<Mutex<MacWindowState>>>,
+    event: *mut AnyObject,
+    call_super: impl FnOnce(),
+) {
+    unsafe {
+        let Some(window_state) = window_state else {
+            return call_super();
         };
         let Some(key_down) = key_down_for_native_view(&window_state, this, event) else {
-            return msg_send![super(this, superclass), keyDown: event];
+            return call_super();
         };
         let passed_up = window_state
             .lock()
@@ -1586,6 +2005,7 @@ mod tests {
             gpui_view: gpui_view.as_ptr(),
             front_to_back: vec![front.as_ptr(), back.as_ptr()],
             attached: vec![hidden.as_ptr(), back.as_ptr(), front.as_ptr()],
+            back_layers: Vec::new(),
             current: back_to_front
                 .iter()
                 .map(|view| view.as_ptr().cast_const())
@@ -1606,6 +2026,116 @@ mod tests {
             back_to_front,
             [behind, hidden, back, front, gpui_view, above]
         );
+    }
+
+    #[test]
+    fn stacking_keeps_backdrop_layers_beneath_glass_and_native_views() {
+        let views = [0u8; 7];
+        let [gpui_view, web, glass, blur, overlay, stray, spare] =
+            [0, 1, 2, 3, 4, 5, 6].map(|index| NonNull::from(&views[index]).cast::<NSView>());
+        let mut back_to_front = [web, gpui_view, glass, stray, overlay, spare, blur];
+        let mut stacking = Stacking {
+            gpui_view: gpui_view.as_ptr(),
+            front_to_back: vec![glass.as_ptr(), web.as_ptr()],
+            attached: vec![web.as_ptr(), glass.as_ptr(), spare.as_ptr()],
+            back_layers: vec![blur.as_ptr(), overlay.as_ptr()],
+            current: back_to_front
+                .iter()
+                .map(|view| view.as_ptr().cast_const())
+                .collect(),
+        };
+        back_to_front.sort_by(|first, second| {
+            let order = unsafe { compare_stacking(*first, *second, (&raw mut stacking).cast()) };
+            match order {
+                NSComparisonResult::Ascending => std::cmp::Ordering::Less,
+                NSComparisonResult::Same => std::cmp::Ordering::Equal,
+                NSComparisonResult::Descending => std::cmp::Ordering::Greater,
+            }
+        });
+        assert_eq!(
+            back_to_front,
+            [blur, overlay, spare, web, glass, gpui_view, stray]
+        );
+    }
+
+    #[test]
+    fn glass_and_native_views_stack_in_paint_order() {
+        let glass = vec![(1, "sidebar tile"), (4, "popover"), (6, "peek")];
+        let native = vec![(1, "page"), (4, "devtools"), (5, "pip")];
+        assert_eq!(
+            merge_by_order(glass, native),
+            ["sidebar tile", "page", "popover", "devtools", "pip", "peek"]
+        );
+        assert_eq!(merge_by_order(Vec::<(u32, u8)>::new(), vec![(2, 7)]), [7]);
+    }
+
+    #[test]
+    fn corner_shape_rounds_whole_views_and_masks_clipped_ones() {
+        let whole = Placement {
+            container: [50., 90., 100., 200.],
+            view: [0., 0., 100., 200.],
+        };
+        assert_eq!(
+            CornerShape::new(&whole, [10.; 4]),
+            CornerShape::Rounded {
+                radius: 10.,
+                corners: 15
+            }
+        );
+        assert_eq!(CornerShape::new(&whole, [0.; 4]), CornerShape::Square);
+        assert_eq!(
+            CornerShape::new(&whole, [400.; 4]),
+            CornerShape::Rounded {
+                radius: 50.,
+                corners: 15
+            }
+        );
+        assert_eq!(
+            CornerShape::new(&whole, [0., 0., 10., 10.]),
+            CornerShape::Rounded {
+                radius: 10.,
+                corners: 1 | 2
+            }
+        );
+
+        let clipped = Placement {
+            container: [60., 90., 90., 170.],
+            view: [-10., 0., 100., 200.],
+        };
+        assert_eq!(
+            CornerShape::new(&clipped, [10., 10., 0., 0.]),
+            CornerShape::Masked {
+                frame: [-10., 0., 100., 200.],
+                radius: 10.,
+                corners: 4 | 8,
+            }
+        );
+
+        assert_eq!(
+            CornerShape::new(&whole, [4., 24., 0., f64::NAN]),
+            CornerShape::Shaped {
+                container: [100., 200.],
+                frame: [0., 0., 100., 200.],
+                radii: [4., 24., 0., 0.],
+            }
+        );
+    }
+
+    #[test]
+    fn rounded_corners_are_left_out_of_hit_testing() {
+        let size = [100., 200.];
+        let radii = [4., 24., 0., 400.];
+        assert!(rounded_rect_contains(size, radii, [50., 100.]));
+        assert!(rounded_rect_contains(size, radii, [1.5, 198.5]));
+        assert!(!rounded_rect_contains(size, radii, [0.5, 199.5]));
+        assert!(!rounded_rect_contains(size, radii, [98., 198.]));
+        assert!(rounded_rect_contains(size, radii, [90., 190.]));
+        assert!(rounded_rect_contains(size, radii, [99.9, 0.1]));
+        assert!(!rounded_rect_contains(size, radii, [2., 2.]));
+        assert!(rounded_rect_contains(size, radii, [50., 50.]));
+        assert!(!rounded_rect_contains(size, radii, [-1., 100.]));
+        assert!(!rounded_rect_contains(size, radii, [50., 200.5]));
+        assert!(rounded_rect_contains(size, [0.; 4], [0., 0.]));
     }
 
     fn focused(view: u64, shown: bool) -> Option<FocusedNativeView> {

@@ -49,6 +49,10 @@ name = "primitives"
 harness = false
 required-features = ["bench-support"]
 
+[[test]]
+name = "attached_macos"
+harness = false
+
 [dependencies]
 anyhow = "1.0.86"
 gpui = { path = "../gpui", default-features = false }
@@ -56,6 +60,13 @@ gpui = { path = "../gpui", default-features = false }
 [dev-dependencies]
 bench_metrics = { git = "https://github.com/zed-industries/zed", rev = "a3ce8d5e88e35697b2ba1cf9cb3c6816089b8281" }
 criterion = { version = "0.8.2", features = ["html_reports"] }
+gpui = { path = "../gpui", default-features = false, features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_macos = { path = "../gpui_macos", default-features = false, features = ["font-kit"] }
+objc2 = "0.6"
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["CGColor", "objc2"] }
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { path = "../gpui_macos", default-features = false }

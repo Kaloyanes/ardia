@@ -808,6 +808,10 @@ impl Platform for LinuxPlatform {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+        anyhow::ensure!(
+            options.host_window.is_none(),
+            "only macOS can host a GPUI window in an existing window"
+        );
         self.connection.borrow().open_window(handle, options)
     }
 

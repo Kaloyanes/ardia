@@ -25,7 +25,7 @@ use gpui_apple::{
 use gpui_util::{ResultExt, new_std_command};
 use itertools::Itertools;
 use objc2::{
-    Encode, MainThreadMarker, MainThreadOnly, class, msg_send,
+    Encode, MainThreadMarker, MainThreadOnly, Message, class, msg_send,
     rc::{Retained, autoreleasepool},
     runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Ivar, Sel},
     sel,
@@ -197,6 +197,10 @@ pub(crate) struct MacPlatformState {
     /// Mirrors `[NSCursor setHiddenUntilMouseMoves:]` state, which AppKit doesn't expose.
     cursor_visible: Arc<AtomicBool>,
     system_notifications: crate::system_notifications::SystemNotificationState,
+    attached: bool,
+    launched: bool,
+    activation_policy_requested: bool,
+    delegate: Option<Retained<AnyObject>>,
 }
 
 /// The activation policy that stands for a windowing mode: an app is headless while it has no
@@ -266,8 +270,70 @@ impl MacPlatform {
             keyboard_mapper,
             cursor_visible: Arc::new(AtomicBool::new(true)),
             system_notifications: crate::system_notifications::SystemNotificationState::new(),
+            attached: false,
+            launched: false,
+            activation_policy_requested: false,
+            delegate: None,
         });
         Self(state, marker)
+    }
+
+    pub fn new_attached() -> Rc<dyn Platform> {
+        let platform = Self::new(false);
+        platform.0.lock().attached = true;
+        Rc::new(platform)
+    }
+
+    fn app_delegate(&self) -> *mut AnyObject {
+        if let Some(delegate) = &self.0.lock().delegate {
+            return Retained::as_ptr(delegate).cast_mut();
+        }
+        unsafe {
+            let app: *mut AnyObject = msg_send![APP_CLASS, sharedApplication];
+            msg_send![app, delegate]
+        }
+    }
+
+    fn run_attached(&self, on_finish_launching: Box<dyn FnOnce()>) {
+        let mut state = self.0.lock();
+        if std::mem::replace(&mut state.launched, true) {
+            log::error!("an attached GPUI platform can only be launched once");
+            return;
+        }
+        if unsafe { NSApp }.is_null() {
+            state.launched = false;
+            log::error!("an attached GPUI platform needs the host's NSApplication to exist");
+            return;
+        }
+        let delegate: Retained<AnyObject> = unsafe { msg_send![APP_DELEGATE_CLASS, new] };
+        unsafe {
+            mac_platform_ivar(&delegate)
+                .load_ptr::<*mut c_void>(&delegate)
+                .write(self as *const Self as *mut c_void);
+        }
+        state.delegate = Some(delegate.clone());
+        state.application_created = true;
+        state.finish_launching = Some(on_finish_launching);
+        drop(state);
+        unsafe {
+            let notification_center: *mut AnyObject =
+                msg_send![class!(NSNotificationCenter), defaultCenter];
+            let _: () = msg_send![notification_center, addObserver: &*delegate,
+                selector: sel!(applicationWillTerminate:),
+                name: ns_string("NSApplicationWillTerminateNotification"),
+                object: ptr::null_mut::<AnyObject>()
+            ];
+        }
+        will_finish_launching(
+            &delegate,
+            sel!(applicationWillFinishLaunching:),
+            ptr::null_mut(),
+        );
+        did_finish_launching(
+            &delegate,
+            sel!(applicationDidFinishLaunching:),
+            ptr::null_mut(),
+        );
     }
 
     unsafe fn create_menu_bar(
@@ -487,7 +553,16 @@ impl MacPlatform {
     // Before the app finishes launching there is no delegate yet;
     // `did_finish_launching` registers the observers then.
     fn ensure_system_power_observers(&self) {
-        if self.0.lock().system_power_observers_registered {
+        let attached_delegate = {
+            let state = self.0.lock();
+            if state.system_power_observers_registered || (state.attached && !state.launched) {
+                return;
+            }
+            state.delegate.clone()
+        };
+        if let Some(delegate) = attached_delegate {
+            register_system_power_observers(&delegate);
+            self.0.lock().system_power_observers_registered = true;
             return;
         }
 
@@ -504,6 +579,26 @@ impl MacPlatform {
             register_system_power_observers(delegate.as_ref());
             self.0.lock().system_power_observers_registered = true;
         }
+    }
+}
+
+impl Drop for MacPlatform {
+    fn drop(&mut self) {
+        let Some(delegate) = self.0.get_mut().delegate.take() else {
+            return;
+        };
+        unsafe {
+            let notification_center: *mut AnyObject =
+                msg_send![class!(NSNotificationCenter), defaultCenter];
+            let _: () = msg_send![notification_center, removeObserver: &*delegate];
+            NSWorkspace::sharedWorkspace()
+                .notificationCenter()
+                .removeObserver(&delegate);
+            mac_platform_ivar(&delegate)
+                .load_ptr::<*mut c_void>(&delegate)
+                .write(ptr::null_mut());
+        }
+        let _ = Retained::into_raw(delegate);
     }
 }
 
@@ -529,6 +624,10 @@ impl Platform for MacPlatform {
 
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
         let mut state = self.0.lock();
+        if state.attached {
+            drop(state);
+            return self.run_attached(on_finish_launching);
+        }
         if state.headless {
             drop(state);
             on_finish_launching();
@@ -655,6 +754,7 @@ impl Platform for MacPlatform {
     fn set_activation_policy(&self, policy: ActivationPolicy) {
         let mut state = self.0.lock();
         state.activation_policy = policy;
+        state.activation_policy_requested = true;
         let should_apply = state.application_created && !state.headless;
         drop(state);
         if should_apply {
@@ -1178,11 +1278,11 @@ impl Platform for MacPlatform {
     }
 
     fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap) {
+        let delegate = self.app_delegate();
         unsafe {
             let app: *mut AnyObject = msg_send![APP_CLASS, sharedApplication];
             let mut state = self.0.lock();
             let actions = &mut state.menu_actions;
-            let delegate: *mut AnyObject = msg_send![app, delegate];
             let menu = self.create_menu_bar(&menus, delegate, actions, keymap);
             drop(state);
             let _: () = msg_send![app, setMainMenu: &*menu];
@@ -1195,11 +1295,10 @@ impl Platform for MacPlatform {
     }
 
     fn set_dock_menu(&self, menu: Vec<MenuItem>, keymap: &Keymap) {
+        let delegate = self.app_delegate();
         unsafe {
-            let app: *mut AnyObject = msg_send![APP_CLASS, sharedApplication];
             let mut state = self.0.lock();
             let actions = &mut state.menu_actions;
-            let delegate: *mut AnyObject = msg_send![app, delegate];
             state.dock_menu = Some(self.create_dock_menu(menu, delegate, actions, keymap));
         }
     }
@@ -1324,6 +1423,13 @@ unsafe fn get_mac_platform(object: &AnyObject) -> &MacPlatform {
     }
 }
 
+unsafe fn mac_platform_if_set(object: &AnyObject) -> Option<&MacPlatform> {
+    unsafe {
+        let platform_ptr = *mac_platform_ivar(object).load::<*mut c_void>(object);
+        platform_ptr.cast_const().cast::<MacPlatform>().as_ref()
+    }
+}
+
 fn mac_platform_ivar(object: &AnyObject) -> &Ivar {
     let ivar = object
         .class()
@@ -1360,8 +1466,16 @@ extern "C-unwind" fn will_finish_launching(_this: &AnyObject, _: Sel, _: *mut An
 extern "C-unwind" fn did_finish_launching(this: &AnyObject, _: Sel, _: *mut AnyObject) {
     unsafe {
         let app: *mut AnyObject = msg_send![APP_CLASS, sharedApplication];
-        let policy = get_mac_platform(this).0.lock().activation_policy;
-        let _: Bool = msg_send![app, setActivationPolicy: native_activation_policy(policy)];
+        let (policy, applies_policy) = {
+            let state = get_mac_platform(this).0.lock();
+            (
+                state.activation_policy,
+                !state.attached || state.activation_policy_requested,
+            )
+        };
+        if applies_policy {
+            let _: Bool = msg_send![app, setActivationPolicy: native_activation_policy(policy)];
+        }
 
         let notification_center: *mut AnyObject =
             msg_send![class!(NSNotificationCenter), defaultCenter];
@@ -1466,68 +1580,41 @@ extern "C-unwind" fn on_screen_parameters_change(this: &AnyObject, _: Sel, _: *m
     // Defer to the next run loop iteration to avoid re-entrant borrows of the App RefCell,
     // as NSNotificationCenter delivers this notification synchronously and it may fire while
     // the App is already borrowed (same pattern as quit() above).
-    let platform = unsafe { get_mac_platform(this) };
-    let platform_ptr = platform as *const MacPlatform as *mut c_void;
-    unsafe {
-        DispatchQueue::main().exec_async_f(platform_ptr, on_screen_parameters_change);
-    }
-
-    extern "C" fn on_screen_parameters_change(context: *mut c_void) {
-        let platform = unsafe { &*(context as *const MacPlatform) };
-        let callback = platform.0.lock().on_displays_changed.take();
-        if let Some(mut callback) = callback {
-            callback();
-            platform
-                .0
-                .lock()
-                .on_displays_changed
-                .get_or_insert(callback);
-        }
-    }
+    defer_platform_callback(this, |state| &mut state.on_displays_changed);
 }
 
 // Deferred to the main queue like the wake and thermal notifications. The
 // machine keeps running the main run loop for well over a frame after the
 // observers return, so the block runs before it suspends.
 extern "C-unwind" fn on_system_sleep(this: &AnyObject, _: Sel, _: *mut AnyObject) {
-    // SAFETY: this is the registered app delegate carrying MAC_PLATFORM_IVAR.
-    let platform = unsafe { get_mac_platform(this) };
-    let platform_ptr = platform as *const MacPlatform as *mut c_void;
-    // SAFETY: platform lives for the process lifetime while callbacks are registered.
-    unsafe {
-        DispatchQueue::main().exec_async_f(platform_ptr, on_system_sleep);
-    }
-
-    extern "C" fn on_system_sleep(context: *mut c_void) {
-        // SAFETY: context is the MacPlatform pointer queued above.
-        let platform = unsafe { &*(context as *const MacPlatform) };
-        let mut lock = platform.0.lock();
-        if let Some(mut callback) = lock.on_system_sleep.take() {
-            drop(lock);
-            callback();
-            platform.0.lock().on_system_sleep.get_or_insert(callback);
-        }
-    }
+    defer_platform_callback(this, |state| &mut state.on_system_sleep);
 }
 
 extern "C-unwind" fn on_system_wake(this: &AnyObject, _: Sel, _: *mut AnyObject) {
-    // SAFETY: this is the registered app delegate carrying MAC_PLATFORM_IVAR.
-    let platform = unsafe { get_mac_platform(this) };
-    let platform_ptr = platform as *const MacPlatform as *mut c_void;
-    // SAFETY: platform lives for the process lifetime while callbacks are registered.
-    unsafe {
-        DispatchQueue::main().exec_async_f(platform_ptr, on_system_wake);
-    }
+    defer_platform_callback(this, |state| &mut state.on_system_wake);
+}
 
-    extern "C" fn on_system_wake(context: *mut c_void) {
-        // SAFETY: context is the MacPlatform pointer queued above.
-        let platform = unsafe { &*(context as *const MacPlatform) };
-        let mut lock = platform.0.lock();
-        if let Some(mut callback) = lock.on_system_wake.take() {
-            drop(lock);
-            callback();
-            platform.0.lock().on_system_wake.get_or_insert(callback);
-        }
+type PlatformCallback = fn(&mut MacPlatformState) -> &mut Option<Box<dyn FnMut()>>;
+
+fn defer_platform_callback(delegate: &AnyObject, callback: PlatformCallback) {
+    let context = Box::into_raw(Box::new((delegate.retain(), callback)));
+    unsafe {
+        DispatchQueue::main().exec_async_f(context.cast(), run_platform_callback);
+    }
+}
+
+extern "C" fn run_platform_callback(context: *mut c_void) {
+    let (delegate, callback) =
+        *unsafe { Box::from_raw(context.cast::<(Retained<AnyObject>, PlatformCallback)>()) };
+    let Some(platform) = (unsafe { mac_platform_if_set(&delegate) }) else {
+        return;
+    };
+    let Some(mut handler) = callback(&mut platform.0.lock()).take() else {
+        return;
+    };
+    handler();
+    if let Some(platform) = unsafe { mac_platform_if_set(&delegate) } {
+        callback(&mut platform.0.lock()).get_or_insert(handler);
     }
 }
 
@@ -1560,7 +1647,9 @@ extern "C-unwind" fn open_urls(this: &AnyObject, _: Sel, _: *mut AnyObject, urls
 
 extern "C-unwind" fn handle_menu_item(this: &AnyObject, _: Sel, item: *mut AnyObject) {
     unsafe {
-        let platform = get_mac_platform(this);
+        let Some(platform) = mac_platform_if_set(this) else {
+            return;
+        };
         let mut lock = platform.0.lock();
         if let Some(mut callback) = lock.menu_command.take() {
             let tag: NSInteger = if item.is_null() {
@@ -1582,7 +1671,9 @@ extern "C-unwind" fn handle_menu_item(this: &AnyObject, _: Sel, item: *mut AnyOb
 extern "C-unwind" fn validate_menu_item(this: &AnyObject, _: Sel, item: *mut AnyObject) -> Bool {
     unsafe {
         let mut result = false;
-        let platform = get_mac_platform(this);
+        let Some(platform) = mac_platform_if_set(this) else {
+            return Bool::NO;
+        };
         let mut lock = platform.0.lock();
         if let Some(mut callback) = lock.validate_menu_command.take() {
             let tag: NSInteger = if item.is_null() {
@@ -1608,7 +1699,9 @@ extern "C-unwind" fn validate_menu_item(this: &AnyObject, _: Sel, item: *mut Any
 
 extern "C-unwind" fn menu_will_open(this: &AnyObject, _: Sel, _: *mut AnyObject) {
     unsafe {
-        let platform = get_mac_platform(this);
+        let Some(platform) = mac_platform_if_set(this) else {
+            return;
+        };
         let mut lock = platform.0.lock();
         if let Some(mut callback) = lock.will_open_menu.take() {
             drop(lock);
@@ -1624,7 +1717,9 @@ extern "C-unwind" fn handle_dock_menu(
     _: *mut AnyObject,
 ) -> *mut AnyObject {
     unsafe {
-        let platform = get_mac_platform(this);
+        let Some(platform) = mac_platform_if_set(this) else {
+            return ptr::null_mut();
+        };
         let state = platform.0.lock();
         state.dock_menu.as_ref().map_or(ptr::null_mut(), |menu| {
             Retained::as_ptr(menu).cast_mut().cast::<AnyObject>()
@@ -1647,6 +1742,11 @@ unsafe fn ns_url_to_path(url: *mut AnyObject) -> Result<PathBuf> {
     Ok(PathBuf::from(OsStr::from_bytes(unsafe {
         CStr::from_ptr(path).to_bytes()
     })))
+}
+
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {
+    static NSApp: *mut AnyObject;
 }
 
 #[link(name = "Carbon", kind = "framework")]

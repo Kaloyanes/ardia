@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, HitboxId, Hsla,
-    NativeViewId, Path, PathTiles, Pixels, Point, Radians, ScaledPixels, Size, TimedTransformation,
-    bounds_tree::BoundsTree,
+    NativeViewId, Path, PathTiles, Pixels, Point, Radians, Rgba, ScaledPixels, Size,
+    TimedTransformation, bounds_tree::BoundsTree, point,
 };
 use smallvec::SmallVec;
 use std::{
@@ -64,6 +64,7 @@ pub struct Scene {
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
     pub native_views: Vec<PaintNativeView>,
+    pub liquid_glass_regions: Vec<LiquidGlassRegion>,
     animations: Vec<SpriteAnimation>,
 }
 
@@ -83,6 +84,7 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.native_views.clear();
+        self.liquid_glass_regions.clear();
         self.animations.clear();
     }
 
@@ -182,15 +184,21 @@ impl Scene {
     fn insert_layer_around_native_views(&mut self, layer: Layer) {
         let mut part = Vec::new();
         for index in layer.primitives.into_iter().flatten() {
-            let PaintOperation::Primitive(primitive) = &self.paint_operations[index] else {
-                continue;
-            };
-            let primitive = primitive.clone();
-            if primitive.kind() == PrimitiveKind::NativeView {
-                self.insert_layer_part(std::mem::take(&mut part));
-                self.insert_layer_part(vec![primitive]);
-            } else {
-                part.push(primitive);
+            match &self.paint_operations[index] {
+                PaintOperation::Primitive(primitive)
+                    if primitive.kind() == PrimitiveKind::NativeView =>
+                {
+                    let primitive = primitive.clone();
+                    self.insert_layer_part(std::mem::take(&mut part));
+                    self.insert_layer_part(vec![primitive]);
+                }
+                PaintOperation::Primitive(primitive) => part.push(primitive.clone()),
+                PaintOperation::LiquidGlass(region) => {
+                    let region = *region;
+                    self.insert_layer_part(std::mem::take(&mut part));
+                    self.place_liquid_glass(region);
+                }
+                PaintOperation::StartLayer | PaintOperation::EndLayer => {}
             }
         }
         self.insert_layer_part(part);
@@ -219,6 +227,57 @@ impl Scene {
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         self.try_insert_primitive(primitive.into());
+    }
+
+    pub fn insert_liquid_glass(&mut self, region: LiquidGlassRegion) {
+        if region.visible_bounds().is_empty() {
+            return;
+        }
+        if let Some(&layer) = self.layer_stack.last()
+            && let Some(layer) = self.layers.get_mut(layer)
+        {
+            layer.bounds = layer.bounds.join(&region.visible_bounds());
+            layer.has_native_view = true;
+            let index = self.paint_operations.len();
+            match layer.primitives.last_mut() {
+                Some(range) if range.end == index => range.end += 1,
+                _ => layer.primitives.push(index..index + 1),
+            }
+        } else {
+            self.place_liquid_glass(region);
+        }
+        self.paint_operations
+            .push(PaintOperation::LiquidGlass(region));
+    }
+
+    fn place_liquid_glass(&mut self, mut region: LiquidGlassRegion) {
+        region.order = self.primitive_bounds.insert(
+            region.visible_bounds(),
+            PrimitiveKind::NativeView,
+            PrimitiveKind::Surface,
+        );
+        let content_mask = ContentMask {
+            bounds: region.content_mask,
+        };
+        for bounds in liquid_glass_cutouts(region.bounds, region.corner_radius) {
+            if bounds.intersects(&region.content_mask) {
+                self.native_views.push(PaintNativeView {
+                    order: region.order,
+                    id: NativeViewId::LIQUID_GLASS,
+                    hitbox_id: HitboxId::NONE,
+                    bounds,
+                    content_mask,
+                    background: Hsla::transparent_black(),
+                });
+            }
+        }
+        self.liquid_glass_regions.push(region);
+    }
+
+    pub fn attached_native_views(&self) -> impl DoubleEndedIterator<Item = &PaintNativeView> {
+        self.native_views
+            .iter()
+            .filter(|native_view| native_view.id != NativeViewId::LIQUID_GLASS)
     }
 
     /// Returns whether the primitive was kept, rather than clipped away.
@@ -299,6 +358,7 @@ impl Scene {
                 }
                 PaintOperation::StartLayer => self.push_layer(),
                 PaintOperation::EndLayer => self.pop_layer(),
+                PaintOperation::LiquidGlass(region) => self.insert_liquid_glass(*region),
             }
         }
     }
@@ -323,6 +383,7 @@ impl Scene {
         self.native_views
             .sort_by_key(|native_view| native_view.order);
         self.keep_first_painted_native_views();
+        self.liquid_glass_regions.sort_by_key(|region| region.order);
 
         // Sorting moved the sprites, so animations learn where theirs ended up.
         if !self.animations.is_empty() {
@@ -341,12 +402,14 @@ impl Scene {
     /// isn't always the first in the drawing order, which depends on what each
     /// occurrence overlaps.
     fn keep_first_painted_native_views(&mut self) {
-        let native_views = &self.native_views;
-        let is_repeated = native_views.iter().enumerate().any(|(index, native_view)| {
-            native_views[..index]
-                .iter()
-                .any(|earlier| earlier.id == native_view.id)
-        });
+        let attached = self
+            .attached_native_views()
+            .map(|native_view| native_view.id)
+            .collect::<SmallVec<[_; 8]>>();
+        let is_repeated = attached
+            .iter()
+            .enumerate()
+            .any(|(index, id)| attached[..index].contains(id));
         if !is_repeated {
             return;
         }
@@ -358,8 +421,10 @@ impl Scene {
                 first_painted.push((native_view.id, native_view.hitbox_id));
             }
         }
-        self.native_views
-            .retain(|native_view| first_painted.contains(&(native_view.id, native_view.hitbox_id)));
+        self.native_views.retain(|native_view| {
+            native_view.id == NativeViewId::LIQUID_GLASS
+                || first_painted.contains(&(native_view.id, native_view.hitbox_id))
+        });
     }
 
     #[cfg_attr(
@@ -484,6 +549,7 @@ impl PrimitiveKind {
 
 pub(crate) enum PaintOperation {
     Primitive(Primitive),
+    LiquidGlass(LiquidGlassRegion),
     StartLayer,
     EndLayer,
 }
@@ -1208,6 +1274,83 @@ impl From<PaintNativeView> for Primitive {
     }
 }
 
+#[allow(missing_docs)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum LiquidGlassStyle {
+    #[default]
+    Regular,
+    Clear,
+}
+
+#[allow(missing_docs)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidGlassRegion {
+    pub id: u64,
+    pub order: DrawOrder,
+    pub bounds: Bounds<ScaledPixels>,
+    pub content_mask: Bounds<ScaledPixels>,
+    pub corner_radius: ScaledPixels,
+    pub tint: Option<Rgba>,
+    pub style: LiquidGlassStyle,
+    pub group_id: Option<u64>,
+}
+
+#[allow(missing_docs)]
+impl LiquidGlassRegion {
+    pub fn visible_bounds(&self) -> Bounds<ScaledPixels> {
+        self.bounds.intersect(&self.content_mask)
+    }
+
+    pub fn is_clipped(&self) -> bool {
+        self.visible_bounds() != self.bounds
+    }
+}
+
+fn liquid_glass_cutouts(
+    bounds: Bounds<ScaledPixels>,
+    corner_radius: ScaledPixels,
+) -> SmallVec<[Bounds<ScaledPixels>; 32]> {
+    let mut cutouts = SmallVec::new();
+    let (left, top) = (bounds.left().0, bounds.top().0);
+    let (right, bottom) = (bounds.right().0, bounds.bottom().0);
+    let radius = corner_radius
+        .0
+        .min((right - left) / 2.)
+        .min((bottom - top) / 2.);
+    if radius.is_nan() || radius < 1. {
+        if !bounds.is_empty() {
+            cutouts.push(bounds);
+        }
+        return cutouts;
+    }
+    let mut push = |top: f32, bottom: f32, inset: f32| {
+        if bottom > top && right - inset > left + inset {
+            cutouts.push(Bounds::from_corners(
+                point(ScaledPixels(left + inset), ScaledPixels(top)),
+                point(ScaledPixels(right - inset), ScaledPixels(bottom)),
+            ));
+        }
+    };
+    let rows = (0..radius.ceil() as u32).map(|row| {
+        let distance = radius - row as f32;
+        let inset = (radius - (radius * radius - distance * distance).max(0.).sqrt()).ceil();
+        (row as f32, (row as f32 + 1.).min(radius), inset)
+    });
+    let mut bands: SmallVec<[(f32, f32, f32); 16]> = SmallVec::new();
+    for (start, end, inset) in rows {
+        match bands.last_mut() {
+            Some(band) if band.2 == inset => band.1 = end,
+            _ => bands.push((start, end, inset)),
+        }
+    }
+    for &(start, end, inset) in &bands {
+        push(top + start, top + end, inset);
+        push(bottom - end, bottom - start, inset);
+    }
+    push(top + radius, bottom - radius, 0.);
+    cutouts
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 #[expect(missing_docs)]
@@ -1425,6 +1568,198 @@ mod tests {
         scene.insert_primitive(quad(5.));
         scene.pop_layer();
         assert_eq!(batch_labels(&mut scene), ["underlines (1)", "quads (1)"]);
+    }
+
+    fn glass(id: u64, x: f32) -> LiquidGlassRegion {
+        LiquidGlassRegion {
+            id,
+            order: 0,
+            bounds: Bounds {
+                origin: point(ScaledPixels(x), ScaledPixels(0.)),
+                size: size(ScaledPixels(10.), ScaledPixels(10.)),
+            },
+            content_mask: Bounds {
+                origin: point(ScaledPixels(-100.), ScaledPixels(-100.)),
+                size: size(ScaledPixels(400.), ScaledPixels(400.)),
+            },
+            corner_radius: ScaledPixels(0.),
+            tint: None,
+            style: LiquidGlassStyle::Regular,
+            group_id: None,
+        }
+    }
+
+    fn native_view(id: u64, x: f32) -> PaintNativeView {
+        PaintNativeView {
+            order: 0,
+            id: NativeViewId::for_test(id),
+            hitbox_id: HitboxId::placeholder(),
+            bounds: square(x),
+            content_mask: ContentMask { bounds: square(x) },
+            background: Hsla::default(),
+        }
+    }
+
+    #[test]
+    fn liquid_glass_is_clipped_to_its_content_mask_and_dropped_when_unseen() {
+        let mut scene = Scene::default();
+        let mut hidden = glass(1, 0.);
+        hidden.content_mask = square(50.);
+        scene.insert_liquid_glass(hidden);
+        let mut clipped = glass(3, 0.);
+        clipped.content_mask = Bounds {
+            origin: point(ScaledPixels(4.), ScaledPixels(0.)),
+            size: size(ScaledPixels(100.), ScaledPixels(100.)),
+        };
+        scene.insert_liquid_glass(clipped);
+        scene.finish();
+
+        assert_eq!(
+            scene
+                .liquid_glass_regions
+                .iter()
+                .map(|region| region.id)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+        let region = scene.liquid_glass_regions[0];
+        assert!(region.is_clipped());
+        assert_eq!(
+            region.visible_bounds(),
+            Bounds {
+                origin: point(ScaledPixels(4.), ScaledPixels(0.)),
+                size: size(ScaledPixels(6.), ScaledPixels(10.)),
+            }
+        );
+        assert!(
+            scene
+                .native_views
+                .iter()
+                .all(|cutout| cutout.content_mask.bounds == clipped.content_mask)
+        );
+    }
+
+    #[test]
+    fn liquid_glass_erases_what_is_beneath_it_and_is_covered_by_what_follows() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(0.));
+        scene.insert_liquid_glass(glass(1, 0.));
+        scene.insert_primitive(quad(0.));
+        scene.insert_primitive(quad(40.));
+        assert_eq!(
+            batch_labels(&mut scene),
+            ["quads (2)", "native views (1)", "quads (1)"]
+        );
+        assert_eq!(scene.attached_native_views().count(), 0);
+        assert!(
+            scene
+                .native_views
+                .iter()
+                .all(|cutout| cutout.order == scene.liquid_glass_regions[0].order)
+        );
+    }
+
+    #[test]
+    fn liquid_glass_stacks_with_native_views_in_paint_order() {
+        let mut scene = Scene::default();
+        scene.insert_liquid_glass(glass(1, 0.));
+        scene.insert_primitive(native_view(7, 0.));
+        scene.insert_liquid_glass(glass(2, 0.));
+        scene.insert_liquid_glass(glass(3, 100.));
+        scene.finish();
+
+        let orders = scene
+            .liquid_glass_regions
+            .iter()
+            .map(|region| (region.id, region.order))
+            .collect::<Vec<_>>();
+        let page = scene
+            .attached_native_views()
+            .map(|native_view| native_view.order)
+            .collect::<Vec<_>>();
+        assert_eq!(page.len(), 1);
+        assert!(orders[0].1 <= page[0]);
+        let over_page = orders
+            .iter()
+            .find(|(id, _)| *id == 2)
+            .map(|(_, order)| *order);
+        assert!(over_page > Some(page[0]));
+        assert_eq!(
+            orders
+                .iter()
+                .find(|(id, _)| *id == 3)
+                .map(|(_, order)| *order),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn liquid_glass_in_a_layer_keeps_its_place_in_paint_order() {
+        let mut scene = Scene::default();
+        scene.push_layer();
+        scene.insert_primitive(quad(0.));
+        scene.insert_liquid_glass(glass(1, 0.));
+        scene.insert_primitive(quad(0.));
+        scene.pop_layer();
+        assert_eq!(
+            batch_labels(&mut scene),
+            ["quads (1)", "native views (1)", "quads (1)"]
+        );
+        assert_eq!(scene.liquid_glass_regions.len(), 1);
+    }
+
+    #[test]
+    fn replaying_a_scene_places_its_liquid_glass_again() {
+        let mut previous = Scene::default();
+        previous.insert_primitive(quad(0.));
+        previous.insert_liquid_glass(glass(5, 0.));
+        previous.finish();
+
+        let mut scene = Scene::default();
+        scene.replay(0..previous.len(), &previous);
+        scene.finish();
+        assert_eq!(scene.liquid_glass_regions, previous.liquid_glass_regions);
+        assert_eq!(scene.native_views.len(), previous.native_views.len());
+    }
+
+    #[test]
+    fn liquid_glass_cutouts_cover_the_rounded_shape_from_inside() {
+        let bounds = Bounds {
+            origin: point(ScaledPixels(10.), ScaledPixels(20.)),
+            size: size(ScaledPixels(120.), ScaledPixels(80.)),
+        };
+        let radius = 24.;
+        let cutouts = liquid_glass_cutouts(bounds, ScaledPixels(radius));
+        let inside = |x: f32, y: f32| {
+            let (left, top) = (bounds.left().0, bounds.top().0);
+            let (right, bottom) = (bounds.right().0, bounds.bottom().0);
+            let cx = x.clamp(left + radius, right - radius);
+            let cy = y.clamp(top + radius, bottom - radius);
+            (x - cx).powi(2) + (y - cy).powi(2) <= radius * radius + 1e-3
+        };
+        let mut area = 0.;
+        for cutout in &cutouts {
+            for (x, y) in [
+                (cutout.left().0, cutout.top().0),
+                (cutout.right().0, cutout.top().0),
+                (cutout.left().0, cutout.bottom().0),
+                (cutout.right().0, cutout.bottom().0),
+            ] {
+                assert!(inside(x, y), "{cutout:?} leaves the rounded shape");
+            }
+            area += cutout.size.width.0 * cutout.size.height.0;
+        }
+        for (index, cutout) in cutouts.iter().enumerate() {
+            for other in &cutouts[index + 1..] {
+                assert!(cutout.intersect(other).is_empty());
+            }
+        }
+        let shape = 120. * 80. - (4. - std::f32::consts::PI) * radius * radius;
+        assert!(area > shape * 0.97, "{area} of {shape}");
+        assert!(cutouts.len() < 40);
+
+        let square = liquid_glass_cutouts(bounds, ScaledPixels(0.));
+        assert_eq!(square.as_slice(), [bounds]);
     }
 
     #[test]
