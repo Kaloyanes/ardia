@@ -20,3 +20,24 @@ export async function fetchGitHubJson(url: string, signal: AbortSignal): Promise
   const body = readGitHubJson(text);
   return body === undefined ? { kind: "refused", retryAt: null } : { kind: "json", body };
 }
+
+export type ChecksumAnswer = { kind: "text"; text: string } | { kind: "missing" } | { kind: "unreachable" };
+
+const MAX_CHECKSUM_CHARS = 512;
+
+export async function fetchReleaseChecksum(url: string, signal: AbortSignal): Promise<ChecksumAnswer> {
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", credentials: "omit", cache: "no-store", signal });
+  } catch {
+    return { kind: "unreachable" };
+  }
+  if (response.status === 404) return { kind: "missing" };
+  if (response.status !== 200) return { kind: "unreachable" };
+  try {
+    const text = await response.text();
+    return text.length > MAX_CHECKSUM_CHARS ? { kind: "missing" } : { kind: "text", text };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}

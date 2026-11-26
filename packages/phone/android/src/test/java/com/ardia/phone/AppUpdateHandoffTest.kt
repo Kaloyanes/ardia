@@ -1,7 +1,12 @@
 package com.ardia.phone
 
+import java.io.ByteArrayInputStream
+import java.nio.file.Files
+import java.security.MessageDigest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppUpdateHandoffTest {
@@ -27,5 +32,21 @@ class AppUpdateHandoffTest {
             "",
             "$base/android-v1.0.2/Ardia-1.0.2.apk" + "x".repeat(300),
         ).forEach { assertNull(it, AppUpdateHandoff.releaseApkName(it)) }
+    }
+
+    private fun sha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun keepsOnlyACopyWhoseSha256MatchesTheRelease() {
+        val directory = Files.createTempDirectory("updates").toFile()
+        val apk = ByteArray(300_000) { (it * 31).toByte() }
+        val copy = directory.resolve("Ardia-1.0.2.apk")
+        assertTrue(AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(apk), copy, sha256(apk)))
+        assertTrue(copy.readBytes().contentEquals(apk))
+        val tampered = apk.copyOf().also { it[1234] = (it[1234] + 1).toByte() }
+        assertFalse(AppUpdateHandoff.verifiedCopy(ByteArrayInputStream(tampered), copy, sha256(apk)))
+        assertFalse(copy.exists())
+        assertEquals(emptyList<String>(), directory.list()!!.toList())
+        directory.deleteRecursively()
     }
 }

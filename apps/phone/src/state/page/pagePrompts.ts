@@ -181,9 +181,7 @@ export const downloadingToast = (fileName: string) => (fileName ? `Downloading $
 
 export const downloadedToast = (fileName: string) => `Downloaded ${fileName}`;
 
-export const opensAfterDownload = (os: string, fileName: string) => !(os === "android" && /\.apk$/i.test(fileName.trim()));
-
-export const downloadedAppToast = (fileName: string) => `Downloaded ${fileName}. Open it from Files to install it.`;
+export const opensInInstaller = (os: string, fileName: string) => os === "android" && /\.apk$/i.test(fileName.trim());
 
 export const downloadFailedToast = (fileName: string) => (fileName ? `Couldn’t Download ${fileName}` : "Couldn’t Download File");
 

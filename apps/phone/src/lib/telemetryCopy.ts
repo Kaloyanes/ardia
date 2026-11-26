@@ -170,8 +170,8 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["page_summaries_chatgpt", "page_summaries_chatgpt_fallbacks"],
       },
       {
-        text: "In the same daily counts, on Android: how often Ardia checked GitHub for a newer version of the app, how often it offered you one, how often you opened that download, and how often the phone had nothing that could download it. Counts only, never which version it offered",
-        fields: ["app_update_checks", "app_update_offers_shown", "app_update_offers_opened", "app_update_handoffs_failed"],
+        text: "In the same daily counts, on Android: how often Ardia checked GitHub for a newer version of the app, how often it offered you one, how often you opened that download, how often the phone had nothing that could download it, how often Ardia opened Android’s installer for a checked download, and how often a download didn’t match the release’s checksum and was deleted. Counts only, never which version it offered",
+        fields: ["app_update_checks", "app_update_offers_shown", "app_update_offers_opened", "app_update_handoffs_failed", "app_update_installs_started", "app_update_checksums_refused"],
       },
       {
         text: "In the same daily counts, on Android: how often you turned the Material You design on or off in Settings, how often you closed the find bar, and with Material You on, how often you closed a tab with its card’s close button, went back with the system’s back swipe, opened Archive from the bottom bar, opened the page menu from the address bar, and pulled Search or the page menu up to full screen. Counts only, never which page, and never while browsing privately",

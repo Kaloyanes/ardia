@@ -15,7 +15,14 @@ type DownloadsNative = {
   deleteAll?(): Promise<number>;
   preview?(uri: string): Promise<boolean>;
   share?(uri: string): Promise<boolean>;
-  handOffAppUpdate?(url: string, title: string): Promise<string>;
+  handOffAppUpdate?(url: string, title: string): Promise<unknown>;
+  appUpdateStatus?(id: string): Promise<unknown>;
+  installAppUpdate?(id: string, sha256: string, fileName: string): Promise<unknown>;
+  discardAppUpdate?(id: string): Promise<boolean>;
+  canInstallPackages?(): boolean;
+  openInstallPermission?(): Promise<boolean>;
+  installDownloadedFile?(uri: string): Promise<unknown>;
+  addListener(eventName: "onAppUpdateDownloaded", listener: (event: { id: string }) => void): Subscription;
 };
 
 let loaded: DownloadsNative | undefined;
@@ -32,6 +39,14 @@ export const downloads = {
   preview: (uri: string): Promise<boolean> => native().preview?.(uri) ?? Promise.resolve(false),
   share: (uri: string): Promise<boolean> => native().share?.(uri) ?? native().open(uri),
   handsOffAppUpdates: (): boolean => typeof native().handOffAppUpdate === "function",
-  handOffAppUpdate: (url: string, title: string): Promise<string> => native().handOffAppUpdate?.(url, title) ?? Promise.resolve("unavailable"),
+  handOffAppUpdate: (url: string, title: string): Promise<unknown> => native().handOffAppUpdate?.(url, title) ?? Promise.resolve({ handoff: "unavailable" }),
+  appUpdateStatus: (id: string): Promise<unknown> => native().appUpdateStatus?.(id) ?? Promise.resolve("gone"),
+  installAppUpdate: (id: string, sha256: string, fileName: string): Promise<unknown> => native().installAppUpdate?.(id, sha256, fileName) ?? Promise.resolve("failed"),
+  discardAppUpdate: (id: string): Promise<boolean> => native().discardAppUpdate?.(id) ?? Promise.resolve(false),
+  canInstallPackages: (): boolean => native().canInstallPackages?.() ?? false,
+  openInstallPermission: (): Promise<boolean> => native().openInstallPermission?.() ?? Promise.resolve(false),
+  installsPackages: (): boolean => typeof native().installDownloadedFile === "function",
+  installDownloadedFile: (uri: string): Promise<unknown> => native().installDownloadedFile?.(uri) ?? Promise.resolve("failed"),
+  addAppUpdateListener: (listener: (event: { id: string }) => void): Subscription => native().addListener("onAppUpdateDownloaded", listener),
   addListener: (listener: (event: DownloadEvent) => void): Subscription => native().addListener("onDownloadEvent", listener),
 };

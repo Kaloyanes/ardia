@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { haptics } from "../../state/app/haptics";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { appVersion, clearBrowsingData, openFromSettings, websiteDataClearsByTime } from "../../state/settings/actions";
@@ -9,8 +9,8 @@ import { copy } from "../../lib/platformCopy";
 import { libraryCredits } from "../../state/settings/libraryCredits";
 import { ButtonRow, Divider, Group, NavRow, PickerRow, SettingsPage, ToggleRow, ValueRow } from "./SettingsKit";
 import { destinationWords } from "../../lib/sharedWords";
-import { updateRowOpensDownload, updateRowWords } from "../../lib/appUpdate";
-import { appUpdatesOffered, checkForUpdate, openUpdate, useAppUpdate } from "../../state/appUpdate/store";
+import { updateRowAction, updateRowWords } from "../../lib/appUpdate";
+import { appUpdatesOffered, checkForUpdate, openUpdate, refreshDownload, useAppUpdate } from "../../state/appUpdate/store";
 
 export function ClearDataPage({ onBack = popSettings }: { onBack?: () => void }) {
   const [range, setRange] = useState<ClearRange>("today");
@@ -73,9 +73,12 @@ function UpdateGroup() {
   const offer = useAppUpdate((s) => s.offer);
   const handoff = useAppUpdate((s) => s.handoff);
   const words = updateRowWords(status, offer, handoff);
+  useEffect(() => {
+    void refreshDownload(false);
+  }, []);
   return (
     <Group>
-      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={updateRowOpensDownload(status, offer) ? () => void openUpdate() : checkForUpdate} />
+      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={updateRowAction(status, offer, handoff) === "check" ? checkForUpdate : () => void openUpdate()} />
     </Group>
   );
 }

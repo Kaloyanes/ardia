@@ -24,7 +24,7 @@ export type ReleaseVersion = AndroidRelease;
 
 export type ReleaseChannel = AndroidReleaseChannel;
 
-export type OfferedRelease = { version: string; downloadUrl: string };
+export type OfferedRelease = { version: string; downloadUrl: string; checksumUrl: string };
 
 export const parseAndroidVersion = (text: unknown): ReleaseVersion | null => parseAndroidRelease(text);
 
@@ -42,6 +42,8 @@ export const releaseTag = (version: ReleaseVersion) => `${RELEASE_TAG_PREFIX}${v
 export const apkName = (version: ReleaseVersion) => `Ardia-${version.text}.apk`;
 
 export const apkDownloadUrl = (version: ReleaseVersion) => `https://github.com/${RELEASE_REPO}/releases/download/${releaseTag(version)}/${apkName(version)}`;
+
+export const apkChecksumUrl = (version: ReleaseVersion) => `${apkDownloadUrl(version)}.sha256`;
 
 export const releasePageUrl = (version: ReleaseVersion) => `https://github.com/${RELEASE_REPO}/releases/tag/${releaseTag(version)}`;
 
@@ -90,11 +92,17 @@ export function releaseOfDownloadUrl(url: unknown): ReleaseVersion | null {
 
 export const isReleaseDownloadUrl = (url: unknown): url is string => releaseOfDownloadUrl(url) !== null;
 
-export function updateDownloadRequest(offer: { version?: unknown; downloadUrl?: unknown } | null | undefined): { url: string; title: string; version: ReleaseVersion } | null {
+export function updateDownloadRequest(offer: { version?: unknown; downloadUrl?: unknown; checksumUrl?: unknown } | null | undefined): { url: string; checksumUrl: string; fileName: string; title: string; version: ReleaseVersion } | null {
   if (!offer || typeof offer !== "object") return null;
   const version = releaseOfDownloadUrl(offer.downloadUrl);
-  if (!version || offer.version !== version.text) return null;
-  return { url: apkDownloadUrl(version), title: `Ardia ${version.text}`, version };
+  if (!version || offer.version !== version.text || offer.checksumUrl !== apkChecksumUrl(version)) return null;
+  return { url: apkDownloadUrl(version), checksumUrl: apkChecksumUrl(version), fileName: apkName(version), title: `Ardia ${version.text}`, version };
+}
+
+export function parseReleaseChecksum(text: unknown, version: ReleaseVersion): string | null {
+  if (typeof text !== "string" || text.length > 512) return null;
+  const match = /^([0-9a-f]{64}) [ *]([0-9A-Za-z.-]{1,60})(?:\r?\n)?$/.exec(text);
+  return match && match[2] === apkName(version) ? match[1]! : null;
 }
 
 export function isPublishedTime(value: unknown): boolean {
@@ -108,11 +116,12 @@ export function isPublishedTime(value: unknown): boolean {
 export function publishedRelease(body: unknown, version: ReleaseVersion): OfferedRelease | null {
   if (!isRecord(body)) return null;
   if (body.draft !== false || body.tag_name !== releaseTag(version) || !isPublishedTime(body.published_at)) return null;
-  if (!Array.isArray(body.assets)) return null;
+  const assets = body.assets;
+  if (!Array.isArray(assets)) return null;
   const expectedUrl = apkDownloadUrl(version);
-  const apk = body.assets.slice(0, MAX_ASSETS).find((asset) => isRecord(asset) && asset.name === apkName(version) && asset.state === "uploaded" && asset.browser_download_url === expectedUrl);
-  if (!apk || !isReleaseDownloadUrl(expectedUrl)) return null;
-  return { version: version.text, downloadUrl: expectedUrl };
+  const uploaded = (name: string, url: string) => assets.slice(0, MAX_ASSETS).some((asset: unknown) => isRecord(asset) && asset.name === name && asset.state === "uploaded" && asset.browser_download_url === url);
+  if (!uploaded(apkName(version), expectedUrl) || !uploaded(`${apkName(version)}.sha256`, apkChecksumUrl(version)) || !isReleaseDownloadUrl(expectedUrl)) return null;
+  return { version: version.text, downloadUrl: expectedUrl, checksumUrl: apkChecksumUrl(version) };
 }
 
 export type UnpublishedMemo = Record<string, number>;
@@ -212,7 +221,9 @@ export function dueForUpdateCheck(now: number, nextAt: number | null): boolean {
 
 export type UpdateStatus = "idle" | "checking" | "current" | "available" | "incomplete" | "failed";
 
-export type UpdateHandoff = "notifications" | "browser" | "unavailable";
+export type UpdateHandoff = "downloading" | "verifying" | "ready" | "needs_permission" | "installing" | "failed" | "refused" | "browser" | "unavailable";
+
+export type UpdateRowAction = "check" | "download" | "refresh" | "install" | "permission";
 
 export const updateOfferMessage = (offer: OfferedRelease) => `Ardia ${offer.version} is available`;
 
@@ -220,11 +231,35 @@ export const updateDownloadingMessage = (offer: OfferedRelease) => `Downloading 
 
 export const updateUnavailableMessage = () => "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases.";
 
+export const updatePermissionMessage = () => "Allow Ardia to install apps, then come back to finish the update.";
+
+export const updateRefusedMessage = (offer: OfferedRelease) => `The Ardia ${offer.version} download didn’t match the release, so it was deleted.`;
+
+export const updateUnverifiedMessage = () => "Couldn’t check the download. Try again.";
+
 export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null): { title: string; detail: string | undefined } {
   if (offer && status !== "current") {
-    if (handoff === "notifications") return { title: `Download Ardia ${offer.version}`, detail: "Downloading. When it’s done, tap its notification to install." };
-    if (handoff === "unavailable") return { title: `Download Ardia ${offer.version}`, detail: "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases." };
-    return { title: `Download Ardia ${offer.version}`, detail: "A newer version is out. It downloads to your notifications, then Android installs it." };
+    const v = offer.version;
+    switch (handoff) {
+      case "downloading":
+        return { title: `Downloading Ardia ${v}`, detail: "It’s in your notifications. Ardia opens the installer when it’s done." };
+      case "verifying":
+        return { title: `Installing Ardia ${v}`, detail: "Checking the download…" };
+      case "ready":
+        return { title: `Install Ardia ${v}`, detail: "Downloaded. Tap to install." };
+      case "needs_permission":
+        return { title: `Install Ardia ${v}`, detail: "Allow Ardia to install apps in Settings, then come back." };
+      case "installing":
+        return { title: `Install Ardia ${v}`, detail: "Android’s installer is open. Tap to open it again." };
+      case "failed":
+        return { title: `Download Ardia ${v}`, detail: "The download didn’t finish. Tap to download it again." };
+      case "refused":
+        return { title: `Download Ardia ${v}`, detail: "The download didn’t match the release, so it was deleted. Tap to download it again." };
+      case "unavailable":
+        return { title: `Download Ardia ${v}`, detail: "Couldn’t start the download. Get it from github.com/ardia-browser/ardia/releases." };
+      default:
+        return { title: `Download Ardia ${v}`, detail: "A newer version is out. Ardia downloads it, then Android installs it." };
+    }
   }
   if (status === "checking") return { title: "Check for updates", detail: "Checking…" };
   if (status === "current") return { title: "Check for updates", detail: "Ardia is up to date." };
@@ -233,6 +268,48 @@ export function updateRowWords(status: UpdateStatus, offer: OfferedRelease | nul
   return { title: "Check for updates", detail: undefined };
 }
 
+export function updateRowAction(status: UpdateStatus, offer: OfferedRelease | null, handoff: UpdateHandoff | null): UpdateRowAction {
+  if (!offer || status === "current") return "check";
+  if (handoff === "downloading" || handoff === "verifying") return "refresh";
+  if (handoff === "ready" || handoff === "installing") return "install";
+  if (handoff === "needs_permission") return "permission";
+  return "download";
+}
+
 export const updateRowOpensDownload = (status: UpdateStatus, offer: OfferedRelease | null) => offer !== null && status !== "current";
 
-export const updateHandoffOf = (value: unknown): UpdateHandoff => (value === "notifications" || value === "browser" ? value : "unavailable");
+export type HandOffResult = { handoff: "downloading"; id: string } | { handoff: "browser" | "unavailable"; id: null };
+
+const DOWNLOAD_ID = /^[1-9]\d{0,18}$/;
+
+export function handOffResultOf(value: unknown): HandOffResult {
+  if (isRecord(value) && value.handoff === "notifications" && typeof value.id === "string" && DOWNLOAD_ID.test(value.id)) return { handoff: "downloading", id: value.id };
+  if (isRecord(value) && value.handoff === "browser") return { handoff: "browser", id: null };
+  return { handoff: "unavailable", id: null };
+}
+
+export type DownloadProgress = "downloading" | "ready" | "failed" | "gone";
+
+export function downloadProgressOf(value: unknown): DownloadProgress {
+  if (value === "pending" || value === "running" || value === "paused") return "downloading";
+  if (value === "successful") return "ready";
+  if (value === "failed") return "failed";
+  return "gone";
+}
+
+export type InstallOutcome = "installing" | "needs_permission" | "refused" | "gone" | "failed";
+
+export function installOutcomeOf(value: unknown): InstallOutcome {
+  if (value === "launched") return "installing";
+  if (value === "needs_permission" || value === "gone") return value;
+  if (value === "mismatch") return "refused";
+  return "failed";
+}
+
+export type UpdateDownloadRecord = { version: string; id: string };
+
+export function parseDownloadRecord(text: string | null | undefined): UpdateDownloadRecord | null {
+  const body = readGitHubJson(text);
+  if (!isRecord(body) || typeof body.id !== "string" || !DOWNLOAD_ID.test(body.id) || parseAndroidVersion(body.version) === null) return null;
+  return { version: body.version as string, id: body.id };
+}
