@@ -8,8 +8,8 @@ import {
   navigationTo,
   newId,
   pinKeyOf,
+  autoHidesTabsIn,
   resolveWindowId,
-  tabsShownIn,
   viewTabIds,
   without,
 } from "../browser/model";
@@ -28,7 +28,8 @@ import { emptyWindow, smallWindow, withWindow } from "./newWindow";
 import { withWindowFrame, withWindowMaximized } from "./windowPlacement";
 import { withFullScreen } from "./fullScreenDisplay";
 import { newTabHome } from "../tabs/newTabHome";
-import { noteAutoHideTabsChosen, noteTornOffWindowKeptAutoHide } from "../telemetry/autoHideTabsChoices";
+import { noteTornOffWindowKeptAutoHide } from "../telemetry/autoHideTabsChoices";
+import { withIconsForWidth, withSidebarCollapsed } from "./windowSidebar";
 import { lastClosedEntry, lastClosedTab, restoreTab, restoreWindow, withoutRecentlyClosed } from "./reopenClosed";
 import { noteRecentlyClosedCleared } from "../telemetry/recentlyClosedCounts";
 import { groupTree, regrouped, splitsWithin, withSplitsBack } from "./groupMoves";
@@ -69,6 +70,8 @@ export type WindowsSlice = {
   setWindowMaximized(id: string, on: boolean): void;
   setWindowFullScreen(id: string, on: boolean, display?: string): void;
   toggleSidebar(windowId: string): void;
+  setSidebarCollapsed(windowId: string, collapsed: boolean): void;
+  setIconsForWidth(windowId: string, on: boolean): void;
   switchProfile(windowId: string, profileId: string): void;
   moveTabsToWindow(tabIds: string[], windowId: string | null, options?: MoveOptions): string | undefined;
   returnRefusedMove(tabId: string, fromWindowId: string): void;
@@ -241,15 +244,10 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
   },
 
   toggleSidebar(windowId) {
-    set((s) => {
-      const w = s.windows[windowId];
-      if (!w || isSmallWindow(w)) return {};
-      noteAutoHideTabsChosen();
-      const { autoHideTabs: _, ...rest } = w;
-      const hide = tabsShownIn(s, windowId);
-      return { windows: { ...s.windows, [windowId]: hide === s.settings.autoHideTabs ? rest : { ...rest, autoHideTabs: hide } } };
-    });
+    get().setSidebarCollapsed(windowId, !autoHidesTabsIn(get(), windowId));
   },
+  setSidebarCollapsed: (windowId, collapsed) => set((s) => withSidebarCollapsed(s, windowId, collapsed)),
+  setIconsForWidth: (windowId, on) => set((s) => withIconsForWidth(s, windowId, on)),
 
   switchProfile(windowId, profileId) {
     let s = get();

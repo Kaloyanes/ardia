@@ -33,6 +33,7 @@ type WindowBase = {
   activeTabIds: Record<string, string>;
   tabLayout?: "sidebar" | "top";
   autoHideTabs?: boolean;
+  iconsForWidth?: true;
   frame: Frame | null;
   restoredFrame?: Frame;
   maximized?: boolean;

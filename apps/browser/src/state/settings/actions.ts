@@ -1,6 +1,6 @@
 import type { Shortcut } from "../commands/shortcuts";
 import { storeAction, useBrowser } from "../browser/store";
-import { tabLayoutOf } from "../browser/model";
+import { tabLayoutOf, type SidebarMode } from "../browser/model";
 import { steppedInterfaceScale } from "../../lib/interfaceScale";
 import { noteTabLayoutSwitch } from "../telemetry/tabLayoutCounts";
 import type { ConsentToken } from "../telemetry/choice";
@@ -24,6 +24,11 @@ export function setShortcutOverride(id: string, combo: Shortcut | null) {
 export function chooseAddressBar(addressBar: Settings["addressBar"]) {
   useBrowser.getState().updateSettings({ addressBar });
   noteSettingsPick("addressBar", addressBar);
+}
+
+export function chooseSidebarMode(mode: SidebarMode) {
+  useBrowser.getState().updateSettings(mode === "full" ? { autoHideTabs: false } : { autoHideTabs: true, collapsedSidebar: mode });
+  noteSettingsPick("sidebarMode", mode);
 }
 
 export function chooseScrollToolbar(hideToolbarWhileScrolling: boolean) {

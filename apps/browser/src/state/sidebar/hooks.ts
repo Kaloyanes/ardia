@@ -19,6 +19,7 @@ import { capture, type Capture } from "./listCapture";
 import { pinnedCollapsed, pinnedKept } from "./pinnedFold";
 import { useSidebarUi, type Hover } from "./sidebarUi";
 import { useShownSidebarWidth } from "./shownWidth";
+import { iconStripCodes } from "./iconStrip";
 
 export function useSidebarWidth(windowId: string): number {
   const shown = useShownSidebarWidth(windowId);
@@ -114,3 +115,8 @@ export const useTabAwayFromPin = (tabId: string | null) => useBrowser((s) => { c
 
 
 export const sidebarListLengthNow = (windowId: string, profileId: string) => sidebarEntries(useBrowser.getState(), windowId, profileId).list.length;
+
+export const useIconStripCodes = (windowId: string, profileId: string) => useBrowser(useShallow((s) => iconStripCodes(s, windowId, profileId)));
+
+export const useAnyShownTab = (tabIds: string[] | undefined) =>
+  useBrowser((s) => !!tabIds && tabIds.some((id) => !!s.tabs[id] && activeTabId(s, s.tabs[id]!.windowId, s.tabs[id]!.profileId) === id));

@@ -1,6 +1,7 @@
 {
   "noter": {
     "apps/browser/src/components/find/FindBar.tsx": 1,
+    "apps/browser/src/components/sidebar/dragController.ts": 1,
     "apps/browser/src/components/tabstrip/StripPage.tsx": 1,
     "apps/browser/src/state/airTraffic/openAt.ts": 1,
     "apps/browser/src/state/app/linuxCommandInstall.ts": 1,

@@ -65,7 +65,7 @@ export const SETTING_SPECS = {
   showSelectionSearch: flag(true, SYNCED),
   tabLayout: oneOf(["sidebar", "top"], "sidebar", SYNCED),
   sidebarSide: oneOf(["left", "right"], "left", SYNCED),
-  autoHideTabs: flag(false, SYNCED),
+  autoHideTabs: flag(false, SYNCED), collapsedSidebar: oneOf(["hidden", "icons"], "hidden", SYNCED),
   hideToolbarWhileScrolling: flag(false, SYNCED),
   newTabPosition: oneOf(["top", "bottom", "nextToCurrent"], "bottom", SYNCED),
   newTabButtonPosition: oneOf(["top", "bottom"], "bottom", SYNCED),
@@ -339,7 +339,7 @@ export const sessionWithNewTabLinksInLittleArdia = (doc: SavedObject) => without
 export const sessionWithUnreadCountsOffByDefault = (doc: SavedObject) => withoutUntouchedSetting(doc, "showUnreadCounts", true);
 
 function windowsFollowingAutoHideTabs(s: Pick<BrowserState, "settings" | "windows">, patch: Partial<Settings>): Pick<BrowserState, "windows"> | {} {
-  if (patch.autoHideTabs === undefined || patch.autoHideTabs === s.settings.autoHideTabs) return {};
+  if ((patch.autoHideTabs ?? s.settings.autoHideTabs) === s.settings.autoHideTabs && (patch.collapsedSidebar ?? s.settings.collapsedSidebar) === s.settings.collapsedSidebar) return {};
   return { windows: Object.fromEntries(Object.entries(s.windows).map(([id, { autoHideTabs: _, ...w }]) => [id, w])) };
 }
 

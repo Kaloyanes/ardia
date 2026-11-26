@@ -19,6 +19,12 @@ const NONE = {
   sidebar_full_screen_peek_quick_closes: 0,
   sidebar_field_remeasures: 0,
   sidebar_thin_frame_peeks: 0,
+  sidebar_icon_strip_peeks: 0,
+  sidebar_icon_strip_presses: 0,
+  sidebar_icons_for_width: 0,
+  sidebar_icons_for_width_returns: 0,
+  sidebar_drags_to_icons: 0,
+  sidebar_drags_to_full: 0,
 };
 
 const QUICK_PEEK_CLOSE_MS = 500;
@@ -29,6 +35,14 @@ export function noteSidebarSlide(pastTarget: boolean) {
   counts.sidebar_slides++;
   if (pastTarget) counts.sidebar_slides_past_target++;
 }
+
+export const noteIconStripPeek = (consent: ConsentToken | null) => countFor(consent, () => void counts.sidebar_icon_strip_peeks++);
+
+export const noteIconStripPress = () => void counts.sidebar_icon_strip_presses++;
+
+export const noteIconsForWidth = (on: boolean) => void counts[on ? "sidebar_icons_for_width" : "sidebar_icons_for_width_returns"]++;
+
+export const noteSidebarDragSnap = (to: "icons" | "full") => void counts[to === "icons" ? "sidebar_drags_to_icons" : "sidebar_drags_to_full"]++;
 
 export const noteSidebarLightsLeftBehind = () => void counts.sidebar_lights_left_behind++;
 

@@ -6,11 +6,13 @@ import { useResizeDrag } from "./useResizeDrag";
 import { setLiveSidebarWidth } from "../../state/sidebar/sidebarUi";
 import { noteSidebarResize } from "../../state/telemetry/sidebarResizeCounts";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_RESIZE_HANDLE } from "./tokens";
-import { keptSidebarWidth, useShownSidebarWidth, useSidebarWidthLimit } from "../../state/sidebar/shownWidth";
+import { useShownSidebarWidth, useSidebarWidthLimit } from "../../state/sidebar/shownWidth";
+import { collapseWindowToIcons } from "../../state/sidebar/sidebarMode";
+import { ICONS_SNAP } from "./iconStripGeometry";
 
 const HALF = SIDEBAR_RESIZE_HANDLE.width / 2;
 
-export function ResizeHandle({ windowId }: { windowId: string }) {
+export function ResizeHandle({ windowId, docked = false }: { windowId: string; docked?: boolean }) {
   const right = useSidebarSide(windowId) === "right";
   const shown = useShownSidebarWidth(windowId);
   const limit = useSidebarWidthLimit(windowId);
@@ -23,8 +25,9 @@ export function ResizeHandle({ windowId }: { windowId: string }) {
     onLive: (w) => setLiveSidebarWidth(windowId, w),
     onCommit: (w, dragged) => {
       if (dragged) noteSidebarResize();
-      updateSettings({ sidebarWidth: keptSidebarWidth(w, limit) });
+      updateSettings({ sidebarWidth: w });
     },
+    snap: docked ? { below: SIDEBAR_MIN_WIDTH - ICONS_SNAP, onSnap: () => collapseWindowToIcons(windowId) } : undefined,
   });
   return (
     <View

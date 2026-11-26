@@ -170,9 +170,26 @@ export function autoHidesTabsIn(s: Pick<BrowserState, "windows" | "settings">, w
   return (windowId ? s.windows[windowId]?.autoHideTabs : undefined) ?? s.settings.autoHideTabs;
 }
 
-export function tabsShownIn(s: Pick<BrowserState, "windows" | "settings">, windowId?: string | null): boolean {
-  return !autoHidesTabsIn(s, windowId) && !(windowId && s.windows[windowId]?.kind === "small");
+export type SidebarMode = "full" | "icons" | "hidden";
+
+export const chosenSidebarMode = (settings: Pick<BrowserState["settings"], "autoHideTabs" | "collapsedSidebar">): SidebarMode => (settings.autoHideTabs ? settings.collapsedSidebar : "full");
+
+export function sidebarModeIn(s: Pick<BrowserState, "windows" | "settings">, windowId?: string | null): SidebarMode {
+  const w = windowId ? s.windows[windowId] : undefined;
+  if (w?.kind === "small") return "hidden";
+  const sidebar = (w?.tabLayout || s.settings.tabLayout) === "sidebar";
+  if (autoHidesTabsIn(s, windowId)) return sidebar ? s.settings.collapsedSidebar : "hidden";
+  return sidebar && w?.iconsForWidth ? "icons" : "full";
 }
+
+export function tabsShownIn(s: Pick<BrowserState, "windows" | "settings">, windowId?: string | null): boolean {
+  return sidebarModeIn(s, windowId) === "full";
+}
+
+export const collapseSidebarTitle = (s: Pick<BrowserState, "windows" | "settings">, windowId?: string | null): string =>
+  s.settings.collapsedSidebar === "icons" && ((windowId ? s.windows[windowId]?.tabLayout : undefined) || s.settings.tabLayout) === "sidebar" ? "Sidebar as Icons" : "Auto-Hide Tabs";
+
+export const iconStripIn = (s: Pick<BrowserState, "windows" | "settings">, windowId?: string | null): boolean => sidebarModeIn(s, windowId) === "icons";
 
 export type SidebarSide = "left" | "right";
 
