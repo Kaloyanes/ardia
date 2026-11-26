@@ -1,0 +1,17 @@
+{
+  "supportUrl": "https://example.com/support",
+  "marketingUrl": "https://example.com",
+  "privacyPolicyUrl": "https://example.com/privacy",
+  "primaryCategory": "UTILITIES",
+  "secondaryCategory": "PRODUCTIVITY",
+  "ageRating": {
+    "advertising": false,
+    "gambling": false,
+    "lootBox": false,
+    "unrestrictedWebAccess": true,
+    "violenceRealistic": "NONE"
+  },
+  "contentRights": "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+  "price": "free",
+  "availability": "all"
+}

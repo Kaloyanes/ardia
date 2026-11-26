@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: status lists what App Store Connect holds; dry-run builds and signs the archive and sends nothing to App Store Connect; upload sends the build to TestFlight's Internal group; device registers an iPhone's UDID on the team and builds a development-signed .ipa it can install over a cable; public-link submits a build for Beta App Review and prints the link to share; app-store submits a processed build for App Review with a manual release; add-tester invites an email to the Public Testers group; expire ends testing of an older build for good; certificate makes the development certificate CI signs with
+        description: status lists what App Store Connect holds; dry-run builds and signs the archive and sends nothing to App Store Connect; upload sends the build to TestFlight's Internal group; device registers an iPhone's UDID on the team and builds a development-signed .ipa it can install over a cable; public-link submits a build for Beta App Review and prints the link to share; listing pushes the App Store listing from apps/phone/store; app-store submits a processed build for App Review with a manual release; add-tester invites an email to the Public Testers group; expire ends testing of an older build for good; certificate makes the development certificate CI signs with
         type: choice
-        options: [status, dry-run, upload, device, public-link, app-store, add-tester, expire, certificate]
+        options: [status, dry-run, upload, device, public-link, listing, app-store, add-tester, expire, certificate]
         default: status
       build:
         description: Build number (empty takes the one after the highest uploaded)
@@ -170,6 +170,43 @@ jobs:
           trap 'rm -f "$key"' EXIT
           grep -q 'BEGIN PRIVATE KEY' "$key" || { echo "::error::ASC_APP_MANAGER_KEY_P8 isn't a base64 .p8 key"; exit 1; }
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  listing:
+    if: inputs.mode == 'listing'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    concurrency:
+      group: ios-app-store
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - name: Check the listing
+        run: node apps/phone/scripts/asc.mjs listing --check
+      - name: Push the listing
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_APP_MANAGER_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_APP_MANAGER_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.ASC_APP_MANAGER_ISSUER }}
+          ASC_REVIEW_CONTACT_FIRST_NAME: ${{ secrets.ASC_REVIEW_CONTACT_FIRST_NAME }}
+          ASC_REVIEW_CONTACT_LAST_NAME: ${{ secrets.ASC_REVIEW_CONTACT_LAST_NAME }}
+          ASC_REVIEW_CONTACT_PHONE: ${{ secrets.ASC_REVIEW_CONTACT_PHONE }}
+          ASC_REVIEW_CONTACT_EMAIL: ${{ secrets.ASC_REVIEW_CONTACT_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER" ]; then
+            echo "::error::listing mode needs the App Manager key in ASC_APP_MANAGER_KEY_P8, ASC_APP_MANAGER_KEY_ID and ASC_APP_MANAGER_ISSUER (docs/phone.md › The App Store)"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/AuthKey.p8"
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
+          trap 'rm -f "$key"' EXIT
+          grep -q 'BEGIN PRIVATE KEY' "$key" || { echo "::error::ASC_APP_MANAGER_KEY_P8 isn't a base64 .p8 key"; exit 1; }
+          ASC_KEY="$key" node apps/phone/scripts/asc.mjs listing | tee -a "$GITHUB_STEP_SUMMARY"
 
   add-tester:
     if: inputs.mode == 'add-tester'

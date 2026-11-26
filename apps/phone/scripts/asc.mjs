@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { createPrivateKey, sign } from "node:crypto";
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { createHash, createPrivateKey, sign } from "node:crypto";
+import { readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,7 @@ const HELP = `App Store Connect, for the iPhone app's TestFlight and App Store b
   node apps/phone/scripts/asc.mjs expire --build <number>
   node apps/phone/scripts/asc.mjs app-store --build <number> [--version <x.y.z>] [--notes <file> [--notes-root <dir>]]
       [--timeout <seconds>] [--no-default-browser] [--ios-dir <dir>]
+  node apps/phone/scripts/asc.mjs listing [--check] [--store <dir>] [--timeout <seconds>] [--ios-dir <dir>]
   node apps/phone/scripts/asc.mjs preflight [--no-default-browser] [--ios-dir <dir>]
 
 Reads the API key from ASC_KEY (path to AuthKey_<id>.p8), ASC_KEY_ID and ASC_ISSUER.
@@ -39,8 +40,8 @@ the invite once the group has an approved build. expire ends testing of an older
 good: nobody can install it again and Apple can't undo it. It refuses the newest build.
 register-device adds an iPhone to the team's devices, so a development-signed build
 (apps/phone/scripts/release-ios --development) installs on it; an iPhone already there is left as it is.
-The iPhone's release version is pinned in apps/phone/ios/Config/release-version: TestFlight uploads and
-app-store take it, and app-store refuses a --version that differs from it.
+The iPhone's release version is pinned in apps/phone/ios/Config/release-version: TestFlight uploads, listing
+and app-store all take it, and app-store refuses a --version that differs from it.
 app-store sends a processed build to App Review with an App Manager key. It picks the build of the pinned
 version by number; finds or makes the App Store version for it;
 attaches the build; sets What's New from --notes (a short default without it); keeps the release manual;
@@ -50,7 +51,14 @@ version or submission is in review or waits for release, and a re-run reports wh
 instead of doing it twice. --notes-root refuses notes that resolve outside that directory. --timeout
 waits that long for a build still processing. preflight, which app-store runs first and which needs no
 key, checks the export compliance answer in Info.plist, the
-privacy manifest, the pinned version and, unless --no-default-browser, the default browser entitlement.`;
+privacy manifest, the pinned version and, unless --no-default-browser, the default browser entitlement.
+listing pushes the App Store listing from apps/phone/store (or --store) with the same App Manager key: each
+locale's description, keywords, promotional text and subtitle, the URLs, categories, age rating answers,
+content rights, a free price, availability in every territory, the App Review notes and, from
+ASC_REVIEW_CONTACT_FIRST_NAME, _LAST_NAME, _PHONE and _EMAIL, the App Review contact, and the iPhone
+screenshots in screenshots/iphone-medium and screenshots/iphone-large. It checks lengths, URLs, sizes and
+alpha before any request (--check stops there and needs no key), writes only what differs, and replaces a
+screenshot set only when its files or their order differ. App Privacy isn't in Apple's API: fill it in by hand.`;
 
 const BUNDLE_PREFIX = "com.ardia.browser.ios";
 const DEVELOPMENT_CERTIFICATES = new Set(["DEVELOPMENT", "IOS_DEVELOPMENT"]);
@@ -73,8 +81,8 @@ const STATES_AFTER_OWN_WRITE = new Map([
   ["INVALID_BINARY", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
 ]);
 const IPHONE_SCREENSHOT_CLASSES = [
-  { displayType: "APP_IPHONE_61", label: "iPhone with Dynamic Island (medium display)" },
-  { displayType: "APP_IPHONE_67", label: "iPhone with Dynamic Island (large display)" },
+  { dir: "iphone-medium", displayType: "APP_IPHONE_61", label: "iPhone with Dynamic Island (medium display)", sizes: [[1206, 2622], [1179, 2556]] },
+  { dir: "iphone-large", displayType: "APP_IPHONE_67", label: "iPhone with Dynamic Island (large display)", sizes: [[1320, 2868], [1290, 2796], [1260, 2736]] },
 ];
 const DEVICE_FAMILIES = new Map([
   [
@@ -89,6 +97,36 @@ const DEVICE_FAMILIES = new Map([
   ["2", { name: "iPad", prefix: "APP_IPAD_", required: "APP_IPAD_*", counts: (type) => type?.startsWith("APP_IPAD_") ?? false }],
 ]);
 const RELEASE_VERSION_FILE = join("Config", "release-version");
+const STORE_DIR = fileURLToPath(new URL("../store", import.meta.url));
+const LOCALE_DIR = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+const LISTING_TEXT = [
+  { file: "description.txt", field: "description", label: "description", limit: 4000, required: true },
+  { file: "keywords.txt", field: "keywords", label: "keywords", limit: 100, required: true },
+  { file: "promotional-text.txt", field: "promotionalText", label: "promotional text", limit: 170, required: false },
+  { file: "subtitle.txt", field: "subtitle", label: "subtitle", limit: 30, required: false },
+];
+const REVIEW_NOTES_FILE = "review-notes.txt";
+const REVIEW_NOTES_LIMIT = 4000;
+const SCREENSHOTS_PER_SET = 10;
+const LISTING_KEYS = new Set(["supportUrl", "marketingUrl", "privacyPolicyUrl", "primaryCategory", "secondaryCategory", "ageRating", "contentRights", "price", "availability", "baseTerritory"]);
+const AGE_RATING_FIELDS = new Set([
+  "advertising", "alcoholTobaccoOrDrugUseOrReferences", "contests", "datingAndRelationships", "gambling", "gamblingSimulated",
+  "gunsOrOtherWeapons", "healthOrWellnessTopics", "kidsAgeBand", "lootBox", "medicalOrTreatmentInformation", "messagingAndChat",
+  "parentalControls", "profanityOrCrudeHumor", "ageAssurance", "sexualContentGraphicAndNudity", "sexualContentOrNudity",
+  "sharedLocation", "socialMedia", "socialMediaAgeRestricted", "horrorOrFearThemes", "matureOrSuggestiveThemes",
+  "unrestrictedWebAccess", "userGeneratedContent", "violenceCartoonOrFantasy", "violenceRealisticProlongedGraphicOrSadistic",
+  "violenceRealistic", "ageRatingOverride", "ageRatingOverrideV2", "koreaAgeRatingOverride", "gracRatingClassificationNumber",
+  "developerAgeRatingInfoUrl",
+]);
+const CONTENT_RIGHTS = new Set(["DOES_NOT_USE_THIRD_PARTY_CONTENT", "USES_THIRD_PARTY_CONTENT"]);
+const REVIEW_CONTACT = [
+  ["contactFirstName", "ASC_REVIEW_CONTACT_FIRST_NAME"],
+  ["contactLastName", "ASC_REVIEW_CONTACT_LAST_NAME"],
+  ["contactPhone", "ASC_REVIEW_CONTACT_PHONE"],
+  ["contactEmail", "ASC_REVIEW_CONTACT_EMAIL"],
+];
+const EDITABLE_APP_INFO_STATES = new Set(["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW", "DEVELOPER_REJECTED", "REJECTED"]);
+const SCREENSHOT_POLL_MS = 5000;
 
 function base64url(input) {
   return Buffer.from(input).toString("base64url");
@@ -197,7 +235,7 @@ function day(value) {
 }
 
 async function listApps() {
-  const { rows } = await get("/v1/apps", { "fields[apps]": "name,bundleId,primaryLocale", limit: "200" });
+  const { rows } = await get("/v1/apps", { "fields[apps]": "name,bundleId,primaryLocale,contentRightsDeclaration", limit: "200" });
   return rows;
 }
 
@@ -1197,6 +1235,541 @@ async function appStore(args) {
   );
 }
 
+function entries(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((entry) => !entry.name.startsWith("."));
+  } catch {
+    return [];
+  }
+}
+
+function counted(count, one, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+function characters(text) {
+  return [...text].length;
+}
+
+function pngFacts(bytes) {
+  if (bytes.length < 33 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return null;
+  let width = 0;
+  let height = 0;
+  let colorType = -1;
+  let transparency = false;
+  for (let at = 8; at + 8 <= bytes.length; ) {
+    const length = bytes.readUInt32BE(at);
+    const type = bytes.toString("latin1", at + 4, at + 8);
+    if (type === "IHDR" && length >= 13) {
+      width = bytes.readUInt32BE(at + 8);
+      height = bytes.readUInt32BE(at + 12);
+      colorType = bytes[at + 17];
+    }
+    if (type === "tRNS") transparency = true;
+    if (type === "IDAT" || type === "IEND") break;
+    at += 12 + length;
+  }
+  if (!width || !height) return null;
+  return { width, height, alpha: colorType === 4 || colorType === 6 || transparency };
+}
+
+function httpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function listingProblems(listing, where) {
+  if (typeof listing !== "object" || listing === null || Array.isArray(listing)) return [`${where} must hold one JSON object`];
+  const problems = [];
+  for (const key of Object.keys(listing)) if (!LISTING_KEYS.has(key)) problems.push(`${where} has an unknown key ${key}`);
+  for (const [key, required] of [["supportUrl", true], ["privacyPolicyUrl", true], ["marketingUrl", false]]) {
+    if (listing[key] === undefined && !required) continue;
+    if (!httpsUrl(listing[key])) problems.push(`${where} ${key} must be an https URL`);
+  }
+  for (const [key, required] of [["primaryCategory", true], ["secondaryCategory", false]]) {
+    if (listing[key] === undefined && !required) continue;
+    if (typeof listing[key] !== "string" || !/^[A-Z][A-Z_]*$/.test(listing[key])) problems.push(`${where} ${key} must be an App Store category id such as UTILITIES`);
+  }
+  if (listing.primaryCategory && listing.primaryCategory === listing.secondaryCategory) problems.push(`${where} secondaryCategory repeats primaryCategory`);
+  const rating = listing.ageRating;
+  if (typeof rating !== "object" || rating === null || Array.isArray(rating) || Object.keys(rating).length === 0) {
+    problems.push(`${where} ageRating must hold the age rating answers`);
+  } else {
+    for (const [key, value] of Object.entries(rating)) {
+      if (!AGE_RATING_FIELDS.has(key)) problems.push(`${where} ageRating has an unknown answer ${key}`);
+      else if (value !== null && typeof value !== "boolean" && typeof value !== "string") problems.push(`${where} ageRating.${key} must be true, false, null or one of Apple's words`);
+    }
+  }
+  if (!CONTENT_RIGHTS.has(listing.contentRights)) problems.push(`${where} contentRights must be ${[...CONTENT_RIGHTS].join(" or ")}`);
+  if (listing.price !== "free") problems.push(`${where} price must be "free": listing sets no other price`);
+  if (listing.availability !== "all") problems.push(`${where} availability must be "all": listing makes the app available in every territory`);
+  if (listing.baseTerritory !== undefined && !/^[A-Z]{3}$/.test(listing.baseTerritory)) problems.push(`${where} baseTerritory must be a territory code such as USA`);
+  return problems;
+}
+
+function readLocale(dir, locale, problems) {
+  const text = {};
+  for (const field of LISTING_TEXT) {
+    const path = join(dir, field.file);
+    const value = contents(path)?.trim();
+    if (!value) {
+      if (field.required) problems.push(`${shown(path)} is ${value === undefined ? "missing" : "empty"}`);
+      continue;
+    }
+    if (characters(value) > field.limit) problems.push(`${shown(path)} has ${characters(value)} characters; the ${field.label} takes at most ${field.limit}`);
+    text[field.field] = value;
+  }
+  const notesPath = join(dir, REVIEW_NOTES_FILE);
+  const reviewNotes = contents(notesPath)?.trim() || null;
+  if (reviewNotes && characters(reviewNotes) > REVIEW_NOTES_LIMIT) {
+    problems.push(`${shown(notesPath)} has ${characters(reviewNotes)} characters; App Review notes take at most ${REVIEW_NOTES_LIMIT}`);
+  }
+  return { locale, text, reviewNotes };
+}
+
+function readScreenshots(dir, kind, problems) {
+  const files = [];
+  const accepted = kind.sizes.map(([width, height]) => `${width}×${height}`).join(", ");
+  for (const entry of entries(dir).toSorted((a, b) => a.name.localeCompare(b.name))) {
+    const path = join(dir, entry.name);
+    if (!entry.isFile() || !/^\d{2}-[^/]+\.png$/.test(entry.name)) {
+      problems.push(`${shown(path)} isn't a screenshot named NN-<name>.png`);
+      continue;
+    }
+    const bytes = readFileSync(path);
+    const facts = pngFacts(bytes);
+    if (!facts) {
+      problems.push(`${shown(path)} isn't a PNG`);
+      continue;
+    }
+    const fits = kind.sizes.some(([width, height]) => (facts.width === width && facts.height === height) || (facts.width === height && facts.height === width));
+    if (!fits) problems.push(`${shown(path)} is ${facts.width}×${facts.height}; ${kind.label} takes ${accepted}, portrait or landscape`);
+    else if (facts.alpha) problems.push(`${shown(path)} has an alpha channel or transparency, which App Store screenshots can't`);
+    else files.push({ name: entry.name, bytes, size: bytes.length, checksum: createHash("md5").update(bytes).digest("hex") });
+  }
+  if (files.length > SCREENSHOTS_PER_SET) problems.push(`${shown(dir)} has ${files.length} screenshots; a set takes at most ${SCREENSHOTS_PER_SET}`);
+  return files;
+}
+
+function reviewContact(problems) {
+  const values = Object.fromEntries(REVIEW_CONTACT.map(([field, name]) => [field, process.env[name]?.trim() ?? ""]));
+  const missing = REVIEW_CONTACT.filter(([field]) => !values[field]).map(([, name]) => name);
+  if (values.contactEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(values.contactEmail)) problems.push("ASC_REVIEW_CONTACT_EMAIL isn't an email address");
+  if (values.contactPhone && !/^\+?[\d ()\-.]{6,}$/.test(values.contactPhone)) problems.push("ASC_REVIEW_CONTACT_PHONE isn't a phone number, such as +1 555 010 0100");
+  return missing.length === 0 ? { values, missing } : { values: null, missing };
+}
+
+function readStore(storeDir) {
+  const problems = [];
+  const listingPath = join(storeDir, "listing.json");
+  const raw = contents(listingPath);
+  let listing = null;
+  if (raw === null) problems.push(`${shown(listingPath)} is missing`);
+  else {
+    try {
+      listing = JSON.parse(raw);
+    } catch (error) {
+      problems.push(`${shown(listingPath)} isn't JSON: ${error.message}`);
+    }
+  }
+  if (listing !== null) problems.push(...listingProblems(listing, shown(listingPath)));
+  const locales = entries(storeDir)
+    .filter((entry) => entry.isDirectory() && LOCALE_DIR.test(entry.name))
+    .toSorted((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => readLocale(join(storeDir, entry.name), entry.name, problems));
+  if (locales.length === 0) problems.push(`${shown(storeDir)} has no locale folder such as en-US`);
+  else if (!locales.some((entry) => entry.reviewNotes)) problems.push(`${shown(storeDir)} has no ${REVIEW_NOTES_FILE} in any locale folder`);
+  const before = problems.length;
+  const screenshots = IPHONE_SCREENSHOT_CLASSES.map((kind) => ({ ...kind, files: readScreenshots(join(storeDir, "screenshots", kind.dir), kind, problems) }));
+  if (!screenshots.some((kind) => kind.files.length > 0) && problems.length === before) {
+    problems.push(`${shown(join(storeDir, "screenshots"))} has no iPhone screenshots: App Review needs ${DEVICE_FAMILIES.get("1").required}`);
+  }
+  return { listing, locales, screenshots, problems };
+}
+
+function differing(current, wanted) {
+  const changed = Object.entries(wanted).filter(([key, value]) => (current?.[key] ?? null) !== (value ?? null));
+  return changed.length > 0 ? Object.fromEntries(changed) : null;
+}
+
+async function optional(path, params) {
+  try {
+    return (await get(path, params)).rows[0] ?? null;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+function planListingVersion(versions, versionString) {
+  const same = versions.find((version) => version.version === versionString);
+  if (same && !EDITABLE_VERSION_STATES.has(same.state) && !SHIPPED_VERSION_STATES.has(same.state)) {
+    return { act: "refuse", message: `version ${versionString} is ${same.state}; its listing can't change until it leaves review` };
+  }
+  return planVersion(versions, versionString, null);
+}
+
+async function listingVersion(app, versionString) {
+  const plan = planListingVersion(await listAppStoreVersions(app.id), versionString);
+  if (plan.act === "refuse") refuse(plan.message);
+  if (plan.act === "create") {
+    const made = await post("/v1/appStoreVersions", {
+      data: {
+        type: "appStoreVersions",
+        attributes: { platform: "IOS", versionString, releaseType: "MANUAL" },
+        relationships: { app: { data: { type: "apps", id: app.id } } },
+      },
+    });
+    return { version: { id: made.id, version: versionString }, change: `made App Store version ${versionString} with a manual release` };
+  }
+  if (plan.act === "rename") {
+    await patch(`/v1/appStoreVersions/${plan.version.id}`, { data: { type: "appStoreVersions", id: plan.version.id, attributes: { versionString } } });
+    return { version: { ...plan.version, version: versionString }, change: `App Store version ${plan.version.version} (${plan.version.state}) is now ${versionString}` };
+  }
+  console.log(`App Store version ${versionString} is ${plan.version.state}`);
+  return { version: plan.version, change: null };
+}
+
+async function screenshotState(id) {
+  const { rows } = await get(`/v1/appScreenshots/${id}`, { "fields[appScreenshots]": "fileName,assetDeliveryState" });
+  return rows[0]?.attributes ?? {};
+}
+
+async function settleScreenshots(ids, deadline) {
+  for (const id of ids) {
+    for (;;) {
+      const shot = await screenshotState(id);
+      const delivery = shot.assetDeliveryState ?? {};
+      if (delivery.state === "COMPLETE") break;
+      if (delivery.state === "FAILED") {
+        const reasons = (delivery.errors ?? []).map((error) => `${error.code ?? ""} ${error.description ?? ""}`.trim()).join("; ");
+        refuse(`App Store Connect refused screenshot ${shot.fileName ?? id}: ${reasons || "no reason given"}; fix it and run listing again`);
+      }
+      if (Date.now() >= deadline) refuse(`screenshot ${shot.fileName ?? id} is still ${delivery.state ?? "processing"}; run listing again to finish`);
+      await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_POLL_MS));
+    }
+  }
+}
+
+async function uploadScreenshot(setId, file) {
+  const made = await post("/v1/appScreenshots", {
+    data: {
+      type: "appScreenshots",
+      attributes: { fileName: file.name, fileSize: file.size },
+      relationships: { appScreenshotSet: { data: { type: "appScreenshotSets", id: setId } } },
+    },
+  });
+  const operations = made.attributes?.uploadOperations ?? [];
+  if (operations.length === 0) refuse(`App Store Connect gave no upload for ${file.name}`);
+  for (const operation of operations) {
+    if (!httpsUrl(operation.url)) refuse(`App Store Connect gave ${file.name} an upload address that isn't https`);
+    const headers = Object.fromEntries((operation.requestHeaders ?? []).map((header) => [header.name, header.value]));
+    const response = await fetch(operation.url, { method: operation.method ?? "PUT", headers, body: file.bytes.subarray(operation.offset, operation.offset + operation.length) });
+    if (!response.ok) refuse(`uploading ${file.name} failed with ${response.status}; run listing again`);
+  }
+  await patch(`/v1/appScreenshots/${made.id}`, { data: { type: "appScreenshots", id: made.id, attributes: { uploaded: true, sourceFileChecksum: file.checksum } } });
+  return made.id;
+}
+
+function inChecksumOrder(held, files) {
+  const byChecksum = new Map();
+  for (const row of held) byChecksum.set(row.checksum, [...(byChecksum.get(row.checksum) ?? []), row.id]);
+  return files.map((file) => byChecksum.get(file.checksum).shift());
+}
+
+async function pushScreenshots(localizationId, classes, deadline, changed) {
+  const { rows: sets, included } = await get(`/v1/appStoreVersionLocalizations/${localizationId}/appScreenshotSets`, {
+    "fields[appScreenshotSets]": "screenshotDisplayType,appScreenshots",
+    include: "appScreenshots",
+    "fields[appScreenshots]": "fileName,sourceFileChecksum,assetDeliveryState",
+    "limit[appScreenshots]": String(SCREENSHOTS_PER_SET),
+    limit: "50",
+  });
+  const shots = new Map(included.filter((row) => row.type === "appScreenshots").map((row) => [row.id, row.attributes ?? {}]));
+  for (const kind of classes) {
+    if (kind.files.length === 0) {
+      console.log(`no screenshots in screenshots/${kind.dir}, so ${kind.displayType} is left as it is`);
+      continue;
+    }
+    let set = sets.find((row) => row.attributes?.screenshotDisplayType === kind.displayType);
+    const held = (set?.relationships?.appScreenshots?.data ?? []).map((link) => ({
+      id: link.id,
+      checksum: shots.get(link.id)?.sourceFileChecksum ?? null,
+      state: shots.get(link.id)?.assetDeliveryState?.state ?? null,
+    }));
+    const wanted = kind.files.map((file) => file.checksum);
+    const sameFiles = held.length === wanted.length && held.map((row) => row.checksum).toSorted().join() === wanted.toSorted().join();
+    const settled = held.every((row) => row.state === "COMPLETE" || row.state === "UPLOAD_COMPLETE");
+    if (set && sameFiles && settled) {
+      await settleScreenshots(held.filter((row) => row.state === "UPLOAD_COMPLETE").map((row) => row.id), deadline);
+      if (held.map((row) => row.checksum).join() === wanted.join()) {
+        console.log(`${kind.displayType}: ${counted(held.length, "screenshot")} already ${held.length === 1 ? "matches" : "match"} screenshots/${kind.dir}`);
+      } else {
+        const order = inChecksumOrder(held, kind.files);
+        await patch(`/v1/appScreenshotSets/${set.id}/relationships/appScreenshots`, { data: order.map((id) => ({ type: "appScreenshots", id })) });
+        changed(`${kind.displayType}: screenshots put in the order of screenshots/${kind.dir}`);
+      }
+      continue;
+    }
+    if (!set) {
+      set = await post("/v1/appScreenshotSets", {
+        data: {
+          type: "appScreenshotSets",
+          attributes: { screenshotDisplayType: kind.displayType },
+          relationships: { appStoreVersionLocalization: { data: { type: "appStoreVersionLocalizations", id: localizationId } } },
+        },
+      });
+    }
+    for (const row of held) await send("DELETE", `/v1/appScreenshots/${row.id}`);
+    const made = [];
+    for (const file of kind.files) made.push(await uploadScreenshot(set.id, file));
+    await settleScreenshots(made, deadline);
+    await patch(`/v1/appScreenshotSets/${set.id}/relationships/appScreenshots`, { data: made.map((id) => ({ type: "appScreenshots", id })) });
+    changed(`${kind.displayType}: ${held.length > 0 ? `${counted(held.length, "screenshot")} replaced by` : "uploaded"} the ${made.length} in screenshots/${kind.dir}`);
+  }
+}
+
+async function freePrice(app, baseTerritory, changed) {
+  const schedule = await optional(`/v1/apps/${app.id}/appPriceSchedule`, { include: "baseTerritory", "fields[appPriceSchedules]": "baseTerritory" });
+  if (schedule) {
+    const { rows: prices, included } = await get(`/v1/appPriceSchedules/${schedule.id}/manualPrices`, {
+      include: "appPricePoint",
+      "fields[appPrices]": "startDate,endDate,appPricePoint",
+      "fields[appPricePoints]": "customerPrice",
+      limit: "200",
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const current = prices.filter((row) => !row.attributes?.endDate || row.attributes.endDate > today);
+    const customerPrice = (row) => included.find((point) => point.type === "appPricePoints" && point.id === row.relationships?.appPricePoint?.data?.id)?.attributes?.customerPrice;
+    const free = current.length > 0 && current.every((row) => Number(customerPrice(row)) === 0);
+    if (free && schedule.relationships?.baseTerritory?.data?.id === baseTerritory) {
+      console.log(`the app is already free, priced from ${baseTerritory}`);
+      return;
+    }
+  }
+  const { rows: points } = await get(`/v1/apps/${app.id}/appPricePoints`, { "filter[territory]": baseTerritory, "fields[appPricePoints]": "customerPrice", limit: "200" });
+  const zero = points.find((point) => point.attributes?.customerPrice !== undefined && Number(point.attributes.customerPrice) === 0);
+  if (!zero) refuse(`App Store Connect lists no free price point for ${baseTerritory}`);
+  await post("/v1/appPriceSchedules", {
+    data: {
+      type: "appPriceSchedules",
+      relationships: {
+        app: { data: { type: "apps", id: app.id } },
+        baseTerritory: { data: { type: "territories", id: baseTerritory } },
+        manualPrices: { data: [{ type: "appPrices", id: "${free}" }] },
+      },
+    },
+    included: [{ type: "appPrices", id: "${free}", attributes: { startDate: null }, relationships: { appPricePoint: { data: { type: "appPricePoints", id: zero.id } } } }],
+  });
+  changed(`price set to free, from ${baseTerritory}`);
+}
+
+async function everywhere(app, changed, byHand) {
+  const { rows: territories } = await get("/v1/territories", { "fields[territories]": "currency", limit: "200" });
+  const availability = await optional(`/v1/apps/${app.id}/appAvailabilityV2`, { "fields[appAvailabilities]": "availableInNewTerritories" });
+  if (!availability) {
+    await post("/v2/appAvailabilities", {
+      data: {
+        type: "appAvailabilities",
+        attributes: { availableInNewTerritories: true },
+        relationships: {
+          app: { data: { type: "apps", id: app.id } },
+          territoryAvailabilities: { data: territories.map((territory) => ({ type: "territoryAvailabilities", id: `\${${territory.id}}` })) },
+        },
+      },
+      included: territories.map((territory) => ({
+        type: "territoryAvailabilities",
+        id: `\${${territory.id}}`,
+        attributes: { available: true },
+        relationships: { territory: { data: { type: "territories", id: territory.id } } },
+      })),
+    });
+    changed(`available in all ${territories.length} territories, and in new ones as Apple adds them`);
+    return;
+  }
+  const { rows: current } = await get(`/v2/appAvailabilities/${availability.id}/territoryAvailabilities`, {
+    include: "territory",
+    "fields[territoryAvailabilities]": "available,territory",
+    limit: "200",
+  });
+  const off = current.filter((row) => row.attributes?.available !== true);
+  for (const row of off) {
+    await patch(`/v1/territoryAvailabilities/${row.id}`, { data: { type: "territoryAvailabilities", id: row.id, attributes: { available: true } } });
+  }
+  if (off.length > 0) changed(`made available in ${counted(off.length, "more territory", "more territories")}`);
+  else console.log(`already available in every listed territory (${current.length})`);
+  const listed = new Set(current.map((row) => row.relationships?.territory?.data?.id));
+  const unlisted = territories.filter((territory) => !listed.has(territory.id));
+  if (unlisted.length > 0) {
+    byHand.push(`${counted(unlisted.length, "territory isn't", "territories aren't")} in the app's availability (${unlisted.map((territory) => territory.id).join(", ")}): add them in Pricing and Availability`);
+  }
+  if (availability.attributes?.availableInNewTerritories === false) byHand.push("turn on availability in new territories in Pricing and Availability: Apple's API has no way to change it");
+}
+
+async function listing(args) {
+  const storeDir = option(args, "--store") ?? STORE_DIR;
+  const iosDir = option(args, "--ios-dir") ?? IOS_DIR;
+  const timeout = Number(option(args, "--timeout") ?? 600);
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    console.error("asc: --timeout takes seconds");
+    process.exit(64);
+  }
+  const store = readStore(storeDir);
+  const contact = reviewContact(store.problems);
+  const versionString = pinnedVersion(iosDir);
+  if (!versionString) store.problems.push(`${shown(join(iosDir, RELEASE_VERSION_FILE))} doesn't hold the iPhone release version as x.y.z`);
+  const families = targetedFamilies(iosDir) ?? [];
+  if (families.some((family) => family.name !== "iPhone")) {
+    store.problems.push(`${shown(projectPath(iosDir))} targets ${families.map((family) => family.name).join(" and ")}; listing pushes only iPhone screenshots`);
+  }
+  if (store.problems.length > 0) refuse(`the listing in ${shown(storeDir)} isn't ready, so nothing was sent:\n${store.problems.map((problem) => `- ${problem}`).join("\n")}`);
+  const counts = store.screenshots.map((kind) => `${kind.files.length} ${kind.displayType}`).join(", ");
+  console.log(`listing checked: version ${versionString}, ${store.locales.map((entry) => entry.locale).join(", ")}, screenshots ${counts}`);
+  if (args.includes("--check")) return;
+
+  const deadline = Date.now() + timeout * 1000;
+  const changes = [];
+  const changed = (what) => {
+    changes.push(what);
+    console.log(what);
+  };
+  const byHand = ["App Privacy: answer the data collection questions in App Store Connect › App Privacy (Apple's API has no endpoint for them)"];
+  const { listing: wanted } = store;
+  const app = await requireApp();
+  const primaryLocale = app.attributes.primaryLocale ?? "en-US";
+  const primary = store.locales.find((entry) => entry.locale === primaryLocale);
+  if (!primary) refuse(`the app's primary language is ${primaryLocale}, and ${shown(storeDir)} has no ${primaryLocale} folder; nothing was sent`);
+  if (!primary.reviewNotes) refuse(`${shown(join(storeDir, primaryLocale, REVIEW_NOTES_FILE))} is missing; App Review reads the primary language's notes`);
+
+  const { version, change } = await listingVersion(app, versionString);
+  if (change) changed(change);
+
+  const { rows: localizations } = await get(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations`, {
+    "fields[appStoreVersionLocalizations]": "locale,description,keywords,promotionalText,supportUrl,marketingUrl",
+    limit: "50",
+  });
+  const localizationIds = new Map();
+  for (const entry of store.locales) {
+    const text = { description: entry.text.description, keywords: entry.text.keywords, supportUrl: wanted.supportUrl };
+    if (entry.text.promotionalText) text.promotionalText = entry.text.promotionalText;
+    if (wanted.marketingUrl) text.marketingUrl = wanted.marketingUrl;
+    const row = localizations.find((candidate) => candidate.attributes?.locale === entry.locale);
+    if (!row) {
+      const made = await post("/v1/appStoreVersionLocalizations", {
+        data: {
+          type: "appStoreVersionLocalizations",
+          attributes: { locale: entry.locale, ...text },
+          relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: version.id } } },
+        },
+      });
+      localizationIds.set(entry.locale, made.id);
+      changed(`${entry.locale}: ${Object.keys(text).join(", ")} set`);
+      continue;
+    }
+    localizationIds.set(entry.locale, row.id);
+    const diff = differing(row.attributes, text);
+    if (!diff) console.log(`${entry.locale}: the version's text already matches`);
+    else {
+      await patch(`/v1/appStoreVersionLocalizations/${row.id}`, { data: { type: "appStoreVersionLocalizations", id: row.id, attributes: diff } });
+      changed(`${entry.locale}: ${Object.keys(diff).join(", ")} updated`);
+    }
+  }
+
+  const { rows: infos } = await get(`/v1/apps/${app.id}/appInfos`, {
+    "fields[appInfos]": "state,appStoreState,primaryCategory,secondaryCategory",
+    include: "primaryCategory,secondaryCategory",
+    limit: "10",
+  });
+  const info = infos.find((row) => EDITABLE_APP_INFO_STATES.has(row.attributes?.state ?? row.attributes?.appStoreState));
+  if (!info) refuse(`no app information can be edited (${infos.map((row) => row.attributes?.state ?? row.attributes?.appStoreState ?? "?").join(", ") || "none"}); run listing again once version ${versionString} has its own`);
+
+  const { rows: infoLocalizations } = await get(`/v1/appInfos/${info.id}/appInfoLocalizations`, {
+    "fields[appInfoLocalizations]": "locale,name,subtitle,privacyPolicyUrl",
+    limit: "50",
+  });
+  for (const entry of store.locales) {
+    const text = { privacyPolicyUrl: wanted.privacyPolicyUrl };
+    if (entry.text.subtitle) text.subtitle = entry.text.subtitle;
+    const row = infoLocalizations.find((candidate) => candidate.attributes?.locale === entry.locale);
+    if (!row) {
+      await post("/v1/appInfoLocalizations", {
+        data: {
+          type: "appInfoLocalizations",
+          attributes: { locale: entry.locale, name: app.attributes.name, ...text },
+          relationships: { appInfo: { data: { type: "appInfos", id: info.id } } },
+        },
+      });
+      changed(`${entry.locale}: ${Object.keys(text).join(", ")} set in the app information`);
+      continue;
+    }
+    const diff = differing(row.attributes, text);
+    if (!diff) console.log(`${entry.locale}: the app information already matches`);
+    else {
+      await patch(`/v1/appInfoLocalizations/${row.id}`, { data: { type: "appInfoLocalizations", id: row.id, attributes: diff } });
+      changed(`${entry.locale}: ${Object.keys(diff).join(", ")} updated in the app information`);
+    }
+  }
+
+  const categories = { primaryCategory: wanted.primaryCategory, secondaryCategory: wanted.secondaryCategory ?? null };
+  const heldCategories = Object.fromEntries(Object.keys(categories).map((key) => [key, info.relationships?.[key]?.data?.id ?? null]));
+  const categoryDiff = differing(heldCategories, categories);
+  if (!categoryDiff) console.log(`categories already ${[categories.primaryCategory, categories.secondaryCategory].filter(Boolean).join(" and ")}`);
+  else {
+    const relationships = Object.fromEntries(Object.entries(categoryDiff).map(([key, id]) => [key, { data: id ? { type: "appCategories", id } : null }]));
+    await patch(`/v1/appInfos/${info.id}`, { data: { type: "appInfos", id: info.id, relationships } });
+    changed(`categories set: ${Object.entries(categoryDiff).map(([key, id]) => `${key} ${id ?? "none"}`).join(", ")}`);
+  }
+
+  const declaration = await optional(`/v1/appInfos/${info.id}/ageRatingDeclaration`, {});
+  if (!declaration) refuse("App Store Connect gives the app information no age rating declaration; answer it once in App Store Connect and run listing again");
+  const ratingDiff = differing(declaration.attributes, wanted.ageRating);
+  if (!ratingDiff) console.log("the age rating answers already match");
+  else {
+    await patch(`/v1/ageRatingDeclarations/${declaration.id}`, { data: { type: "ageRatingDeclarations", id: declaration.id, attributes: ratingDiff } });
+    changed(`age rating answers updated: ${Object.keys(ratingDiff).join(", ")}`);
+  }
+
+  if (app.attributes.contentRightsDeclaration === wanted.contentRights) console.log(`content rights already ${wanted.contentRights}`);
+  else {
+    await patch(`/v1/apps/${app.id}`, { data: { type: "apps", id: app.id, attributes: { contentRightsDeclaration: wanted.contentRights } } });
+    changed(`content rights set to ${wanted.contentRights}`);
+  }
+
+  await freePrice(app, wanted.baseTerritory ?? "USA", changed);
+  await everywhere(app, changed, byHand);
+
+  const review = await optional(`/v1/appStoreVersions/${version.id}/appStoreReviewDetail`, {
+    "fields[appStoreReviewDetails]": "contactFirstName,contactLastName,contactPhone,contactEmail,demoAccountRequired,notes",
+  });
+  const reviewWanted = { notes: primary.reviewNotes, demoAccountRequired: false, ...(contact.values ?? {}) };
+  if (!contact.values) {
+    console.log(`App Review contact skipped: ${contact.missing.join(", ")} ${contact.missing.length === 1 ? "is" : "are"} unset`);
+    byHand.push(`App Review contact: set ${contact.missing.join(", ")} as GitHub secrets and run mode=listing again, or fill it in App Store Connect`);
+  }
+  const shownFields = (fields) => Object.keys(fields).map((key) => (key.startsWith("contact") ? "contact" : key)).filter((key, at, all) => all.indexOf(key) === at).join(", ");
+  if (!review) {
+    await post("/v1/appStoreReviewDetails", {
+      data: { type: "appStoreReviewDetails", attributes: reviewWanted, relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: version.id } } } },
+    });
+    changed(`App Review information set: ${shownFields(reviewWanted)}`);
+  } else {
+    const diff = differing(review.attributes, reviewWanted);
+    if (!diff) console.log("the App Review information already matches");
+    else {
+      await patch(`/v1/appStoreReviewDetails/${review.id}`, { data: { type: "appStoreReviewDetails", id: review.id, attributes: diff } });
+      changed(`App Review information updated: ${shownFields(diff)}`);
+    }
+  }
+
+  await pushScreenshots(localizationIds.get(primaryLocale), store.screenshots, deadline, changed);
+
+  console.log(changes.length === 0 ? `\nthe listing for ${versionString} already matched the repo; nothing was written` : `\nthe listing for ${versionString} is up to date: ${counted(changes.length, "change")}`);
+  console.log(`still by hand in App Store Connect:\n${byHand.map((item) => `- ${item}`).join("\n")}`);
+}
+
 async function registerDevice(args) {
   const udid = option(args, "--udid");
   if (!udid) {
@@ -1225,6 +1798,7 @@ const commands = {
   "register-device": registerDevice,
   expire,
   "app-store": appStore,
+  listing,
   preflight,
 };
 if (!command || command === "-h" || command === "--help" || !commands[command]) {
@@ -1238,6 +1812,9 @@ try {
   console.error(`asc: App Store Connect answered ${error.message}`);
   if (command === "app-store" && error.status === 403) {
     console.error("asc: submitting for App Review needs a key with the App Manager role (docs/phone.md › The App Store)");
+  }
+  if (command === "listing" && error.status === 403) {
+    console.error("asc: editing the App Store listing needs a key with the App Manager role (docs/phone.md › The App Store)");
   }
   process.exit(1);
 }

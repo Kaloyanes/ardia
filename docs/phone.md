@@ -4839,14 +4839,52 @@ This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflo
 
 A stable iPhone release goes to App Review from a TestFlight build that has processed, only on the owner's word.
 `mode=status` lists the App Store versions with their state, release type and build, and the newest review
-submissions, beside the TestFlight builds.
+submissions, beside the TestFlight builds. The first release (the owner, 2026-11-26) is iPhone only and free, and
+App Review gets no ChatGPT account: Browse for Me and Pinch to Summarize answer on the device without one.
 
-```sh
-gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>
-```
+In order, each on the owner's word:
+1. **A TestFlight build** of the pinned version (`apps/phone/ios/Config/release-version`): `mode=dry-run`, then
+   `mode=upload` ("TestFlight: the workflow, its certificate and its testers" above). Note its build number.
+2. **The listing from the repo:** `gh workflow run ios-release.yml -f mode=listing`. It makes or takes the App Store
+   version for the pin and writes everything in `apps/phone/store/` (below). Run it again after any change there.
+3. **App Privacy by hand.** The data collection questions (the App Store's privacy "nutrition label") aren't in
+   Apple's App Store Connect API: its OpenAPI description (4.6.1, November 2026) has no resource for them, so answer
+   them in App Store Connect › App Privacy and publish them. `mode=listing` ends with this reminder, beside anything
+   else left to do by hand.
+4. **The submission:** `gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>`.
 
-- **Its own key.** Submitting for App Review needs the App Manager role, and the notary key (`NOTARY_*`) stays a
-  Developer key, so `mode=app-store` uses a second key and stops at once when its secrets are missing. To make it:
+**The listing** (`asc.mjs listing`, the App Manager key below). It reads `apps/phone/store/`:
+- `<locale>/description.txt` (at most 4,000 characters), `keywords.txt` (100), and, when present,
+  `promotional-text.txt` (170) and `subtitle.txt` (30); `<primary locale>/review-notes.txt` (4,000) is App Review's
+  notes. One folder per locale, `en-US` for now.
+- `listing.json`: `supportUrl`, `marketingUrl` and `privacyPolicyUrl` (https only; the policy is
+  `https://ardia.dev/privacy`), `primaryCategory` and `secondaryCategory` (App Store category ids such as
+  `UTILITIES`), `ageRating` (the age rating declaration's answers, by Apple's field names), `contentRights`
+  (`DOES_NOT_USE_THIRD_PARTY_CONTENT` or `USES_THIRD_PARTY_CONTENT`), `price: "free"`, `availability: "all"` and,
+  optionally, `baseTerritory` (`USA` when left out). Unknown keys are refused, so a typo never goes unnoticed.
+- `screenshots/iphone-medium/NN-<name>.png` (1206×2622 or 1179×2556, `APP_IPHONE_61`) and
+  `screenshots/iphone-large/NN-<name>.png` (1320×2868, 1290×2796 or 1260×2736, `APP_IPHONE_67`), 1 to 10 a set,
+  in file name order, portrait or landscape, PNG with no alpha channel.
+
+It checks all of that before any request and lists every problem at once (`asc.mjs listing --check` stops there
+and needs no key; the workflow runs it first). Then it writes only what differs from App Store Connect: the version
+(made with a manual release, or a lone `PREPARE_FOR_SUBMISSION` draft renamed, as `app-store` does; a version in
+review is refused), each locale's text and URLs, the subtitle and privacy policy, the categories, the age rating
+answers, the content rights, a free price from the base territory, availability in every territory and in new ones,
+and App Review Information: the notes, no demo account and the contact. The contact comes from the
+`ASC_REVIEW_CONTACT_FIRST_NAME`, `_LAST_NAME`, `_PHONE` and `_EMAIL` secrets; with any of them unset it is left alone
+and the run says which, so set them (`gh secret set ASC_REVIEW_CONTACT_EMAIL`, and so on) and run it again. The
+contact is never committed and never printed. A screenshot set is replaced only when its files differ from the
+repo's by MD5 (Apple's `sourceFileChecksum`), and only reordered when just the order differs; a new screenshot is
+reserved, uploaded to the addresses Apple gives (without the App Store Connect token) and committed with its
+checksum, and the run waits up to `--timeout` (600 s) for Apple to finish processing it. A set for any other
+display type is left as it is. A re-run on an unchanged repo writes nothing. Two things the API can't do are
+listed at the end instead: territories missing from an existing availability, and availability in new
+territories once it was turned off.
+
+- **Its own key.** Editing the listing and submitting for App Review need the App Manager role, and the notary key
+  (`NOTARY_*`) stays a Developer key, so `mode=listing` and `mode=app-store` use a second key and stop at once when
+  its secrets are missing. To make it:
   App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys › Generate API Key,
   named "Ardia App Store", access **App Manager**. Download `AuthKey_<id>.p8` (Apple offers it once) and set the
   secrets, then delete the download:
@@ -4858,11 +4896,11 @@ gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<fi
   ```
 
   A 403 from Apple during the run means the key lacks that role, and the run says so.
-- **On a Mac**, `node apps/phone/scripts/asc.mjs app-store --build <number> --version <x.y.z> [--notes <file>]`
-  does the same with that key in `ASC_KEY`, `ASC_KEY_ID` and `ASC_ISSUER`. Each request carries a token minted for
+- **On a Mac**, `node apps/phone/scripts/asc.mjs listing` and `node apps/phone/scripts/asc.mjs app-store --build
+  <number> [--notes <file>]` do the same with that key in `ASC_KEY`, `ASC_KEY_ID` and `ASC_ISSUER`. Each request carries a token minted for
   15 minutes and made again a minute before it runs out, so a long wait for processing keeps working.
 
-In order:
+`mode=app-store`, in order:
 - **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
   `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
   `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in

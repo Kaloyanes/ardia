@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32, deflateSync } from "node:zlib";
 
 const script = fileURLToPath(new URL("./asc.mjs", import.meta.url));
 
@@ -869,4 +870,429 @@ test("app-store wants a finished screenshot in the Dynamic Island medium or larg
     const run = appStore(ready101({ screenshots: [{ type, shots: 1 }, { type: "APP_IPHONE_65", shots: ["FAILED"] }] }));
     assert.equal(run.code, 0, `${type}: ${run.err}`);
   }
+});
+
+const STORE_FIXTURE = fileURLToPath(new URL("./fixtures/store", import.meta.url));
+const pngCache = new Map();
+
+function png(width, height, { shade = 40, alpha = false } = {}) {
+  const key = `${width}x${height}:${shade}:${alpha}`;
+  if (pngCache.has(key)) return pngCache.get(key);
+  const channels = alpha ? 4 : 3;
+  const row = Buffer.alloc(1 + width * channels, shade);
+  row[0] = 0;
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = alpha ? 6 : 2;
+  const bytes = Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.concat(Array(height).fill(row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  pngCache.set(key, bytes);
+  return bytes;
+}
+
+function storeDir({ medium = [png(1206, 2622, { shade: 10 }), png(1206, 2622, { shade: 20 })], large = [png(1320, 2868, { shade: 30 })], text = {}, listing: changes = {} } = {}) {
+  const dir = join(mkdtempSync(join(tmpdir(), "asc-store-")), "store");
+  cpSync(STORE_FIXTURE, dir, { recursive: true });
+  for (const [file, value] of Object.entries(text)) writeFileSync(join(dir, "en-US", file), value);
+  const listing = { ...JSON.parse(readFileSync(join(dir, "listing.json"), "utf8")), ...changes };
+  writeFileSync(join(dir, "listing.json"), JSON.stringify(listing));
+  for (const [kind, shots] of [["iphone-medium", medium], ["iphone-large", large]]) {
+    mkdirSync(join(dir, "screenshots", kind), { recursive: true });
+    shots.forEach((bytes, at) => writeFileSync(join(dir, "screenshots", kind, `${String(at + 1).padStart(2, "0")}-shot.png`), bytes));
+  }
+  return dir;
+}
+
+function fakeListing() {
+  const file = process.env.ASC_FAKE_STATE_FILE;
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  const log = (entry) => appendFileSync(process.env.ASC_FAKE_LOG, `${JSON.stringify(entry)}\n`);
+  globalThis.setTimeout = (resume) => queueMicrotask(resume);
+  const reply = (data, status = 200, included) => new Response(data === undefined ? null : JSON.stringify({ data, included }), { status });
+  const missing = () => new Response(JSON.stringify({ errors: [{ detail: "The specified resource does not exist" }] }), { status: 404 });
+  const made = (kind) => `${kind}-${++state.made}`;
+  const row = (type, item, relationships) => {
+    const { id, ...attributes } = item;
+    return { id, type, attributes, ...(relationships ? { relationships } : {}) };
+  };
+  const shotRow = (shot) => ({ id: shot.id, type: "appScreenshots", attributes: { fileName: shot.fileName, sourceFileChecksum: shot.checksum, assetDeliveryState: { state: shot.state } } });
+  const route = (method, path, searchParams, body, init) => {
+    if (path === "/v1/apps" && method === "GET") {
+      return reply([{ id: "app", type: "apps", attributes: { bundleId: "com.ardia.browser.ios", name: "Ardia", primaryLocale: "en-US", contentRightsDeclaration: state.contentRights } }]);
+    }
+    if (path === "/v1/apps/app" && method === "PATCH") {
+      state.contentRights = body.data.attributes.contentRightsDeclaration;
+      return reply({ id: "app", type: "apps" });
+    }
+    if (path === "/v1/apps/app/appStoreVersions") {
+      return reply(state.versions.map((version) => ({ id: version.id, type: "appStoreVersions", attributes: { versionString: version.version, appVersionState: version.state, releaseType: "MANUAL" }, relationships: { build: { data: null } } })), 200, []);
+    }
+    if (path === "/v1/appStoreVersions" && method === "POST") {
+      state.versions.push({ id: made("version"), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType });
+      return reply({ id: state.versions.at(-1).id, type: "appStoreVersions", attributes: body.data.attributes }, 201);
+    }
+    let match = path.match(/^\/v1\/appStoreVersions\/([^/]+)$/);
+    if (match && method === "PATCH") {
+      Object.assign(state.versions.find((version) => version.id === match[1]), { version: body.data.attributes.versionString });
+      return reply({ id: match[1], type: "appStoreVersions" });
+    }
+    match = path.match(/^\/v1\/appStoreVersions\/([^/]+)\/appStoreVersionLocalizations$/);
+    if (match) return reply(state.versionLocalizations.filter((entry) => entry.version === match[1]).map(({ version, ...entry }) => row("appStoreVersionLocalizations", entry)));
+    if (path === "/v1/appStoreVersionLocalizations" && method === "POST") {
+      state.versionLocalizations.push({ id: made("vloc"), version: body.data.relationships.appStoreVersion.data.id, ...body.data.attributes });
+      return reply({ id: state.versionLocalizations.at(-1).id, type: "appStoreVersionLocalizations" }, 201);
+    }
+    match = path.match(/^\/v1\/appStoreVersionLocalizations\/([^/]+)$/);
+    if (match && method === "PATCH") {
+      Object.assign(state.versionLocalizations.find((entry) => entry.id === match[1]), body.data.attributes);
+      return reply({ id: match[1], type: "appStoreVersionLocalizations" });
+    }
+    if (path === "/v1/apps/app/appInfos") {
+      const link = (id) => ({ data: id ? { type: "appCategories", id } : null });
+      return reply(state.appInfos.map((info) => ({ id: info.id, type: "appInfos", attributes: { state: info.state }, relationships: { primaryCategory: link(info.primaryCategory), secondaryCategory: link(info.secondaryCategory) } })));
+    }
+    match = path.match(/^\/v1\/appInfos\/([^/]+)(.*)$/);
+    if (match && match[2] === "/appInfoLocalizations") return reply(state.infoLocalizations.filter((entry) => entry.info === match[1]).map(({ info, ...entry }) => row("appInfoLocalizations", entry)));
+    if (match && match[2] === "/ageRatingDeclaration") return reply({ id: "age", type: "ageRatingDeclarations", attributes: state.ageRating });
+    if (match && match[2] === "" && method === "PATCH") {
+      const info = state.appInfos.find((entry) => entry.id === match[1]);
+      for (const [key, link] of Object.entries(body.data.relationships)) info[key] = link.data?.id ?? null;
+      return reply({ id: info.id, type: "appInfos" });
+    }
+    if (path === "/v1/appInfoLocalizations" && method === "POST") {
+      state.infoLocalizations.push({ id: made("iloc"), info: body.data.relationships.appInfo.data.id, ...body.data.attributes });
+      return reply({ id: state.infoLocalizations.at(-1).id, type: "appInfoLocalizations" }, 201);
+    }
+    match = path.match(/^\/v1\/appInfoLocalizations\/([^/]+)$/);
+    if (match && method === "PATCH") {
+      Object.assign(state.infoLocalizations.find((entry) => entry.id === match[1]), body.data.attributes);
+      return reply({ id: match[1], type: "appInfoLocalizations" });
+    }
+    if (path === "/v1/ageRatingDeclarations/age" && method === "PATCH") {
+      Object.assign(state.ageRating, body.data.attributes);
+      return reply({ id: "age", type: "ageRatingDeclarations" });
+    }
+    if (path === "/v1/apps/app/appPriceSchedule") {
+      return state.price ? reply({ id: "schedule", type: "appPriceSchedules", relationships: { baseTerritory: { data: { type: "territories", id: state.price.base } } } }) : missing();
+    }
+    if (path === "/v1/appPriceSchedules/schedule/manualPrices") {
+      return reply(
+        [{ id: "price", type: "appPrices", attributes: { startDate: null, endDate: null }, relationships: { appPricePoint: { data: { type: "appPricePoints", id: state.price.point } } } }],
+        200,
+        state.pricePoints.filter((point) => point.id === state.price.point).map((point) => ({ id: point.id, type: "appPricePoints", attributes: { customerPrice: point.customerPrice } })),
+      );
+    }
+    if (path === "/v1/apps/app/appPricePoints") {
+      return reply(state.pricePoints.filter((point) => point.territory === searchParams.get("filter[territory]")).map((point) => ({ id: point.id, type: "appPricePoints", attributes: { customerPrice: point.customerPrice } })));
+    }
+    if (path === "/v1/appPriceSchedules" && method === "POST") {
+      state.price = { base: body.data.relationships.baseTerritory.data.id, point: body.included[0].relationships.appPricePoint.data.id };
+      return reply({ id: "schedule", type: "appPriceSchedules" }, 201);
+    }
+    if (path === "/v1/territories") return reply(state.territories.map((id) => ({ id, type: "territories", attributes: { currency: "USD" } })));
+    if (path === "/v1/apps/app/appAvailabilityV2") {
+      return state.availability ? reply({ id: "availability", type: "appAvailabilities", attributes: { availableInNewTerritories: state.availability.newTerritories } }) : missing();
+    }
+    if (path === "/v2/appAvailabilities" && method === "POST") {
+      state.availability = {
+        newTerritories: body.data.attributes.availableInNewTerritories,
+        territories: body.included.map((entry) => ({ id: `ta-${entry.relationships.territory.data.id}`, territory: entry.relationships.territory.data.id, available: entry.attributes.available })),
+      };
+      return reply({ id: "availability", type: "appAvailabilities" }, 201);
+    }
+    if (path === "/v2/appAvailabilities/availability/territoryAvailabilities") {
+      return reply(state.availability.territories.map((entry) => ({ id: entry.id, type: "territoryAvailabilities", attributes: { available: entry.available }, relationships: { territory: { data: { type: "territories", id: entry.territory } } } })));
+    }
+    match = path.match(/^\/v1\/territoryAvailabilities\/([^/]+)$/);
+    if (match && method === "PATCH") {
+      state.availability.territories.find((entry) => entry.id === match[1]).available = body.data.attributes.available;
+      return reply({ id: match[1], type: "territoryAvailabilities" });
+    }
+    match = path.match(/^\/v1\/appStoreVersions\/([^/]+)\/appStoreReviewDetail$/);
+    if (match) {
+      const detail = state.review?.version === match[1] ? state.review : null;
+      if (!detail) return reply(null);
+      const { version, ...attributes } = detail;
+      return reply(row("appStoreReviewDetails", attributes));
+    }
+    if (path === "/v1/appStoreReviewDetails" && method === "POST") {
+      state.review = { id: "review", version: body.data.relationships.appStoreVersion.data.id, ...body.data.attributes };
+      return reply({ id: "review", type: "appStoreReviewDetails" }, 201);
+    }
+    if (path === "/v1/appStoreReviewDetails/review" && method === "PATCH") {
+      Object.assign(state.review, body.data.attributes);
+      return reply({ id: "review", type: "appStoreReviewDetails" });
+    }
+    match = path.match(/^\/v1\/appStoreVersionLocalizations\/([^/]+)\/appScreenshotSets$/);
+    if (match) {
+      const sets = state.sets.filter((set) => set.localization === match[1]);
+      return reply(
+        sets.map((set) => ({ id: set.id, type: "appScreenshotSets", attributes: { screenshotDisplayType: set.type }, relationships: { appScreenshots: { data: set.shots.map((id) => ({ type: "appScreenshots", id })) } } })),
+        200,
+        sets.flatMap((set) => set.shots.map((id) => shotRow(state.shots[id]))),
+      );
+    }
+    if (path === "/v1/appScreenshotSets" && method === "POST") {
+      state.sets.push({ id: made("set"), localization: body.data.relationships.appStoreVersionLocalization.data.id, type: body.data.attributes.screenshotDisplayType, shots: [] });
+      return reply({ id: state.sets.at(-1).id, type: "appScreenshotSets" }, 201);
+    }
+    match = path.match(/^\/v1\/appScreenshotSets\/([^/]+)\/relationships\/appScreenshots$/);
+    if (match && method === "PATCH") {
+      state.sets.find((set) => set.id === match[1]).shots = body.data.map((link) => link.id);
+      return reply(undefined, 204);
+    }
+    if (path === "/v1/appScreenshots" && method === "POST") {
+      const id = made("shot");
+      const { fileName, fileSize } = body.data.attributes;
+      const half = Math.ceil(fileSize / 2);
+      state.shots[id] = { id, fileName, fileSize, received: 0, checksum: null, state: "AWAITING_UPLOAD", polls: 0 };
+      state.sets.find((set) => set.id === body.data.relationships.appScreenshotSet.data.id).shots.push(id);
+      const operation = (offset, length) => ({ method: "PUT", url: `https://upload.test/${id}/${offset}`, offset, length, requestHeaders: [{ name: "Content-Type", value: "image/png" }] });
+      return reply({ id, type: "appScreenshots", attributes: { fileName, fileSize, uploadOperations: [operation(0, half), operation(half, fileSize - half)] } }, 201);
+    }
+    match = path.match(/^\/v1\/appScreenshots\/([^/]+)$/);
+    const shot = match && state.shots[match[1]];
+    if (shot && method === "PATCH") {
+      shot.checksum = body.data.attributes.sourceFileChecksum;
+      if (body.data.attributes.uploaded) shot.state = shot.received === shot.fileSize ? "UPLOAD_COMPLETE" : "FAILED";
+      return reply(shotRow(shot));
+    }
+    if (shot && method === "GET") {
+      if (shot.state === "UPLOAD_COMPLETE" && ++shot.polls >= 2) shot.state = "COMPLETE";
+      return reply(shotRow(shot));
+    }
+    if (shot && method === "DELETE") {
+      for (const set of state.sets) set.shots = set.shots.filter((id) => id !== shot.id);
+      delete state.shots[shot.id];
+      return reply(undefined, 204);
+    }
+    return missing();
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const method = init.method ?? "GET";
+    const { hostname, pathname: path, searchParams } = new URL(url);
+    const authorized = Object.keys(init.headers ?? {}).some((name) => name.toLowerCase() === "authorization");
+    if (hostname === "upload.test") {
+      const [, id, offset] = path.split("/");
+      state.shots[id].received += init.body.length;
+      log({ method, path: `upload.test${path}`, length: init.body.length, offset: Number(offset), authorized });
+      writeFileSync(file, JSON.stringify(state));
+      return new Response(null, { status: 200 });
+    }
+    const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+    log(method === "GET" ? { method, path } : { method, path, body });
+    const response = route(method, path, searchParams, body, init);
+    writeFileSync(file, JSON.stringify(state));
+    return response;
+  };
+}
+
+function listingState(changes = {}) {
+  return {
+    made: 0,
+    contentRights: null,
+    versions: [],
+    versionLocalizations: [],
+    appInfos: [{ id: "info", state: "PREPARE_FOR_SUBMISSION", primaryCategory: null, secondaryCategory: null }],
+    infoLocalizations: [{ id: "iloc", info: "info", locale: "en-US", name: "Ardia", subtitle: null, privacyPolicyUrl: null }],
+    ageRating: { advertising: null, gambling: null, lootBox: null, unrestrictedWebAccess: null, violenceRealistic: null, userGeneratedContent: null },
+    price: null,
+    pricePoints: [
+      { id: "point-paid", territory: "USA", customerPrice: "0.99" },
+      { id: "point-free", territory: "USA", customerPrice: "0.0" },
+      { id: "point-free-gbr", territory: "GBR", customerPrice: "0.0" },
+    ],
+    territories: ["USA", "GBR", "IND"],
+    availability: null,
+    review: null,
+    sets: [],
+    shots: {},
+    ...changes,
+  };
+}
+
+const CONTACT = { ASC_REVIEW_CONTACT_FIRST_NAME: "Quillon", ASC_REVIEW_CONTACT_LAST_NAME: "Marrowby", ASC_REVIEW_CONTACT_PHONE: "+1 555 010 0100", ASC_REVIEW_CONTACT_EMAIL: "contact@example.com" };
+const NO_CONTACT = Object.fromEntries(Object.keys(CONTACT).map((name) => [name, ""]));
+
+function listingRun(state, { store = storeDir(), contact = CONTACT, extra = [], key = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "asc-"));
+  const keyPath = join(dir, "AuthKey.p8");
+  writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({ type: "pkcs8", format: "pem" }));
+  const log = join(dir, "requests.jsonl");
+  writeFileSync(log, "");
+  const stateFile = typeof state === "string" ? state : join(dir, "state.json");
+  if (typeof state !== "string") writeFileSync(stateFile, JSON.stringify(state));
+  const preload = `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";\n(${fakeListing})();`;
+  const run = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, "listing", "--store", store, "--ios-dir", fakeIosDir("1"), ...extra], {
+    env: { ...process.env, ...(key ? { ASC_KEY: keyPath, ASC_KEY_ID: "key", ASC_ISSUER: "issuer" } : { ASC_KEY: "", ASC_KEY_ID: "", ASC_ISSUER: "" }), ...contact, ASC_FAKE_STATE_FILE: stateFile, ASC_FAKE_LOG: log },
+    encoding: "utf8",
+  });
+  const requests = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const writes = requests.filter((entry) => entry.method !== "GET");
+  return { code: run.status, out: run.stdout, err: run.stderr, requests, writes, steps: writes.map((write) => `${write.method} ${write.path}`), stateFile, state: JSON.parse(readFileSync(stateFile, "utf8")) };
+}
+
+const md5 = (bytes) => createHash("md5").update(bytes).digest("hex");
+const fixtureText = (file) => readFileSync(join(STORE_FIXTURE, "en-US", file), "utf8").trim();
+
+test("listing pushes the text, URLs, categories, age rating, rights, free price, availability, review details and screenshots from the repo", () => {
+  const store = storeDir();
+  const run = listingRun(listingState(), { store });
+  assert.equal(run.code, 0, run.err);
+  const version = run.writes.find((write) => write.path === "/v1/appStoreVersions");
+  assert.deepEqual(version.body.data.attributes, { platform: "IOS", versionString: "1.0.1", releaseType: "MANUAL" });
+  assert.deepEqual(run.state.versionLocalizations.map(({ id, version: _, ...entry }) => entry), [
+    {
+      locale: "en-US",
+      description: fixtureText("description.txt"),
+      keywords: fixtureText("keywords.txt"),
+      supportUrl: "https://example.com/support",
+      promotionalText: fixtureText("promotional-text.txt"),
+      marketingUrl: "https://example.com",
+    },
+  ]);
+  assert.deepEqual(run.state.infoLocalizations[0], { id: "iloc", info: "info", locale: "en-US", name: "Ardia", subtitle: fixtureText("subtitle.txt"), privacyPolicyUrl: "https://example.com/privacy" });
+  assert.deepEqual([run.state.appInfos[0].primaryCategory, run.state.appInfos[0].secondaryCategory], ["UTILITIES", "PRODUCTIVITY"]);
+  assert.deepEqual(run.writes.find((write) => write.path === "/v1/ageRatingDeclarations/age").body.data.attributes, { advertising: false, gambling: false, lootBox: false, unrestrictedWebAccess: true, violenceRealistic: "NONE" });
+  assert.equal(run.state.ageRating.userGeneratedContent, null);
+  assert.equal(run.state.contentRights, "DOES_NOT_USE_THIRD_PARTY_CONTENT");
+  assert.deepEqual(run.state.price, { base: "USA", point: "point-free" });
+  assert.deepEqual(run.state.availability, {
+    newTerritories: true,
+    territories: ["USA", "GBR", "IND"].map((territory) => ({ id: `ta-${territory}`, territory, available: true })),
+  });
+  const { id, version: reviewed, ...review } = run.state.review;
+  assert.equal(reviewed, run.state.versions[0].id);
+  assert.deepEqual(review, { notes: fixtureText("review-notes.txt"), demoAccountRequired: false, contactFirstName: "Quillon", contactLastName: "Marrowby", contactPhone: "+1 555 010 0100", contactEmail: "contact@example.com" });
+  for (const value of Object.values(CONTACT)) assert.ok(!run.out.includes(value) && !run.err.includes(value), "contact details never printed");
+  const sets = Object.fromEntries(run.state.sets.map((set) => [set.type, set.shots.map((shot) => run.state.shots[shot])]));
+  assert.deepEqual(Object.keys(sets).sort(), ["APP_IPHONE_61", "APP_IPHONE_67"]);
+  const medium = [png(1206, 2622, { shade: 10 }), png(1206, 2622, { shade: 20 })];
+  assert.deepEqual(sets.APP_IPHONE_61.map((shot) => [shot.fileName, shot.checksum, shot.state, shot.received === shot.fileSize]), medium.map((bytes, at) => [`0${at + 1}-shot.png`, md5(bytes), "COMPLETE", true]));
+  assert.deepEqual(sets.APP_IPHONE_67.map((shot) => shot.checksum), [md5(png(1320, 2868, { shade: 30 }))]);
+  const uploads = run.requests.filter((entry) => entry.path.startsWith("upload.test"));
+  assert.equal(uploads.length, 6);
+  assert.ok(uploads.every((upload) => !upload.authorized), "the upload never carries the App Store Connect token");
+  assert.match(run.out, /still by hand in App Store Connect:\n- App Privacy/);
+  assert.doesNotMatch(run.out, /App Review contact skipped/);
+});
+
+test("listing run again on what it wrote changes nothing", () => {
+  const store = storeDir();
+  const first = listingRun(listingState(), { store });
+  assert.equal(first.code, 0, first.err);
+  const again = listingRun(first.stateFile, { store });
+  assert.equal(again.code, 0, again.err);
+  assert.deepEqual(again.writes, []);
+  assert.match(again.out, /already matched the repo; nothing was written/);
+});
+
+test("listing replaces only the screenshot set whose files changed, and reorders one whose order alone changed", () => {
+  const first = listingRun(listingState(), { store: storeDir() });
+  assert.equal(first.code, 0, first.err);
+  const oldMedium = first.state.sets.find((set) => set.type === "APP_IPHONE_61").shots;
+  const changed = listingRun(first.stateFile, { store: storeDir({ medium: [png(1206, 2622, { shade: 10 }), png(1206, 2622, { shade: 99 })] }) });
+  assert.equal(changed.code, 0, changed.err);
+  assert.deepEqual(changed.steps.filter((step) => step.startsWith("DELETE")), oldMedium.map((id) => `DELETE /v1/appScreenshots/${id}`));
+  assert.equal(changed.steps.filter((step) => step === "POST /v1/appScreenshots").length, 2);
+  assert.ok(!changed.steps.some((step) => step.startsWith("POST /v1/appScreenshotSets")));
+  const large = changed.state.sets.find((set) => set.type === "APP_IPHONE_67");
+  assert.deepEqual(large.shots, first.state.sets.find((set) => set.type === "APP_IPHONE_67").shots, "the large set is left alone");
+  assert.deepEqual(changed.state.sets.find((set) => set.type === "APP_IPHONE_61").shots.map((id) => changed.state.shots[id].checksum), [md5(png(1206, 2622, { shade: 10 })), md5(png(1206, 2622, { shade: 99 }))]);
+  assert.ok(changed.steps.every((step) => !/appStoreVersionLocalizations\/|appInfo|ageRating|appPriceSchedules|appAvailabilities|appStoreReviewDetails|\/v1\/apps\//.test(step)), changed.steps.join("\n"));
+  const before = changed.state.sets.find((set) => set.type === "APP_IPHONE_61").shots;
+  const swapped = listingRun(changed.stateFile, { store: storeDir({ medium: [png(1206, 2622, { shade: 99 }), png(1206, 2622, { shade: 10 })] }) });
+  assert.equal(swapped.code, 0, swapped.err);
+  assert.deepEqual(swapped.writes.map((write) => [write.method, write.path, write.body?.data?.map((link) => link.id)]), [["PATCH", `/v1/appScreenshotSets/${changed.state.sets.find((set) => set.type === "APP_IPHONE_61").id}/relationships/appScreenshots`, before.toReversed()]]);
+});
+
+test("listing refuses text over Apple's limits, bad URLs, a wrong size, alpha and an unknown answer before any request", () => {
+  const store = storeDir({
+    medium: [png(1206, 2622), png(1290, 2796), png(1206, 2622, { alpha: true })],
+    text: { "subtitle.txt": "s".repeat(31), "keywords.txt": "k".repeat(101), "description.txt": "d".repeat(4001), "promotional-text.txt": "p".repeat(171), "review-notes.txt": "n".repeat(4001) },
+    listing: { supportUrl: "http://example.com/support", price: "0.99", ageRating: { advertising: false, spaceTravel: true }, contentRights: "MAYBE" },
+  });
+  writeFileSync(join(store, "screenshots", "iphone-large", "shot.jpg"), "x");
+  for (const run of [listingRun(listingState(), { store }), listingRun(listingState(), { store, extra: ["--check"], key: false })]) {
+    assert.equal(run.code, 1, run.out);
+    for (const problem of [
+      /subtitle\.txt has 31 characters; the subtitle takes at most 30/,
+      /keywords\.txt has 101 characters; the keywords takes at most 100/,
+      /description\.txt has 4001 characters; the description takes at most 4000/,
+      /promotional-text\.txt has 171 characters; the promotional text takes at most 170/,
+      /review-notes\.txt has 4001 characters; App Review notes take at most 4000/,
+      /supportUrl must be an https URL/,
+      /price must be "free"/,
+      /ageRating has an unknown answer spaceTravel/,
+      /contentRights must be/,
+      /02-shot\.png is 1290×2796; iPhone with Dynamic Island \(medium display\) takes 1206×2622, 1179×2556/,
+      /03-shot\.png has an alpha channel/,
+      /shot\.jpg isn't a screenshot named NN-<name>\.png/,
+    ]) {
+      assert.match(run.err, problem);
+    }
+    assert.deepEqual(run.requests, []);
+  }
+  const fine = listingRun(listingState(), { extra: ["--check"], key: false });
+  assert.equal(fine.code, 0, fine.err);
+  assert.match(fine.out, /listing checked: version 1\.0\.1, en-US, screenshots 2 APP_IPHONE_61, 1 APP_IPHONE_67/);
+  assert.deepEqual(fine.requests, []);
+  const none = listingRun(listingState(), { store: storeDir({ medium: [], large: [] }), extra: ["--check"], key: false });
+  assert.equal(none.code, 1);
+  assert.match(none.err, /has no iPhone screenshots: App Review needs APP_IPHONE_61 or APP_IPHONE_67/);
+});
+
+test("listing skips the App Review contact with a note when its secrets are unset, and never makes them up", () => {
+  for (const contact of [NO_CONTACT, { ...NO_CONTACT, ASC_REVIEW_CONTACT_EMAIL: "contact@example.com" }]) {
+    const run = listingRun(listingState(), { contact });
+    assert.equal(run.code, 0, run.err);
+    const { id, version, ...review } = run.state.review;
+    assert.deepEqual(review, { notes: fixtureText("review-notes.txt"), demoAccountRequired: false });
+    assert.match(run.out, /App Review contact skipped: ASC_REVIEW_CONTACT_FIRST_NAME, ASC_REVIEW_CONTACT_LAST_NAME, ASC_REVIEW_CONTACT_PHONE[^\n]* unset/);
+    assert.match(run.out, /- App Review contact: set ASC_REVIEW_CONTACT_FIRST_NAME/);
+    assert.doesNotMatch(run.out, /contact@example\.com/);
+  }
+  const bad = listingRun(listingState(), { contact: { ...CONTACT, ASC_REVIEW_CONTACT_EMAIL: "not-an-email" } });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /ASC_REVIEW_CONTACT_EMAIL isn't an email address/);
+  assert.doesNotMatch(bad.err, /not-an-email/);
+  assert.deepEqual(bad.requests, []);
+});
+
+test("listing renames a lone draft, refuses a version in review, and makes the app free and available where it wasn't", () => {
+  const renamed = listingRun(listingState({ versions: [{ id: "v100", version: "1.0", state: "PREPARE_FOR_SUBMISSION" }] }));
+  assert.equal(renamed.code, 0, renamed.err);
+  assert.deepEqual(renamed.writes[0], { method: "PATCH", path: "/v1/appStoreVersions/v100", body: { data: { type: "appStoreVersions", id: "v100", attributes: { versionString: "1.0.1" } } } });
+  assert.ok(!renamed.steps.includes("POST /v1/appStoreVersions"));
+  for (const state of ["WAITING_FOR_REVIEW", "IN_REVIEW"]) {
+    const run = listingRun(listingState({ versions: [{ id: "v101", version: "1.0.1", state }] }));
+    assert.equal(run.code, 1, run.out);
+    assert.match(run.err, new RegExp(`version 1\\.0\\.1 is ${state}; its listing can't change`));
+    assert.deepEqual(run.writes, []);
+  }
+  const partly = listingRun(
+    listingState({
+      price: { base: "USA", point: "point-paid" },
+      availability: { newTerritories: false, territories: [{ id: "ta-USA", territory: "USA", available: true }, { id: "ta-GBR", territory: "GBR", available: false }] },
+    }),
+  );
+  assert.equal(partly.code, 0, partly.err);
+  assert.deepEqual(partly.state.price, { base: "USA", point: "point-free" });
+  assert.deepEqual(partly.steps.filter((step) => step.includes("territoryAvailabilities")), ["PATCH /v1/territoryAvailabilities/ta-GBR"]);
+  assert.match(partly.out, /1 territory isn't in the app's availability \(IND\)/);
+  assert.match(partly.out, /turn on availability in new territories/);
 });
