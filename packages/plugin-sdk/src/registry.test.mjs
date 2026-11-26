@@ -15,13 +15,16 @@ import {
   resolvePluginGraph,
   sameRegistry,
   signEnvelope,
+  signOfficialArtifact,
   toBase64,
   toBase64Url,
   validatePluginDetail,
   validateRegistryIndex,
   validateRevocationList,
   verifyEnvelope,
+  verifyOfficialArtifact,
   verifySignedJson,
+  isNativeTier,
 } from "./registry.ts";
 import { satisfies } from "./semver.ts";
 
@@ -607,5 +610,19 @@ describe("diffSecuritySurface", () => {
   test("adding a sidecar or a first program from nothing expands", () => {
     assert.deepEqual(diffSecuritySurface({}, { scope: "global", sidecar: { run: ["x"] }, contributes: { programs: [{ name: "tool", path: "bin/tool" }] } }).expanded, true);
     assert.equal(diffSecuritySurface(null, { permissions: { activePage: { screenshot: true } } }).expanded, true);
+  });
+
+  test("official native artifact signatures bind id, version, platform and sha256", async () => {
+    const k1 = keys();
+    const k2 = keys();
+    const claim = { id: "@ardia/cli", version: "0.8.0", platform: "macos-arm64", sha256: "a".repeat(64) };
+    const sig = await signOfficialArtifact(claim, k2.privatePem);
+    assert.match(sig, /^[A-Za-z0-9_-]{86}$/);
+    assert.deepEqual(await verifyOfficialArtifact(claim, sig, { k1: k1.publicPem, k2: k2.publicPem }), { ok: true, kid: "k2" });
+    assert.equal((await verifyOfficialArtifact({ ...claim, sha256: "b".repeat(64) }, sig, { k2: k2.publicPem })).ok, false);
+    assert.equal((await verifyOfficialArtifact({ ...claim, id: "@acme/cli" }, sig, { k2: k2.publicPem })).ok, false);
+    assert.equal(isNativeTier({ contributes: { programs: [{ name: "ardia", path: "bin/ardia" }] } }), true);
+    assert.equal(isNativeTier({ sidecar: { run: ["sidecar/server.mjs"] } }), true);
+    assert.equal(isNativeTier({}), false);
   });
 });

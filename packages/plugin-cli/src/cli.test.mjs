@@ -10,7 +10,7 @@ import { parseArgs } from "./args.ts";
 import { buildProject } from "./build.ts";
 import { checkProject } from "./check.ts";
 import { devPaths, runDev } from "./dev.ts";
-import { globRule } from "./files.ts";
+import { globRule, limitProblems, limitsForTier } from "./files.ts";
 import { initPlugin } from "./init.ts";
 import { main } from "./main.ts";
 
@@ -543,6 +543,12 @@ describe("round 1 fixes", () => {
     handlers.SIGINT();
     assert.equal(await running, 0);
     assert.equal(existsSync(session.paths.link), false);
+  });
+
+  test("native plugins get the higher 512 MB file / 1 GB total pack limits while js_sandbox stays tight", () => {
+    const big = [{ path: "bin/ardia", size: 70 * 1024 * 1024, mode: 0o755, executable: true }];
+    assert.equal(limitProblems(big, [], limitsForTier(false)).length, 2);
+    assert.deepEqual(limitProblems(big, [], limitsForTier(true)), []);
   });
 });
 

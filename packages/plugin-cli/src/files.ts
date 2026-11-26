@@ -1,7 +1,13 @@
 import { lstatSync, readdirSync, type Stats } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-export const PACK_LIMITS = { entries: 20_000, fileBytes: 32 * 1024 * 1024, totalBytes: 64 * 1024 * 1024, packedBytes: 64 * 1024 * 1024, pathBytes: 240 } as const;
+export type PackLimits = { readonly entries: number; readonly fileBytes: number; readonly totalBytes: number; readonly packedBytes: number; readonly pathBytes: number };
+
+export const PACK_LIMITS: PackLimits = { entries: 20_000, fileBytes: 32 * 1024 * 1024, totalBytes: 64 * 1024 * 1024, packedBytes: 64 * 1024 * 1024, pathBytes: 240 };
+
+export const NATIVE_PACK_LIMITS: PackLimits = { entries: 20_000, fileBytes: 512 * 1024 * 1024, totalBytes: 1024 * 1024 * 1024, packedBytes: 512 * 1024 * 1024, pathBytes: 240 };
+
+export const limitsForTier = (native: boolean): PackLimits => (native ? NATIVE_PACK_LIMITS : PACK_LIMITS);
 
 export type FileEntry = { path: string; size: number; mode: number; executable: boolean };
 
@@ -95,17 +101,17 @@ export function walkPluginFiles(root: string, ignore: readonly IgnoreRule[], kee
   return { files, directories, problems };
 }
 
-export function limitProblems(files: readonly FileEntry[], directories: readonly string[] = []): string[] {
+export function limitProblems(files: readonly FileEntry[], directories: readonly string[] = [], limits: PackLimits = PACK_LIMITS): string[] {
   const problems: string[] = [];
   const entries = files.length + directories.length + 1;
-  if (entries > PACK_LIMITS.entries) problems.push(`the pack would hold ${entries} entries (files and folders); the limit is ${PACK_LIMITS.entries}`);
+  if (entries > limits.entries) problems.push(`the pack would hold ${entries} entries (files and folders); the limit is ${limits.entries}`);
   let total = 0;
   for (const file of files) {
     total += file.size;
-    if (file.size > PACK_LIMITS.fileBytes) problems.push(`${file.path} is ${file.size} bytes; the limit for one file is ${PACK_LIMITS.fileBytes}`);
-    if (Buffer.byteLength(file.path) > PACK_LIMITS.pathBytes) problems.push(`${file.path} is a longer path than ${PACK_LIMITS.pathBytes} bytes`);
+    if (file.size > limits.fileBytes) problems.push(`${file.path} is ${file.size} bytes; the limit for one file is ${limits.fileBytes}`);
+    if (Buffer.byteLength(file.path) > limits.pathBytes) problems.push(`${file.path} is a longer path than ${limits.pathBytes} bytes`);
     if (/[\u0000-\u001f\u007f]/.test(file.path)) problems.push(`${JSON.stringify(file.path)} has control characters in its name`);
   }
-  if (total > PACK_LIMITS.totalBytes) problems.push(`the pack would hold ${total} bytes; the limit is ${PACK_LIMITS.totalBytes}`);
+  if (total > limits.totalBytes) problems.push(`the pack would hold ${total} bytes; the limit is ${limits.totalBytes}`);
   return problems;
 }

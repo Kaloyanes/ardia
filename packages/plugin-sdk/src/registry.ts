@@ -72,6 +72,19 @@ export {
   type Catalog,
 } from "./resolve";
 export { diffSecuritySurface, securitySurface, type SecurityDiff, type SecuritySurfaceInput } from "./securitySurface";
+export {
+  OFFICIAL_ARTIFACT_DOMAIN,
+  OFFICIAL_SCOPE,
+  isNativeTier,
+  officialArtifactMessage,
+  officialArtifactProblem,
+  reachesOutsideSandbox,
+  signOfficialArtifact,
+  verifyOfficialArtifact,
+  type NativeTierInput,
+  type OfficialArtifactClaim,
+  type OfficialVerifyResult,
+} from "./officialArtifact";
 export type { PlatformKey } from "./manifestParts";
 
 export async function verifySignedJson<T>(

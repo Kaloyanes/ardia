@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { insidePath, limitProblems, walkPluginFiles, type FileEntry } from "./files";
+import { isNativeTier } from "@ardia/plugin-sdk/registry";
+import { insidePath, limitProblems, limitsForTier, walkPluginFiles, type FileEntry } from "./files";
 import { formatBytes, type Output } from "./output";
 import { entrySources, ignoreRules, loadProject, referencedFiles, type Project } from "./project";
 
@@ -46,7 +47,7 @@ export function checkProject(project: Project, options: CheckOptions = {}): Chec
     if (ref.path.endsWith(".json")) problems.push(...jsonProblems(project.dir, ref.path, ref.what));
   }
   const walked = packedFiles(project);
-  problems.push(...walked.problems, ...limitProblems(walked.files, walked.directories));
+  problems.push(...walked.problems, ...limitProblems(walked.files, walked.directories, limitsForTier(isNativeTier(project.manifest))));
   const bytes = walked.files.reduce((sum, f) => sum + f.size, 0);
   if (project.packageJson && typeof project.packageJson.version === "string" && project.packageJson.version !== project.manifest.version) {
     warnings.push(`package.json's version ${project.packageJson.version} isn't plugin.json's ${project.manifest.version}`);

@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { PLATFORM_KEYS, type PlatformKey } from "@ardia/plugin-sdk/manifest";
+import { isNativeTier } from "@ardia/plugin-sdk/registry";
 import { runBuild, type BuildFlags } from "./build";
 import { checkProject, packedFiles } from "./check";
-import { PACK_LIMITS } from "./files";
+import { limitsForTier } from "./files";
 import { CliError, formatBytes, shownPath, type Output } from "./output";
 import { loadProject, type Project } from "./project";
 import { gzipDeterministic, TarError, tarBytes, type TarEntry } from "./tar";
@@ -72,7 +73,8 @@ export async function packProject(project: Project, out: Output, flags: PackFlag
     if (error instanceof TarError) throw new CliError(error.message);
     throw error;
   }
-  if (archive.length > PACK_LIMITS.packedBytes) throw new CliError(`The pack is ${formatBytes(archive.length)}; the limit is ${formatBytes(PACK_LIMITS.packedBytes)}`);
+  const limits = limitsForTier(isNativeTier(project.manifest));
+  if (archive.length > limits.packedBytes) throw new CliError(`The pack is ${formatBytes(archive.length)}; the limit is ${formatBytes(limits.packedBytes)}`);
   const file = resolve(flags.out ?? join(project.dir, "release", assetName(project, platform)));
   const sha256 = createHash("sha256").update(archive).digest("hex");
   mkdirSync(dirname(file), { recursive: true });
