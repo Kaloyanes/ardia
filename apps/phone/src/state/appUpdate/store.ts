@@ -25,6 +25,7 @@ import {
   updateUnavailableMessage,
   updateUnverifiedMessage,
   UPDATE_CHECK_TIMEOUT_MS,
+  UPDATE_CHECKSUM_TIMEOUT_MS,
   withOfferedVersion,
   type HandOffResult,
   type OfferedRelease,
@@ -225,9 +226,10 @@ async function installDownloaded(offer: OfferedRelease, id: string) {
   installing = true;
   setHandoff(offer.version, "verifying");
   const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS);
+  const deadline = setTimeout(() => controller.abort(), UPDATE_CHECKSUM_TIMEOUT_MS);
   try {
     const answer = await fetchReleaseChecksum(request.checksumUrl, controller.signal);
+    clearTimeout(deadline);
     if (answer.kind === "unreachable") {
       setHandoff(offer.version, "ready");
       showToast(updateUnverifiedMessage(), "warning");

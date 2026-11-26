@@ -3190,7 +3190,7 @@ zeros, nightly 1 to 998) and orders them by versionCode.
   the system DownloadManager (the exact URL, `application/vnd.android.package-archive`, the public Downloads folder,
   a completion notification titled Ardia <version>); `app_update_download` keeps its id and version. When the
   DownloadManager says it finished (`ACTION_DOWNLOAD_COMPLETE` for that id, or Install in the row), Ardia fetches the
-  release's `Ardia-<v>.apk.sha256` asset (a release without one is never offered), reads it only in `sha256sum`'s own
+  release's `Ardia-<v>.apk.sha256` asset within 30 s (GitHub's asset host can take over 10 s to connect; a release without one is never offered), reads it only in `sha256sum`'s own
   form for that file name, copies the download into its cache while hashing it, and on a match opens Android's
   installer on that copy through its `updates` FileProvider. A mismatch, a missing or unreadable checksum deletes the
   download and says so; no connection keeps it and asks to try again. Without the install permission Ardia says so in
