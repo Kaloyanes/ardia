@@ -19,7 +19,25 @@ type BackdropDeps = {
   watchMotion: (changed: () => void) => () => void;
   animating: (layers: readonly Element[], fades: boolean) => boolean;
   opacity?: (element: Element) => number;
+  additive?: (element: Element) => boolean;
 };
+
+export function settleCrossFades(regions: BackdropRegion[], additive: readonly boolean[]): BackdropRegion[] {
+  const stacks = new Map<string, number[]>();
+  regions.forEach((region, index) => {
+    if (!region.theme) return;
+    const key = JSON.stringify(region.rect);
+    stacks.set(key, [...(stacks.get(key) ?? []), index]);
+  });
+  const settled = [...regions];
+  for (const members of stacks.values()) {
+    if (members.length < 2 || !members.some((index) => additive[index])) continue;
+    const bottom = members[0]!;
+    const total = members.reduce((sum, index) => sum + (regions[index]!.theme?.opacity ?? 0), 0);
+    settled[bottom] = { ...regions[bottom]!, theme: { ...regions[bottom]!.theme!, opacity: +Math.min(1, total).toFixed(4) } };
+  }
+  return settled;
+}
 
 export type AnimationLike = { playState: string; effect: { target?: Element | null; getKeyframes?: () => readonly Record<string, unknown>[] } | null };
 
@@ -60,7 +78,8 @@ export function createMacBackdrops(deps: BackdropDeps) {
 
   const measured = () => {
     const seen = new Set<string>();
-    const regions = [...layers].flatMap(([element, { material, theme }]): BackdropRegion[] => {
+    const additive: boolean[] = [];
+    const measuredRegions = [...layers].flatMap(([element, { material, theme }]): BackdropRegion[] => {
       const rect = deps.measure(element);
       if (!rect) return [];
       const painted = theme?.(rect) ?? null;
@@ -69,8 +88,10 @@ export function createMacBackdrops(deps: BackdropDeps) {
       const key = JSON.stringify(region);
       if (seen.has(key)) return [];
       seen.add(key);
+      additive.push(!!painted && !!deps.additive?.(element));
       return [region];
     });
+    const regions = settleCrossFades(measuredRegions, additive);
     return { regions, text: JSON.stringify(regions) };
   };
 

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_backdrop_theme.h"
 #include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
@@ -104,6 +105,9 @@ TEST(corpus_is_loaded) {
 
 TEST(glass_names_and_ids) {
   for (const std::string& text : Load().strings) {
+    if (ardia_mac::backdrop_theme::KnownTexture(text)) {
+      CHECK(text == "film" || text == "grain" || text == "sand" || text == "denim" || text == "tweed");
+    }
     if (ardia_mac::glass::ValidId(text)) {
       CHECK(!text.empty() && text.size() <= ardia_mac::glass::kMaxIdLength && Charset(text, "-_:."));
     }

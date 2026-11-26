@@ -153,10 +153,13 @@ inline std::array<std::uint8_t, kGrainSide * kGrainSide> GrainAlpha(std::string_
   return texture == "film" ? FilmGrainAlpha() : TextureGrainAlpha(texture);
 }
 
-inline int GrainCellPixels(double points, double backing_scale) {
+inline constexpr int kMaxGrainImagePixels = 4096;
+
+inline int GrainImagePixels(double points, double backing_scale, double zoom = 1) {
   const double scale = Finite(backing_scale) && backing_scale > 0 ? backing_scale : 1;
+  const double magnify = Finite(zoom) && zoom > 0 ? std::min(zoom, 20.0) : 1;
   const double size = Finite(points) && points > 0 ? std::min(points, kMaxGrainPoints) : kGrainSide;
-  return std::max(1, static_cast<int>(std::lround(size * scale / kGrainSide)));
+  return std::clamp(static_cast<int>(std::lround(size * magnify * scale)), 1, kMaxGrainImagePixels);
 }
 
 }

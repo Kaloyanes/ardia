@@ -12,6 +12,13 @@ export const nativeWindowBackdrop = (): boolean => behindWindowGlassAvailable() 
 
 export const refreshBehindWindowGlass = () => backdrops?.refresh();
 
+function blendsAdditively(element: Element) {
+  for (let node: Element | null = element; node && node !== document.documentElement; node = node.parentElement) {
+    if (getComputedStyle(node).mixBlendMode === "plus-lighter") return true;
+  }
+  return false;
+}
+
 function ancestorOpacity(element: Element) {
   let opacity = 1;
   for (let node: Element | null = element; node && node !== document.documentElement; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity) || 0;
@@ -51,6 +58,7 @@ export function watchBehindWindowGlass(element: HTMLElement, theme: BackdropThem
     watchMotion,
     animating: runningAnimations,
     opacity: ancestorOpacity,
+    additive: blendsAdditively,
   });
   return backdrops.add(element, windowBackdropMaterial((method) => hostSupports(method)), theme);
 }

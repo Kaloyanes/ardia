@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { WindowBackdrop } from "../../browser/src/components/ui";
+import { WindowBackdrop } from "./rootBackdropUi";
 import { spaceLookSource } from "../../browser/src/lib/profileLook";
 import { PageThemeContext, profileTheme } from "../../browser/src/components/ui/theme";
 import { useProfileLooks } from "../../browser/src/state/profiles/hooks";

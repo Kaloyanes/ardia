@@ -44,12 +44,15 @@ TEST(native_grain_matches_the_shell_tiles_byte_for_byte) {
 TEST(textures_and_cells_are_bounded) {
   for (const char* known : {"film", "grain", "sand", "denim", "tweed"}) CHECK(theme::KnownTexture(known));
   for (const char* unknown : {"", "Film", "../x", "noise"}) CHECK(!theme::KnownTexture(unknown));
-  CHECK(theme::GrainCellPixels(128, 2) == 2);
-  CHECK(theme::GrainCellPixels(64, 2) == 1);
-  CHECK(theme::GrainCellPixels(128, 1) == 1);
-  CHECK(theme::GrainCellPixels(1e12, 2) == 16);
-  CHECK(theme::GrainCellPixels(std::nan(""), std::nan("")) == 1);
-  CHECK(theme::GrainCellPixels(-5, 2) == 2);
+  CHECK(theme::GrainImagePixels(128, 2) == 256);
+  CHECK(theme::GrainImagePixels(64, 2) == 128);
+  CHECK(theme::GrainImagePixels(64, 1) == 64);
+  CHECK(theme::GrainImagePixels(128, 1) == 128);
+  CHECK(theme::GrainImagePixels(64, 2, 1.5) == 192);
+  CHECK(theme::GrainImagePixels(1e12, 2) == 2048);
+  CHECK(theme::GrainImagePixels(1024, 3, 20) == theme::kMaxGrainImagePixels);
+  CHECK(theme::GrainImagePixels(std::nan(""), std::nan(""), std::nan("")) == 128);
+  CHECK(theme::GrainImagePixels(-5, 2, -1) == 256);
   CHECK(theme::Unit(std::nan("")) == 0 && theme::Unit(4) == 1 && theme::Unit(-1) == 0);
 }
 

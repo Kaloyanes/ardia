@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { themedBackdropTheme, treatmentBackdropTheme, WINDOW_BACKDROP_CAPABILITY } from "./backdropTheme.ts";
 import { baseLine, baseStops, GRAIN_POINTS, FILM_GRAIN_POINTS, overlayLine, swatchColors } from "./shims/web/gl/themeSwatch.ts";
-import { createMacBackdrops } from "./platform/mac/macGlass.ts";
+import { createMacBackdrops, settleCrossFades } from "./platform/mac/macGlass.ts";
 
 const PURPLE = [0.45, 0.3, 0.5, 1, 0.6, 0.45, 0.3, 1, 0.2, 0.3, 0.6, 0.8];
 
@@ -85,11 +85,32 @@ test("the Mac backdrop registry sends each layer's theme with its ancestors' opa
   assert.equal(sent.at(-1)[0].theme, undefined);
 });
 
-test("WindowBackdrop leaves the paint to the host when it paints the backdrop natively, but never above pages", () => {
+test("only the window's root backdrop is painted natively; Peek and Little Ardia keep their shell paint", () => {
   const shaders = readFileSync(new URL("./shims/shaders.tsx", import.meta.url), "utf8");
-  assert.match(shaders, /const nativeTheme = nativeThemeAvailable && !abovePages;/);
+  assert.match(shaders, /const nativeTheme = nativeThemeAvailable && backdropRoot;/);
   assert.match(shaders, /if \(behindGlass && nativeTheme\) return <View ref=\{layer\} pointerEvents="none" style=\{style\} \/>;/);
+  const root = readFileSync(new URL("./rootBackdropUi.tsx", import.meta.url), "utf8");
+  assert.match(root, /<NativeBackdropRoot\.Provider value=\{true\}>/);
+  const vite = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
+  assert.match(vite, /components\/ui\/index\.ts"\)\}\\0\$\{here\("\.\.\/browser\/src\/App\.tsx"\)\}`, here\("\.\/src\/rootBackdropUi\.tsx"\)/);
+  assert.match(readFileSync(new URL("./ProfileTintTimeline.tsx", import.meta.url), "utf8"), /import \{ WindowBackdrop \} from "\.\/rootBackdropUi";/);
+  for (const overlay of ["../../browser/src/components/peek/PeekOverlay.tsx", "./PeekOverlay.tsx", "../../browser/src/components/littleArdia/LittleArdiaWindow.tsx"]) {
+    const source = readFileSync(new URL(overlay, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /NativeBackdropRoot|rootBackdropUi/, `${overlay} must keep painting its backdrop in the shell`);
+  }
+  assert.ok(!/rootBackdropUi/.test(vite.split("\n").filter((line) => /PeekOverlay|LittleArdia/.test(line)).join("\n")));
   assert.equal(WINDOW_BACKDROP_CAPABILITY, "shell.windowBackdrop");
-  const calls = readFileSync(new URL("../../../scripts/mac/webui-engine/src/ardia/mac/ac_mac_shell_calls.mm", import.meta.url), "utf8");
-  assert.match(calls, /"shell\.windowBackdrop",/);
+});
+
+test("a profile cross-fade keeps the bottom theme opaque so no vibrancy shows through mid-swipe", () => {
+  const rect = { x: 0, y: 0, width: 300, height: 800 };
+  const theme = (opacity) => ({ layers: [], opacity });
+  const regions = [{ rect, material: "windowTreatment", theme: theme(0.5) }, { rect, material: "windowTreatment", theme: theme(0.5) }];
+  const settled = settleCrossFades(regions, [true, true]);
+  assert.equal(settled[0].theme.opacity, 1);
+  assert.equal(settled[1].theme.opacity, 0.5);
+  assert.equal(settleCrossFades(regions, [false, false])[0].theme.opacity, 0.5, "a plain stack keeps its own opacities");
+  assert.equal(settleCrossFades([{ rect, material: "liquid", theme: theme(0.3) }, { rect: { ...rect, x: 10 }, material: "liquid", theme: theme(0.3) }], [true, true])[0].theme.opacity, 0.3, "different rects are separate stacks");
+  assert.equal(settleCrossFades([{ rect, material: "liquid", theme: theme(0.8) }, { rect, material: "liquid", theme: theme(0.7) }], [true, true])[0].theme.opacity, 1);
+  assert.deepEqual(settleCrossFades([{ rect, material: "liquid" }], [false]), [{ rect, material: "liquid" }]);
 });

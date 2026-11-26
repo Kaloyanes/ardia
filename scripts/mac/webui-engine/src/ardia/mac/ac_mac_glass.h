@@ -47,7 +47,7 @@ class GlassRegions {
   struct Views;
 
   glass::Layout Relayout();
-  void LayOutThemes();
+  void LayOutThemes(const glass::Layout& layout);
   bool MountUnderShell(const glass::Placement& placement, const glass::Rect& page);
   void EmitPresented(glass::PresentedGate::Ticket ticket);
 

@@ -12,6 +12,7 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_not_drawn.h"
@@ -410,36 +411,43 @@ CGColorRef CreateThemeColor(const theme::Color& color) {
   return CGColorRetain(made.CGColor);
 }
 
-NSColor* GrainPattern(const std::string& texture, double points, double backing_scale) {
-  static NSMutableDictionary<NSString*, NSColor*>* cache = [NSMutableDictionary dictionary];
-  const int cell = theme::GrainCellPixels(points, backing_scale);
+NSColor* GrainPattern(NSMutableDictionary<NSString*, NSColor*>* cache,
+                      const std::string& texture,
+                      double points,
+                      double backing_scale,
+                      double zoom) {
   const double scale = theme::Finite(backing_scale) && backing_scale > 0 ? backing_scale : 1;
-  NSString* key = [NSString stringWithFormat:@"%s:%d:%g", texture.c_str(), cell, scale];
+  const int side = theme::GrainImagePixels(points, scale, zoom);
+  NSString* key = [NSString stringWithFormat:@"%s:%d:%g", texture.c_str(), side, scale];
   if (NSColor* found = cache[key]) return found;
   const auto alpha = theme::GrainAlpha(texture);
-  const std::size_t side = static_cast<std::size_t>(theme::kGrainSide * cell);
-  std::vector<std::uint8_t> pixels(side * side * 4, 0);
-  for (std::size_t y = 0; y < side; ++y) {
-    for (std::size_t x = 0; x < side; ++x) {
-      const std::size_t source = (y / static_cast<std::size_t>(cell)) * theme::kGrainSide + x / static_cast<std::size_t>(cell);
-      pixels[(y * side + x) * 4 + 3] = alpha[source];
+  const std::size_t pixels_side = static_cast<std::size_t>(side);
+  const std::size_t tile = static_cast<std::size_t>(theme::kGrainSide);
+  std::vector<std::uint8_t> pixels(pixels_side * pixels_side * 4, 0);
+  for (std::size_t y = 0; y < pixels_side; ++y) {
+    for (std::size_t x = 0; x < pixels_side; ++x) {
+      const std::size_t source = (y * tile / pixels_side) * tile + x * tile / pixels_side;
+      pixels[(y * pixels_side + x) * 4 + 3] = alpha[source];
     }
   }
   CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-  CGContextRef context = CGBitmapContextCreate(pixels.data(), side, side, 8, side * 4, space,
+  CGContextRef context = CGBitmapContextCreate(pixels.data(), pixels_side, pixels_side, 8, pixels_side * 4, space,
                                                static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast));
   CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
   if (context) CGContextRelease(context);
   CGColorSpaceRelease(space);
   if (!image) return nil;
-  NSImage* tile = [[NSImage alloc] initWithCGImage:image size:NSMakeSize(side / scale, side / scale)];
+  NSImage* tile_image = [[NSImage alloc] initWithCGImage:image size:NSMakeSize(side / scale, side / scale)];
   CGImageRelease(image);
-  NSColor* pattern = [NSColor colorWithPatternImage:tile];
+  NSColor* pattern = [NSColor colorWithPatternImage:tile_image];
   cache[key] = pattern;
   return pattern;
 }
 
-CALayer* MakeThemeLayer(const theme::Layer& layer, double backing_scale) {
+CALayer* MakeThemeLayer(const theme::Layer& layer,
+                        NSMutableDictionary<NSString*, NSColor*>* grain_cache,
+                        double backing_scale,
+                        double zoom) {
   switch (layer.kind) {
     case theme::Kind::kFill: {
       CALayer* fill = [CALayer layer];
@@ -468,7 +476,7 @@ CALayer* MakeThemeLayer(const theme::Layer& layer, double backing_scale) {
     }
     case theme::Kind::kGrain: {
       CALayer* grain = [CALayer layer];
-      grain.backgroundColor = GrainPattern(layer.texture, layer.points, backing_scale).CGColor;
+      grain.backgroundColor = GrainPattern(grain_cache, layer.texture, layer.points, backing_scale, zoom).CGColor;
       grain.opacity = static_cast<float>(layer.opacity);
       return grain;
     }
@@ -519,6 +527,7 @@ struct GlassRegions::Views {
   ArdiaMacGlassSlotView* glass = nil;
   std::vector<CALayer*> theme_groups;
   std::vector<std::string> theme_keys;
+  NSMutableDictionary<NSString*, NSColor*>* grain_cache = [NSMutableDictionary dictionary];
   std::map<glass::SlotKey, NSView*> effects;
   std::map<glass::GroupKey, NSView*> groups;
   std::map<int, std::unique_ptr<ui::LayerNotDrawn>> page_clips;
@@ -557,6 +566,7 @@ void GlassRegions::Clear() {
   views_->glass = nil;
   views_->theme_groups.clear();
   views_->theme_keys.clear();
+  [views_->grain_cache removeAllObjects];
   themes_.clear();
   placed_.clear();
   regions_.clear();
@@ -737,7 +747,6 @@ glass::Layout GlassRegions::Relayout() {
   for (NSView* plane : {views_->vibrancy, views_->theme, views_->glass}) {
     plane.frame = views_->behind.bounds;
   }
-  LayOutThemes();
 
   std::erase_if(views_->under_shell, [&page_rects](const auto& entry) {
     return !page_rects.contains(entry.first.page);
@@ -777,10 +786,11 @@ glass::Layout GlassRegions::Relayout() {
     return members;
   };
   const auto parent_of = [&](const glass::Placement& placement) -> NSView* {
-    if (placement.source == glass::Source::kBackdrop) return views_->vibrancy;
+    if (glass::EffectFor(placement.material, liquid) != glass::Effect::kLiquidGlass) return views_->vibrancy;
     return glass::Grouped(placement, groups_glass) ? group_for(glass::GroupOf(placement)) : views_->glass;
   };
 
+  LayOutThemes(layout);
   const glass::Diff diff =
       glass::DiffPlacements(placed_, layout.placements, liquid);
   for (const glass::SlotKey& key : diff.remove) {
@@ -832,18 +842,28 @@ glass::Layout GlassRegions::Relayout() {
   return mounted;
 }
 
-void GlassRegions::LayOutThemes() {
+void GlassRegions::LayOutThemes(const glass::Layout& layout) {
   NSView* plane = views_->theme;
   if (!plane) return;
   CALayer* host = plane.layer;
   const double backing = plane.window ? plane.window.backingScaleFactor : 2;
+  std::vector<std::pair<const backdrop_theme::Theme*, const glass::Placement*>> shown_themes;
+  for (const glass::Placement& placement : layout.placements) {
+    if (placement.source != glass::Source::kBackdrop || placement.plane != glass::Plane::kBehindWindow ||
+        placement.slice != 0 || !placement.id.starts_with("backdrop:")) {
+      continue;
+    }
+    std::size_t index = 0;
+    if (!base::StringToSizeT(std::string_view(placement.id).substr(9), &index) || index >= themes_.size() ||
+        !themes_[index]) {
+      continue;
+    }
+    shown_themes.emplace_back(&*themes_[index], &placement);
+  }
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   std::size_t shown = 0;
-  for (std::size_t index = 0; index < backdrops_.size() && index < themes_.size(); ++index) {
-    const std::optional<backdrop_theme::Theme>& spec = themes_[index];
-    if (!spec) continue;
-    const glass::Rect& rect = backdrops_[index].rect;
+  for (const auto& [spec, placement] : shown_themes) {
     if (views_->theme_groups.size() <= shown) {
       CALayer* group = [CALayer layer];
       group.masksToBounds = YES;
@@ -854,9 +874,9 @@ void GlassRegions::LayOutThemes() {
     }
     CALayer* group = views_->theme_groups[shown];
     group.hidden = NO;
-    group.frame = CGRectMake(rect.x * zoom_, rect.y * zoom_, rect.width * zoom_, rect.height * zoom_);
-    group.opacity = static_cast<float>(spec->opacity);
-    std::string key = std::to_string(backing);
+    group.frame = CGRectMake(placement->frame.x, placement->frame.y, placement->frame.width, placement->frame.height);
+    group.opacity = static_cast<float>(spec->opacity * placement->opacity);
+    std::string key = std::to_string(backing) + "@" + std::to_string(zoom_);
     for (const backdrop_theme::Layer& layer : spec->layers) {
       key += "|" + std::to_string(static_cast<int>(layer.kind)) + ":" + std::to_string(layer.opacity) + ":" + layer.texture +
              ":" + std::to_string(layer.points) + ":" + std::to_string(layer.start_x) + "," + std::to_string(layer.start_y) +
@@ -873,7 +893,7 @@ void GlassRegions::LayOutThemes() {
       views_->theme_keys[shown] = key;
       group.sublayers = nil;
       for (const backdrop_theme::Layer& layer : spec->layers) {
-        [group addSublayer:MakeThemeLayer(layer, backing)];
+        [group addSublayer:MakeThemeLayer(layer, views_->grain_cache, backing, zoom_)];
       }
     }
     for (CALayer* sublayer in group.sublayers) {

@@ -758,12 +758,14 @@ class ContractTests(unittest.TestCase):
     def test_native_backdrop_sits_between_vibrancy_and_glass(self):
         glass = self.read('ac_mac_glass.mm')
         self.assertIn('for (ArdiaMacGlassSlotView* __strong* plane : {&views_->vibrancy, &views_->theme, &views_->glass}) {', glass)
-        self.assertIn('if (placement.source == glass::Source::kBackdrop) return views_->vibrancy;', glass)
+        self.assertIn('if (glass::EffectFor(placement.material, liquid) != glass::Effect::kLiquidGlass) return views_->vibrancy;', glass)
+        self.assertIn('LayOutThemes(layout);', glass)
+        self.assertNotIn('backdrops_[index].rect', glass)
         self.assertIn('NSView* plane = views_->glass;', glass)
         self.assertIn(': views_->glass;', glass)
         self.assertNotIn(': views_->behind;', glass)
         self.assertIn('themes.push_back(ThemeOf(dict->FindDict("theme")));', glass)
-        self.assertIn('[CATransaction setDisableActions:YES];', glass.split('void GlassRegions::LayOutThemes() {', 1)[1])
+        self.assertIn('[CATransaction setDisableActions:YES];', glass.split('void GlassRegions::LayOutThemes(const glass::Layout& layout) {', 1)[1])
         self.assertIn('"shell.windowBackdrop",', self.read('ac_mac_shell_calls.mm'))
 
     def test_tab_strips_and_search_engines_answer_for_real(self):
