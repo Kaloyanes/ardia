@@ -195,7 +195,7 @@ function fakeAppStore() {
   const versionRow = (version) => ({
     id: version.id,
     type: "appStoreVersions",
-    attributes: { versionString: version.version, appVersionState: version.state, releaseType: version.releaseType ?? "MANUAL", copyright: "copyright" in version ? version.copyright : "2026 Example" },
+    attributes: { versionString: version.version, appVersionState: version.state, releaseType: version.releaseType ?? "MANUAL", copyright: "copyright" in version ? version.copyright : "2026 Example", createdDate: version.created ?? null },
     relationships: { build: { data: version.build ? { type: "builds", id: version.build } : null } },
   });
   globalThis.fetch = async (url, init = {}) => {
@@ -213,6 +213,10 @@ function fakeAppStore() {
     const id = () => `made-${++made}`;
     if (path === "/v1/apps") return reply([{ id: "app", attributes: { bundleId: "com.ardia.browser.ios", name: "Ardia", primaryLocale: "en-US" } }]);
     if (path === "/v1/builds") {
+      if (state.buildFailures > 0) {
+        state.buildFailures--;
+        return new Response(JSON.stringify({ errors: [{ detail: "Service Unavailable" }] }), { status: 503 });
+      }
       const rows = state.builds.filter((build) => build.number === searchParams.get("filter[version]"));
       return reply(
         rows.map((build) => ({
@@ -885,12 +889,12 @@ test("app-store wants a finished screenshot in the Dynamic Island medium or larg
 const STORE_FIXTURE = fileURLToPath(new URL("./fixtures/store", import.meta.url));
 const pngCache = new Map();
 
-function png(width, height, { shade = 40, alpha = false } = {}) {
-  const key = `${width}x${height}:${shade}:${alpha}`;
+function png(width, height, { shade = 40, alpha = false, filter = 0 } = {}) {
+  const key = `${width}x${height}:${shade}:${alpha}:${filter}`;
   if (pngCache.has(key)) return pngCache.get(key);
   const channels = alpha ? 4 : 3;
   const row = Buffer.alloc(1 + width * channels, shade);
-  row[0] = 0;
+  row[0] = filter;
   const chunk = (type, data) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length);
@@ -939,7 +943,7 @@ function fakeListing() {
     const { id, ...attributes } = item;
     return { id, type, attributes, ...(relationships ? { relationships } : {}) };
   };
-  const shotRow = (shot) => ({ id: shot.id, type: "appScreenshots", attributes: { fileName: shot.fileName, sourceFileChecksum: shot.checksum, assetDeliveryState: { state: shot.state } } });
+  const shotRow = (shot) => ({ id: shot.id, type: "appScreenshots", attributes: { fileName: shot.fileName, ...(shot.checksum === undefined ? {} : { sourceFileChecksum: shot.checksum }), assetDeliveryState: { state: shot.state } } });
   const route = (method, path, searchParams, body, init) => {
     if (path === "/v1/apps" && method === "GET") {
       return reply([{ id: "app", type: "apps", attributes: { bundleId: "com.ardia.browser.ios", name: "Ardia", primaryLocale: "en-US", contentRightsDeclaration: state.contentRights } }]);
@@ -1089,6 +1093,10 @@ function fakeListing() {
       return reply(shotRow(shot));
     }
     if (shot && method === "GET") {
+      if (shot.state === "UPLOAD_COMPLETE" && state.failProcessing > 0) {
+        state.failProcessing--;
+        shot.state = "FAILED";
+      }
       if (shot.state === "UPLOAD_COMPLETE" && ++shot.polls >= 2) shot.state = "COMPLETE";
       return reply(shotRow(shot));
     }
@@ -1568,4 +1576,82 @@ test("round 5: blank promotional text or subtitle and a dropped marketingUrl cle
   assert.equal(fresh.code, 0, fresh.err);
   const made = fresh.writes.find((write) => write.path === "/v1/appStoreVersionLocalizations");
   assert.ok(!("promotionalText" in made.body.data.attributes) && !("marketingUrl" in made.body.data.attributes), JSON.stringify(made.body.data.attributes));
+});
+
+test("round 6: at the ten-screenshot cap, each replacement finishes processing before the next original goes", () => {
+  const ten = Array.from({ length: 10 }, (_, at) => png(1206, 2622, { shade: 100 + at }));
+  const first = listingRun(listingState(), { store: storeDir({ medium: ten }) });
+  assert.equal(first.code, 0, first.err);
+  const originals = first.state.sets.find((set) => set.type === "APP_IPHONE_61").shots;
+  const failing = JSON.parse(readFileSync(first.stateFile, "utf8"));
+  failing.failProcessing = 1;
+  writeFileSync(first.stateFile, JSON.stringify(failing));
+  const next = Array.from({ length: 10 }, (_, at) => png(1206, 2622, { shade: 200 + at }));
+  const run = listingRun(first.stateFile, { store: storeDir({ medium: next }) });
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /refused screenshot 01-shot\.png/);
+  const left = originals.filter((id) => run.state.shots[id]?.state === "COMPLETE");
+  assert.equal(left.length, 9, `${left.length} originals left`);
+  assert.equal(run.steps.filter((step) => step === "POST /v1/appScreenshots").length, 1);
+  const retried = listingRun(first.stateFile, { store: storeDir({ medium: next }) });
+  assert.equal(retried.code, 0, retried.err);
+  const set = retried.state.sets.find((entry) => entry.type === "APP_IPHONE_61");
+  assert.deepEqual(set.shots.map((id) => retried.state.shots[id].checksum), next.map(md5));
+});
+
+test("round 6: a finished screenshot with no checksum is held until its replacements settle", () => {
+  const first = listingRun(listingState(), { store: storeDir() });
+  assert.equal(first.code, 0, first.err);
+  const unknown = JSON.parse(readFileSync(first.stateFile, "utf8"));
+  const medium = unknown.sets.find((set) => set.type === "APP_IPHONE_61");
+  for (const id of medium.shots) delete unknown.shots[id].checksum;
+  unknown.failUploads = 1;
+  writeFileSync(first.stateFile, JSON.stringify(unknown));
+  const failed = listingRun(first.stateFile, { store: storeDir() });
+  assert.equal(failed.code, 1, failed.out);
+  assert.ok(!failed.steps.some((step) => step.startsWith("DELETE")), failed.steps.join("\n"));
+  for (const id of medium.shots) assert.equal(failed.state.shots[id].state, "COMPLETE");
+  const retried = listingRun(first.stateFile, { store: storeDir() });
+  assert.equal(retried.code, 0, retried.err);
+  const after = retried.state.sets.find((set) => set.type === "APP_IPHONE_61").shots;
+  assert.ok(medium.shots.every((id) => !after.includes(id)), "the unmatched ones go once their replacements are in");
+  assert.equal(after.length, 2);
+  const lastDelete = Math.max(...retried.steps.map((step, at) => (step.startsWith("DELETE") ? at : -1)));
+  const lastUpload = Math.max(...retried.steps.map((step, at) => (step === "POST /v1/appScreenshots" ? at : -1)));
+  assert.ok(lastDelete > lastUpload, "deleted after the uploads");
+});
+
+test("round 6: a PNG whose scanlines use an unknown filter type is refused before any request", () => {
+  const run = listingRun(listingState(), { store: storeDir({ medium: [png(1206, 2622, { shade: 9, filter: 5 })] }), extra: ["--check"], key: false });
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /01-shot\.png isn't a complete PNG: [^\n]*filter type 5/);
+  assert.deepEqual(run.requests, []);
+  for (const filter of [1, 2, 3, 4]) {
+    const fine = listingRun(listingState(), { store: storeDir({ medium: [png(1206, 2622, { shade: 9, filter })] }), extra: ["--check"], key: false });
+    assert.equal(fine.code, 0, `filter ${filter}: ${fine.err}`);
+  }
+});
+
+test("round 6: a version app-store makes copies the newest copyright by full timestamp, and trusts the copyright Apple returns", () => {
+  const sameDay = [
+    { id: "v099", version: "0.9.9", state: "READY_FOR_SALE", build: "b9", copyright: "2026 Older", created: "2026-11-20T01:00:00Z" },
+    { id: "v100", version: "1.0.0", state: "READY_FOR_SALE", build: "b9", copyright: "2026 Newer", created: "2026-11-20T20:00:00Z" },
+  ];
+  const run = appStore(appStoreState({ versions: sameDay, localizations: { "made-1": [{ id: "loc", ...listing }] } }));
+  assert.equal(run.code, 0, run.err);
+  assert.equal(run.writes[0].body.data.attributes.copyright, "2026 Newer");
+  const filled = appStore(appStoreState({ copyrightOnCreate: "2026 Filled", localizations: { "made-1": [{ id: "loc", ...listing }] } }));
+  assert.equal(filled.code, 0, filled.err);
+  assert.ok(!("copyright" in filled.writes[0].body.data.attributes));
+  assert.ok(filled.steps.some((step) => /^PATCH \/v1\/reviewSubmissions\//.test(step)), filled.steps.join("\n"));
+});
+
+test("round 6: a retried build lookup never runs past --timeout", () => {
+  const ready = { clock: true, buildFailures: 1, versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } };
+  const late = appStore(appStoreState(ready), ["--timeout", "0.5"]);
+  assert.equal(late.code, 1, late.out);
+  assert.ok(!late.steps.some((step) => step.startsWith("PATCH /v1/reviewSubmissions/")), late.steps.join("\n"));
+  assert.deepEqual(late.writes, []);
+  const roomy = appStore(appStoreState(ready), ["--timeout", "30"]);
+  assert.equal(roomy.code, 0, roomy.err);
 });

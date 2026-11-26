@@ -4870,7 +4870,8 @@ In order, each on the owner's word:
 - `screenshots/iphone-medium/NN-<name>.png` (1206×2622 or 1179×2556, `APP_IPHONE_61`) and
   `screenshots/iphone-large/NN-<name>.png` (1320×2868, 1290×2796 or 1260×2736, `APP_IPHONE_67`), 1 to 10 a set,
   in file name order, portrait or landscape. Each is decoded: every chunk's checksum, the image data inflated to the
-  size its header gives, no interlacing, no alpha channel or transparency, nothing after `IEND`.
+  size its header gives, every row's filter type one PNG defines (0 to 4), no interlacing, no alpha channel or
+  transparency, nothing after `IEND`.
 
 It checks all of that before any request and lists every problem at once (`asc.mjs listing --check` stops there
 and needs no key; the workflow runs it first). A `version` (`--version`) other than the pin is refused there too.
@@ -4886,8 +4887,10 @@ the status, Apple's error code and the field it names, since Apple's message can
 GitHub's secret masking doesn't catch. Screenshots are matched to the repo's files by MD5 (Apple's
 `sourceFileChecksum`): a screenshot that matches and has finished uploading or is processing is kept, and only the
 files that differ are uploaded. New ones go up before the old ones are deleted, as far as a set's limit of 10
-allows (at 10 it deletes one unwanted screenshot per upload), so a failed upload leaves the old screenshots in place;
-one that never finished or that Apple refused is deleted first. The order is set last, to the file names' order.
+allows, so a failed upload leaves the old screenshots in place. At the limit it deletes one old screenshot per
+upload, and only once the upload before it has finished processing, so a replacement Apple refuses costs at most
+one old screenshot. A finished screenshot Apple gives no checksum for counts as old and is kept until its
+replacements are in; one that never finished or that Apple refused is deleted first. The order is set last, to the file names' order.
 Each new screenshot is reserved, uploaded to the addresses Apple gives (without the App Store Connect token) and
 committed with its checksum, and the run waits up to `--timeout` (600 s) for Apple to finish processing it. A
 free price counts as set only when a free manual price is in effect today, by its start and end dates. A set for any other
@@ -4931,7 +4934,8 @@ territories once it was turned off.
 - **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
   outside is refused before a request.
 - **The wait** for a build still processing never starts a read after `--timeout`: each pause is cut to the time
-  left, and the run stops at the deadline.
+  left, a read Apple answers with a server error is asked again only while time is left, and the run stops at the
+  deadline.
 - **The build** is picked by its number and the pinned version, so a build number another version shares never
   gets in the way. A `version` (`--version`) other than the pin is refused before any request: change the pin in a
   commit instead. The build must be `VALID`, not expired, and carry an export compliance answer.
@@ -4946,7 +4950,8 @@ territories once it was turned off.
   build's version is already on sale (a new App Store release needs a new version, which is the owner's call). A
   version already in review with this build is reported and left alone, but only as a success when its release is
   manual: with any other release type the run exits non-zero and asks for Manual in App Store Connect, touching
-  nothing. A version it makes takes the copyright of the newest version that has one. Otherwise it takes this version's draft,
+  nothing. A version it makes takes the copyright of the newest version that has one, by full creation time, and
+  keeps whatever copyright App Store Connect returns for it. Otherwise it takes this version's draft,
   makes it, or renames the one other draft only when it is alone and still `PREPARE_FOR_SUBMISSION`; a rejected
   draft, or more than one, stops the run with the list. Then it attaches the build (in place of an older one) and
   sets the release to manual.

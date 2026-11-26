@@ -189,9 +189,9 @@ async function fail(response) {
 
 const RETRY_AFTER_MS = [1000, 3000, 9000];
 
-async function read(url) {
+async function read(url, deadline) {
   for (let attempt = 0; ; attempt++) {
-    const last = attempt === RETRY_AFTER_MS.length;
+    const last = attempt === RETRY_AFTER_MS.length || (deadline !== undefined && Date.now() + RETRY_AFTER_MS[attempt] >= deadline);
     let response;
     try {
       response = await fetch(url, { headers: { Authorization: authorization() } });
@@ -217,7 +217,7 @@ async function send(method, path, body) {
 const post = (path, body) => send("POST", path, body);
 const patch = (path, body) => send("PATCH", path, body);
 
-async function get(path, params = {}) {
+async function get(path, params = {}, deadline) {
   authorization();
   const url = new URL(path, API);
   for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
@@ -225,7 +225,7 @@ async function get(path, params = {}) {
   const included = [];
   let next = url.toString();
   while (next) {
-    const response = await read(next);
+    const response = await read(next, deadline);
     if (!response.ok) await fail(response);
     const page = await response.json();
     rows.push(...(Array.isArray(page.data) ? page.data : page.data ? [page.data] : []));
@@ -724,6 +724,7 @@ async function listAppStoreVersions(appId) {
       releaseType: row.attributes.releaseType ?? "?",
       copyright: row.attributes.copyright ?? null,
       created: day(row.attributes.createdDate),
+      createdAt: row.attributes.createdDate ?? "",
       buildId: link?.id ?? null,
       build: link ? (builds.get(link.id)?.attributes.version ?? "?") : null,
     };
@@ -927,13 +928,17 @@ async function processedBuild(appId, number, wanted, timeout) {
   const deadline = Date.now() + timeout * 1000;
   let said = "";
   for (;;) {
-    const { rows, included } = await get("/v1/builds", {
-      "filter[app]": appId,
-      "filter[version]": number,
-      "fields[builds]": "version,processingState,expired,usesNonExemptEncryption,preReleaseVersion",
-      include: "preReleaseVersion",
-      "fields[preReleaseVersions]": "version",
-    });
+    const { rows, included } = await get(
+      "/v1/builds",
+      {
+        "filter[app]": appId,
+        "filter[version]": number,
+        "fields[builds]": "version,processingState,expired,usesNonExemptEncryption,preReleaseVersion",
+        include: "preReleaseVersion",
+        "fields[preReleaseVersions]": "version",
+      },
+      timeout > 0 ? deadline : undefined,
+    );
     const versionOf = (row) => {
       const link = row.relationships?.preReleaseVersion?.data;
       return included.find((candidate) => candidate.type === "preReleaseVersions" && candidate.id === link?.id)?.attributes.version ?? "?";
@@ -1091,7 +1096,7 @@ function requireManualAlready(version, where) {
 }
 
 function carriedCopyright(versions) {
-  return versions.toSorted((a, b) => b.created.localeCompare(a.created)).find((row) => row.copyright?.trim())?.copyright ?? null;
+  return versions.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt)).find((row) => row.copyright?.trim())?.copyright ?? null;
 }
 
 async function appStore(args) {
@@ -1161,8 +1166,9 @@ async function appStore(args) {
         relationships: { app: { data: { type: "apps", id: app.id } } },
       },
     });
-    version = { id: made.id, version: versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: made.attributes?.releaseType ?? "MANUAL", copyright, buildId: null, build: null };
-    console.log(`made App Store version ${versionString}${copyright ? `, copyright carried from the last version` : ""}`);
+    const held = made.attributes?.copyright ?? copyright;
+    version = { id: made.id, version: versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: made.attributes?.releaseType ?? "MANUAL", copyright: held, buildId: null, build: null };
+    console.log(`made App Store version ${versionString}${copyright ? ", copyright carried from the last version" : held ? ", copyright filled in by App Store Connect" : ""}`);
   } else if (plan.act === "rename") {
     await patch(`/v1/appStoreVersions/${version.id}`, { data: { type: "appStoreVersions", id: version.id, attributes: { versionString } } });
     console.log(`App Store version ${version.version} (${version.state}) is now ${versionString}`);
@@ -1359,6 +1365,10 @@ function pngFacts(bytes) {
   }
   const rowBytes = Math.ceil((header.width * channels * header.depth) / 8);
   if (pixels.length !== header.height * (1 + rowBytes)) return { problem: "its image data doesn't fill the image" };
+  for (let row = 0; row < header.height; row++) {
+    const filter = pixels[row * (1 + rowBytes)];
+    if (filter > 4) return { problem: `row ${row + 1} uses filter type ${filter}, which PNG doesn't define` };
+  }
   return { width: header.width, height: header.height, alpha: header.colorType === 4 || header.colorType === 6 || transparency };
 }
 
@@ -1599,16 +1609,15 @@ async function uploadScreenshot(setId, file) {
 const USABLE_SCREENSHOT_STATES = new Set(["COMPLETE", "UPLOAD_COMPLETE"]);
 
 function planScreenshots(held, files) {
-  const usable = new Map();
-  for (const row of held.filter((candidate) => USABLE_SCREENSHOT_STATES.has(candidate.state) && candidate.checksum)) {
-    usable.set(row.checksum, [...(usable.get(row.checksum) ?? []), row]);
-  }
-  const slots = files.map((file) => ({ file, row: usable.get(file.checksum)?.shift() ?? null }));
+  const usable = held.filter((row) => USABLE_SCREENSHOT_STATES.has(row.state));
+  const byChecksum = new Map();
+  for (const row of usable.filter((candidate) => candidate.checksum)) byChecksum.set(row.checksum, [...(byChecksum.get(row.checksum) ?? []), row]);
+  const slots = files.map((file) => ({ file, row: byChecksum.get(file.checksum)?.shift() ?? null }));
   const kept = new Set(slots.filter((slot) => slot.row).map((slot) => slot.row.id));
   return {
     slots,
-    broken: held.filter((row) => !USABLE_SCREENSHOT_STATES.has(row.state) || !row.checksum),
-    unwanted: held.filter((row) => USABLE_SCREENSHOT_STATES.has(row.state) && row.checksum && !kept.has(row.id)),
+    broken: held.filter((row) => !USABLE_SCREENSHOT_STATES.has(row.state)),
+    unwanted: usable.filter((row) => !kept.has(row.id)),
   };
 }
 
@@ -1645,20 +1654,22 @@ async function pushScreenshots(localizationId, classes, deadline, changed) {
       });
     }
     for (const row of broken) await remove(row);
+    await settleScreenshots(slots.filter((slot) => slot.row?.state === "UPLOAD_COMPLETE").map((slot) => slot.row.id), deadline);
     let count = held.length - broken.length;
     const spare = [...unwanted];
+    let unsettled = [];
     for (const slot of missing) {
       if (count >= SCREENSHOTS_PER_SET) {
+        await settleScreenshots(unsettled, deadline);
+        unsettled = [];
         await remove(spare.shift());
         count--;
       }
       slot.id = await uploadScreenshot(set.id, slot.file);
+      unsettled.push(slot.id);
       count++;
     }
-    await settleScreenshots(
-      slots.map((slot) => (slot.row ? (slot.row.state === "UPLOAD_COMPLETE" ? slot.row.id : null) : slot.id)).filter(Boolean),
-      deadline,
-    );
+    await settleScreenshots(unsettled, deadline);
     for (const row of spare) await remove(row);
     const order = slots.map((slot) => slot.row?.id ?? slot.id);
     const settledOrder = held.filter((row) => order.includes(row.id)).map((row) => row.id);
