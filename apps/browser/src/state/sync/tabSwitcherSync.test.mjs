@@ -165,7 +165,10 @@ test("shortcuts chosen here, a legacy stepping record and an idle sync leave a j
   const b = new Device("B", folder);
   b.with(() => S().updateSettings({ shortcuts: { reload: ["r", "command", "shift"] } }));
   await b.sync();
-  const legacy = new Peer("old", folder, { shortcuts: STEP });
+  await b.sync();
+  const legacy = new Peer("old", folder, {});
+  await legacy.sync();
+  legacy.set({ shortcuts: STEP });
   await legacy.sync();
   await b.sync();
   await b.sync();
