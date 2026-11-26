@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useBrowser } from "../browser/store";
-import { noteSettingsCreateProfile } from "../telemetry/usage";
+import { noteSettingsProfiles } from "../telemetry/usage";
 
 export type CreateProfilePreset = { name?: string; shareWith?: string };
 type CreateProfileRequest = { windowId: string | null; preset: CreateProfilePreset; resolve: (id: string | null) => void };
@@ -17,7 +17,7 @@ export function requestCreateProfile(windowId?: string, preset: CreateProfilePre
       useCreateProfileRequest.setState({ request: { windowId, preset, resolve } });
       return;
     }
-    noteSettingsCreateProfile("asked");
+    noteSettingsProfiles("createAsked");
     useCreateProfileRequest.setState({ sheet: { windowId: null, preset, resolve } });
   });
 }

@@ -11,7 +11,7 @@ import { Box, Button, DialogActions, DialogTitle, Divider, Dot, Group, PROFILE_C
 import { profileColors, SHARE_ROW_HEIGHT } from "./tokens";
 import { ThemeSwatches } from "../settings/ThemeEditor";
 import { closeSettingsSheet, showSettingsSheet } from "../../state/settings/sheet";
-import { noteSettingsCreateProfile } from "../../state/telemetry/usage";
+import { noteSettingsProfiles } from "../../state/telemetry/usage";
 
 export function showCreateProfileSheets() {
   const show = () => {
@@ -22,7 +22,7 @@ export function showCreateProfileSheets() {
       request.resolve(id);
     };
     showSettingsSheet(<CreateProfileSheet windowId={null} preset={request.preset} onDone={done} />);
-    noteSettingsCreateProfile("shown");
+    noteSettingsProfiles("createShown");
   };
   show();
   return useCreateProfileRequest.subscribe((s, prev) => {

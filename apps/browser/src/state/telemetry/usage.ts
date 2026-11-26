@@ -236,8 +236,7 @@ export const noteSettingsScrollRestore = (outcome: "applied" | "clamped" | "unre
 let relayCountsNow: ((consent: ConsentToken | null) => void) | null = null;
 export const setCountsRelayNow = (relay: ((consent: ConsentToken | null) => void) | null) => void (relayCountsNow = relay);
 export const noteSettingsRevealMiss = (consent: ConsentToken | null) => { if (stillValid(consent)) { bump(consent, { settingsRevealMisses: 1 }); relayCountsNow?.(consent); } };
-export const noteSettingsProfilePick = (consent?: ConsentToken | null) => bump(consent, { settingsProfilePicks: 1 });
-export const noteSettingsCreateProfile = (event: "asked" | "shown") => void counts[event === "asked" ? "settingsCreateProfileAsks" : "settingsCreateProfileSheets"]++;
+export const noteSettingsProfiles = (event: "picked" | "createAsked" | "createShown", consent?: ConsentToken | null) => bump(consent, { [({ picked: "settingsProfilePicks", createAsked: "settingsCreateProfileAsks", createShown: "settingsCreateProfileSheets" } as const)[event]]: 1 });
 export const noteSettingsSearch = (event: "started" | "empty" | "dropped" | "closed" | "keys" | "keysOpened" | "shortcutsTyped" | "shortcutsRecorded" | "shortcutsEmpty", consent?: ConsentToken | null) => bump(consent, { [({ started: "settingsSearches", empty: "settingsSearchesEmpty", dropped: "settingsSearchesDropped", closed: "settingsSearchesClosed", keys: "settingsSearchKeySearches", keysOpened: "settingsSearchKeyHitOpens", shortcutsTyped: "shortcutsKeySearchesTyped", shortcutsRecorded: "shortcutsKeySearchesRecorded", shortcutsEmpty: "shortcutsKeySearchesEmpty" } as const)[event]]: 1 });
 export const noteWebKitLimits = (event: "engineRow" | "enginesPane") => void counts[({ engineRow: "webKitLimitsFromEngineRow", enginesPane: "webKitLimitsFromEnginesPane" } as const)[event]]++;
 
