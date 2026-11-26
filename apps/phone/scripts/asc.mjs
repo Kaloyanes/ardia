@@ -967,10 +967,13 @@ async function processedBuild(appId, number, wanted, timeout) {
       if (version === "?") refuse(`App Store Connect gives ${subject} no version`);
       return { id: row.id, number, version };
     }
-    if (Date.now() >= deadline) refuse(`${subject} is ${state}${timeout > 0 ? ` after ${timeout} s` : ""}`);
+    const tooLate = () => refuse(`${subject} is ${state}${timeout > 0 ? ` after ${timeout} s` : ""}`);
+    const left = deadline - Date.now();
+    if (left <= 0) tooLate();
     if (state !== said) console.log(`${subject}: ${state}, waiting`);
     said = state;
-    await new Promise((resolve) => setTimeout(resolve, 30000));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(30000, left)));
+    if (Date.now() >= deadline) tooLate();
   }
 }
 
@@ -1494,6 +1497,16 @@ function readStore(storeDir) {
   return { listing, locales, screenshots, problems };
 }
 
+function given(fields) {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null));
+}
+
+function described(diff) {
+  const set = Object.keys(given(diff));
+  const cleared = Object.keys(diff).filter((key) => diff[key] === null);
+  return [set.length > 0 ? `${set.join(", ")} updated` : "", cleared.length > 0 ? `${cleared.join(", ")} cleared` : ""].filter(Boolean).join("; ");
+}
+
 function differing(current, wanted) {
   const changed = Object.entries(wanted).filter(([key, value]) => (current?.[key] ?? null) !== (value ?? null));
   return changed.length > 0 ? Object.fromEntries(changed) : null;
@@ -1769,8 +1782,10 @@ async function listing(args) {
   if (asked !== undefined && versionString && asked !== versionString) {
     store.problems.push(`--version ${asked} isn't the pinned iPhone version ${versionString} (apps/phone/ios/${RELEASE_VERSION_FILE}); change the pin in a commit instead`);
   }
-  const families = targetedFamilies(iosDir) ?? [];
-  if (families.some((family) => family.name !== "iPhone")) {
+  const families = targetedFamilies(iosDir);
+  if (!families) {
+    store.problems.push(`${shown(projectPath(iosDir))} gives ${BUNDLE_PREFIX}'s Release build no TARGETED_DEVICE_FAMILY, so the screenshots it needs are unknown`);
+  } else if (families.some((family) => family.name !== "iPhone")) {
     store.problems.push(`${shown(projectPath(iosDir))} targets ${families.map((family) => family.name).join(" and ")}; listing pushes only iPhone screenshots`);
   }
   if (store.problems.length > 0) refuse(`the listing in ${shown(storeDir)} isn't ready, so nothing was sent:\n${store.problems.map((problem) => `- ${problem}`).join("\n")}`);
@@ -1800,20 +1815,24 @@ async function listing(args) {
   });
   const localizationIds = new Map();
   for (const entry of store.locales) {
-    const text = { description: entry.text.description, keywords: entry.text.keywords, supportUrl: wanted.supportUrl };
-    if (entry.text.promotionalText) text.promotionalText = entry.text.promotionalText;
-    if (wanted.marketingUrl) text.marketingUrl = wanted.marketingUrl;
+    const text = {
+      description: entry.text.description,
+      keywords: entry.text.keywords,
+      supportUrl: wanted.supportUrl,
+      promotionalText: entry.text.promotionalText ?? null,
+      marketingUrl: wanted.marketingUrl ?? null,
+    };
     const row = localizations.find((candidate) => candidate.attributes?.locale === entry.locale);
     if (!row) {
       const made = await post("/v1/appStoreVersionLocalizations", {
         data: {
           type: "appStoreVersionLocalizations",
-          attributes: { locale: entry.locale, ...text },
+          attributes: { locale: entry.locale, ...given(text) },
           relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: version.id } } },
         },
       });
       localizationIds.set(entry.locale, made.id);
-      changed(`${entry.locale}: ${Object.keys(text).join(", ")} set`);
+      changed(`${entry.locale}: ${Object.keys(given(text)).join(", ")} set`);
       continue;
     }
     localizationIds.set(entry.locale, row.id);
@@ -1821,7 +1840,7 @@ async function listing(args) {
     if (!diff) console.log(`${entry.locale}: the version's text already matches`);
     else {
       await patch(`/v1/appStoreVersionLocalizations/${row.id}`, { data: { type: "appStoreVersionLocalizations", id: row.id, attributes: diff } });
-      changed(`${entry.locale}: ${Object.keys(diff).join(", ")} updated`);
+      changed(`${entry.locale}: ${described(diff)}`);
     }
   }
 
@@ -1838,25 +1857,24 @@ async function listing(args) {
     limit: "50",
   });
   for (const entry of store.locales) {
-    const text = { privacyPolicyUrl: wanted.privacyPolicyUrl };
-    if (entry.text.subtitle) text.subtitle = entry.text.subtitle;
+    const text = { privacyPolicyUrl: wanted.privacyPolicyUrl, subtitle: entry.text.subtitle ?? null };
     const row = infoLocalizations.find((candidate) => candidate.attributes?.locale === entry.locale);
     if (!row) {
       await post("/v1/appInfoLocalizations", {
         data: {
           type: "appInfoLocalizations",
-          attributes: { locale: entry.locale, name: app.attributes.name, ...text },
+          attributes: { locale: entry.locale, name: app.attributes.name, ...given(text) },
           relationships: { appInfo: { data: { type: "appInfos", id: info.id } } },
         },
       });
-      changed(`${entry.locale}: ${Object.keys(text).join(", ")} set in the app information`);
+      changed(`${entry.locale}: ${Object.keys(given(text)).join(", ")} set in the app information`);
       continue;
     }
     const diff = differing(row.attributes, text);
     if (!diff) console.log(`${entry.locale}: the app information already matches`);
     else {
       await patch(`/v1/appInfoLocalizations/${row.id}`, { data: { type: "appInfoLocalizations", id: row.id, attributes: diff } });
-      changed(`${entry.locale}: ${Object.keys(diff).join(", ")} updated in the app information`);
+      changed(`${entry.locale}: ${described(diff)} in the app information`);
     }
   }
 

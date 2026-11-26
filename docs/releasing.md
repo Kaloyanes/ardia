@@ -107,7 +107,8 @@ phones a build that isn't a release says Dev.
   same commit. For a direct install on the owner's iPhone, use a local Xcode development build or the `device` IPA
   over USB or Xcode's paired wireless connection. See [iPhone release and direct installs](phone.md#testflight-the-workflow-its-certificate-and-its-testers).
   The App Store is separate runs on the owner's word, once a TestFlight build has processed: `mode=listing` pushes
-  the listing from `apps/phone/store/`, App Privacy is answered by hand in App Store Connect, then
+  the listing from `apps/phone/store/` (the version's copyright, which Apple requires, is `copyright` in its
+  `listing.json`, the holder in `NOTICE`), App Privacy is answered by hand in App Store Connect, then
   `gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>`, with its own App
   Manager key (`ASC_APP_MANAGER_*`; the notary key stays Developer). It finds or
   makes the App Store version for the build's version, attaches the build, sets What's New, checks the listing and

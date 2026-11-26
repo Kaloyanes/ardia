@@ -516,6 +516,7 @@ test("preflight refuses a missing export compliance answer, privacy manifest or 
   assert.match(bare.err, /release-version must hold one line with the version as x\.y\.z/);
   assert.match(bare.err, /first-iphone-only-build must hold one line with a build number/);
   assert.deepEqual(bare.writes, []);
+  assert.deepEqual(bare.tokens, [], "no request, not even a read, before preflight refuses");
   writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
   mkdirSync(join(ios, "Ardia.xcodeproj"));
@@ -1521,4 +1522,50 @@ test("round 5: the pinned version and the first iPhone-only build are each one p
   const first = spawnSync(process.execPath, [script, "version", "--first-build"], { encoding: "utf8" });
   assert.equal(first.status, 0, first.stderr);
   assert.match(first.stdout, /^[1-9]\d*\n$/);
+});
+
+test("round 5: app-store's wait for a processing build never reads past --timeout", () => {
+  const processing = (states, timeout) =>
+    appStore(appStoreState({ clock: true, builds: [{ id: "b12", number: "12", version: "1.0.1", processing: states }], versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }), ["--timeout", timeout]);
+  const short = processing(["PROCESSING", "VALID"], "1");
+  assert.equal(short.code, 1, short.out);
+  assert.match(short.err, /build 12 of 1\.0\.1 is PROCESSING after 1 s/);
+  assert.deepEqual(short.writes, []);
+  const edge = processing(["PROCESSING", "PROCESSING", "VALID"], "40");
+  assert.equal(edge.code, 1, edge.out);
+  assert.deepEqual(edge.writes, []);
+  const enough = processing(["PROCESSING", "PROCESSING", "VALID"], "61");
+  assert.equal(enough.code, 0, enough.err);
+  const now = appStore(appStoreState({ versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }), ["--timeout", "0"]);
+  assert.equal(now.code, 0, now.err);
+});
+
+test("round 5: listing refuses a project whose device family it can't read", () => {
+  for (const extra of [[], ["--check"]]) {
+    const run = listingRun(listingState(), { ios: fakeIosDir(null), extra, key: extra.length === 0 });
+    assert.equal(run.code, 1, run.out);
+    assert.match(run.err, /TARGETED_DEVICE_FAMILY/);
+    assert.deepEqual(run.requests, []);
+  }
+});
+
+test("round 5: blank promotional text or subtitle and a dropped marketingUrl clear what App Store Connect holds", () => {
+  const first = listingRun(listingState());
+  assert.equal(first.code, 0, first.err);
+  const store = storeDir({ text: { "promotional-text.txt": "", "subtitle.txt": "\n" } });
+  const listing = JSON.parse(readFileSync(join(store, "listing.json"), "utf8"));
+  delete listing.marketingUrl;
+  writeFileSync(join(store, "listing.json"), JSON.stringify(listing));
+  const cleared = listingRun(first.stateFile, { store });
+  assert.equal(cleared.code, 0, cleared.err);
+  const version = cleared.writes.find((write) => write.path.startsWith("/v1/appStoreVersionLocalizations/"));
+  assert.deepEqual(version.body.data.attributes, { promotionalText: null, marketingUrl: null });
+  const info = cleared.writes.find((write) => write.path.startsWith("/v1/appInfoLocalizations/"));
+  assert.deepEqual(info.body.data.attributes, { subtitle: null });
+  const again = listingRun(cleared.stateFile, { store });
+  assert.deepEqual(again.writes, []);
+  const fresh = listingRun(listingState(), { store });
+  assert.equal(fresh.code, 0, fresh.err);
+  const made = fresh.writes.find((write) => write.path === "/v1/appStoreVersionLocalizations");
+  assert.ok(!("promotionalText" in made.body.data.attributes) && !("marketingUrl" in made.body.data.attributes), JSON.stringify(made.body.data.attributes));
 });

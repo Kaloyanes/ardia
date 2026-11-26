@@ -4855,7 +4855,8 @@ In order, each on the owner's word:
 
 **The listing** (`asc.mjs listing`, the App Manager key below). It reads `apps/phone/store/`:
 - `<locale>/description.txt` (at most 4,000 characters), `keywords.txt` (100 bytes of UTF-8, as Apple counts it),
-  and, when present, `promotional-text.txt` (170 characters) and `subtitle.txt` (30 characters);
+  and, when present, `promotional-text.txt` (170 characters) and `subtitle.txt` (30 characters; a blank or missing
+  file clears what App Store Connect holds, as does dropping `marketingUrl`);
   `<primary locale>/review-notes.txt` (4,000 bytes) is App Review's notes. One folder per locale, `en-US` for now.
 - `listing.json`: `supportUrl`, `marketingUrl` and `privacyPolicyUrl` (https strings; the policy is
   `https://ardia.dev/privacy`), `copyright` (the year and the holder, without the ©, which Apple adds: the holder
@@ -4929,6 +4930,8 @@ territories once it was turned off.
   `Config/release-version` and the floor in `Config/first-iphone-only-build`. Each missing one is named and nothing is sent.
 - **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
   outside is refused before a request.
+- **The wait** for a build still processing never starts a read after `--timeout`: each pause is cut to the time
+  left, and the run stops at the deadline.
 - **The build** is picked by its number and the pinned version, so a build number another version shares never
   gets in the way. A `version` (`--version`) other than the pin is refused before any request: change the pin in a
   commit instead. The build must be `VALID`, not expired, and carry an export compliance answer.
