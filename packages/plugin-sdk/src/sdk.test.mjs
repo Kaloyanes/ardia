@@ -1760,7 +1760,7 @@ describe("v2-showcase fixture", () => {
     const { readManifest } = await import("../../../apps/browser/src/lib/pluginManifest.ts");
     const { appProblems } = await import("../../../apps/browser/src/state/plugins/appChecks.ts");
     const { useBrowser } = await import("../../../apps/browser/src/state/browser/store.ts");
-    const read = readManifest(readFileSync(fixture("plugin.json"), "utf8"));
+    const read = readManifest(readFileSync(fixture("plugin.json"), "utf8"), "v2-showcase");
     assert.deepEqual(read.problems, []);
     assert.deepEqual(appProblems(read.manifest, useBrowser.getState().settings, "99.0.0"), []);
     assert.equal(read.manifest.name, "v2-showcase");

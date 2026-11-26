@@ -33,10 +33,8 @@ echo "==> Official plugins (fetched on Install; the app carries only the pin and
 plist="$app/Contents/Info.plist"
 [ ! -e "$app/Contents/Resources/Plugins" ] || die "the export bundles plugins; official plugins are fetched on Install"
 /usr/libexec/PlistBuddy -c "Delete :ArdiaBuiltInPlugins" "$plist" 2>/dev/null || true
-signed_pin="$(python3 -I "$root/scripts/release/official-plugins.py" signed-pin)" || die "the official plugins' pin couldn't be read"
-plutil -replace ArdiaOfficialPlugins -json "$signed_pin" "$plist" || die "couldn't write ArdiaOfficialPlugins into Info.plist"
-registry="$(python3 -I "$root/scripts/release/official-plugins.py" registry)" || die "the pin's program registry couldn't be made"
-plutil -replace ArdiaProgramRegistry -json "$registry" "$plist" || die "couldn't write ArdiaProgramRegistry into Info.plist"
+plutil -remove ArdiaOfficialPlugins "$plist" >/dev/null 2>&1 || true
+plutil -remove ArdiaProgramRegistry "$plist" >/dev/null 2>&1 || true
 
 echo "==> Licenses"
 licenses="$app/Contents/Resources/Licenses"

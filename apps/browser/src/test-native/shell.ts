@@ -21,8 +21,6 @@ import { nativeEvents, unfaked } from "./events";
 import { reportModule } from "./report";
 import { telemetryLocalModule } from "./telemetryLocal";
 import { windowGeometries, windowGeometryFakes } from "./windowGeometry";
-import officialPin from "../../official-plugins.json";
-import { hexOf, sha256 } from "../lib/sha256";
 export { beginWindowControlTransition, finishStalledTransition, geometryWorld } from "./windowGeometry";
 
 type Modules = Omit<ShellNativeModules, "ArdiaFieldGlow">;
@@ -674,27 +672,32 @@ const systemSignalsModule: Modules["ArdiaSystemSignals"] = {
   addListener: systemSignalEvents.addListener,
 };
 
+type FakeCandidate = { folderId: string; text: string; version: string };
+
 export const pluginHost = {
   folders: [] as {
     name: string;
     status: "ok" | "missing" | "link" | "notFile" | "tooBig" | "unreadable";
+    source?: "local" | "store" | "dev";
     text?: string;
     folderId?: string;
-    official?: boolean;
-    legacy?: boolean;
-    legacyHash?: string;
-    candidateOnly?: boolean;
-    candidate?: { folderId: string; text: string; legacyHash: string; version: string };
-    ignoresUserFolder?: boolean;
+    candidates?: FakeCandidate[];
+    previous?: FakeCandidate;
+    devPath?: string;
+    shadowsStore?: boolean;
   }[],
-  pinned: undefined as undefined | null | { name: string; version: string; folderId: string }[],
-  officialArtifacts: {} as Record<string, string>,
-  officialFetchResults: {} as Record<string, { ok: false; code: "offline" | "failed" | "verify" | "cancelled" | "unsupported"; reason: string; cause?: string }>,
-  officialFetchGate: null as null | Promise<void>,
-  officialFetchLog: [] as string[],
-  officialCancels: [] as string[],
-  promotes: [] as { name: string; folderId: string; approved: string }[],
-  promoteResult: null as null | { ok: false; reason: string },
+  artifacts: {} as Record<string, string>,
+  artifactResults: {} as Record<string, { ok: false; code: "offline" | "failed" | "verify" | "cancelled" | "unsupported"; reason: string; cause?: string }>,
+  artifactGate: null as null | Promise<void>,
+  artifactLog: [] as { name: string; id: string; version: string; url: string; sha256: string }[],
+  artifactCancels: [] as string[],
+  activations: [] as { name: string; folderId: string; approved: string }[],
+  activateResult: null as null | { ok: false; reason: string },
+  rollbacks: [] as string[],
+  adoptions: [] as { from: string; to: string }[],
+  adoptResult: { ok: true, found: false, moved: [] } as { ok: boolean; found: boolean; moved: string[]; reason?: string },
+  localInstalls: [] as string[],
+  localInstallResult: null as null | { ok: true; name: string; id: string; source: "local" | "store" | "dev"; sha256?: string; candidate?: FakeCandidate } | { ok: false; reason: string },
   starts: [] as { name: string; run: string[]; memoryMB: number; network: boolean; folderId: string; approved: string; page: boolean; runtime?: "js" | "process"; entry?: string }[],
   fetches: [] as { url: string; method: string; headers: Record<string, string>; body?: string; timeoutMs: number; allowedHosts: string[] }[],
   fetchResult: null as null | { ok: true; status: number; statusText: string; url: string; headers: Record<string, string>; body: string } | { ok: false; reason: string },
@@ -709,13 +712,11 @@ export const pluginHost = {
   events: [] as { name: string; run: number; line: string }[],
   removed: [] as string[],
   removeFolderIds: [] as (string | null)[],
-  links: [] as { name: string; folderId: string; approved: string; version: string | null; programs: { name: string; path: string; afterUpdate?: string[][] }[] }[],
+  links: [] as { name: string; folderId: string; approved: string; version: string | null; official: boolean; programs: { name: string; path: string; afterUpdate?: string[][] }[] }[],
   unlinks: [] as { name: string; programs: string[]; remove: boolean }[],
   sweeps: [] as string[][],
   afterUpdateQuitStops: null as null | { consent: string; exitedOnTerm: number; killed: number },
   afterUpdateQuitConsent: null as null | string,
-  legacyInstalled: [] as string[],
-  registry: null as null | { claims: Record<string, string>; failClosed: boolean; legacyOwners: string[] },
   linkResult: null as null | { ok: false; reason?: string; stale?: true } | { ok: true; linked: string[]; refused: Record<string, string>; binDir: string; adopted: boolean },
   startResult: null as null | { ok: false; reason: string },
   removeGate: null as null | Promise<void>,
@@ -725,39 +726,17 @@ export const pluginHost = {
   listFails: false,
   nextRun: 0,
 };
-function derivedRegistry() {
-  const claims: Record<string, string> = {};
-  const declared: Record<string, string[]> = {};
-  for (const folder of pluginHost.folders) {
-    if (!folder.official || !folder.text) continue;
-    try {
-      const doc = JSON.parse(folder.text) as { programs?: unknown; contributes?: { programs?: unknown } };
-      const programs = (doc.contributes?.programs ?? doc.programs) as { name?: unknown; claim?: unknown }[] | undefined;
-      declared[folder.name] = (Array.isArray(programs) ? programs : []).flatMap((p) => (typeof p.name === "string" ? [p.name] : []));
-      for (const p of Array.isArray(programs) ? programs : []) if (p.claim === true && typeof p.name === "string") claims[p.name] ??= folder.name;
-    } catch {}
-  }
-  for (const plugin of (officialPin as { plugins: { name: string; reservedPrograms?: string[] }[] }).plugins)
-    for (const program of plugin.reservedPrograms ?? []) if (declared[plugin.name]?.includes(program)) claims[program] ??= plugin.name;
-  return { claims, failClosed: false, legacyOwners: [] };
-}
-export const officialLegacyHash = (text: string) => hexOf(sha256(`${text}\u0000bundled`));
-export function officialPinnedFromPin(): { name: string; version: string; folderId: string }[] {
-  return (officialPin as { plugins: { name: string; version: string; artifacts: Record<string, { sha256?: string | null }> }[] }).plugins.flatMap((p) => {
-    const sha = p.artifacts["macos-arm64"]?.sha256;
-    return sha ? [{ name: p.name, version: p.version, folderId: `official-${sha}` }] : [];
-  });
-}
-const pinnedNow = () => (pluginHost.pinned === undefined ? officialPinnedFromPin() : pluginHost.pinned);
+const withSource = <T extends { source?: "local" | "store" | "dev" }>(f: T) => ({ ...f, source: f.source ?? "local" });
 const pluginEvents = nativeEvents();
 export const emitPluginLine = (line: { name: string; run: number; line: string }) => pluginEvents.emit("onLine", line);
 export const emitPluginExit = (exit: { name: string; run: number; status: number | null; signal: number | null; overMemory: boolean }) => pluginEvents.emit("onExit", exit);
+export const storeFolderId = (sha: string) => `store-${sha}`;
 const plugins: Modules["ArdiaPlugins"] = {
   folder: () => "/config/plugins",
   list: async () => {
     await pluginHost.listGate;
     if (pluginHost.listFails) throw new Error("the plugins folder couldn't be listed");
-    return pluginHost.folders.map((f) => ({ ...f }));
+    return pluginHost.folders.map((f) => withSource({ ...f, ...(f.candidates ? { candidates: f.candidates.map((c) => ({ ...c })) } : {}) }));
   },
   start: async (spec) => {
     pluginHost.starts.push({ ...spec, run: [...spec.run] });
@@ -770,7 +749,7 @@ const plugins: Modules["ArdiaPlugins"] = {
   reply: (name, run, line) => void pluginHost.replies.push({ name, run, line }),
   event: (name, run, line) => void pluginHost.events.push({ name, run, line }),
   call: (name, run, line) => void pluginHost.events.push({ name, run, line }),
-  remove: async (name, official, folderId) => (await pluginHost.removeGate, pluginHost.removeFolderIds.push(folderId), pluginHost.removed.push(official ? `official:${name}` : name), (pluginHost.folders = pluginHost.folders.filter((f) => f.name !== name)), { ok: true }),
+  remove: async (name, source, folderId) => (await pluginHost.removeGate, pluginHost.removeFolderIds.push(folderId), pluginHost.removed.push(source === "local" ? name : `${source}:${name}`), (pluginHost.folders = pluginHost.folders.filter((f) => f.name !== name)), { ok: true }),
   linkPrograms: async (spec) => {
     pluginHost.links.push({ ...spec, programs: spec.programs.map((p) => ({ ...p })) });
     if (pluginHost.linkResult) return pluginHost.linkResult;
@@ -784,40 +763,51 @@ const plugins: Modules["ArdiaPlugins"] = {
     return stops;
   },
   setAfterUpdateQuitConsent: (consent) => void (pluginHost.afterUpdateQuitConsent = consent),
-  legacyProgramsInstalled: async () => [...pluginHost.legacyInstalled],
-  programRegistry: async () => pluginHost.registry ?? derivedRegistry(),
   revealLog: () => {},
   revealFolder: () => {},
   devSnapshotPage: async () => false,
-  officialPlugins: async () => pinnedNow(),
-  fetchOfficial: async (name) => {
-    pluginHost.officialFetchLog.push(name);
-    await pluginHost.officialFetchGate;
-    if (pluginHost.officialCancels.includes(name)) {
-      pluginHost.officialCancels = pluginHost.officialCancels.filter((n) => n !== name);
+  fetchArtifact: async (spec) => {
+    pluginHost.artifactLog.push({ name: spec.name, id: spec.id, version: spec.version, url: spec.url, sha256: spec.sha256 });
+    await pluginHost.artifactGate;
+    if (pluginHost.artifactCancels.includes(spec.name)) {
+      pluginHost.artifactCancels = pluginHost.artifactCancels.filter((n) => n !== spec.name);
       return { ok: false, code: "cancelled", reason: "Cancelled." };
     }
-    const refused = pluginHost.officialFetchResults[name];
+    const refused = pluginHost.artifactResults[spec.name];
     if (refused) return refused;
-    const text = pluginHost.officialArtifacts[name];
-    const pinned = pinnedNow()?.find((p) => p.name === name);
-    if (text === undefined || !pinned) return { ok: false, code: "offline", reason: "The Internet connection appears to be offline." };
-    const candidate = { folderId: pinned.folderId, text, legacyHash: officialLegacyHash(text), version: pinned.version };
-    const at = pluginHost.folders.findIndex((f) => f.name === name);
-    if (at < 0) pluginHost.folders.push({ name, status: "missing", official: true, candidateOnly: true, candidate });
-    else pluginHost.folders[at] = { ...pluginHost.folders[at]!, candidate };
-    return { ok: true, candidate };
+    const text = pluginHost.artifacts[`${spec.id}@${spec.version}`] ?? pluginHost.artifacts[spec.id];
+    if (text === undefined) return { ok: false, code: "offline", reason: "The Internet connection appears to be offline." };
+    const candidate = { folderId: storeFolderId(spec.sha256), text, version: spec.version };
+    const at = pluginHost.folders.findIndex((f) => f.name === spec.name);
+    if (at < 0) pluginHost.folders.push({ name: spec.name, status: "missing", source: "store", candidates: [candidate] });
+    else pluginHost.folders[at] = { ...pluginHost.folders[at]!, candidates: [...(pluginHost.folders[at]!.candidates ?? []).filter((c) => c.folderId !== candidate.folderId), candidate] };
+    return { ok: true, candidate: { ...candidate, payloadDigest: "d".repeat(64) } };
   },
-  cancelOfficialFetch: (name) => void pluginHost.officialCancels.push(name),
-  promoteOfficial: async (name, folderId, approved) => {
-    pluginHost.promotes.push({ name, folderId, approved });
-    if (pluginHost.promoteResult) return pluginHost.promoteResult;
+  cancelArtifactFetch: (name) => void pluginHost.artifactCancels.push(name),
+  installArchiveFile: async (path) => (pluginHost.localInstalls.push(path), pluginHost.localInstallResult ?? { ok: false, reason: "no archive" }),
+  installFolder: async (path) => (pluginHost.localInstalls.push(path), pluginHost.localInstallResult ?? { ok: false, reason: "no folder" }),
+  activateStore: async (name, folderId, approved) => {
+    pluginHost.activations.push({ name, folderId, approved });
+    if (pluginHost.activateResult) return pluginHost.activateResult;
     const at = pluginHost.folders.findIndex((f) => f.name === name);
-    const candidate = at < 0 ? undefined : pluginHost.folders[at]!.candidate;
-    if (!candidate || candidate.folderId !== folderId) return { ok: false, reason: "Its download is gone. Try again." };
-    pluginHost.folders[at] = { name, status: "ok", official: true, folderId, text: candidate.text, legacyHash: candidate.legacyHash };
-    return { ok: true };
+    const folder = at < 0 ? undefined : pluginHost.folders[at]!;
+    const candidate = folder?.candidates?.find((c) => c.folderId === folderId);
+    if (!folder || !candidate) return { ok: false, reason: "Its download is gone or changed. Try again." };
+    const previous = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: "0.0.0" } : undefined;
+    pluginHost.folders[at] = { name, status: "ok", source: "store", folderId, text: candidate.text, candidates: folder.candidates!.filter((c) => c.folderId !== folderId), ...(previous ? { previous } : {}) };
+    return { ok: true, folderId };
   },
+  rollbackStore: async (name) => {
+    pluginHost.rollbacks.push(name);
+    const at = pluginHost.folders.findIndex((f) => f.name === name);
+    const folder = at < 0 ? undefined : pluginHost.folders[at]!;
+    if (!folder?.previous) return { ok: false, reason: "There's no earlier version to go back to." };
+    const current = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: "0.0.0" } : undefined;
+    pluginHost.folders[at] = { ...folder, folderId: folder.previous.folderId, text: folder.previous.text, ...(current ? { previous: current } : {}) };
+    return { ok: true, folderId: folder.previous.folderId };
+  },
+  verifySignature: () => false,
+  adoptLegacy: async (from, to) => (pluginHost.adoptions.push({ from, to }), { ...pluginHost.adoptResult }),
   hostFetch: async (spec) => {
     pluginHost.fetches.push({ ...spec, headers: { ...spec.headers }, allowedHosts: [...spec.allowedHosts] });
     return pluginHost.fetchResult ?? { ok: true, status: 200, statusText: "OK", url: spec.url, headers: {}, body: "" };

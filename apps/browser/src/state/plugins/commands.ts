@@ -1,3 +1,4 @@
+import { shownNames, windowProfileId } from "./profileScope";
 import type { CommandAction as BarAction } from "@ardia/core";
 import type { CommandSpec, PageSide, PluginPermissions } from "../../lib/pluginManifest";
 import { minimizedUrl, urlParts } from "../../lib/urlParts";
@@ -42,7 +43,7 @@ function windowWhenContext(windowId: string, s: BrowserState = useBrowser.getSta
 export function pluginBarActions(s: Pick<PluginsStore, "listings" | "records" | "order">, windowId?: string): BarAction[] {
   const out: BarAction[] = [];
   const when = windowId === undefined ? null : windowWhenContext(windowId);
-  for (const name of activeNames(s)) {
+  for (const name of shownNames(s, windowProfileId(windowId))) {
     const m = activeManifest(s, name)!;
     if (m.page) out.push({ id: `${PLUGIN_ACTION_PREFIX}${name}/${PAGE_ACTION}`, title: `Open ${m.page.title}`, icon: m.page.icon, keywords: [m.title, "plugin"] });
     for (const c of m.commands) if (!when || whenHolds(c.when, when)) out.push({ id: `${PLUGIN_ACTION_PREFIX}${name}/${c.name}`, title: c.title, icon: c.icon, keywords: [...c.keywords, m.title] });

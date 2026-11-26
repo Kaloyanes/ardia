@@ -626,3 +626,41 @@ describe("diffSecuritySurface", () => {
     assert.equal(isNativeTier({}), false);
   });
 });
+
+describe("official artifact signatures", async () => {
+  const { OFFICIAL_ARTIFACT_DOMAIN, officialArtifactMessage, signOfficialArtifact, verifyOfficialArtifact, isNativeTier, reachesOutsideSandbox } = await import("./registry.ts");
+  const claim = { id: "@ardia/cli", version: "0.8.0", platform: "macos-arm64", sha256: "a".repeat(64) };
+
+  test("the signed bytes are the domain plus canonical {v, id, version, platform, sha256}", async () => {
+    const message = new TextDecoder().decode(officialArtifactMessage(claim));
+    assert.equal(message, `${OFFICIAL_ARTIFACT_DOMAIN}{"id":"@ardia/cli","platform":"macos-arm64","sha256":"${"a".repeat(64)}","v":1,"version":"0.8.0"}`);
+    const k = keys();
+    const sig = await signOfficialArtifact(claim, k.privatePem);
+    assert.match(sig, /^[A-Za-z0-9_-]{86}$/);
+    assert.ok(nodeVerify(null, Buffer.from(officialArtifactMessage(claim)), createPublicKey(k.publicPem), Buffer.from(fromBase64Url(sig))));
+  });
+
+  test("verifies against any trusted key, and refuses another key, another hash, another platform or another scope", async () => {
+    const k = keys();
+    const other = keys();
+    const sig = await signOfficialArtifact(claim, k.privatePem);
+    assert.deepEqual(await verifyOfficialArtifact(claim, sig, { old: other.publicPem, now: k.raw.replace(/-/g, "+").replace(/_/g, "/") }), { ok: true, kid: "now" });
+    assert.equal((await verifyOfficialArtifact(claim, sig, { only: other.publicPem })).ok, false);
+    assert.equal((await verifyOfficialArtifact({ ...claim, sha256: "b".repeat(64) }, sig, { k: k.publicPem })).ok, false);
+    assert.equal((await verifyOfficialArtifact({ ...claim, platform: "universal" }, sig, { k: k.publicPem })).ok, false);
+    assert.match((await verifyOfficialArtifact({ ...claim, id: "@alice/cli" }, sig, { k: k.publicPem })).reason, /only @ardia/);
+    assert.match((await verifyOfficialArtifact(claim, undefined, { k: k.publicPem })).reason, /no official signature/);
+    assert.match((await verifyOfficialArtifact(claim, sig, {})).reason, /no official signing key/);
+    assert.match((await verifyOfficialArtifact(claim, "short", { k: k.publicPem })).reason, /64 bytes/);
+  });
+
+  test("native tier is a sidecar, a program or control; only programs and control reach outside the sandbox", () => {
+    assert.equal(isNativeTier({}), false);
+    assert.equal(isNativeTier({ sidecar: null }), false);
+    assert.equal(isNativeTier({ sidecar: { run: ["bin/x"] } }), true);
+    assert.equal(isNativeTier({ contributes: { programs: [{ name: "ardia" }] } }), true);
+    assert.equal(isNativeTier({ permissions: { control: true } }), true);
+    assert.equal(reachesOutsideSandbox({ sidecar: { run: ["bin/x"] } }), false);
+    assert.equal(reachesOutsideSandbox({ permissions: { control: true } }), true);
+  });
+});

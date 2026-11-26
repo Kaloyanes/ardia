@@ -1510,8 +1510,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "824356c4ceb0f526b84811590c1aab1a8ad59aa6b3f949f06ad68fb723cef12f",
-        "swift": "41a93592952890260b4a8e0f8fba27b9931a42b5ee4a4b1b2bb25ca358f7c010"
+        "types": "793961f4e8d090cc643d5f8a0c1ba2a81b7fc7d655459435535d03e551068815",
+        "swift": "2c5642619320e82d8c19525c46278c33284ea97349585bf7fd7c92800647ac98"
       },
       "modules": {
         "ArdiaShell": {
@@ -3930,20 +3930,6 @@
               "desktop": "custom",
               "windows": "absent"
             },
-            "legacyProgramsInstalled": {
-              "args": [],
-              "async": true,
-              "mac": "custom",
-              "desktop": "custom",
-              "windows": "absent"
-            },
-            "programRegistry": {
-              "args": [],
-              "async": true,
-              "mac": "custom",
-              "desktop": "custom",
-              "windows": "absent"
-            },
             "sweepPrograms": {
               "args": [
                 "active"
@@ -3964,23 +3950,16 @@
               "desktop": "custom",
               "windows": "absent"
             },
-            "officialPlugins": {
-              "args": [],
-              "async": true,
-              "mac": "custom",
-              "desktop": "custom",
-              "windows": "absent"
-            },
-            "fetchOfficial": {
+            "fetchArtifact": {
               "args": [
-                "name"
+                "spec"
               ],
               "async": true,
               "mac": "custom",
               "desktop": "custom",
               "windows": "absent"
             },
-            "cancelOfficialFetch": {
+            "cancelArtifactFetch": {
               "args": [
                 "name"
               ],
@@ -3989,11 +3968,59 @@
               "desktop": "custom",
               "windows": "absent"
             },
-            "promoteOfficial": {
+            "installArchiveFile": {
+              "args": [
+                "path"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "installFolder": {
+              "args": [
+                "path"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "activateStore": {
               "args": [
                 "name",
                 "folderId",
                 "approved"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "rollbackStore": {
+              "args": [
+                "name"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "verifySignature": {
+              "args": [
+                "publicKey",
+                "signature",
+                "message"
+              ],
+              "async": false,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "adoptLegacy": {
+              "args": [
+                "from",
+                "to"
               ],
               "async": true,
               "mac": "custom",
@@ -4043,7 +4070,7 @@
             "remove": {
               "args": [
                 "name",
-                "official",
+                "source",
                 "folderId"
               ],
               "async": true,
@@ -4089,7 +4116,7 @@
               "desktop": "absent",
               "windows": "absent"
             },
-            "onOfficialFetch": {
+            "onArtifactFetch": {
               "mac": "custom",
               "desktop": "absent",
               "windows": "absent"
