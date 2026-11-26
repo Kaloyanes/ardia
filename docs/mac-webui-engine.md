@@ -200,6 +200,33 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
   display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 
+- **Trackpad swipes** (`ac_mac_swipe`, rules in `ac_mac_swipe_policy.h`). A local `NSEvent` scroll-wheel monitor per
+  window, scoped to that window and removed with its host, reads AppKit's real `phase`, `momentumPhase` and
+  `hasPreciseScrollingDeltas`, so a live two-finger drag, its momentum and a mouse wheel click are told apart without
+  timers. Each gesture keeps the surface it began on.
+  - Over the shell it sends `ArdiaShell` `onScrollGesture {phase, momentum, dx, dy, x, y, t}` (`mayBegin`, `began`,
+    `changed`, `ended`, `cancelled`, `none` for momentum, `wheel` for a mouse click) and swallows nothing. The shell
+    advertises `shell.scrollGestures`, and `swipe.ts` then drives the profile pager from these phases alone: it ends
+    the drag on the event the fingers lift with, ignores the momentum of a swipe it tracked, and only holds a DOM
+    `wheel` off the shell's scrollers while a swipe or its momentum is its own.
+  - A gesture that moves to another surface before it starts, or whose window or app resigns, cancels the route it
+    left, so a pager held by `mayBegin` settles instead of staying held.
+  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
+    timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
+    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. Acks are matched to
+    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, converted with `EventTimeStampFromSeconds` and compared
+    to the microsecond, so a late ack from an earlier gesture is dropped. Every frame widget of the tab is watched as
+    frames come and go, so a wheel aimed at a non-scrolling cross-site iframe still opens the gesture, and a new
+    primary page cancels it. A page that
+    scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
+    vertical start (latched on the first deltas). A consumed update before the shell claims the swipe cancels it.
+    The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
+    soon as any of them changes or the tab stops being shown. `swipe.ts` routes it only to the swipe area whose
+    `pageTabId` is that tab.
+  - The host swallows a page swipe's horizontal motion only after the shell claims it with `shell.pageSwipeClaim
+    {gesture, tabId, claimed}`, which `swipe.ts` sends once it tracks the swipe (history in that direction, horizontal
+    intent) and withdraws when it lets go. The end always reaches the page. Chrome's own history swiper is turned off
+    for the shell and every hosted page (`HistorySwipingControl`).
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),
@@ -253,9 +280,10 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
     (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a link that would open a new tab
     opens in place (`openWindow` `current`) when it has no opener and isn't a form submission. Chromium routes it
-    through `OpenURLFromTab` or, for `target="_blank"` and `rel="noopener"`, through `CreateNewWindow`'s
-    opener-suppressed branch, where `apply.sh`'s hook (`content::SetArdiaMacNewWindowInPlaceHook`) still sees
-    `is_form_submission` and the POST body, before `AddNewContents` and before the new contents loads.
+    through `OpenURLFromTab` or, for `target="_blank"` and `rel="noopener"`, through `CreateNewWindow`. There
+    `apply.sh`'s hook (`content::SetArdiaMacNewWindowInPlaceHook`) runs first for opener-suppressed requests, before
+    any child `WebContents` is created or announced to observers, and still sees `is_form_submission` and the POST
+    body.
     `window.open` with an opener and POST forms keep their own contents.
   - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll, routed by the native hit test at
     the event's own location; the count restarts when the page changes or the setting is turned off, and precise

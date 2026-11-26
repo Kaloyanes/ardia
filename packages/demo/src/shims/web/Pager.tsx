@@ -15,12 +15,12 @@ export const pagerState = (key: string): PagerSnapshot | null => Pager.existing(
 export const devPagerState = async (key: string) => Pager.existing(key)?.debug() ?? null;
 
 export const SwipeArea = forwardRef<SwipeAreaHandle, SwipeAreaProps>(function SwipeArea(
-  { onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager, ...props },
+  { onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager, pageTabId, ...props },
   ref,
 ) {
   const node = useRef<HTMLElement | null>(null);
-  const latest = useRef({ onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager });
-  latest.current = { onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager };
+  const latest = useRef({ onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager, pageTabId });
+  latest.current = { onSwipe, onPagerState, onPagerPosition, nativePager, canSwipeBack, canSwipeForward, tracksUnavailableDirections, allowsVerticalMotion, isPager, pageTabId };
   const pager = useRef<Pager | null>(null);
 
   const area = useRef<PagerArea>({

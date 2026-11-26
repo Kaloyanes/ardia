@@ -23,6 +23,7 @@
 #include "ardia/mac/ac_mac_share.h"
 #include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "ardia/mac/generated/ac_desktop_window_commands.h"
@@ -294,6 +295,7 @@ std::string ShellHostView::BootstrapJson() const {
   SystemServices::AppendCapabilities(capabilities);
   ExtensionViews::AppendCapabilities(capabilities);
   PipPresenter::AppendCapabilities(capabilities);
+  ScrollGestures::AppendCapabilities(capabilities);
   if (popover::kPopoverRendererShipped) {
     for (std::string_view capability : kPopoverCapabilities) {
       capabilities.Append(capability);
@@ -404,6 +406,9 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (pip_ && PipPresenter::Handles(method)) {
     return pip_->Invoke(method, args, std::move(done));
+  }
+  if (scroll_gestures_ && ScrollGestures::Handles(method)) {
+    return scroll_gestures_->Invoke(method, args, std::move(done));
   }
   if (method == "shell.inputRegions") {
     return SetInputRegions(args, std::move(done));

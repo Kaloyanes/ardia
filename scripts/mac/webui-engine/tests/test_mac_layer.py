@@ -91,6 +91,9 @@ class PureHeaderTests(unittest.TestCase):
     def test_link_policy(self):
         compile_and_run(self, TESTS / 'link_policy_test.cc', self.out / 'link-policy')
 
+    def test_swipe_policy(self):
+        compile_and_run(self, TESTS / 'swipe_policy_test.cc', self.out / 'swipe-policy')
+
     def test_pip_policy(self):
         compile_and_run(self, TESTS / 'pip_policy_test.cc', self.out / 'pip-policy')
 
@@ -213,6 +216,7 @@ class ApplyTests(unittest.TestCase):
                 '#include "build/build_config.h"\n\nnamespace content {\n\n'
                 'FrameTree* WebContentsImpl::CreateNewWindow(\n'
                 '    RenderFrameHostImpl* opener, const mojom::CreateNewWindowParams& params) {\n'
+                '  content::ChildProcessId render_process_id = opener->GetProcess()->GetID();\n'
                 '  if (!params.opener_suppressed) {\n    return nullptr;\n  }\n\n'
                 '  bool was_blocked = false;\n'
                 '  base::WeakPtr<WebContentsImpl> weak_new_contents =\n'
@@ -287,7 +291,9 @@ class ApplyTests(unittest.TestCase):
         download = 'content/browser/renderer_host/render_frame_host_impl.cc'
         windows = 'content/browser/web_contents/web_contents_impl.cc'
         anchor_file = 'third_party/blink/renderer/core/html/html_anchor_element.cc'
-        linked = (throttles, download, windows, anchor_file)
+        menu = 'components/renderer_context_menu/render_view_context_menu_base.cc'
+        overlay = 'chrome/browser/ui/views/overlay/video_overlay_window_views.cc'
+        linked = (throttles, download, windows, anchor_file, menu, overlay)
         guard = '#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
         with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
             root = pathlib.Path(scratch)
@@ -311,6 +317,14 @@ class ApplyTests(unittest.TestCase):
                                                  '    return nullptr;\n  }\n#endif  \n'),
                 anchor_file: hooked[anchor_file].replace('#if !defined(OFFICIAL_BUILD)\n',
                                                          '#if   !defined( OFFICIAL_BUILD )\n'),
+                menu: hooked[menu]
+                .replace('RenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n',
+                         'RenderViewContextMenuObserver* ( *g_ardia_mac_page_menu_observer )(\n')
+                .replace('  if (g_ardia_mac_page_menu_observer) {\n', '  if ( g_ardia_mac_page_menu_observer) {\n')
+                .replace('  if (g_ardia_mac_page_menu_destroyed) {\n', '  if (g_ardia_mac_page_menu_destroyed ) {\n'),
+                overlay: hooked[overlay]
+                .replace('(*g_ardia_mac_video_overlay)(\n', '(* g_ardia_mac_video_overlay)(\n')
+                .replace('  if (g_ardia_mac_video_overlay) {\n', '  if (g_ardia_mac_video_overlay ) {\n'),
             }
             for path, text in reformatted.items():
                 self.assertNotEqual(text, hooked[path], path)
@@ -355,6 +369,57 @@ class ApplyTests(unittest.TestCase):
             (root / download).write_text(doubled)
             self.assertEqual(self.run_apply(root, '--revert').returncode, 0)
             self.assertEqual((root / download).read_text(), originals[download])
+            for path in (menu, overlay):
+                (root / path).write_text(reformatted[path])
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            for path in (menu, overlay):
+                self.assertEqual((root / path).read_text(), hooked[path], path)
+            moved = (guard + '  if (g_ardia_mac_new_window_in_place &&\n'
+                     '      g_ardia_mac_new_window_in_place(\n'
+                     '          this, params.target_url, params.disposition,\n'
+                     '          params.is_form_submission || params.form_submission_post_data,\n'
+                     '          has_user_gesture)) {\n    return nullptr;\n  }\n#endif\n')
+            late = '  bool was_blocked = false;\n'
+            early = hooked[windows].split('CreateNewWindowParams& params) {\n', 1)[1].split('  content::ChildProcessId', 1)[0]
+            self.assertTrue(early.startswith(guard) and early.endswith('#endif\n'), early)
+            (root / windows).write_text(hooked[windows].replace(early, '', 1).replace(late, moved + late, 1))
+            self.assertEqual((root / windows).read_text().count('g_ardia_mac_new_window_in_place &&'), 1)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            relocated = (root / windows).read_text()
+            self.assertEqual(relocated, hooked[windows])
+            self.assertLess(relocated.index('params.opener_suppressed && g_ardia_mac_new_window_in_place'),
+                            relocated.index('content::ChildProcessId render_process_id'))
+
+    def test_apply_touches_only_the_hook_block_inside_an_outer_guard(self):
+        download = 'content/browser/renderer_host/render_frame_host_impl.cc'
+        with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
+            root = pathlib.Path(scratch)
+            originals = self.fake_tree(root)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            hooked = (root / download).read_text()
+            call = hooked.split('blink_parameters) {\n', 1)[1].split('  std::unique_ptr', 1)[0]
+            respaced = call.replace('  if (g_ardia_mac_download_url &&\n', '  if (g_ardia_mac_download_url   &&\n')
+            sibling = '  int ardia_sibling_kept = 1;\n'
+            outer = '#if !defined(OFFICIAL_BUILD)\n' + sibling + respaced + sibling.replace('1', '2') + '#endif\n'
+            nested = hooked.replace(call, outer, 1)
+            (root / download).write_text(nested)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            applied = (root / download).read_text()
+            self.assertIn(sibling, applied)
+            self.assertIn(sibling.replace('1', '2'), applied)
+            self.assertEqual(applied.count('g_ardia_mac_download_url &&'), 1)
+            self.assertNotIn('g_ardia_mac_download_url   &&', applied)
+            self.assertEqual(self.run_apply(root, '--check').returncode, 0)
+            (root / download).write_text(nested)
+            self.assertEqual(self.run_apply(root, '--revert').returncode, 0)
+            reverted = (root / download).read_text()
+            self.assertIn('#if !defined(OFFICIAL_BUILD)\n' + sibling + sibling.replace('1', '2') + '#endif\n', reverted)
+            self.assertNotIn('g_ardia_mac_download_url', reverted)
+            self.assertNotIn('SetArdiaMacDownloadUrlHook', reverted)
+            self.assertEqual(reverted.replace('#if !defined(OFFICIAL_BUILD)\n' + sibling + sibling.replace('1', '2')
+                                              + '#endif\n', '', 1), originals[download])
 
     def test_apply_upgrades_an_earlier_page_menu_hook_and_reverts_it(self):
         target = 'components/renderer_context_menu/render_view_context_menu_base.cc'
@@ -1689,6 +1754,121 @@ class ContractTests(unittest.TestCase):
             self.assertNotIn('std::lround(', path.read_text(), path.name)
 
 
+class SwipeContractTests(unittest.TestCase):
+    def setUp(self):
+        self.source = (MAC / 'ac_mac_swipe.mm').read_text()
+
+    def test_the_scroll_monitor_is_scoped_to_its_window_and_removed_with_it(self):
+        self.assertIn('addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel', self.source)
+        self.assertNotIn('addGlobalMonitorForEvents', self.source)
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('event.window != own', handle)
+        teardown = self.source.split('ScrollGestures::~ScrollGestures() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('[NSEvent removeMonitor:state_->monitor]', teardown)
+        self.assertLess(teardown.index('removeMonitor'), teardown.index('InvalidateWeakPtrs'))
+        self.assertIn('state_->watch->Stop()', teardown)
+
+    def test_phases_come_from_appkit_not_timers(self):
+        for needle in ('event.phase', 'event.momentumPhase', 'event.hasPreciseScrollingDeltas',
+                       'event.scrollingDeltaX', 'event.scrollingDeltaY', 'event.timestamp'):
+            self.assertIn(needle, self.source)
+        for banned in ('NSTimer', 'PostDelayedTask', 'dispatch_after', 'performSelector'):
+            self.assertNotIn(banned, self.source)
+
+    def test_chrome_history_swiping_is_off_for_hosted_and_shell_contents(self):
+        self.assertIn('history_swiper::HistorySwipingControl::CreateForWebContents', self.source)
+        hit = self.source.split('Hit HitAt(NSEvent* event) const {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertEqual(hit.count('KeepChromeHistorySwiperOff('), 2)
+        build = (MAC / 'BUILD.gn').read_text()
+        self.assertIn('"//chrome/browser/renderer_host:history_swiping_control"', build)
+
+    def test_page_swipes_follow_the_page_ack_and_system_setting(self):
+        start = self.source.split('void StartPage(const Hit& hit, NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('NSEvent.isSwipeTrackingFromScrollEventsEnabled', 'binding->presented', 'binding->visible',
+                       'watch->Watch(contents, view->GetRenderWidgetHost())',
+                       'page.Begin(enabled, ++next_gesture, EventMicros(ui::EventTimeStampFromSeconds(event.timestamp)))'):
+            self.assertIn(needle, start)
+        self.assertIn('blink::mojom::GestureDevice::kTouchpad', self.source)
+        self.assertIn('InertialPhaseState::kMomentum', self.source)
+        self.assertIn('RenderWidgetHostDestroyed', self.source)
+        self.assertIn('contents->ForEachRenderFrameHost(', self.source)
+        watch = self.source.split('class PageWatch', 1)[1].split('\n};\n', 1)[0]
+        for needle in ('public content::WebContentsObserver', 'void RenderFrameCreated(', 'void RenderFrameHostChanged(',
+                       'void PrimaryPageChanged(content::Page& page) override { Lost(); }', 'void WebContentsDestroyed() override { Lost(); }'):
+            self.assertIn(needle, watch)
+        self.assertNotIn('kWidgetsMax', self.source)
+        self.assertIn('(time - base::TimeTicks()).InMicroseconds()', self.source)
+        self.assertIn('EventMicros(ui::EventTimeStampFromSeconds(event.timestamp))', self.source)
+        self.assertIn('"//ui/events:events_base"', (MAC / 'BUILD.gn').read_text())
+        ack = self.source.split('void OnInputEventAck(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('sp::AckEvent{ack, time, &host == main_}', ack)
+
+    def test_only_tracked_page_motion_is_swallowed(self):
+        gesture = self.source.split('bool PageGesture(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertEqual(gesture.count('return page.Swallows();'), 1)
+        self.assertIn('case sp::Phase::kChanged:\n        Scroll(dx, dy);\n        return page.Swallows();', gesture)
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        shell = handle.split('if (route == sp::Route::kShell) {', 1)[1].split('}', 1)[0]
+        self.assertIn('return false;', shell)
+
+    def test_the_host_builds_tears_down_and_advertises_the_bridge(self):
+        lifecycle = (MAC / 'ac_mac_shell_lifecycle.mm').read_text()
+        start = lifecycle.split('void ShellHostView::StartLifecycle() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_ = std::make_unique<ScrollGestures>(this, widget);', start)
+        stop = lifecycle.split('void ShellHostView::StopLifecycle() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_.reset();', stop)
+        calls = (MAC / 'ac_mac_shell_calls.mm').read_text()
+        self.assertIn('ScrollGestures::AppendCapabilities(capabilities);', calls)
+        policy = (MAC / 'ac_mac_swipe_policy.h').read_text()
+        swipe = (REPO / 'apps/desktop/src/shims/web/motion/swipe.ts').read_text()
+        for name in ('onScrollGesture', 'onPageSwipe', 'shell.scrollGestures'):
+            self.assertIn(f'"{name}"', policy)
+            self.assertIn(f'"{name}"', swipe)
+
+    def test_a_page_gesture_stays_bound_to_its_tab_document_and_widget(self):
+        live = self.source.split('bool PageLive() const {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('host->bindings_.find(page_binding)', 'binding->binding_generation != page_generation',
+                       'binding->key() != page_key', '!binding->presented', '!binding->visible',
+                       'page_document.AsRenderFrameHostIfValid()', 'contents->GetPrimaryMainFrame()',
+                       'view->GetRenderWidgetHost() == watch->host()'):
+            self.assertIn(needle, live)
+        for name in ('void Scroll(double dx, double dy) {', 'void Acknowledged(const sp::AckEvent& ack) {', 'bool Claim(const base::DictValue& args) {'):
+            body = self.source.split(name, 1)[1].split('\n  }\n', 1)[0]
+            self.assertIn('KeepPage()', body, name)
+        forward = self.source.split('void ForwardPage(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('.Set("tabId", page_key)', forward)
+        self.assertIn('.Set("gesture"', forward)
+        host = (MAC / 'ac_mac_shell_host.mm').read_text()
+        reattach = host.split('void ShellHostView::ReattachViewports() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_->Revalidate();', reattach)
+        gone = host.split('void ShellHostView::BindingGone(PageBinding* binding) {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('scroll_gestures_->Revalidate();', gone)
+        self.assertGreaterEqual(host.count('scroll_gestures_->Revalidate();'), 4)
+
+    def test_the_shell_claims_a_page_swipe_before_the_host_swallows_it(self):
+        calls = (MAC / 'ac_mac_shell_calls.mm').read_text()
+        self.assertIn('if (scroll_gestures_ && ScrollGestures::Handles(method)) {', calls)
+        claim = self.source.split('bool Claim(const base::DictValue& args) {', 1)[1].split('\n  }\n', 1)[0]
+        for needle in ('sp::GestureId(args.FindDouble("gesture"))', 'args.FindString("tabId")', 'args.FindBool("claimed")',
+                       '*tab != page_key', 'page.Claim(*gesture, *claimed)'):
+            self.assertIn(needle, claim)
+        policy = (MAC / 'ac_mac_swipe_policy.h').read_text()
+        swallows = policy.split('bool Swallows() const {', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('claimed_', swallows)
+        self.assertIn('HorizontalIntent(', swallows)
+
+    def test_a_retargeted_or_deactivated_gesture_cancels_the_route_it_left(self):
+        handle = self.source.split('bool Handle(NSEvent* event) {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('Abandon(routes.TakeAbandoned(), event.timestamp);', handle)
+        start = self.source.split('ScrollGestures::ScrollGestures(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('NSWindowDidResignKeyNotification', start)
+        self.assertIn('NSApplicationDidResignActiveNotification', start)
+        self.assertIn('state->Interrupt();', start)
+        teardown = self.source.split('ScrollGestures::~ScrollGestures() {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('removeObserver:observer', teardown)
+        self.assertLess(teardown.index('removeObserver:observer'), teardown.index('InvalidateWeakPtrs'))
+
+
 class BoundaryTests(unittest.TestCase):
     def test_every_bridge_handler_has_a_boundary_row(self):
         import json
@@ -1709,13 +1889,13 @@ class BoundaryTests(unittest.TestCase):
                        'downloads.remove', 'downloads.clear', 'ArdiaSystem.openFile', 'ArdiaApp.openExternalURL',
                        'application:openURLs:', 'ArdiaShell.listenForOpenURLs', 'extensionView.create',
                        'extensions.resolveInstallPrompt', 'executeExtensionAction', 'pip.command',
-                       'webView.setAutoPictureInPicture'):
+                       'webView.setAutoPictureInPicture', 'onScrollGesture', 'onPageSwipe', 'shell.pageSwipeClaim'):
             self.assertIn(method, guards)
         cited = {check.split('#', 1)[0] for row in mac for check in row['checks']}
         for test in ('glass_layout_test.cc', 'popover_policy_test.cc', 'menu_window_test.cc', 'launch_args_test.cc',
                      'hostile_corpus_test.cc', 'shell_policy_test.cc', 'page_policy_test.cc', 'system_policy_test.cc',
                      'extension_view_policy_test.cc', 'pip_policy_test.cc', 'share_policy_test.cc',
-                     'shared_folders_policy_test.cc'):
+                     'shared_folders_policy_test.cc', 'swipe_policy_test.cc'):
             self.assertIn(f'scripts/mac/webui-engine/tests/{test}', cited)
 
 

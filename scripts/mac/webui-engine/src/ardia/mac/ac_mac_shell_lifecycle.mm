@@ -12,6 +12,7 @@
 
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_dialog.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_window_policy.h"
@@ -311,11 +312,13 @@ void ShellHostView::StartLifecycle() {
   window_events_ = std::make_unique<WindowEvents>(
       widget, base::BindRepeating(&ShellHostView::OnWindowChanged, GetWeakPtr()),
       base::BindRepeating(&ShellHostView::OnPointerMoved, GetWeakPtr()));
+  scroll_gestures_ = std::make_unique<ScrollGestures>(this, widget);
   KeepMinimumSize(widget);
 }
 
 void ShellHostView::StopLifecycle() {
   edge_.Stop();
+  scroll_gestures_.reset();
   window_events_.reset();
   dialogs_.reset();
   close_dialogs_.clear();

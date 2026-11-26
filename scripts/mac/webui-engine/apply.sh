@@ -68,29 +68,34 @@ HOOKS = [
     ("components/renderer_context_menu/render_view_context_menu_base.cc",
      '#include "url/origin.h"\n',
      PAGE_MENU_DECLARATIONS,
-     "after"),
+     "after",
+     r"\(\s*\*\s*g_ardia_mac_page_menu_observer\s*\)\s*\("),
     ("components/renderer_context_menu/render_view_context_menu_base.cc",
      "  InitMenu();\n",
      MAC_DEV + "  if (g_ardia_mac_page_menu_observer) {\n    if (RenderViewContextMenuObserver* observer =\n"
      "            g_ardia_mac_page_menu_observer(this, &menu_model_)) {\n      observers_.AddObserver(observer);\n"
      "    }\n  }\n#endif\n",
-     "after"),
+     "after",
+     r"if\s*\(\s*g_ardia_mac_page_menu_observer\s*\)"),
     ("components/renderer_context_menu/render_view_context_menu_base.cc",
      "RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n",
      MAC_DEV + "  if (g_ardia_mac_page_menu_destroyed) {\n    g_ardia_mac_page_menu_destroyed(this);\n  }\n#endif\n",
-     "after"),
+     "after",
+     r"if\s*\(\s*g_ardia_mac_page_menu_destroyed\s*\)"),
     ("chrome/browser/ui/views/overlay/video_overlay_window_views.cc",
      "std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n"
      "    content::VideoPictureInPictureWindowController* controller) {\n",
      MAC_DEV + "std::unique_ptr<content::VideoOverlayWindow> (*g_ardia_mac_video_overlay)(\n"
      "    content::VideoPictureInPictureWindowController* controller) = nullptr;\n#endif\n\n",
-     "before"),
+     "before",
+     r"\(\s*\*\s*g_ardia_mac_video_overlay\s*\)\s*\("),
     ("chrome/browser/ui/views/overlay/video_overlay_window_views.cc",
      "std::unique_ptr<content::VideoOverlayWindow> CreateVideoOverlayWindow(\n"
      "    content::VideoPictureInPictureWindowController* controller) {\n",
      MAC_DEV + "  if (g_ardia_mac_video_overlay) {\n    if (auto overlay = g_ardia_mac_video_overlay(controller)) {\n"
      "      return overlay;\n    }\n  }\n#endif\n",
-     "after"),
+     "after",
+     r"if\s*\(\s*g_ardia_mac_video_overlay\s*\)"),
     ("chrome/browser/chrome_content_browser_client_navigation_throttles.cc",
      "void CreateAndAddChromeThrottlesForNavigation(\n",
      MAC_DEV + "void (*g_ardia_mac_add_navigation_throttles)(\n"
@@ -145,16 +150,15 @@ HOOKS = [
      "before",
      r"\bSetArdiaMacNewWindowInPlaceHook\s*\("),
     ("content/browser/web_contents/web_contents_impl.cc",
-     "  bool was_blocked = false;\n"
-     "  base::WeakPtr<WebContentsImpl> weak_new_contents =\n",
-     MAC_DEV + "  if (g_ardia_mac_new_window_in_place &&\n"
+     "  content::ChildProcessId render_process_id = opener->GetProcess()->GetID();\n",
+     MAC_DEV + "  if (params.opener_suppressed && g_ardia_mac_new_window_in_place &&\n"
      "      g_ardia_mac_new_window_in_place(\n"
      "          this, params.target_url, params.disposition,\n"
      "          params.is_form_submission || params.form_submission_post_data,\n"
      "          has_user_gesture)) {\n"
      "    return nullptr;\n  }\n#endif\n",
      "before",
-     r"if\s*\(\s*g_ardia_mac_new_window_in_place\s*&&"),
+     r"if\s*\(\s*(?:params\.opener_suppressed\s*&&\s*)?g_ardia_mac_new_window_in_place\s*&&"),
     ("third_party/blink/renderer/core/html/html_anchor_element.cc",
      "  NavigationPolicy navigation_policy = NavigationPolicyFromEvent(&event);\n",
      DEV + "  if (navigation_policy == kNavigationPolicyDownload &&\n"
@@ -174,7 +178,7 @@ CLOSES = re.compile(r"[ \t]*#[ \t]*endif\b")
 
 
 def blocks(s, identity, text):
-    found = []
+    spans = []
     for opening in GUARD.finditer(s):
         depth, at, end = 1, opening.end() + 1, None
         while at <= len(s):
@@ -191,9 +195,16 @@ def blocks(s, identity, text):
                 break
             at = stop + 1
         if end is not None and re.search(identity, s[opening.start():end]):
-            if text.endswith("\n\n") and s[end:end + 1] == "\n":
-                end += 1
-            found.append(s[opening.start():end])
+            spans.append((opening.start(), end))
+    innermost = [span for span in spans
+                 if not any(other != span and span[0] <= other[0] and other[1] <= span[1] for other in spans)]
+    found = []
+    for start, end in innermost:
+        if text.startswith("\n") and start > 0 and s[start - 1] == "\n":
+            start -= 1
+        if text.endswith("\n\n") and s[end:end + 1] == "\n":
+            end += 1
+        found.append(s[start:end])
     return found
 
 
@@ -229,11 +240,11 @@ for hook in HOOKS:
     elif copies == 1 and not stale:
         pass
     elif copies or stale:
-        first = min(s.find(shape) for shape in shapes if shape in s)
-        head, tail = s[:first], s[first:]
         for shape in shapes:
-            tail = tail.replace(shape, "")
-        s = head + text + tail
+            s = s.replace(shape, "")
+        if s.count(anchor) != 1:
+            sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
+        s = s.replace(anchor, anchor + text if where == "after" else text + anchor, 1)
     else:
         if s.count(anchor) != 1:
             sys.exit(f"apply.sh: anchor not found once in {path}: {anchor.strip()!r}")
