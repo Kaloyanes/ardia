@@ -407,6 +407,7 @@
     if (Array.isArray(picked)) return picked.filter((id) => typeof id === "string");
     return [];
   }
+  var profileOf = (options) => typeof options?.profile === "string" ? { profile: options.profile } : {};
   function response(reply) {
     if (typeof reply.status !== "number") {
       const reason = reply.reason;
@@ -583,24 +584,24 @@
         close: (panelId) => rpc.request(HOST_METHODS.panelClose, { panelId })
       },
       storage: {
-        get: async (key) => {
-          const res = await rpc.request(HOST_METHODS.storageGet, { key });
+        get: async (key, options) => {
+          const res = await rpc.request(HOST_METHODS.storageGet, { key, ...profileOf(options) });
           return res && typeof res === "object" && res.found === true ? res.value : void 0;
         },
-        set: (key, value) => rpc.request(HOST_METHODS.storageSet, { key, value }).then(() => void 0),
-        delete: (key) => rpc.request(HOST_METHODS.storageDelete, { key }).then(() => void 0),
-        keys: async () => {
-          const keys = unwrap(await rpc.request(HOST_METHODS.storageKeys), "keys");
+        set: (key, value, options) => rpc.request(HOST_METHODS.storageSet, { key, value, ...profileOf(options) }).then(() => void 0),
+        delete: (key, options) => rpc.request(HOST_METHODS.storageDelete, { key, ...profileOf(options) }).then(() => void 0),
+        keys: async (options) => {
+          const keys = unwrap(await rpc.request(HOST_METHODS.storageKeys, profileOf(options)), "keys");
           return Array.isArray(keys) ? keys.filter((k) => typeof k === "string") : [];
         }
       },
       secrets: {
-        get: async (key) => {
-          const value = unwrap(await rpc.request(HOST_METHODS.secretGet, { key }), "value");
+        get: async (key, options) => {
+          const value = unwrap(await rpc.request(HOST_METHODS.secretGet, { key, ...profileOf(options) }), "value");
           return typeof value === "string" ? value : void 0;
         },
-        set: (key, value) => rpc.request(HOST_METHODS.secretSet, { key, value }).then(() => void 0),
-        delete: (key) => rpc.request(HOST_METHODS.secretDelete, { key }).then(() => void 0)
+        set: (key, value, options) => rpc.request(HOST_METHODS.secretSet, { key, value, ...profileOf(options) }).then(() => void 0),
+        delete: (key, options) => rpc.request(HOST_METHODS.secretDelete, { key, ...profileOf(options) }).then(() => void 0)
       },
       settings,
       pages: {
@@ -1876,7 +1877,8 @@
         context: message.context ?? {},
         caller: message.caller ?? null,
         deadline: typeof message.deadline === "number" ? message.deadline : void 0,
-        signal
+        signal,
+        ...typeof message.profile === "string" ? { profile: message.profile } : {}
       };
       let body;
       try {

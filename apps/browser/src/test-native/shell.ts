@@ -809,11 +809,12 @@ const plugins: Modules["ArdiaPlugins"] = {
     pluginHost.folders[at] = { name, status: "ok", source: "store", folderId, text: candidate.text, candidates: folder.candidates!.filter((c) => c.folderId !== folderId), ...(previous ? { previous } : {}) };
     return { ok: true, folderId };
   },
-  rollbackStore: async (name) => {
+  rollbackStore: async (name, expectedVersion, expectedSha256) => {
     pluginHost.rollbacks.push(name);
     const at = pluginHost.folders.findIndex((f) => f.name === name);
     const folder = at < 0 ? undefined : pluginHost.folders[at]!;
     if (!folder?.previous) return { ok: false, reason: "There's no earlier version to go back to." };
+    if (folder.previous.version !== expectedVersion || folder.previous.folderId !== storeFolderId(expectedSha256)) return { ok: false, reason: "The earlier copy isn't the one Ardia checked, so it wasn't switched to." };
     const current = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: textVersion(folder.text) } : undefined;
     pluginHost.folders[at] = { ...folder, folderId: folder.previous.folderId, text: folder.previous.text, ...(current ? { previous: current } : {}) };
     return { ok: true, folderId: folder.previous.folderId };

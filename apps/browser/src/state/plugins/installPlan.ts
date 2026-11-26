@@ -60,6 +60,16 @@ async function officialProblem(plugin: ResolvedPlugin, found: Found): Promise<st
   return verified.ok ? null : `${plugin.id} ${plugin.version} isn't signed by Ardia's release key: ${verified.reason}`;
 }
 
+export function installedRanges(): Record<string, { from: string; range: string }[]> {
+  const out: Record<string, { from: string; range: string }[]> = {};
+  for (const listing of Object.values(currentPlugins().listings)) {
+    const v3 = listing.manifest?.v3;
+    if (!v3) continue;
+    for (const [dep, range] of Object.entries(v3.dependencies ?? {})) (out[dep] ??= []).push({ from: v3.id, range });
+  }
+  return out;
+}
+
 export async function planInstall(request: PlanRequest, keepInstalled = true): Promise<PlanResult> {
   const found = new Map<string, Found>();
   const queue: string[] = [request.id];
@@ -85,6 +95,7 @@ export async function planInstall(request: PlanRequest, keepInstalled = true): P
     installed,
     keepInstalled,
     revocations: currentRevocations(),
+    heldBy: installedRanges(),
     registry: (id: string) => {
       const from = found.get(id);
       return from ? sourceUrl(from.source) : undefined;

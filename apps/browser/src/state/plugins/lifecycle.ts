@@ -14,7 +14,7 @@ import { activateStorePlugin, type PluginSource } from "../../platform/plugins";
 import { forgetLockKey } from "./lockfile";
 import { listingRevocation, revokedText } from "./revocationChecks";
 import { candidatesOf, listingsOf } from "./folderListings";
-import { lockAfterPromotion, settledPromotions, trackPromotion } from "./promotedLock";
+import { lockAfterPromotion, officialCandidateProblem, officialProofMissing, settledPromotions, trackPromotion, undoPromotion, UNSIGNED_OFFICIAL } from "./promotedLock";
 import { pluginsScanned } from "./scanListeners";
 import { stopProcess, superviseProcess, supervisedNames } from "./process";
 import { checkActivations, deactivatePlugin, shouldRun } from "./activation";
@@ -155,6 +155,8 @@ export type ConsentExtras = Pick<PluginConsentRequest, "bundle" | "added">;
 export function requestPluginConsent(name: string, extras: ConsentExtras = {}): boolean {
   const target = consentTarget(name);
   if (currentPlugins().consent || !target?.manifest || !target.hash) return false;
+  const unsigned = [{ name, listing: target }, ...(extras.bundle ?? []).map((b) => ({ name: b.name, listing: consentListing(currentPlugins(), b.name, b.hash) }))];
+  if (unsigned.some((u) => !u.listing || officialProofMissing(u.name, u.listing))) return false;
   usePlugins.setState({ consent: { id: ++lastConsentId, name, hash: target.hash, ...(extras.bundle?.length ? { bundle: extras.bundle } : {}), ...(extras.added?.length ? { added: extras.added } : {}) }, unsaved: null });
   return true;
 }
@@ -180,7 +182,8 @@ export function confirmConsentRequest(id: number): boolean {
 export function approvalRefusal(name: string, hash: string): string | null {
   const listing = consentListing(currentPlugins(), name, hash);
   if (!listing?.manifest || listing.hash !== hash) return "It changed while you were deciding. Try again.";
-  const revoked = listingRevocation(name, listing);
+  if (officialProofMissing(name, listing)) return `${listing.manifest.title}: ${UNSIGNED_OFFICIAL}`;
+  const revoked = listingRevocation(name, listing, currentPlugins().candidates[name] === listing);
   return revoked ? `${listing.manifest.title}: ${revokedText(revoked)}` : null;
 }
 
@@ -214,7 +217,7 @@ export { settledPromotions };
 export function approvePlugin(name: string, hash: string, consent: ConsentToken | null): boolean {
   const listing = consentListing(currentPlugins(), name, hash);
   if (!listing?.manifest || listing.hash !== hash || removing.has(name)) return false;
-  if (listingRevocation(name, listing)) return false;
+  if (officialProofMissing(name, listing) || listingRevocation(name, listing, currentPlugins().candidates[name] === listing)) return false;
   const candidate = currentPlugins().candidates[name] === listing;
   const manifest = listing.manifest;
   const before = recordOf(currentPlugins(), name);
@@ -254,9 +257,11 @@ export async function promoteCandidate(name: string, candidate: PluginListing, c
     setPluginFetch(name, { state: "failed", code: "failed", reason: saved ? "Its approval changed before it could be switched to." : UNSAVED });
     return false;
   }
-  const promoted = await activateStorePlugin(name, candidate.folderId, candidate.hash!).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  const unsigned = await officialCandidateProblem(name, candidate);
+  const before = ownValue(currentPlugins().listings, name);
+  let promoted = unsigned ? { ok: false as const, reason: unsigned } : await activateStorePlugin(name, candidate.folderId, candidate.hash!).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  if (promoted.ok && !(await lockAfterPromotion(name, candidate, consent))) promoted = { ok: false, reason: await undoPromotion(name, before, (n, edit) => updateRecord(n, edit, consent)) };
   if (!promoted.ok) warnFor(consent, `[plugins] ${name}'s download couldn't be switched to: ${promoted.reason}`);
-  if (promoted.ok && !lockAfterPromotion(name, candidate, consent)) warnFor(consent, `[plugins] ${name} was switched to, but plugins-lock.json couldn't be saved`);
   await rescanPlugins(consent);
   setPluginFetch(name, promoted.ok ? null : { state: "failed", code: "failed", reason: promoted.reason });
   if (!promoted.ok) setTimeout(() => void rescanPlugins(consent), PROMOTION_RETRY.delayMs);
@@ -268,6 +273,7 @@ export function turnOnApprovedPlugin(name: string): boolean {
   const listing = ownValue(s.listings, name);
   const before = recordOf(s, name);
   if (!listing?.manifest || before.enabled || !recordApproves(listing, before) || removing.has(name) || s.consent) return false;
+  if (listingRevocation(name, listing)) return false;
   const consent = consentNow();
   const plan = planEnable(listing.manifest, s.records, name, before.applied);
   if (!saveRecords({ ...s.records, [name]: { ...before, enabled: true, applied: plan.applied } }, consent)) return false;

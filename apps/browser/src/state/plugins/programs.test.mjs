@@ -28,7 +28,7 @@ const SHA = "c".repeat(64);
 const CLI_FOLDER = { name: "ardia__cli", status: "ok", source: "store", folderId: `store-${SHA}`, text: CLI };
 const OTHER_FOLDER = { name: "other", status: "ok", text: OTHER, folderId: "1:2" };
 const officialLock = (official = true) =>
-  updateLock(() => ({ "@ardia/cli": { id: "@ardia/cli", key: "ardia__cli", version: "0.8.0", channel: "latest", source: { kind: "registry", url: "https://ardia.dev/r" }, sha256: SHA, payloadDigest: null, dependencies: [], root: true, official, installedAt: 1 } }), null);
+  updateLock(() => ({ "@ardia/cli": { id: "@ardia/cli", key: "ardia__cli", version: "0.8.0", channel: "latest", source: { kind: "registry", url: "https://ardia.dev/r" }, sha256: SHA, payloadDigest: null, dependencies: [], officialSig: "A".repeat(86), platform: "universal", root: true, official, installedAt: 1 } }), null);
 
 function reset() {
   host.links.length = 0;

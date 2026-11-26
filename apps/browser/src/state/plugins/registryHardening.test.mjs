@@ -412,10 +412,9 @@ describe("dev reloads and install links", () => {
   });
 });
 
-describe("profile-scoped plugins", () => {
-  const MENU = { commands: [{ name: "go", title: "Go" }], contributes: { menus: { tab: [{ command: "go" }] } }, permissions: { storage: true, secrets: true }, settings: { rows: [{ key: "token", type: "secret", title: "Token" }] } };
+const MENU = { commands: [{ name: "go", title: "Go" }], contributes: { menus: { tab: [{ command: "go" }] } }, permissions: { storage: true, secrets: true }, settings: { rows: [{ key: "token", type: "secret", title: "Token" }] } };
 
-  async function scopedPlugin(profiles) {
+async function scopedPlugin(profiles) {
     host.folders = [{ name: "acme__m", status: "ok", source: "local", text: manifestFor("@acme/m", "1.0.0", MENU), folderId: `local-${"c".repeat(64)}` }];
     await lifecycle.rescanPlugins(null);
     usePlugins.setState({ records: { acme__m: { enabled: true, approved: P().listings.acme__m.hash, values: {}, applied: {}, profiles } } });
@@ -423,8 +422,9 @@ describe("profile-scoped plugins", () => {
       profiles: { ...b.profiles, work: { ...b.profiles.default, id: "work", name: "Work" } },
       windows: { ...b.windows, ww: { ...(Object.values(b.windows)[0] ?? {}), id: "ww", kind: "main", profileId: "work" }, wd: { ...(Object.values(b.windows)[0] ?? {}), id: "wd", kind: "main", profileId: "default" } },
     }));
-  }
+}
 
+describe("profile-scoped plugins", () => {
   test("menus, commands and events reach a profile plugin only in its profiles", async () => {
     await scopedPlugin(["work"]);
     assert.equal(P().listings.acme__m.manifest.scope, "profile");
@@ -459,5 +459,197 @@ describe("the revocation list's floor", () => {
     const got = await revocations.refreshRevocations();
     assert.equal(got.ok, true, got.reason);
     assert.equal(revocations.revocationSeq(), 5);
+  });
+});
+
+const LOCK_DOC = "Plugins/plugins-lock.json";
+
+function failingWrites(name) {
+  const realSet = stub.docs.set.bind(stub.docs);
+  let failing = true;
+  stub.docs.set = (key, value) => {
+    if (failing && key === name) throw new Error("disk full");
+    return realSet(key, value);
+  };
+  return () => {
+    failing = false;
+    stub.docs.set = realSet;
+  };
+}
+
+async function promptedUpdate() {
+  await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+  client.resetRegistryCacheForTests();
+  await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+  host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "write" } });
+  await updater.checkPlugins(consentToken());
+  assert.ok(P().records.acme__a.pendingUpdate);
+}
+
+describe("round 2: official code at consent and activation", () => {
+  const PROGRAMS = { programs: [{ name: "tool", path: "bin/tool" }] };
+  const candidateFolder = () => ({ name: "ardia__tool", status: "missing", source: "store", candidates: [{ folderId: `store-${sha(4)}`, text: manifestFor("@ardia/tool", "1.0.0", PROGRAMS), version: "1.0.0" }] });
+  const entry = (extra = {}) => ({ id: "@ardia/tool", key: "ardia__tool", version: "1.0.0", channel: "latest", source: { kind: "registry", url: BASE }, sha256: sha(4), payloadDigest: null, dependencies: [], root: true, official: true, installedAt: 1, ...extra });
+
+  test("an @ardia candidate that reaches outside the sandbox with no recorded signature never reaches the sheet", async () => {
+    const { wantCandidate } = await import("./candidates.ts");
+    host.folders = [candidateFolder()];
+    wantCandidate("ardia__tool", `store-${sha(4)}`);
+    await lifecycle.rescanPlugins(null);
+    assert.ok(P().candidates.ardia__tool?.hash);
+    assert.equal(lifecycle.requestPluginConsent("ardia__tool"), false);
+    assert.equal(lifecycle.approvePlugin("ardia__tool", P().candidates.ardia__tool.hash, null), false);
+  });
+
+  test("a recorded signature that doesn't verify stops the switch, so nothing activates", async () => {
+    const { wantCandidate } = await import("./candidates.ts");
+    host.folders = [candidateFolder()];
+    lockfile.stageLockEntry(`store-${sha(4)}`, entry({ officialSig: "A".repeat(86), platform: "universal" }));
+    wantCandidate("ardia__tool", `store-${sha(4)}`);
+    await lifecycle.rescanPlugins(null);
+    assert.ok(lifecycle.requestPluginConsent("ardia__tool"));
+    assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+    assert.equal((await lifecycle.settledPromotions(["ardia__tool"])).ok, false);
+    assert.deepEqual(host.activations, [], "native is never asked to switch to it");
+  });
+});
+
+describe("round 2: revocations at every turn-on", () => {
+  test("a plugin turned off and then blocked can't be turned back on", async () => {
+    await installed("@acme/a", "1.0.0");
+    assert.ok(lifecycle.disablePlugin("acme__a", null));
+    revocations.resetRevocationsForTests(revocationList(20, [{ match: { id: "@acme/a" }, action: "block" }]));
+    assert.equal(lifecycle.turnOnApprovedPlugin("acme__a"), false);
+    assert.equal(P().records.acme__a.enabled, false);
+  });
+
+  test("a download yanked while its sheet was open is refused at the button", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    const done = installPlugin({ id: "@acme/a" }, { showSheet: false });
+    for (let i = 0; i < 100 && !P().consent; i++) await tick();
+    revocations.resetRevocationsForTests(revocationList(21, [{ match: { id: "@acme/a", versions: ["1.0.0"] }, action: "yank" }]));
+    assert.equal(lifecycle.confirmConsentRequest(P().consent.id), false);
+    assert.equal((await done).ok, false);
+    assert.deepEqual(host.activations, []);
+  });
+
+  test("a rollback hands native the exact earlier copy it checked", async () => {
+    await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+    client.resetRegistryCacheForTests();
+    await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+    host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "read" } });
+    await updater.checkPlugins(consentToken());
+    const folder = host.folders.find((f) => f.name === "acme__a");
+    folder.previous = { ...folder.previous, folderId: `store-${sha(8)}` };
+    const swapped = await updater.rollbackPlugin("acme__a");
+    assert.equal(swapped.ok, false, "a previous copy that changed since the check isn't switched to");
+    assert.equal(P().listings.acme__a.manifest.version, "2.0.0");
+  });
+});
+
+describe("round 2: store, staged provenance and the lock stay together", () => {
+  test("a reinstall after the files vanished downloads again even when the listing is stale", async () => {
+    await installed("@acme/a", "1.0.0");
+    const before = host.artifactLog.length;
+    host.folders = [];
+    const done = installPlugin({ id: "@acme/a" }, { showSheet: false });
+    for (let i = 0; i < 100 && !P().consent && host.artifactLog.length === before; i++) await tick();
+    for (let i = 0; i < 100 && !P().consent; i++) await tick();
+    if (P().consent) lifecycle.confirmConsentRequest(P().consent.id);
+    await done;
+    assert.equal(host.artifactLog.length, before + 1, "the missing copy is fetched again");
+  });
+
+  test("an Update… confirmed after a restart keeps the new copy's full provenance", async () => {
+    await promptedUpdate();
+    lockfile.resetLockForTests();
+    resetCandidatesForTests();
+    assert.ok(updater.reviewUpdate("acme__a") || (await lifecycle.rescanPlugins(null), updater.reviewUpdate("acme__a")));
+    assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+    for (let i = 0; i < 100 && lockfile.currentLock()["@acme/a"].version !== "2.0.0"; i++) await tick();
+    const entry = lockfile.currentLock()["@acme/a"];
+    assert.deepEqual([entry.version, entry.sha256, entry.repo, entry.payloadDigest], ["2.0.0", sha(2), "acme/plugins", "d".repeat(64)]);
+  });
+
+  test("a lock that can't be written after the switch undoes the switch and fails", async () => {
+    await promptedUpdate();
+    assert.ok(updater.reviewUpdate("acme__a"));
+    const restore = failingWrites(LOCK_DOC);
+    try {
+      assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+      const promoted = await lifecycle.settledPromotions(["acme__a"]);
+      assert.equal(promoted.ok, false);
+      assert.match(promoted.reason, /stayed on 1\.0\.0/);
+    } finally {
+      restore();
+    }
+    await lifecycle.rescanPlugins(null);
+    assert.equal(P().listings.acme__a.manifest.version, "1.0.0", "the files went back to what the lock says");
+    assert.equal(lockfile.currentLock()["@acme/a"].version, "1.0.0");
+    assert.ok(activeManifest(P(), "acme__a"), "the earlier copy keeps running under its approval");
+  });
+});
+
+describe("round 2: revocation seq and dependents", () => {
+  test("a revocation list that couldn't be saved is saved again at the same seq", async () => {
+    await registry.publish([], revocationList(30, []));
+    const restore = failingWrites("Plugins/revocations-cache.json");
+    try {
+      assert.equal((await revocations.refreshRevocations()).ok, false);
+    } finally {
+      restore();
+    }
+    client.resetRegistryCacheForTests();
+    assert.equal((await revocations.refreshRevocations()).ok, true);
+    assert.ok(stub.docs.get("Plugins/revocations-cache.json").includes('"seq":30'));
+  });
+
+  test("an update its installed dependent can't take is held back to the newest version that fits", async () => {
+    await registry.publish([detail("@acme/app", [version("1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } })]), detail("@acme/lib", [version("1.0.0")])]);
+    host.artifacts["@acme/app@1.0.0"] = manifestFor("@acme/app", "1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } });
+    host.artifacts["@acme/lib@1.0.0"] = manifestFor("@acme/lib", "1.0.0");
+    assert.deepEqual(await confirmWhenAsked(installPlugin({ id: "@acme/app" }, { showSheet: false })), { ok: true });
+    await lifecycle.rescanPlugins(null);
+    client.resetRegistryCacheForTests();
+    const lib = (v, n) => version(v, { artifacts: { universal: { url: `https://github.com/acme/plugins/releases/download/lib${n}/lib.tar.gz`, sha256: sha(n), sizeBytes: 10 } } });
+    await registry.publish([detail("@acme/app", [version("1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } })]), detail("@acme/lib", [version("1.0.0"), lib("1.1.0", 6), lib("2.0.0", 7)])]);
+    host.artifacts["@acme/lib@1.1.0"] = manifestFor("@acme/lib", "1.1.0");
+    host.artifacts["@acme/lib@2.0.0"] = manifestFor("@acme/lib", "2.0.0");
+    await updater.checkPlugins(consentToken());
+    await lifecycle.rescanPlugins(null);
+    assert.equal(P().listings.acme__lib.manifest.version, "1.1.0", "2.0.0 would break @acme/app, which wants ^1.0.0");
+    assert.equal(lockfile.currentLock()["@acme/lib"].version, "1.1.0");
+  });
+});
+
+describe("round 2: per-profile isolation", () => {
+  test("a profile plugin's settings secret is kept per profile and refused in a profile it's off in", async () => {
+    await scopedPlugin(["work"]);
+    const { setPluginSecretRow, pluginSecretRowIsSet, secretRowSpace } = await import("./secretRows.ts");
+    assert.equal(secretRowSpace("acme__m", "work"), "acme__m@work");
+    assert.equal(secretRowSpace("acme__m", "default"), null);
+    const refused = await setPluginSecretRow("acme__m", "token", "s3cret", "default");
+    assert.equal(refused.ok, false);
+    assert.equal(await pluginSecretRowIsSet("acme__m", "token", "default"), false);
+  });
+
+  test("launch and idle replays pass the same profile gate as live events", async () => {
+    await scopedPlugin(["work"]);
+    const { eventReaches } = await import("./channel.ts");
+    assert.equal(eventReaches("acme__m", { windows: [] }), false, "app.launched has no profile, so a plugin limited to some doesn't get it");
+    assert.equal(eventReaches("acme__m", { tabId: "t-gone", windowId: "wd" }), false, "tab.idle for another profile's window isn't replayed to it");
+    assert.equal(eventReaches("acme__m", { tabId: "t-gone", windowId: "ww" }), true);
+  });
+
+  test("a call carries the profile that invoked it, and storage keeps to it after focus moves", async () => {
+    await scopedPlugin(["work"]);
+    const { callProfile } = await import("./tools.ts");
+    const { storageMethod } = await import("./channelData.ts");
+    assert.equal(callProfile("acme__m", { kind: "command", command: "go", context: { windowId: "ww" } }), "work");
+    useBrowser.setState({ focusedWindowId: "wd" });
+    await storageMethod({ name: "acme__m", run: 1 }, P().listings.acme__m.manifest, "storage.set", { key: "k", value: 1, profile: "work" });
+    assert.equal(host.storage["profiles/work/acme__m"], '{"k":1}', "the write lands in the invoking profile, not the focused window's");
+    assert.equal(host.storage["profiles/default/acme__m"], undefined);
   });
 });

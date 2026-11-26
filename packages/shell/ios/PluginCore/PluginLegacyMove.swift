@@ -5,6 +5,9 @@ enum ReservedPrograms {
   static let owners: [String: String] = ["ardia": "ardia__cli"]
 
   static func refusal(program: String, plugin: String, official: Bool) -> String? {
+    if !official, PluginStore.parts(plugin)?.scope == PluginInstaller.officialScope {
+      return "\(PluginStore.id(plugin) ?? plugin) isn't Ardia's verified download, so none of its programs go on PATH"
+    }
     guard let owner = owners[PluginPrograms.folded(program)] else { return nil }
     return official && owner == plugin ? nil : "\(program) belongs to Ardia's official \(PluginStore.id(owner) ?? owner) plugin"
   }
@@ -74,8 +77,25 @@ enum PluginLegacyMove {
     let newPrograms = places.pluginStore(to)
     var info = stat()
     if lstat(newPrograms, &info) == 0 { return "its new programs folder is already there" }
-    guard renamex_np(oldPrograms, newPrograms, UInt32(RENAME_EXCL)) == 0 else { return "its programs couldn't be moved (\(String(cString: strerror(errno))))" }
-    return retarget(from: oldPrograms, to: newPrograms, places: places)
+    let staging = ((newPrograms as NSString).deletingLastPathComponent as NSString).appendingPathComponent(".adopt-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+    do {
+      try FileManager.default.copyItem(atPath: oldPrograms, toPath: staging)
+    } catch {
+      PluginPrograms.discard(staging)
+      return "its programs couldn't be copied (\(error.localizedDescription))"
+    }
+    guard renamex_np(staging, newPrograms, UInt32(RENAME_EXCL)) == 0 else {
+      let failed = errno
+      PluginPrograms.discard(staging)
+      return "its programs couldn't be put in place (\(String(cString: strerror(failed))))"
+    }
+    if let problem = retarget(from: oldPrograms, to: newPrograms, places: places) {
+      _ = retarget(from: newPrograms, to: oldPrograms, places: places)
+      PluginPrograms.discard(newPrograms)
+      return problem
+    }
+    PluginPrograms.discard(oldPrograms)
+    return nil
   }
 
   static func retarget(from oldPrograms: String, to newPrograms: String, places: ProgramPlaces) -> String? {

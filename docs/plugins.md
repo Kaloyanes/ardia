@@ -142,8 +142,10 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   registry server can't push a rogue `ardia` binary. What counts is the `plugin.json` Ardia actually downloaded, not
   the tier the registry claims: an `@ardia` download that declares any of those needs the signature before the sheet
   opens. Native checks it again with its own copy of the keys (`PluginOfficial.swift`) and records the proof as
-  `.<version>-<sha12>.official` beside the store copy; only a copy with a proof that verifies may own `ardia` on PATH
-  or run after-update commands, and a rollback to an `@ardia` copy needs its recorded signature too.
+  `.<version>-<sha12>.official` beside the store copy. Such a copy reaches the consent sheet only with its signature
+  recorded, Ardia verifies it again before the switch, and native refuses to make it active without a proof that
+  verifies; an `@ardia` copy without one puts no program on PATH at all, and a rollback to an `@ardia` copy needs its
+  recorded signature too.
 - **Overrides for testing.** `ARDIA_PLUGIN_REGISTRY_URL` points Ardia at another registry (its envelopes still have to
   verify; a plain-http loopback address only in an unsigned scratch build); in a test instance only, `ARDIA_PLUGIN_REGISTRY_PUBLIC_KEY` and `ARDIA_PLUGIN_NATIVE_PUBLIC_KEY` replace
   the built-in keys (`kid=key,…`, raw base64 or SPKI PEM), and `ARDIA_INSTANCE pluginArtifactsFrom=<folder>` serves
@@ -158,7 +160,8 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   `<name>/`), its `plugin.json` checked to be the expected id and version, and the copy sealed read-only. The approval
   of a store copy binds the manifest to `store-<sha256>`, so it covers the whole package. Downloads are shared only
   between requests for the exact same artifact (plugin, version, SHA-256 and address), and the copy native returns
-  must be that version and digest. A locked version whose files are gone is downloaded again.
+  must be that version and digest. Ardia rescans the store before it decides what to download, so a locked version
+  whose files are gone is downloaded again.
 - **Folder installs.** A folder in `<config>/plugins/` is identified by `local-<sha256>`, a digest over every file and
   folder in it (sorted paths, sizes, the executable bit and bytes; links and special files refused, 4,096 entries and
   256 MB at most, Finder's `.DS_Store` skipped). The approval binds that digest with `plugin.json`, and every load,
@@ -167,8 +170,10 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   lines; a plugin that runs outside Ardia's sandbox (programs, control) says so first. Confirming approves them all
   and the install finishes once their `active` links have switched; each switch writes that plugin's entry in
   `plugins-lock.json` (version, SHA-256, dependencies, source, repo, official signature and platform), keeping the
-  entry it replaced as `previous`. A failed switch fails the install and leaves the lock alone; removing a plugin drops
-  its entry.
+  entry it replaced as `previous`. The entry waiting for its switch is kept in the lock file's `staged` section, so an
+  **Update…** confirmed after a restart keeps its provenance. A failed switch fails the install and leaves the lock
+  alone; a lock that can't be written after the switch switches back (or takes a first install away) and fails;
+  removing a plugin drops its entry.
 - **Updates.** At launch and every 20 minutes Ardia reads `index.json` (cheap with its ETag) and compares each plugin's
   channel tag with what it runs. A newer compatible version is downloaded and checked like an install, then its whole
   security surface (`diffSecuritySurface`: permissions, contributions, dependencies) is compared with the approved one.
@@ -177,15 +182,19 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   `+ Added` lines. An update that needs a newer version of an installed dependency brings it along: silently when
   neither widens, otherwise on the same sheet, with the dependency's additions named. **Roll Back** checks the earlier
   version against revocations (and an `@ardia` copy's signature) before it swaps `active` and `previous`, and restores
-  that version's whole lock entry.
+  that version's whole lock entry; native switches only if `previous` is still that version and SHA-256. A version
+  the plugins you have installed can't take (their dependency ranges) is held back to the newest one that fits.
 - **Browser upgrades.** A plugin whose `engines.ardia` this Ardia is past stops with "Incompatible with Ardia X.Y.Z —
   waiting for plugin update", and the next check looks for a compatible version on its channel first.
 - **Revocations.** `revocations.json` is read at launch, every 20 minutes, and before every install and update; a list
-  with a lower `seq` than one seen is refused (no replays), and only a list that verifies sets that floor. Once Ardia
+  with a lower `seq` than one seen is refused (no replays), only a list that verifies sets that floor, and a list
+  that couldn't be saved counts as a failed refresh until it is. Once Ardia
   has a key for its registry, an install from any source (a registry you added, GitHub, a file) waits for the list and
   fails if it can't load; with no key yet, Ardia's own registry stays closed and the others work without it. Every
-  approval checks the exact copy it approves, a `.tar.gz` or folder install is checked before its sheet, and the
-  check runs over every installed plugin, not only those in the lock. `yank` refuses installs and updates to those versions;
+  approval checks the exact copy it approves (a new copy also against `yank`), turning a plugin back on checks it
+  again, a `.tar.gz` or folder install is checked before its sheet, and the check runs over every installed plugin,
+  not only those in the lock. A `registry` selector matches its scheme and host in any case and its path exactly or
+  as a parent, never a child path matching its parent. `yank` refuses installs and updates to those versions;
   `disable` stops the plugin, unlinks its programs, withdraws its UI and shows the reason, rolling back first when
   `rollbackTo` is the kept `previous`; `block` does the same across every source, matching `id`, `scope`,
   `githubOwner`, `repo` or an archive's `sha256`. Lifting a revocation lets the plugin run again.
@@ -199,9 +208,11 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
 - **Per-profile plugins.** A `"scope": "profile"` plugin can be on in all profiles or selected ones (Settings, the
   plugin's page). Its menus, commands and events reach only windows and tabs of those profiles (an event with no
   profile reaches it only when it's on in all of them). Its `storage.*` lives in `PluginData/profiles/<profileId>/`
-  and its runtime `secrets.*` under a Keychain account for that profile: the request's `profile`, else the front
-  window's, else the default or first profile it's on in. Secrets its settings rows hold stay shared, and
-  `"scope": "global"` plugins keep one store. `"scope": "global"` is forced for plugins with `programs` or `control`.
+  and its `secrets.*`, settings rows included (Settings picks the profile), under a Keychain account for that profile:
+  the request's `profile`, else the front window's, else the default or first profile it's on in. Every command,
+  decide hook, omnibox query and event it gets carries the `profile` that invoked it (`call.profile`), and
+  `storage.*`/`secrets.*` take `{ profile }` so an async handler keeps to it; launch and idle replays pass the same
+  gate as live events. `"scope": "global"` plugins keep one store. `"scope": "global"` is forced for plugins with `programs` or `control`.
 - **Dev links.** `ardia-plugin dev` writes `<config>/plugins-dev/<scope>__<name>.json` and calls `plugins.devReload`
   `{id, path, link}` on the control socket, with the folder's real path. Ardia rescans, refuses a `path` that isn't
   the folder the link points at, reloads the plugin's host and answers `{ok: true, id,
@@ -210,8 +221,9 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
 - **The old Command Line.** On the first launch of v3 an install of the `cli` plugin (0.2.48 and 0.2.49) is moved to
   `@ardia/cli`: its programs folder, its data and `~/.local/bin/ardia`'s link move to the new key in place, so
   `ardia` keeps working, and the first registry copy of `@ardia/cli` installs with no sheet if the old one was on (a
-  turned-off one stays off and asks). The old download stays until the verified `@ardia/cli` copy is active and
-  PATH points at the new folder; a move that fails is retried at the next check, and the move counts as done only
+  turned-off one stays off and asks). Its programs are copied to the new folder first and PATH is pointed there before
+  the old folder goes; if PATH can't be pointed there, the copy goes and the old folder and links stay. The old
+  download stays until the verified `@ardia/cli` copy is active and PATH points at the new folder; a move that fails is retried at the next check, and the move counts as done only
   then.
 - **Install links.** `ardia://plugin/install/@scope/name` opens Settings › Plugins on that plugin's Get; a link that
   launches Ardia waits until plugins have started.

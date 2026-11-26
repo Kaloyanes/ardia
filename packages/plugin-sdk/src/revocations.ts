@@ -21,21 +21,23 @@ const same = (a: string | undefined, b: string | undefined) => a !== undefined &
 const scopeOf = (id: string) => id.slice(0, Math.max(0, id.indexOf("/")));
 
 export function registryKey(value: string): { host: string; origin: string | null; path: string } {
-  const trimmed = value.trim().toLowerCase().replace(/\/index\.json$/, "").replace(/\/+$/, "");
-  const found = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)(\/[^?#]*)?$/.exec(trimmed);
-  if (found) return { host: found[2]!, origin: `${found[1]}://${found[2]}`, path: (found[3] ?? "").replace(/\/+$/, "") };
+  const trimmed = value.trim().replace(/\/index\.json$/, "").replace(/\/+$/, "");
+  const found = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]+)(\/[^?#]*)?$/.exec(trimmed);
+  if (found) {
+    const host = found[2]!.toLowerCase();
+    return { host, origin: `${found[1]!.toLowerCase()}://${host}`, path: (found[3] ?? "").replace(/\/+$/, "") };
+  }
   const slash = trimmed.indexOf("/");
-  return slash < 0 ? { host: trimmed, origin: null, path: "" } : { host: trimmed.slice(0, slash), origin: null, path: trimmed.slice(slash).replace(/\/+$/, "") };
+  const host = (slash < 0 ? trimmed : trimmed.slice(0, slash)).toLowerCase();
+  return { host, origin: null, path: slash < 0 ? "" : trimmed.slice(slash).replace(/\/+$/, "") };
 }
 
-const pathCovers = (named: string, actual: string) => named === "" || named === actual || actual.startsWith(`${named}/`);
-
-export function sameRegistry(named: string | undefined, actual: string | undefined): boolean {
-  if (named === undefined || actual === undefined) return false;
-  const left = registryKey(named);
-  const right = registryKey(actual);
-  if (left.origin && right.origin ? left.origin !== right.origin : left.host !== right.host) return false;
-  return pathCovers(left.path, right.path) || pathCovers(right.path, left.path);
+export function sameRegistry(selector: string | undefined, target: string | undefined): boolean {
+  if (selector === undefined || target === undefined) return false;
+  const named = registryKey(selector);
+  const actual = registryKey(target);
+  if (named.origin && actual.origin ? named.origin !== actual.origin : named.host !== actual.host) return false;
+  return named.path === "" || actual.path === named.path || actual.path.startsWith(`${named.path}/`);
 }
 
 export function versionMatches(version: string, selectors: readonly string[]): boolean {

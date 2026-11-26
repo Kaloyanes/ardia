@@ -53,8 +53,6 @@ export function requestProfile(name: string, m: Pick<PluginManifest, "scope">, p
   return fallback ? { ok: true, profileId: fallback } : { ok: false, message: "This plugin isn't on in any profile." };
 }
 
-const settingsSecret = (m: PluginManifest, key: unknown) => !!m.settings?.rows?.some((r) => r.type === "secret" && r.key === key);
-
 export function storageMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Promise<Body> | Body {
   if (!m.permissions.storage) return failure("refused", `${method} needs the storage permission.`);
   const profile = requestProfile(c.name, m, params);
@@ -73,7 +71,7 @@ export function storageMethod(c: Caller, m: PluginManifest, method: string, para
 
 export function secretsMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Promise<Body> | Body {
   if (!m.permissions.secrets) return failure("refused", `${method} needs the secrets permission.`);
-  const profile = settingsSecret(m, params.key) ? ({ ok: true, profileId: null } as const) : requestProfile(c.name, m, params);
+  const profile = requestProfile(c.name, m, params);
   if (!profile.ok) return failure("refused", profile.message);
   const space = secretSpace(c.name, profile.profileId);
   if (method === "secrets.get") return getPluginSecret(space, params.key).then((o) => (o.ok ? { result: o.value && reveal(o.value) } : settled(o)));

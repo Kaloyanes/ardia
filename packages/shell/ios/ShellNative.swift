@@ -1429,7 +1429,7 @@ protocol PluginsNative {
   static func installArchiveFile(_ path: String, _ promise: Promise)
   static func installFolder(_ path: String, _ promise: Promise)
   static func activateStore(_ name: String, _ folderId: String, _ approved: String) -> [String: Any]
-  static func rollbackStore(_ name: String) -> [String: Any]
+  static func rollbackStore(_ name: String, _ expectedVersion: String, _ expectedSha256: String) -> [String: Any]
   static func verifySignature(_ publicKey: String, _ signature: String, _ message: String) -> Bool
   static func adoptLegacy(_ from: String, _ to: String, _ promise: Promise)
   static func hostFetch(_ spec: [String: Any], _ promise: Promise)
@@ -1518,7 +1518,7 @@ extension PluginsNative {
   }
 
   static var rollbackStoreFunction: AnyDefinition {
-    AsyncFunction("rollbackStore") { (name: String) -> [String: Any] in Self.rollbackStore(name) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
+    AsyncFunction("rollbackStore") { (name: String, expectedVersion: String, expectedSha256: String) -> [String: Any] in Self.rollbackStore(name, expectedVersion, expectedSha256) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
   }
 
   static var verifySignatureFunction: AnyDefinition {

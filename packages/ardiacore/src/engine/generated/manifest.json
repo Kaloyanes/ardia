@@ -1510,8 +1510,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "793961f4e8d090cc643d5f8a0c1ba2a81b7fc7d655459435535d03e551068815",
-        "swift": "2c5642619320e82d8c19525c46278c33284ea97349585bf7fd7c92800647ac98"
+        "types": "94cb99721f35f8f6309d51ad389ec10741b947c6149f7ac4c137fce52f865100",
+        "swift": "07e701bcb2fa91b4e0365eef9596b908e23c34c250ddcd1fd4371bdc51b47719"
       },
       "modules": {
         "ArdiaShell": {
@@ -3999,7 +3999,9 @@
             },
             "rollbackStore": {
               "args": [
-                "name"
+                "name",
+                "expectedVersion",
+                "expectedSha256"
               ],
               "async": true,
               "mac": "custom",

@@ -8,6 +8,8 @@ const CACHE_DOC = "Plugins/revocations-cache.json";
 
 let list: RegistryRevocationsPayload | null = null;
 let seq = -1;
+let persistedSeq = -1;
+let envelope: unknown = null;
 let loaded = false;
 
 function savedEnvelope(): unknown {
@@ -22,12 +24,26 @@ function savedEnvelope(): unknown {
 async function loadCache() {
   if (loaded) return;
   loaded = true;
-  const envelope = savedEnvelope();
-  if (envelope === null || envelope === undefined) return;
-  const verified = await verifyCachedEnvelope(defaultRegistry(), envelope, (payload) => validateRevocationList(payload));
+  const cached = savedEnvelope();
+  if (cached === null || cached === undefined) return;
+  const verified = await verifyCachedEnvelope(defaultRegistry(), cached, (payload) => validateRevocationList(payload));
   if (!verified.ok || verified.value.seq < seq) return;
   list = verified.value;
   seq = verified.value.seq;
+  envelope = cached;
+  persistedSeq = seq;
+}
+
+async function persist(): Promise<boolean> {
+  if (persistedSeq >= seq) return true;
+  try {
+    writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq, envelope })}\n`);
+    await documentSaved(CACHE_DOC);
+    persistedSeq = seq;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type RevocationsRefresh = { ok: boolean; changed: boolean; reason?: string };
@@ -41,15 +57,10 @@ export async function refreshRevocations(): Promise<RevocationsRefresh> {
   if (got.value.seq < seq) return { ok: false, changed: false, reason: "The registry sent an older revocation list than one already seen" };
   const changed = got.value.seq !== seq || !list;
   list = got.value;
+  if (got.value.seq !== seq || envelope === null) envelope = got.envelope;
   seq = got.value.seq;
-  if (!changed) return { ok: true, changed };
-  try {
-    writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq, envelope: got.envelope })}\n`);
-    await documentSaved(CACHE_DOC);
-    return { ok: true, changed };
-  } catch {
-    return { ok: true, changed, reason: "The revocation list couldn't be saved; Ardia checks it again next time" };
-  }
+  if (!(await persist())) return { ok: false, changed, reason: "The revocation list couldn't be saved, so Ardia will try again" };
+  return { ok: true, changed };
 }
 
 export async function revocationPreflight(): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -94,5 +105,7 @@ export const revocationReason = (match: RevocationMatch) => match.entry?.reason 
 export function resetRevocationsForTests(given: RegistryRevocationsPayload | null = null) {
   list = given;
   seq = given?.seq ?? -1;
+  persistedSeq = seq;
+  envelope = null;
   loaded = given !== null;
 }

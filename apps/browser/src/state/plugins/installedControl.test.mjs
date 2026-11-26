@@ -16,7 +16,7 @@ const settle = async () => {
 
 const AUTO = v3Text({ name: "auto", title: "Auto", permissions: { control: true }, contributes: { programs: [{ name: "auto-tool", path: "bin/auto" }] } }, "ardia");
 const { updateLock } = await import("./lockfile.ts");
-updateLock(() => ({ "@ardia/auto": { id: "@ardia/auto", key: "ardia__auto", version: "1.0.0", channel: "latest", source: { kind: "registry", url: "https://ardia.dev/r" }, sha256: "a".repeat(64), payloadDigest: null, dependencies: [], root: true, official: true, installedAt: 1 } }), null);
+updateLock(() => ({ "@ardia/auto": { id: "@ardia/auto", key: "ardia__auto", version: "1.0.0", channel: "latest", source: { kind: "registry", url: "https://ardia.dev/r" }, sha256: "a".repeat(64), payloadDigest: null, dependencies: [], officialSig: "A".repeat(86), platform: "universal", root: true, official: true, installedAt: 1 } }), null);
 
 setConsentPeriod(true, "test-epoch");
 S().hydrate({});

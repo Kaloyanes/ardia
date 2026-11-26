@@ -65,26 +65,48 @@ function provenanceOf(raw: Record<string, unknown>, source: LockSource): LockPro
   };
 }
 
+function entryOf(id: string, raw: unknown): LockEntry | null {
+  const key = isPluginId(id) ? keyOfId(id) : null;
+  const source = isFields(raw) ? sourceOf(raw.source) : null;
+  if (!key || !isFields(raw) || !source) return null;
+  const earlierSource = isFields(raw.previous) ? sourceOf(raw.previous.source) : null;
+  return {
+    id,
+    key,
+    ...provenanceOf(raw, source),
+    channel: raw.channel === "beta" ? "beta" : "latest",
+    root: raw.root !== false,
+    official: raw.official === true,
+    installedAt: typeof raw.installedAt === "number" && Number.isFinite(raw.installedAt) ? raw.installedAt : 0,
+    ...(raw.pending === "migration" ? { pending: "migration" as const } : {}),
+    ...(isFields(raw.previous) && earlierSource ? { previous: provenanceOf(raw.previous, earlierSource) } : {}),
+  };
+}
+
 export function parseLock(json: string | null): PluginLock {
   const doc = parseSaved(json, VERSION);
   if (!doc || !isFields(doc.plugins)) return {};
   const out: PluginLock = {};
   for (const [id, raw] of Object.entries(doc.plugins).slice(0, MAX_ENTRIES)) {
-    const key = isPluginId(id) ? keyOfId(id) : null;
-    const source = isFields(raw) ? sourceOf(raw.source) : null;
-    if (!key || !isFields(raw) || !source) continue;
-    const earlierSource = isFields(raw.previous) ? sourceOf(raw.previous.source) : null;
-    out[id] = {
-      id,
-      key,
-      ...provenanceOf(raw, source),
-      channel: raw.channel === "beta" ? "beta" : "latest",
-      root: raw.root !== false,
-      official: raw.official === true,
-      installedAt: typeof raw.installedAt === "number" && Number.isFinite(raw.installedAt) ? raw.installedAt : 0,
-      ...(raw.pending === "migration" ? { pending: "migration" as const } : {}),
-      ...(isFields(raw.previous) && earlierSource ? { previous: provenanceOf(raw.previous, earlierSource) } : {}),
-    };
+    const entry = entryOf(id, raw);
+    if (entry) out[id] = entry;
+  }
+  return out;
+}
+
+export type StagedLock = Record<string, { folderId: string; entry: LockEntry }>;
+
+const STORE_FOLDER = /^store-[0-9a-f]{64}$/;
+const MAX_STAGED = 64;
+
+export function parseStaged(json: string | null): StagedLock {
+  const doc = parseSaved(json, VERSION);
+  if (!doc || !isFields(doc.staged)) return {};
+  const out: StagedLock = {};
+  for (const [key, raw] of Object.entries(doc.staged).slice(0, MAX_STAGED)) {
+    if (!isFields(raw) || typeof raw.folderId !== "string" || !STORE_FOLDER.test(raw.folderId) || !isFields(raw.entry) || typeof raw.entry.id !== "string") continue;
+    const entry = entryOf(raw.entry.id, raw.entry);
+    if (entry && entry.key === key && entry.sha256 === raw.folderId.slice(6)) out[key] = { folderId: raw.folderId, entry };
   }
   return out;
 }
@@ -107,16 +129,19 @@ export function withProvenance(entry: LockEntry, given: LockProvenance): LockEnt
   return { ...rest, ...provenance(given) };
 }
 
-export const lockJson = (lock: PluginLock) => versionedJson({ plugins: lock }, VERSION);
+export const lockJson = (lock: PluginLock, stagedEntries: StagedLock = {}) => versionedJson(Object.keys(stagedEntries).length ? { plugins: lock, staged: stagedEntries } : { plugins: lock }, VERSION);
 
 let lock: PluginLock | null = null;
+let staged: StagedLock | null = null;
 
 export const useLock = create<{ lock: PluginLock }>()(() => ({ lock: {} }));
 
 export function currentLock(): PluginLock {
   if (lock) return lock;
   try {
-    lock = parseLock(readDocument(LOCK_DOC));
+    const text = readDocument(LOCK_DOC);
+    lock = parseLock(text);
+    staged ??= parseStaged(text);
   } catch {
     lock = {};
   }
@@ -124,10 +149,16 @@ export function currentLock(): PluginLock {
   return lock;
 }
 
-export function writeLock(next: PluginLock, consent: ConsentToken | null): boolean {
+const currentStaged = (): StagedLock => {
+  currentLock();
+  return (staged ??= {});
+};
+
+function saveLock(next: PluginLock, nextStaged: StagedLock, consent: ConsentToken | null): boolean {
   try {
-    writeDocument(LOCK_DOC, lockJson(next));
+    writeDocument(LOCK_DOC, lockJson(next, nextStaged));
     lock = next;
+    staged = nextStaged;
     useLock.setState({ lock: next });
     return true;
   } catch (error) {
@@ -135,6 +166,8 @@ export function writeLock(next: PluginLock, consent: ConsentToken | null): boole
     return false;
   }
 }
+
+export const writeLock = (next: PluginLock, consent: ConsentToken | null): boolean => saveLock(next, currentStaged(), consent);
 
 export function updateLock(change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): boolean {
   return writeLock(change({ ...currentLock() }), consent);
@@ -164,25 +197,32 @@ export function orphanedBy(removed: string, given: PluginLock = currentLock()): 
   return Object.keys(rest).filter((id) => !needed.has(id)).sort();
 }
 
-const staged = new Map<string, { folderId: string; entry: LockEntry }>();
-
-export const stageLockEntry = (folderId: string, entry: LockEntry) => void staged.set(entry.key, { folderId, entry });
+export const stageLockEntry = (folderId: string, entry: LockEntry, consent: ConsentToken | null = null): boolean =>
+  saveLock(currentLock(), { ...currentStaged(), [entry.key]: { folderId, entry } }, consent);
 
 export const stagedLockEntry = (key: string, folderId: string): LockEntry | null => {
-  const found = staged.get(key);
+  const found = currentStaged()[key];
   return found?.folderId === folderId ? found.entry : null;
 };
 
-export const dropStagedLock = (key: string) => void staged.delete(key);
+const withoutStaged = (key: string): StagedLock => Object.fromEntries(Object.entries(currentStaged()).filter(([k]) => k !== key));
+
+export function dropStagedLock(key: string, consent: ConsentToken | null = null): boolean {
+  return !currentStaged()[key] || saveLock(currentLock(), withoutStaged(key), consent);
+}
+
+export function commitStagedLock(key: string, next: LockEntry, consent: ConsentToken | null): boolean {
+  const kept = Object.fromEntries(Object.entries(currentLock()).filter(([id, entry]) => entry.key !== key || id === next.id));
+  return saveLock({ ...kept, [next.id]: next }, withoutStaged(key), consent);
+}
 
 export function forgetLockKey(key: string, consent: ConsentToken | null): boolean {
-  staged.delete(key);
-  if (!Object.values(currentLock()).some((entry) => entry.key === key)) return true;
-  return updateLock((now) => Object.fromEntries(Object.entries(now).filter(([, entry]) => entry.key !== key)), consent);
+  if (!currentStaged()[key] && !Object.values(currentLock()).some((entry) => entry.key === key)) return true;
+  return saveLock(Object.fromEntries(Object.entries(currentLock()).filter(([, entry]) => entry.key !== key)), withoutStaged(key), consent);
 }
 
 export function resetLockForTests() {
   lock = null;
-  staged.clear();
+  staged = null;
   useLock.setState({ lock: {} });
 }

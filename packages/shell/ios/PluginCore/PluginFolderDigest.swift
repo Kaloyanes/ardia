@@ -69,11 +69,11 @@ enum PluginFolderDigest {
     }
     for name in names {
       let text = String(decoding: name, as: UTF8.self)
-      if skippedNames.contains(text) { continue }
       let path = relative.isEmpty ? name : relative + [0x2F] + name
       let shown = String(decoding: path, as: UTF8.self)
       var info = stat()
       guard fstatat(folder, text, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return .unreadable(shown) }
+      if skippedNames.contains(text) && (info.st_mode & S_IFMT) == S_IFREG { continue }
       walk.files += 1
       if walk.files > maxFiles { return .tooBig }
       switch info.st_mode & S_IFMT {

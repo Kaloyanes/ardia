@@ -246,9 +246,11 @@ struct PluginStore {
     } ?? false
   }
 
-  func rollback(_ key: String) -> StoreCopy? {
+  func rollback(_ key: String, expectedVersion: String? = nil, expectedSha: String? = nil) -> StoreCopy? {
     withLock(key) { () -> StoreCopy? in
       guard let folder = pluginFolder(key), let earlier = previous(key) else { return nil }
+      if let expectedVersion, earlier.version != expectedVersion { return nil }
+      if let expectedSha, earlier.sha != expectedSha { return nil }
       let current = active(key)
       guard PluginPrograms.swapLink(in: folder, named: Self.activeName, to: earlier.entry) else { return nil }
       if let current { _ = PluginPrograms.swapLink(in: folder, named: Self.previousName, to: current.entry) } else { unlink((folder as NSString).appendingPathComponent(Self.previousName)) }

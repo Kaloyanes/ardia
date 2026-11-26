@@ -615,6 +615,15 @@ extension PluginProgramsTests {
     XCTAssertNotNil(moved["reason"] as? String)
     XCTAssertEqual(moved["leftover"] as? Bool, true)
     XCTAssertTrue(FileManager.default.fileExists(atPath: "\(appData)/OfficialPlugins/cli"), "the old download isn't deleted while PATH may still need it")
+    XCTAssertTrue(PluginPrograms.isRealFolder(places.pluginStore("cli")), "the old programs folder stays while PATH points at it")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: places.pluginStore("ardia__cli")), "the half-made new folder is cleaned up")
+    chmod(places.binDir, 0o755)
+    XCTAssertEqual(run("\(places.binDir)/hello-tool"), "old", "the command on PATH still runs")
+  }
+
+  func testUnsignedOfficialScopeCopiesPutNoProgramOnPATH() {
+    XCTAssertNotNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: false), "an unverified @ardia copy links no program, reserved or not")
+    XCTAssertNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: true))
   }
 
   func testOnlyTheOfficialCliMayPutArdiaOnPATH() {

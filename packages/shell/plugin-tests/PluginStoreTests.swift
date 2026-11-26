@@ -102,9 +102,9 @@ final class PluginStoreTests: XCTestCase {
     XCTAssertNil(store.active(key), "a candidate isn't active until the user confirms")
     XCTAssertFalse(hasQuarantine("\(made.copy.path)/bin/tool"), "the copy isn't quarantined, so Gatekeeper never asks to notarize it")
     let approved = PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId)
-    XCTAssertEqual(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: "0" + approved.dropFirst(), store: store), "It changed since you approved it. Try again.")
+    XCTAssertEqual(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: "0" + approved.dropFirst(), store: store, officialKeys: []), "It changed since you approved it. Try again.")
     XCTAssertNil(store.active(key))
-    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: approved, store: store))
+    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: approved, store: store, officialKeys: []))
     XCTAssertEqual(store.active(key), made.copy)
     let again = try publish(archive, entry: entry(sha: sha)).get()
     XCTAssertEqual(again.copy, made.copy, "the same download is reused, not replaced")
@@ -174,8 +174,8 @@ final class PluginStoreTests: XCTestCase {
     let sha = try XCTUnwrap(PluginArchive.sha256(file: archive))
     let made = try publish(archive, entry: entry(sha: sha)).get()
     let other = PluginFiles.approvalHash(text: made.manifest, folderId: "store-" + String(repeating: "9", count: 64))
-    XCTAssertNotNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: other, store: store), "an approval of another copy never switches to this one")
-    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId), store: store))
+    XCTAssertNotNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: other, store: store, officialKeys: []), "an approval of another copy never switches to this one")
+    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId), store: store, officialKeys: []))
   }
 
   func testASha256MismatchIsRefusedAndLeavesNothing() throws {
@@ -411,7 +411,7 @@ final class PluginStoreTests: XCTestCase {
     try tamper("\(made.copy.path)/bin/tool", "#!/bin/sh\necho swapped\n")
     let approved = PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId)
     XCTAssertNil(store.copy(key, sha: sha), "an edit inside a copy already checked this launch is still noticed")
-    XCTAssertNotNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: approved, store: store), "activation re-verifies against the download")
+    XCTAssertNotNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: approved, store: store, officialKeys: []), "activation re-verifies against the download")
     let other = try pluginArchive(manifest("1.2.0"), tool: Data("#!/bin/sh\necho other\n".utf8))
     try FileManager.default.removeItem(atPath: "\(made.copy.path).tar.gz")
     try FileManager.default.copyItem(atPath: other, toPath: "\(made.copy.path).tar.gz")
@@ -481,7 +481,7 @@ final class PluginStoreTests: XCTestCase {
     let sha = try XCTUnwrap(PluginArchive.sha256(file: archive))
     let made = try publish(archive, entry: entry(sha: sha)).get()
     XCTAssertTrue(store.activate(key, sha: sha))
-    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId), store: store), "its own exact approval holds")
+    XCTAssertNil(PluginInstaller.activate(key, folderId: made.copy.folderId, approved: PluginFiles.approvalHash(text: made.manifest, folderId: made.copy.folderId), store: store, officialKeys: []), "its own exact approval holds")
     try tamper("\(made.copy.path)/bin/tool", "#!/bin/sh\necho damaged\n")
     XCTAssertNil(store.active(key))
     let repaired = try publish(archive, entry: entry(sha: sha)).get()
@@ -1054,5 +1054,44 @@ extension PluginStoreTests {
     for hostile in ["profiles", "profiles/../acme__tool", "profiles/p/../../x", "profiles//acme__tool", "profiles/p/acme__tool/extra", "../acme__tool", "profiles/p\u{0}/acme__tool", "profiles/p.q/acme__tool", "/abs", ""] {
       XCTAssertNil(PluginDataPaths.relative(hostile), hostile)
     }
+  }
+
+  func testAFolderNamedDSStoreIsDigestedLikeAnyOther() throws {
+    let folder = try folderWith(["plugin.json": manifest(), "main.js": "run()"])
+    let first = try digest(folder).get()
+    try FileManager.default.createDirectory(atPath: "\(folder)/.DS_Store", withIntermediateDirectories: true)
+    try Data("evil()".utf8).write(to: URL(fileURLWithPath: "\(folder)/.DS_Store/payload.js"))
+    XCTAssertNotEqual(try digest(folder).get(), first, "a loadable subtree under a folder named .DS_Store is covered")
+  }
+
+  func testAnUnsignedOfficialNativeCandidateIsNeverActivated() throws {
+    let signer = Curve25519.Signing.PrivateKey()
+    let keys = [signer.publicKey.rawRepresentation.base64EncodedString()]
+    let copy = try officialCopy()
+    let text = try XCTUnwrap(manifestOf(copy.path))
+    let approved = PluginFiles.approvalHash(text: text, folderId: copy.folderId)
+    XCTAssertEqual(PluginInstaller.activate("ardia__tool", folderId: copy.folderId, approved: approved, store: store, officialKeys: keys), "It reaches outside Ardia's sandbox but isn't signed by Ardia's release key, so it wasn't switched to.")
+    XCTAssertNil(store.active("ardia__tool"))
+    XCTAssertTrue(store.recordOfficial(copy, proof: try officialSignature(signer, copy)))
+    XCTAssertNil(PluginInstaller.activate("ardia__tool", folderId: copy.folderId, approved: approved, store: store, officialKeys: keys))
+    XCTAssertEqual(store.active("ardia__tool"), copy)
+  }
+
+  func manifestOf(_ path: String) -> String? {
+    guard let opened = PluginFiles.openFolder(path) else { return nil }
+    defer { opened.close() }
+    if case .text(let text) = PluginFiles.readManifest(in: opened) { return text }
+    return nil
+  }
+
+  func testRollbackSwitchesOnlyToTheCopyArdiaChecked() throws {
+    let first = try publishedVersion("1.0.0", say: "one")
+    let second = try publishedVersion("1.1.0", say: "two")
+    XCTAssertTrue(store.activate(key, sha: first.copy.sha))
+    XCTAssertTrue(store.activate(key, sha: second.copy.sha))
+    XCTAssertNil(store.rollback(key, expectedVersion: "0.9.0", expectedSha: first.copy.sha), "another version isn't switched to")
+    XCTAssertNil(store.rollback(key, expectedVersion: "1.0.0", expectedSha: second.copy.sha), "another digest isn't switched to")
+    XCTAssertEqual(store.active(key)?.version, "1.1.0")
+    XCTAssertEqual(store.rollback(key, expectedVersion: "1.0.0", expectedSha: first.copy.sha)?.version, "1.0.0")
   }
 }

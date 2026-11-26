@@ -10,7 +10,7 @@ import { warnFor } from "../telemetry/consoleConsent";
 import { dropCandidate, wantCandidate } from "./candidates";
 import { prepareInstall, recordUnchangedInLock, type Downloaded } from "./installer";
 import { approvePlugin, reconcilePlugins, requestPluginConsent, rescanPlugins, settledPromotions, updateRecord } from "./lifecycle";
-import { currentLock, lockEntryByKey, provenance, updateLock, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
+import { currentLock, lockEntryByKey, lockSaved, provenance, updateLock, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
 import { fetchIndex, registryForUrl } from "./registryClient";
 import { officialNativeKeys } from "./registryKeys";
 import { currentRevocations, refreshRevocations, revocationReason, revocationsFor, stoppingRevocation } from "./revocations";
@@ -141,14 +141,21 @@ export async function rollbackPlugin(key: string): Promise<{ ok: boolean; reason
     notePlugin("rollback_refusals", consent);
     return { ok: false, reason: revoked ? `${listing.previousVersion} was turned off by Ardia's registry: ${revocationReason(revoked)}` : unsigned! };
   }
-  const switched = await rollbackStorePlugin(key).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  if (!sha256) return { ok: false, reason: "There's no earlier version to go back to." };
+  const switched = await rollbackStorePlugin(key, listing.previousVersion, sha256).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!switched.ok) return switched;
-  const note = { from: listing.manifest?.version ?? null, to: listing.previousVersion, added: [], rolledBack: true as const };
-  updateRecord(key, (r) => ({ ...r, approved: r.previous ?? r.approved, previous: r.approved ?? undefined, updated: note }), consent);
   if (entry) {
     const restored: LockProvenance = target ?? { version: listing.previousVersion, source: entry.source, sha256, payloadDigest: null, dependencies: [] };
-    updateLock((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent);
+    const written = updateLock((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent) && (await lockSaved());
+    const currentSha = shaOfFolderId(listing.folderId);
+    if (!written && listing.manifest && currentSha) {
+      await rollbackStorePlugin(key, listing.manifest.version, currentSha).catch(() => null);
+      await rescanPlugins(consent);
+      return { ok: false, reason: `Ardia couldn't save plugins-lock.json, so it stayed on ${listing.manifest.version}. Try again.` };
+    }
   }
+  const note = { from: listing.manifest?.version ?? null, to: listing.previousVersion, added: [], rolledBack: true as const };
+  updateRecord(key, (r) => ({ ...r, approved: r.previous ?? r.approved, previous: r.approved ?? undefined, updated: note }), consent);
   await rescanPlugins(consent);
   notePlugin("updates_rolled_back", consent);
   return { ok: true };

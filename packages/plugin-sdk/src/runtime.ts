@@ -162,6 +162,7 @@ export function createHostRuntime(transport: Transport, options: HostRuntimeOpti
       caller: message.caller ?? null,
       deadline: typeof message.deadline === "number" ? message.deadline : undefined,
       signal,
+      ...(typeof message.profile === "string" ? { profile: message.profile } : {}),
     };
     let body: Record<string, unknown>;
     try {

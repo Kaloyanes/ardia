@@ -35,7 +35,7 @@ public class PluginsModule: Module, PluginsNative {
 
   static func activateStore(_ name: String, _ folderId: String, _ approved: String) -> [String: Any] { PluginLocalInstall.activate(name, folderId: folderId, approved: approved) }
 
-  static func rollbackStore(_ name: String) -> [String: Any] { PluginLocalInstall.rollback(name) }
+  static func rollbackStore(_ name: String, _ expectedVersion: String, _ expectedSha256: String) -> [String: Any] { PluginLocalInstall.rollback(name, expectedVersion: expectedVersion, expectedSha256: expectedSha256) }
 
   static func verifySignature(_ publicKey: String, _ signature: String, _ message: String) -> Bool { PluginSignatures.verify(publicKey: publicKey, signature: signature, message: message) }
 

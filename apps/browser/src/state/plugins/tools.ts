@@ -4,6 +4,8 @@ import { notePlugin } from "../telemetry/pluginCounts";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
 import { activeManifest, currentPlugins } from "./store";
 import { ensurePluginActivated, pluginReadyRun } from "./activation";
+import { eventProfileId, windowProfileId } from "./profileScope";
+import { focusedWindowId } from "../browser/current";
 
 const MAX_CALLS_PER_PLUGIN = 16;
 const MAX_TOOL_JSON = 1 << 20;
@@ -47,12 +49,21 @@ function finish(id: string, outcome: ToolOutcome) {
   return true;
 }
 
-function lineOf(id: string, call: PluginCall, given: ToolCaller, deadline: number): string {
+export function callProfile(plugin: string, call: PluginCall): string | null {
+  if (activeManifest(currentPlugins(), plugin)?.scope !== "profile") return null;
+  if (call.kind === "command") return typeof call.context.windowId === "string" ? windowProfileId(call.context.windowId) : null;
+  if (call.kind === "decide") return eventProfileId(call.data);
+  if (call.kind === "omnibox") return windowProfileId(focusedWindowId() ?? undefined);
+  return null;
+}
+
+function lineOf(id: string, call: PluginCall, given: ToolCaller, deadline: number, profileId: string | null): string {
   const caller = wireCaller(given);
-  if (call.kind === "tool") return JSON.stringify({ call: id, tool: call.tool, input: call.input === undefined ? {} : call.input, caller, deadline });
-  if (call.kind === "command") return JSON.stringify({ call: id, kind: call.kind, name: call.command, context: call.context, caller, deadline });
-  if (call.kind === "omnibox") return JSON.stringify({ call: id, kind: call.kind, name: call.provider, input: call.query, caller, deadline });
-  return JSON.stringify({ call: id, kind: call.kind, name: call.event, input: call.data, caller, deadline });
+  const profile = profileId ? { profile: profileId } : {};
+  if (call.kind === "tool") return JSON.stringify({ call: id, tool: call.tool, input: call.input === undefined ? {} : call.input, caller, deadline, ...profile });
+  if (call.kind === "command") return JSON.stringify({ call: id, kind: call.kind, name: call.command, context: call.context, caller, deadline, ...profile });
+  if (call.kind === "omnibox") return JSON.stringify({ call: id, kind: call.kind, name: call.provider, input: call.query, caller, deadline, ...profile });
+  return JSON.stringify({ call: id, kind: call.kind, name: call.event, input: call.data, caller, deadline, ...profile });
 }
 
 const labelOf = (call: PluginCall) => (call.kind === "tool" ? call.tool : call.kind === "command" ? call.command : call.kind === "omnibox" ? `omnibox ${call.provider}` : call.event);
@@ -62,7 +73,7 @@ function send(plugin: string, run: number, call: PluginCall, caller: ToolCaller,
   const id = `c${++seq}`;
   let line: string;
   try {
-    line = lineOf(id, call, caller, timeoutMs);
+    line = lineOf(id, call, caller, timeoutMs, callProfile(plugin, call));
   } catch {
     return Promise.resolve(failed("bad_request", "The call's input isn't JSON."));
   }

@@ -296,6 +296,10 @@ describe("revocations", () => {
     assert.equal(sameRegistry("plugins.example.com", "https://plugins.example.com/r"), true);
     assert.equal(sameRegistry("https://plugins.example.com/r", "https://plugins.example.com/other"), false, "a path names only the registry at it");
     assert.equal(sameRegistry("https://plugins.example.com/r", "https://plugins.example.com/rx"), false);
+    assert.equal(sameRegistry("https://plugins.example.com/a/b", "https://plugins.example.com/a"), false, "a selector for a child path never matches its parent");
+    assert.equal(sameRegistry("https://plugins.example.com/a", "https://plugins.example.com/a/b"), true);
+    assert.equal(sameRegistry("HTTPS://Plugins.Example.com/R", "https://plugins.example.com/R"), true, "scheme and host fold case");
+    assert.equal(sameRegistry("https://plugins.example.com/R", "https://plugins.example.com/r"), false, "a path keeps its case");
     assert.equal(sameRegistry("https://plugins.example.com/r", "https://evil.example.com/r"), false);
     assert.deepEqual(matchRevocations({ id: "@x/y", version: "1.0.0", registry: "https://evil.example.com/r" }, list).map((m) => m.action), ["block"]);
     assert.deepEqual(matchRevocations({ id: "@a/b", version: "1.1.0" }, null), []);
@@ -443,6 +447,16 @@ describe("resolvePluginGraph", () => {
     assert.equal(resolvePluginGraph({ ...base, revocations: yank, installed: { "@a/ai": "1.2.0" }, keepInstalled: true, roots: [{ id: "@a/ai", range: "^1.0.0" }] }).plan[0].version, "1.2.0");
     const blocked = { ...yank, entries: [revocation({ match: { id: "@a/ai" }, action: "block" })] };
     assert.match(resolvePluginGraph({ ...base, revocations: blocked, installed: { "@a/ai": "1.2.0" }, keepInstalled: true, roots: [{ id: "@a/ai" }] }).problems[0].message, /revoked/);
+  });
+
+  test("an installed plugin's ranges hold back an update its dependency would break", () => {
+    const lib = new Map([["@h/lib", detail("@h/lib", [version("1.0.0"), version("1.1.0"), version("2.0.0")])]]);
+    const held = { "@h/lib": [{ from: "@h/app", range: "^1.0.0" }] };
+    assert.equal(resolvePluginGraph({ catalog: lib, ardiaVersion: "1.0.0", platform: null, heldBy: held, roots: [{ id: "@h/lib" }] }).plan[0].version, "1.1.0");
+    assert.equal(resolvePluginGraph({ catalog: lib, ardiaVersion: "1.0.0", platform: null, roots: [{ id: "@h/lib" }] }).plan[0].version, "2.0.0");
+    const blocked = resolvePluginGraph({ catalog: lib, ardiaVersion: "1.0.0", platform: null, heldBy: held, roots: [{ id: "@h/lib", range: "^2.0.0" }] });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.problems[0].message, /@h\/app \(installed\) wants \^1\.0\.0/);
   });
 
   test("each plugin's revocations match the registry it came from", () => {

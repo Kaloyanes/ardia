@@ -32,7 +32,7 @@ import { useProfileOrder, useProfileRecords } from "../../../state/profiles/hook
 import { goToSettingsPane, SETTINGS_WINDOW_ID, type SettingsPlace } from "../../../state/settings/settingsWindows";
 import { Button, PopUp, Symbol, Text, TextField, Toggle } from "../../ui";
 import { radius, space } from "../../ui/tokens";
-import { Group, Row, SectionHeader } from "../Form";
+import { Group, ProfilePicker, Row, SectionHeader, useSettingsProfile } from "../Form";
 import { useTheme } from "../../ui/theme";
 import { PaneSubPage } from "./PaneSubPage";
 import { releaseOrphanedConsent } from "../../../state/plugins/consentSurface";
@@ -199,20 +199,23 @@ function NumberRow({ name, row, value }: { name: string; row: Extract<RowSpec, {
 }
 
 function SecretRow({ name, row }: { name: string; row: Extract<RowSpec, { type: "secret" }> }) {
+  const perProfile = usePluginListing(name)?.manifest?.scope === "profile";
+  const [profileId, setProfileId] = useSettingsProfile();
+  const space = perProfile ? profileId : null;
   const [draft, setDraft] = useState("");
   const [saved, setSaved] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
-    void pluginSecretRowIsSet(name, row.key).then((set) => live && setSaved(set));
+    void pluginSecretRowIsSet(name, row.key, space).then((set) => live && setSaved(set));
     return () => {
       live = false;
     };
-  }, [name, row.key]);
+  }, [name, row.key, space]);
   const write = async (value: string | null) => {
     setBusy(true);
-    const outcome = await setPluginSecretRow(name, row.key, value);
+    const outcome = await setPluginSecretRow(name, row.key, value, space);
     setBusy(false);
     if (!outcome.ok) return setProblem(outcome.message);
     setProblem(null);
@@ -222,6 +225,7 @@ function SecretRow({ name, row }: { name: string; row: Extract<RowSpec, { type: 
   const status = problem ?? (saved === null ? null : saved ? `Saved in ${PLATFORM_TERMS.secretStore}` : "Not set");
   return (
     <Row title={row.title} description={[row.description, status].filter(Boolean).join(" · ") || undefined}>
+      {perProfile ? <ProfilePicker value={profileId} onChange={setProfileId} /> : null}
       <TextField value={draft} width={180} secure placeholder={saved ? "••••••••" : row.placeholder} onChangeText={setDraft} onSubmit={() => draft && void write(draft)} />
       <Button title="Save" disabled={!draft || busy} onPress={() => void write(draft)} />
       {saved ? <Button title="Clear" disabled={busy} onPress={() => void write(null)} /> : null}

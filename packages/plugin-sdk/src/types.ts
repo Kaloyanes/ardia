@@ -15,6 +15,7 @@ export type CallContext = {
   readonly caller: unknown;
   readonly deadline: number | undefined;
   readonly signal: CancelSignal;
+  readonly profile?: string;
 };
 
 export type ToolHandler<I = any, O = unknown> = (input: I, call: CallContext) => Awaitable<O>;

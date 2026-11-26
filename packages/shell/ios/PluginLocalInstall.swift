@@ -1,3 +1,4 @@
+import ArdiaCore
 import Foundation
 
 enum PluginLocalInstall {
@@ -50,13 +51,16 @@ enum PluginLocalInstall {
 
   static func activate(_ name: String, folderId: String, approved: String) -> [String: Any] {
     guard let folders = PluginFolders.current() else { return ["ok": false, "reason": "Ardia has no data folder"] }
-    if let problem = PluginInstaller.activate(name, folderId: folderId, approved: approved, store: folders.store()) { return ["ok": false, "reason": problem] }
+    if let problem = PluginInstaller.activate(name, folderId: folderId, approved: approved, store: folders.store(), officialKeys: PluginOfficial.keys(override: LaunchConfig.shared.pluginNativeKeys)) { return ["ok": false, "reason": problem] }
     return ["ok": true, "folderId": folderId]
   }
 
-  static func rollback(_ name: String) -> [String: Any] {
+  static func rollback(_ name: String, expectedVersion: String, expectedSha256: String) -> [String: Any] {
     guard let folders = PluginFolders.current() else { return ["ok": false, "reason": "Ardia has no data folder"] }
-    guard let earlier = folders.store().rollback(name) else { return ["ok": false, "reason": "There's no earlier version to go back to."] }
+    guard PluginStore.isSha(expectedSha256), !expectedVersion.isEmpty else { return ["ok": false, "reason": "rollbackStore needs the version and SHA-256 Ardia checked"] }
+    guard let earlier = folders.store().rollback(name, expectedVersion: expectedVersion, expectedSha: expectedSha256) else {
+      return ["ok": false, "reason": "The earlier copy isn't the one Ardia checked, so it wasn't switched to."]
+    }
     return ["ok": true, "folderId": earlier.folderId]
   }
 }

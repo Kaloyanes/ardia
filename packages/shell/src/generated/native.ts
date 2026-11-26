@@ -416,7 +416,7 @@ export type PluginsNative = {
   installArchiveFile(path: string): Promise<PluginLocalInstallResult>;
   installFolder(path: string): Promise<PluginLocalInstallResult>;
   activateStore(name: string, folderId: string, approved: string): Promise<PluginStoreSwitchResult>;
-  rollbackStore(name: string): Promise<PluginStoreSwitchResult>;
+  rollbackStore(name: string, expectedVersion: string, expectedSha256: string): Promise<PluginStoreSwitchResult>;
   verifySignature(publicKey: string, signature: string, message: string): boolean;
   adoptLegacy(from: string, to: string): Promise<PluginLegacyAdoption>;
   hostFetch(spec: PluginFetchSpec): Promise<PluginFetchResult>;

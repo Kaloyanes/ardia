@@ -86,10 +86,15 @@ function handlePluginLine({ name, run, launch, line }: PluginLine) {
   else reply(c, request.id, body);
 }
 
+export const eventReaches = (plugin: string, data: Record<string, unknown>) => !!manifestInProfile(currentPlugins(), plugin, eventProfileId(data));
+
 function deliverTo(c: Connection, name: AutomationEventName, data: Record<string, unknown>, time: number) {
+  if (!eventReaches(c.name, data)) return;
+  const profileId = eventProfileId(data);
   const full = !!c.sub?.fullUrls;
   const shown = full ? data : redactedEventData(data);
-  sendToPlugin(c.name, c.run, JSON.stringify({ event: name, time, data: shown }));
+  const profile = profileId && activeManifest(currentPlugins(), c.name)?.scope === "profile" ? { profile: profileId } : {};
+  sendToPlugin(c.name, c.run, JSON.stringify({ event: name, time, data: shown, ...profile }));
 }
 
 function deliver(name: AutomationEventName, data: Record<string, unknown>, time: number) {

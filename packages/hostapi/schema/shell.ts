@@ -451,7 +451,7 @@ export const shell = defineModuleDomain({
         installArchiveFile: { args: [["path", "string"]], result: "PluginLocalInstallResult", async: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         installFolder: { args: [["path", "string"]], result: "PluginLocalInstallResult", async: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         activateStore: { args: [["name", "string"], ["folderId", "string"], ["approved", "string"]], result: "PluginStoreSwitchResult", swiftResult: "[String: Any]", async: true, queue: "userInitiated", mac: "custom", desktop: "custom", windows: "absent" },
-        rollbackStore: { args: [["name", "string"]], result: "PluginStoreSwitchResult", swiftResult: "[String: Any]", async: true, queue: "userInitiated", mac: "custom", desktop: "custom", windows: "absent" },
+        rollbackStore: { args: [["name", "string"], ["expectedVersion", "string"], ["expectedSha256", "string"]], result: "PluginStoreSwitchResult", swiftResult: "[String: Any]", async: true, queue: "userInitiated", mac: "custom", desktop: "custom", windows: "absent" },
         verifySignature: { args: [["publicKey", "string"], ["signature", "string"], ["message", "string"]], result: "boolean", async: false, mac: "custom", desktop: "custom", windows: "absent" },
         adoptLegacy: { args: [["from", "string"], ["to", "string"]], result: "PluginLegacyAdoption", async: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         hostFetch: { args: [["spec", "PluginFetchSpec", "[String: Any]"]], result: "PluginFetchResult", async: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },

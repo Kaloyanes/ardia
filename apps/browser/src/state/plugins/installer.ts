@@ -170,6 +170,7 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
     notePlugin(planned.code === "offline" ? "registry_offline" : planned.code === "verify" || planned.code === "official" ? "registry_verify_failures" : "registry_install_refusals", consent);
     return { ok: false, reason: planned.code === "offline" || planned.code === "keys" ? `${OFFLINE_REGISTRY}. ${planned.reason}` : planned.reason };
   }
+  await rescanPlugins(consent);
   const fetching = newInPlan(planned.plan);
   const got = await downloadPlan(fetching, consent, quiet);
   if (!got.ok) return got;

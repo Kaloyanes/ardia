@@ -69,7 +69,7 @@ export const cancelPluginArtifactFetch = (name: string) => Plugins().cancelArtif
 export const installPluginArchive = (path: string) => Plugins().installArchiveFile(path);
 export const installPluginFolder = (path: string) => Plugins().installFolder(path);
 export const activateStorePlugin = (name: string, folderId: string, approved: string) => Plugins().activateStore(name, folderId, approved);
-export const rollbackStorePlugin = (name: string) => Plugins().rollbackStore(name);
+export const rollbackStorePlugin = (name: string, expectedVersion: string, expectedSha256: string) => Plugins().rollbackStore(name, expectedVersion, expectedSha256);
 export const adoptLegacyPlugin = (from: string, to: string) => Plugins().adoptLegacy(from, to);
 export const onPluginArtifactProgress = (listener: (e: PluginArtifactProgress) => void) => Plugins().addListener("onArtifactFetch", listener);
 export const nativeVerifySignature = (publicKey: string, signature: string, message: string) => Plugins().verifySignature(publicKey, signature, message);

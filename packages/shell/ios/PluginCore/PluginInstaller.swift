@@ -98,12 +98,23 @@ enum PluginInstaller {
     return PluginStore.id(key) == id ? key : nil
   }
 
-  static func activate(_ key: String, folderId: String, approved: String, store: PluginStore) -> String? {
+  static func reachesOutsideSandbox(_ text: String) -> Bool {
+    guard let doc = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return true }
+    let sidecar = doc["sidecar"].map { !($0 is NSNull) } ?? false
+    let programs = ((doc["contributes"] as? [String: Any])?["programs"] as? [Any])?.isEmpty == false
+    let control = (doc["permissions"] as? [String: Any])?["control"] as? Bool == true
+    return sidecar || programs || control
+  }
+
+  static func activate(_ key: String, folderId: String, approved: String, store: PluginStore, officialKeys: [String]) -> String? {
     guard let sha = PluginStore.sha(ofFolderId: folderId), let copy = store.copy(key, sha: sha, fresh: true) else { return "Its download is gone or changed. Try again." }
     guard let opened = PluginFiles.openFolder(copy.path) else { return "Its download is gone. Try again." }
     let read = PluginFiles.readManifest(in: opened)
     opened.close()
     guard case .text(let text) = read, PluginFiles.approvalHash(text: text, folderId: folderId) == approved else { return "It changed since you approved it. Try again." }
+    if PluginStore.parts(key)?.scope == officialScope, reachesOutsideSandbox(text), !store.isOfficial(copy, keys: officialKeys) {
+      return "It reaches outside Ardia's sandbox but isn't signed by Ardia's release key, so it wasn't switched to."
+    }
     return store.activate(key, sha: sha) ? nil : "It couldn't be switched to the new copy."
   }
 }
