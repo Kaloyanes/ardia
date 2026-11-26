@@ -37,7 +37,7 @@ on:
         type: string
         default: ""
       version:
-        description: Device build version. Leave empty to use the Mac app's MARKETING_VERSION for a USB build or the pinned version for TestFlight and the App Store.
+        description: Device build version. Leave empty to use the Mac app's MARKETING_VERSION for a USB build or apps/phone/ios/Config/release-version for TestFlight and the App Store, which refuse any other.
         type: string
         default: ""
   workflow_call:
@@ -72,9 +72,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  TESTFLIGHT_VERSION: 1.0.1
 
 jobs:
   status:
@@ -164,8 +161,8 @@ jobs:
             echo "::error::app-store mode needs the App Manager key in ASC_APP_MANAGER_KEY_P8, ASC_APP_MANAGER_KEY_ID and ASC_APP_MANAGER_ISSUER (docs/phone.md › The App Store)"
             exit 1
           fi
-          VERSION="${VERSION_INPUT:-$TESTFLIGHT_VERSION}"
-          args=(app-store --build "$BUILD" --version "$VERSION" --timeout 1200)
+          args=(app-store --build "$BUILD" --timeout 1200)
+          [ -z "$VERSION_INPUT" ] || args+=(--version "$VERSION_INPUT")
           [ -z "$NOTES" ] || args+=(--notes "$NOTES" --notes-root "$GITHUB_WORKSPACE")
           [ "$DEFAULT_BROWSER" = true ] || args+=(--no-default-browser)
           key="$RUNNER_TEMP/AuthKey.p8"
@@ -279,15 +276,6 @@ jobs:
       - if: inputs.mode == 'device'
         name: Mask the UDID
         run: jq -r '.inputs.udid // empty' "$GITHUB_EVENT_PATH" | sed 's/^/::add-mask::/'
-      - if: inputs.mode != 'device'
-        name: Use the pinned TestFlight version
-        run: |
-          set -euo pipefail
-          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$TESTFLIGHT_VERSION" ]; then
-            echo "::error::Leave version empty for TestFlight. This workflow uses $TESTFLIGHT_VERSION (docs/phone.md)."
-            exit 1
-          fi
-          echo "RELEASE_VERSION=$TESTFLIGHT_VERSION" >> "$GITHUB_ENV"
       - name: Uploads go to the Internal group first
         if: inputs.mode == 'upload' && inputs.public_testers
         run: |
@@ -296,6 +284,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - if: inputs.mode != 'device'
+        name: Use the pinned iPhone version
+        run: |
+          set -euo pipefail
+          pinned="$(tr -d '[:space:]' < apps/phone/ios/Config/release-version)"
+          [[ "$pinned" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::apps/phone/ios/Config/release-version holds '$pinned', not a version such as 1.0.1"; exit 1; }
+          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$pinned" ]; then
+            echo "::error::Leave version empty for TestFlight. This workflow uses $pinned from apps/phone/ios/Config/release-version (docs/phone.md)."
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$pinned" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:

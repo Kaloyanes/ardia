@@ -348,7 +348,7 @@ function appStore(state, extra = [], iosDir) {
   const log = join(dir, "requests.jsonl");
   writeFileSync(log, "");
   const preload = `import { appendFileSync } from "node:fs";\n(${fakeAppStore})();`;
-  const args = ["app-store", "--build", "12", ...extra, ...(iosDir ? ["--ios-dir", iosDir] : [])];
+  const args = ["app-store", "--build", "12", ...extra, "--ios-dir", iosDir ?? fakeIosDir("1")];
   const run = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, ...args], {
     env: { ...process.env, ASC_KEY: key, ASC_KEY_ID: "key", ASC_ISSUER: "issuer", ASC_FAKE_STATE: JSON.stringify(state), ASC_FAKE_LOG: log },
     encoding: "utf8",
@@ -436,10 +436,10 @@ test("app-store refuses another version in review, a released version, another b
       { versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12" }], localizations: { v101: [{ id: "loc", ...listing }] }, submissions: [{ id: "s1", state: "IN_REVIEW", items: ["other"] }] },
       /review submission s1 is IN_REVIEW and holds version other; wait for it or cancel it/,
     ],
-    [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: ["INVALID"] }] }, /build 12 is INVALID/],
-    [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: [], expired: true }] }, /build 12 has expired/],
+    [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: ["INVALID"] }] }, /build 12 of 1\.0\.1 is INVALID/],
+    [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: [], expired: true }] }, /build 12 of 1\.0\.1 has expired/],
     [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: [], encryption: null }] }, /no export compliance answer/],
-    [{ builds: [] }, /build 12 is not on App Store Connect/],
+    [{ builds: [] }, /build 12 of 1\.0\.1 is not on App Store Connect/],
   ];
   for (const [changes, refusal] of cases) {
     const run = appStore(appStoreState(changes));
@@ -449,7 +449,15 @@ test("app-store refuses another version in review, a released version, another b
   }
   const mismatch = appStore(appStoreState(), ["--version", "1.1.0"]);
   assert.equal(mismatch.code, 1);
-  assert.match(mismatch.err, /build 12 of 1\.1\.0 is not on App Store Connect \(it is for 1\.0\.1\)/);
+  assert.match(mismatch.err, /--version 1\.1\.0 isn't the pinned iPhone version 1\.0\.1/);
+  assert.deepEqual(mismatch.writes, []);
+  const bumped = appStore(
+    appStoreState({ builds: [{ id: "b12", number: "12", version: "1.1.0", processing: [] }], versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }),
+    [],
+    fakeIosDir("1", "1.1.0"),
+  );
+  assert.equal(bumped.code, 0, bumped.err);
+  assert.equal(bumped.writes[0].body.data.attributes.versionString, "1.1.0");
 });
 
 test("app-store renames a draft of another version instead of making a second one, and replaces its build", () => {
@@ -464,10 +472,10 @@ test("app-store waits for a build still processing when given a timeout, and ref
   const processing = { builds: [{ id: "b12", number: "12", version: "1.0.1", processing: ["PROCESSING", "PROCESSING"] }], versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } };
   const waited = appStore(appStoreState(processing), ["--timeout", "600"]);
   assert.equal(waited.code, 0, waited.err);
-  assert.match(waited.out, /build 12: PROCESSING, waiting/);
+  assert.match(waited.out, /build 12 of 1\.0\.1: PROCESSING, waiting/);
   const now = appStore(appStoreState(processing));
   assert.equal(now.code, 1);
-  assert.match(now.err, /build 12 is PROCESSING/);
+  assert.match(now.err, /build 12 of 1\.0\.1 is PROCESSING/);
 });
 
 test("app-store lists what App Review still needs and submits nothing", () => {
@@ -480,10 +488,10 @@ test("app-store lists what App Review still needs and submits nothing", () => {
     }),
   );
   assert.equal(run.code, 1);
-  for (const gap of ["en-US keywords", "en-US support URL", "en-US iPhone screenshots", "en-US iPad screenshots", "App Review contact first name", "App Review contact phone", "demo account name and password"]) {
+  for (const gap of ["en-US keywords", "en-US support URL", "en-US iPhone screenshots in APP_IPHONE_61 or APP_IPHONE_67", "App Review contact first name", "App Review contact phone", "demo account name and password"]) {
     assert.match(run.err, new RegExp(`- [^\\n]*${gap}`));
   }
-  assert.doesNotMatch(run.err, /contact email|ChatGPT/);
+  assert.doesNotMatch(run.err, /contact email|ChatGPT|iPad/);
   assert.ok(!run.steps.some((step) => step.includes("reviewSubmission")));
   const none = appStore(appStoreState({ versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] }, review: null }));
   assert.equal(none.code, 1);
@@ -503,19 +511,23 @@ test("preflight refuses a missing export compliance answer, privacy manifest or 
   assert.match(bare.err, /PrivacyInfo\.xcprivacy is missing/);
   assert.match(bare.err, /com\.apple\.developer\.web-browser/);
   assert.match(bare.err, /TARGETED_DEVICE_FAMILY/);
+  assert.match(bare.err, /release-version doesn't hold the iPhone release version/);
   assert.deepEqual(bare.writes, []);
   writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
   mkdirSync(join(ios, "Ardia.xcodeproj"));
   writeFileSync(join(ios, "Ardia.xcodeproj", "project.pbxproj"), readFileSync(join(fakeIosDir('"1,2"'), "Ardia.xcodeproj", "project.pbxproj")));
+  writeFileSync(join(ios, "Config", "release-version"), "1.0.1\n");
   const unsigned = spawnSync(process.execPath, [script, "preflight", "--no-default-browser", "--ios-dir", ios], { encoding: "utf8", env: { ...process.env, ASC_KEY: "", ASC_KEY_ID: "", ASC_ISSUER: "" } });
   assert.equal(unsigned.status, 0, unsigned.stderr);
-  assert.match(unsigned.stdout, /preflight passed/);
+  assert.match(unsigned.stdout, /preflight passed: [^\n]*version 1\.0\.1, for iPhone and iPad/);
   const signed = spawnSync(process.execPath, [script, "preflight", "--ios-dir", ios], { encoding: "utf8" });
   assert.equal(signed.status, 1);
   assert.match(signed.stderr, /--no-default-browser/);
   const repo = spawnSync(process.execPath, [script, "preflight"], { encoding: "utf8" });
   assert.equal(repo.status, 0, repo.stderr);
+  const pinned = readFileSync(fileURLToPath(new URL("../ios/Config/release-version", import.meta.url)), "utf8").trim();
+  assert.match(repo.stdout, new RegExp(`version ${pinned.replaceAll(".", "\\.")}, for iPhone\n`));
 });
 
 test("status lists the App Store versions with their state and the newest review submission first", () => {
@@ -558,7 +570,8 @@ test("app-store submits with its own App Manager key, and says so when Apple ref
   assert.match(job, /secrets\.ASC_APP_MANAGER_KEY_ID/);
   assert.match(job, /secrets\.ASC_APP_MANAGER_ISSUER/);
   assert.doesNotMatch(job, /NOTARY_/);
-  assert.match(job, /--version "\$VERSION"/);
+  assert.match(job, /\[ -z "\$VERSION_INPUT" \] \|\| args\+=\(--version "\$VERSION_INPUT"\)/);
+  assert.doesNotMatch(job, /TESTFLIGHT_VERSION/);
   assert.match(job, /--notes-root "\$GITHUB_WORKSPACE"/);
 });
 
@@ -621,19 +634,17 @@ test("app-store makes a new token before the old one runs out during a long wait
   for (const token of run.tokens) assert.ok(token.exp - token.iat <= 1200);
 });
 
-test("app-store picks the build by number and version, and lists the candidates when the number alone is ambiguous", () => {
+test("app-store picks the build of the pinned version by number, whatever other version shares the number", () => {
   const builds = [
     { id: "b12old", number: "12", version: "1.0.0", processing: [] },
     { id: "b12", number: "12", version: "1.0.1", processing: [] },
   ];
-  const ambiguous = appStore(appStoreState({ builds }));
-  assert.equal(ambiguous.code, 1);
-  assert.match(ambiguous.err, /build 12 is on App Store Connect for 1\.0\.0 \(VALID\), 1\.0\.1 \(VALID\); pass --version/);
-  assert.deepEqual(ambiguous.writes, []);
-  const picked = appStore(appStoreState({ builds, versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }), ["--version", "1.0.1"]);
-  assert.equal(picked.code, 0, picked.err);
-  assert.deepEqual(picked.writes.find((write) => write.path.endsWith("/relationships/build")).body, { data: { type: "builds", id: "b12" } });
-  const missing = appStore(appStoreState({ builds: [builds[0]] }), ["--version", "1.0.1"]);
+  for (const extra of [[], ["--version", "1.0.1"]]) {
+    const picked = appStore(appStoreState({ builds, versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }), extra);
+    assert.equal(picked.code, 0, picked.err);
+    assert.deepEqual(picked.writes.find((write) => write.path.endsWith("/relationships/build")).body, { data: { type: "builds", id: "b12" } });
+  }
+  const missing = appStore(appStoreState({ builds: [builds[0]] }));
   assert.equal(missing.code, 1);
   assert.match(missing.err, /build 12 of 1\.0\.1 is not on App Store Connect \(it is for 1\.0\.0\)/);
 });
@@ -658,7 +669,7 @@ test("app-store renames only a lone PREPARE_FOR_SUBMISSION draft and lists any o
 test("app-store counts screenshots inside their sets, and only warns when the notes don't mention ChatGPT", () => {
   const empty = appStore(ready101({ screenshots: [0, 0, { type: "APP_IPAD_PRO_3GEN_129", shots: 1 }] }));
   assert.equal(empty.code, 1);
-  assert.match(empty.err, /- en-US iPhone screenshots \(2 empty screenshot sets\)/);
+  assert.match(empty.err, /- en-US iPhone screenshots in APP_IPHONE_61 or APP_IPHONE_67[^\n]*\(2 empty screenshot sets\)/);
   const quiet = appStore(ready101({ review: { ...reviewReady, notes: "Sign in with any account." } }));
   assert.equal(quiet.code, 0, quiet.err);
   assert.match(quiet.out + quiet.err, /warning: [^\n]*Continue with ChatGPT/);
@@ -695,12 +706,12 @@ test("app-store counts only screenshots whose upload has finished", () => {
   const ipad = { type: "APP_IPAD_PRO_3GEN_129", shots: 1 };
   const pending = appStore(ready101({ screenshots: [["UPLOAD_COMPLETE", "FAILED"], ipad] }));
   assert.equal(pending.code, 1);
-  assert.match(pending.err, /- en-US iPhone screenshots \(2 not finished uploading\)/);
+  assert.match(pending.err, /- en-US iPhone screenshots in APP_IPHONE_61 or APP_IPHONE_67[^\n]*\(2 not finished uploading\)/);
   const one = appStore(ready101({ screenshots: [["FAILED", "COMPLETE"], ipad] }));
   assert.equal(one.code, 0, one.err);
 });
 
-function fakeIosDir(family) {
+function fakeIosDir(family, version = "1.0.1") {
   const ios = mkdtempSync(join(tmpdir(), "asc-ios-"));
   mkdirSync(join(ios, "Ardia"));
   mkdirSync(join(ios, "Config"));
@@ -709,6 +720,7 @@ function fakeIosDir(family) {
   writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
   writeFileSync(join(ios, "Config", "Ardia-DefaultBrowser.entitlements"), plist("\t<key>com.apple.developer.web-browser</key>\n\t<true/>"));
+  writeFileSync(join(ios, "Config", "release-version"), `${version}\n`);
   const config = (id, name, bundle, value) =>
     `\t\t${id} /* ${name} */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = ${bundle};\n\t\t\t\tTARGETED_DEVICE_FAMILY = ${value};\n\t\t\t};\n\t\t\tname = ${name};\n\t\t};\n`;
   writeFileSync(
@@ -746,9 +758,9 @@ test("app-store wants a finished screenshot for each device family the app targe
   assert.equal(both.code, 1);
   assert.match(both.err, /- en-US iPad screenshots/);
   assert.doesNotMatch(both.err, /iPhone screenshots/);
-  const repo = appStore(ready101(iphoneOnly));
-  assert.equal(repo.code, 1);
-  assert.match(repo.err, /- en-US iPad screenshots/);
+  const repo = appStore(ready101(iphoneOnly), [], fileURLToPath(new URL("../ios", import.meta.url)));
+  assert.equal(repo.code, 0, repo.err);
+  assert.doesNotMatch(repo.out + repo.err, /iPad/);
   const phone = appStore(ready101(iphoneOnly), [], fakeIosDir("1"));
   assert.equal(phone.code, 0, phone.err);
   const tablet = appStore(ready101({ screenshots: [{ type: "APP_IPAD_PRO_3GEN_129", shots: 2 }] }), [], fakeIosDir("2"));
@@ -846,4 +858,15 @@ test("app-store reads the attached build again after finding the version in revi
   const same = appStore(inReview(undefined));
   assert.equal(same.code, 0, same.err);
   assert.deepEqual(same.writes, []);
+});
+
+test("app-store wants a finished screenshot in the Dynamic Island medium or large class, not any iPhone class", () => {
+  const smaller = appStore(ready101({ screenshots: [{ type: "APP_IPHONE_65", shots: 3 }, { type: "APP_IPHONE_55", shots: 2 }, { type: "APP_IPHONE_61", shots: ["FAILED"] }] }));
+  assert.equal(smaller.code, 1, smaller.out);
+  assert.match(smaller.err, /- en-US iPhone screenshots in APP_IPHONE_61 or APP_IPHONE_67, iPhone with Dynamic Island \(medium or large display\) \(1 not finished uploading; only APP_IPHONE_65, APP_IPHONE_55 finished, which App Review doesn't take in their place\)/);
+  assert.ok(!smaller.steps.some((step) => step.startsWith("PATCH /v1/reviewSubmissions/")), smaller.steps.join("\n"));
+  for (const type of ["APP_IPHONE_61", "APP_IPHONE_67"]) {
+    const run = appStore(ready101({ screenshots: [{ type, shots: 1 }, { type: "APP_IPHONE_65", shots: ["FAILED"] }] }));
+    assert.equal(run.code, 0, `${type}: ${run.err}`);
+  }
 });

@@ -39,8 +39,10 @@ the invite once the group has an approved build. expire ends testing of an older
 good: nobody can install it again and Apple can't undo it. It refuses the newest build.
 register-device adds an iPhone to the team's devices, so a development-signed build
 (apps/phone/scripts/release-ios --development) installs on it; an iPhone already there is left as it is.
-app-store sends a processed build to App Review with an App Manager key. It picks the build by number
-and, when the number repeats across versions, --version; finds or makes the App Store version for it;
+The iPhone's release version is pinned in apps/phone/ios/Config/release-version: TestFlight uploads and
+app-store take it, and app-store refuses a --version that differs from it.
+app-store sends a processed build to App Review with an App Manager key. It picks the build of the pinned
+version by number; finds or makes the App Store version for it;
 attaches the build; sets What's New from --notes (a short default without it); keeps the release manual;
 checks the listing and the App Review contact and notes; and submits through a review submission. It
 reads every review submission before it writes and again before it submits, refuses while another
@@ -48,7 +50,7 @@ version or submission is in review or waits for release, and a re-run reports wh
 instead of doing it twice. --notes-root refuses notes that resolve outside that directory. --timeout
 waits that long for a build still processing. preflight, which app-store runs first and which needs no
 key, checks the export compliance answer in Info.plist, the
-privacy manifest and, unless --no-default-browser, the default browser entitlement.`;
+privacy manifest, the pinned version and, unless --no-default-browser, the default browser entitlement.`;
 
 const BUNDLE_PREFIX = "com.ardia.browser.ios";
 const DEVELOPMENT_CERTIFICATES = new Set(["DEVELOPMENT", "IOS_DEVELOPMENT"]);
@@ -70,10 +72,23 @@ const STATES_AFTER_OWN_WRITE = new Map([
   ["DEVELOPER_REJECTED", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
   ["INVALID_BINARY", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
 ]);
+const IPHONE_SCREENSHOT_CLASSES = [
+  { displayType: "APP_IPHONE_61", label: "iPhone with Dynamic Island (medium display)" },
+  { displayType: "APP_IPHONE_67", label: "iPhone with Dynamic Island (large display)" },
+];
 const DEVICE_FAMILIES = new Map([
-  ["1", { name: "iPhone", displayTypePrefix: "APP_IPHONE_" }],
-  ["2", { name: "iPad", displayTypePrefix: "APP_IPAD_" }],
+  [
+    "1",
+    {
+      name: "iPhone",
+      prefix: "APP_IPHONE_",
+      required: `${IPHONE_SCREENSHOT_CLASSES.map((kind) => kind.displayType).join(" or ")}, iPhone with Dynamic Island (medium or large display)`,
+      counts: (type) => IPHONE_SCREENSHOT_CLASSES.some((kind) => kind.displayType === type),
+    },
+  ],
+  ["2", { name: "iPad", prefix: "APP_IPAD_", required: "APP_IPAD_*", counts: (type) => type?.startsWith("APP_IPAD_") ?? false }],
 ]);
+const RELEASE_VERSION_FILE = join("Config", "release-version");
 
 function base64url(input) {
   return Buffer.from(input).toString("base64url");
@@ -770,8 +785,16 @@ function targetedFamilies(iosDir) {
   return families.length > 0 ? families : null;
 }
 
+function shown(path) {
+  return relative(process.cwd(), path) || path;
+}
+
+function pinnedVersion(iosDir) {
+  const text = contents(join(iosDir, RELEASE_VERSION_FILE))?.trim() ?? "";
+  return /^\d+\.\d+\.\d+$/.test(text) ? text : null;
+}
+
 function preflightGaps(iosDir, defaultBrowser) {
-  const shown = (path) => relative(process.cwd(), path) || path;
   const gaps = [];
   const infoPath = join(iosDir, "Ardia", "Info.plist");
   const info = contents(infoPath);
@@ -784,6 +807,7 @@ function preflightGaps(iosDir, defaultBrowser) {
   if (!targetedFamilies(iosDir)) {
     gaps.push(`${shown(projectPath(iosDir))} gives ${BUNDLE_PREFIX}'s Release build no TARGETED_DEVICE_FAMILY, so the screenshots it needs are unknown`);
   }
+  if (!pinnedVersion(iosDir)) gaps.push(`${shown(join(iosDir, RELEASE_VERSION_FILE))} doesn't hold the iPhone release version as x.y.z`);
   if (defaultBrowser) {
     const entitlementsPath = join(iosDir, "Config", "Ardia-DefaultBrowser.entitlements");
     if (!/<key>com\.apple\.developer\.web-browser<\/key>\s*<true\/>/.test(contents(entitlementsPath) ?? "")) {
@@ -799,11 +823,12 @@ function requirePreflight(args) {
   const gaps = preflightGaps(iosDir, defaultBrowser);
   if (gaps.length > 0) refuse(`the iPhone app isn't ready for App Review:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
   const families = targetedFamilies(iosDir);
+  const version = pinnedVersion(iosDir);
   console.log(
     `preflight passed: export compliance answered, privacy manifest present${defaultBrowser ? ", default browser entitlement present" : ""}, ` +
-      `for ${families.map((family) => family.name).join(" and ")}`,
+      `version ${version}, for ${families.map((family) => family.name).join(" and ")}`,
   );
-  return families;
+  return { families, version };
 }
 
 async function preflight(args) {
@@ -938,14 +963,19 @@ async function listingGaps(localization, locale, families) {
     limit: "50",
   });
   const delivery = new Map(included.filter((row) => row.type === "appScreenshots").map((row) => [row.id, row.attributes?.assetDeliveryState?.state]));
+  const finishedIn = (set) => (set.relationships?.appScreenshots?.data ?? []).filter((link) => delivery.get(link.id) === "COMPLETE").length;
   for (const family of families) {
-    const mine = sets.filter((set) => set.attributes?.screenshotDisplayType?.startsWith(family.displayTypePrefix));
+    const mine = sets.filter((set) => family.counts(set.attributes?.screenshotDisplayType));
     const linked = mine.flatMap((set) => set.relationships?.appScreenshots?.data ?? []);
-    const finished = linked.filter((link) => delivery.get(link.id) === "COMPLETE").length;
-    if (finished === 0) {
-      const detail = linked.length > 0 ? ` (${linked.length} not finished uploading)` : mine.length > 0 ? ` (${mine.length} empty screenshot sets)` : "";
-      gaps.push(`${locale} ${family.name} screenshots${detail}`);
-    }
+    if (mine.some((set) => finishedIn(set) > 0)) continue;
+    const elsewhere = sets
+      .filter((set) => !mine.includes(set) && finishedIn(set) > 0 && set.attributes?.screenshotDisplayType?.startsWith(family.prefix))
+      .map((set) => set.attributes.screenshotDisplayType);
+    const detail = [
+      linked.length > 0 ? `${linked.length} not finished uploading` : mine.length > 0 ? `${mine.length} empty screenshot sets` : "",
+      elsewhere.length > 0 ? `only ${elsewhere.join(", ")} finished, which App Review doesn't take in their place` : "",
+    ].filter(Boolean);
+    gaps.push(`${locale} ${family.name} screenshots in ${family.required}${detail.length > 0 ? ` (${detail.join("; ")})` : ""}`);
   }
   return gaps;
 }
@@ -982,10 +1012,14 @@ async function appStore(args) {
     console.error("asc: --timeout takes seconds");
     process.exit(64);
   }
-  const families = requirePreflight(args);
+  const { families, version: pinned } = requirePreflight(args);
+  const asked = option(args, "--version");
+  if (asked !== undefined && asked !== pinned) {
+    refuse(`--version ${asked} isn't the pinned iPhone version ${pinned} (apps/phone/ios/${RELEASE_VERSION_FILE}), which TestFlight uploads too; change the pin in a commit instead`);
+  }
   const whatsNew = whatsNewText(option(args, "--notes"), option(args, "--notes-root"));
   const app = await requireApp();
-  const build = await processedBuild(app.id, number, option(args, "--version"), timeout);
+  const build = await processedBuild(app.id, number, pinned, timeout);
   const versionString = build.version;
 
   const versions = await listAppStoreVersions(app.id);

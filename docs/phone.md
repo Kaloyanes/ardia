@@ -4508,8 +4508,9 @@ d5fbaabc1). After a hand edit to the project, run `pod install` and commit what 
   ids and the same entitlement files, now in `apps/phone/ios/Config`: the app group `group.com.ardia.browser.ios`, and the default
   browser off (`ARDIA_DEFAULT_BROWSER = NO`).
 - **Version and build number:**
-  - The Apple version is TestFlight's pin, `1.0.1` for now ("TestFlight: the workflow, its certificate and its
-    testers" below). Until 2026-11-19 it was the Mac's release version.
+  - The Apple version is the iPhone's pin, `apps/phone/ios/Config/release-version` (`1.0.1` for now), which TestFlight
+    and the App Store share ("TestFlight: the workflow, its certificate and its testers" below). Until 2026-11-19 it
+    was the Mac's release version.
   - The build number goes above the highest one App Store Connect holds. On 15 Nov that is 0.2.47 (9), uploaded that
     day, internal "in testing", external "waiting for review" (`gh workflow run ios-release.yml -f mode=status`).
   - The first Expo candidate at the time was 0.2.47 (10) or later.
@@ -4556,7 +4557,7 @@ d5fbaabc1). After a hand edit to the project, run `pod install` and commit what 
   3. **The upload, the owner's moment:** `gh workflow run ios-release.yml --ref t3/unify-expo-architecture -f
      mode=upload -f public_testers=false`.
      - The build number is taken above App Store Connect's highest, from 10 on, unless `-f build=` sets it.
-     - The version is TestFlight's pin, `1.0.1`; the run refuses any other.
+     - The version is the pin in `apps/phone/ios/Config/release-version`; the run refuses any other.
   4. **On the owner's phone:** install it from TestFlight over the SwiftUI app. Settings' footer should read "Ardia
      <version> Nightly (<build>)".
 - **Who uploads, and how 0.2.47 (9) went up:**
@@ -4749,9 +4750,13 @@ core has its own). Not applicable: the default-browser status (no entitlement in
 
 This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflow builds only the Expo app.
 - **The owner's rule** (2026-11-19). The owner asks for TestFlight before the dry run and upload.
-  - **Version:** every TestFlight build is `1.0.1` (`CFBundleShortVersionString`) until the owner changes it. It is
-    `TESTFLIGHT_VERSION` in `ios-release.yml`: `mode=dry-run` and `mode=upload` take it with `version` left empty, and
-    stop at their first step on any other version, such as an old `0.2.47`.
+  - **Version:** one committed file, `apps/phone/ios/Config/release-version` (`1.0.1` for now), is the iPhone's
+    version (`CFBundleShortVersionString`) for TestFlight and the App Store alike. `mode=dry-run` and `mode=upload`
+    read it with `version` left empty and stop on any other version, such as an old `0.2.47`; `release-ios` refuses
+    to upload anything else; `asc.mjs listing` and `app-store` work on that version and refuse a `--version` that
+    differs. Bumping it is one commit: once `1.0.1` is on the App Store, TestFlight needs `1.0.2` or later, because
+    App Store Connect takes no new builds for a version that is on sale. `app.json`'s `version` (`0.1.0`) is not
+    the release version: the app's telemetry reads it on iPhone and Android alike, so it stays as it is.
   - **Build number:** App Store Connect picks it. Leave `build` empty and the run takes the one after the highest it
     holds.
   - **Steps:** a dry run at the commit to upload, `gh workflow run ios-release.yml -f mode=dry-run`, then the upload,
@@ -4861,14 +4866,14 @@ In order:
 - **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
   `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
   `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in
-  `Config/Ardia-DefaultBrowser.entitlements`, and the Release `TARGETED_DEVICE_FAMILY` of `com.ardia.browser.ios` in
-  `Ardia.xcodeproj` (`"1,2"`: iPhone and iPad), which decides the screenshots the listing needs. Each missing one is
-  named and nothing is sent.
+  `Config/Ardia-DefaultBrowser.entitlements`, the Release `TARGETED_DEVICE_FAMILY` of `com.ardia.browser.ios` in
+  `Ardia.xcodeproj` (`1`: iPhone only), which decides the screenshots the listing needs, and the pinned version in
+  `Config/release-version`. Each missing one is named and nothing is sent.
 - **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
   outside is refused before a request.
-- **The build** is picked by its number and its version. Build numbers repeat across versions, so the workflow passes
-  the TestFlight pin (`1.0.1` for now, or `version` when given); without `--version` the CLI refuses a number that
-  two versions share and lists them. The build must be `VALID`, not expired, and carry an export compliance answer.
+- **The build** is picked by its number and the pinned version, so a build number another version shares never
+  gets in the way. A `version` (`--version`) other than the pin is refused before any request: change the pin in a
+  commit instead. The build must be `VALID`, not expired, and carry an export compliance answer.
   A build that declares non-exempt encryption is refused unless its encryption declaration is `APPROVED`, which
   can't happen while Info.plist says false. The workflow waits up to 20 minutes for one still processing (`--timeout`).
 - **Reads before writes.** Before it writes anything, it reads the App Store versions and every open review
@@ -4885,9 +4890,14 @@ In order:
 - **What's New** comes from `notes`, at most 4,000 characters; without it the text is "Bug fixes and improvements."
   and the run says so. The App Store shows no What's New on an app's first version, so the run leaves it out then.
 - **The checks** list everything missing at once and stop before the submission: the primary locale's description,
-  keywords, support URL and, for each device family the app targets (iPhone and iPad), at least one screenshot whose
-  upload has finished (an empty set, or one still uploading or failed, counts as none), and App Review
+  keywords, support URL and, for each device family the app targets, at least one screenshot whose upload has
+  finished (an empty set, or one still uploading or failed, counts as none), and App Review
   Information's contact name, phone, email and notes, and a demo account's name and password when one is required.
+  For iPhone that screenshot must be in the "iPhone with Dynamic Island (medium display)" class, which App Review
+  requires (`APP_IPHONE_61`: 1206×2622 or 1179×2556), or in the large class it scales down from (`APP_IPHONE_67`:
+  1320×2868, 1290×2796, 1260×2736); a finished set only in a smaller class (`APP_IPHONE_65`, `_58`, `_55` and older)
+  counts as none, and the gap names it (Apple's Screenshot specifications, checked 2026-11-26; the display type
+  values are `ScreenshotDisplayType` in the App Store Connect API).
   Notes that don't say how to try Continue with ChatGPT (Browse for Me) only print a warning. Fill the gaps in App
   Store Connect and run it again; the run never makes contact details up.
 - **The submission** reuses an open review submission that is ready and holds nothing or only this version, or one

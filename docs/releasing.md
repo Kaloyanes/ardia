@@ -98,8 +98,9 @@ phones a build that isn't a release says Dev.
   app's defaults, so a Debug build ignores the picked app icon variant and keeps its own in the Dock
   (`IconStyle.shown`); Settings still previews the variants. Release builds, which every release is, keep
   `AppIcon.icon`. A Debug build still shows the committed version in About and Settings, nightly or not.
-- **iPhone.** TestFlight uses version `1.0.1` until the owner asks to change it. App Store Connect supplies the next
-  build number. Upload only when the owner asks for TestFlight. When it is part of a desktop release,
+- **iPhone.** TestFlight and the App Store use the version pinned in `apps/phone/ios/Config/release-version` (`1.0.1`
+  now; after it reaches the App Store, TestFlight needs `1.0.2` or later), changed in a commit on the owner's word.
+  App Store Connect supplies the next build number. Upload only when the owner asks for TestFlight. When it is part of a desktop release,
   `iphone=true` opts in to the same TestFlight version. The dry run signs the iPhone archive and the real run uploads
   to Internal after the desktop release publishes. The Public Testers submission is a separate `public-link` run.
   If the iPhone job fails after the desktop release publishes, rerun the failed job or dispatch iOS Release on the

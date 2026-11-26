@@ -42,10 +42,16 @@ test("the upload is the only step that sends anything, and the dry run reads the
 });
 
 test("TestFlight dry runs and uploads build one pinned version, and the desktop release passes none of its own", () => {
-  assert.equal([...workflow.matchAll(/TESTFLIGHT_VERSION: \d+\.\d+\.\d+\n/g)].length, 1, "one pin");
-  assert.match(workflow, /if \[ -n "\$RELEASE_VERSION" \] && \[ "\$RELEASE_VERSION" != "\$TESTFLIGHT_VERSION" \]; then[\s\S]*?exit 1/, "any other version is refused");
-  assert.match(workflow, /if: inputs\.mode != 'device'\n\s+name: Use the pinned TestFlight version/, "USB builds skip the pin");
-  assert.match(workflow, /echo "RELEASE_VERSION=\$TESTFLIGHT_VERSION" >> "\$GITHUB_ENV"/, "the archive gets the pin");
+  const pin = read("../../ios/Config/release-version");
+  assert.match(pin, /^\d+\.\d+\.\d+\n$/, "one committed pin");
+  assert.doesNotMatch(workflow, /TESTFLIGHT_VERSION/, "the workflow keeps no copy of the pin");
+  const pinStep = workflow.match(/- if: inputs\.mode != 'device'\n\s+name: Use the pinned iPhone version\n[\s\S]*?>> "\$GITHUB_ENV"\n/)?.[0] ?? "";
+  assert.ok(pinStep.length > 0, "USB builds skip the pin");
+  assert.ok(workflow.indexOf(pinStep) > workflow.indexOf("actions/checkout", workflow.indexOf("\n  release:\n")), "the pin is read after the checkout");
+  assert.match(pinStep, /pinned="\$\(tr -d '\[:space:\]' < apps\/phone\/ios\/Config\/release-version\)"/, "it reads the committed pin");
+  assert.match(pinStep, /if \[ -n "\$RELEASE_VERSION" \] && \[ "\$RELEASE_VERSION" != "\$pinned" \]; then[\s\S]*?exit 1/, "any other version is refused");
+  assert.match(pinStep, /echo "RELEASE_VERSION=\$pinned" >> "\$GITHUB_ENV"/, "the archive gets the pin");
+  assert.match(script, /if \[ "\$upload" = 1 \]; then\n  pinned="\$\(tr -d '\[:space:\]' < "\$phoneIos\/Config\/release-version"\)"[\s\S]*?\[ "\$release_version" = "\$pinned" \] \|\| die/, "release-ios uploads only the pin");
   assert.match(workflow, /if: inputs\.mode == 'upload' && inputs\.public_testers\n\s+run: \|\n\s+echo "::error::/, "an upload with public testers is still refused");
   const release = read("../../../../.github/workflows/release.yml");
   const iphone = release.match(/^  iphone:\n(?:    .*\n)*/m)?.[0] ?? "";
