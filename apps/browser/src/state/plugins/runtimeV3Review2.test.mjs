@@ -448,3 +448,11 @@ test("the Health row counts only the current sidecar run's memory", async () => 
   refreshHealth(rows(3));
   assert.equal(usePluginHealth.getState().rows.both.memoryBytes, 10, "with no live sidecar run, a stale sidecar sample isn't added");
 });
+
+test("parsePluginThemeKey accepts scoped registry keys and rejects malformed ones", async () => {
+  const { parsePluginThemeKey } = await import("./themes.ts");
+  assert.deepEqual(parsePluginThemeKey("plugin:sample__notes/dark"), { plugin: "sample__notes", id: "dark" });
+  assert.deepEqual(parsePluginThemeKey("plugin:classic/light_1"), { plugin: "classic", id: "light_1" });
+  assert.equal(parsePluginThemeKey("plugin:bad__/dark"), null);
+  assert.equal(parsePluginThemeKey("plugin:../evil/dark"), null);
+});
