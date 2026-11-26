@@ -9,15 +9,22 @@
 #include <string_view>
 #include <utility>
 
+#include "ardia/linux/ac_linux_search_engines.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_pip.h"
+#include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_bridge.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
+#include "ardia/mac/ac_mac_share.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "ardia/mac/generated/ac_desktop_window_commands.h"
@@ -67,19 +74,43 @@ constexpr std::string_view kPopoverCapabilities[] = {
     "shell.popover.beyondWindow",
 };
 
+constexpr std::string_view kInvokedEngineCalls[] = {
+    "engine.info",
+    "tabs.strips",
+    "search.setEngineName",
+};
+
+constexpr std::string_view kInertEngineCalls[] = {
+    "engine.memorySaver",
+    "engine.systemState",
+    "webKit.setFraudWarnings",
+    "webView.setSelectionPopover",
+};
+
+template <std::size_t N>
+bool ListedCall(const std::string_view (&names)[N], std::string_view name) {
+  return std::ranges::find(names, name) != std::end(names);
+}
+
 constexpr std::string_view kCapabilities[] = {
     "shell.inputRegions",
     "shell.glassRegions",
+    "shell.glassBehindWindow",
     "shell.backdropRegions",
+    "shell.backdropRegions.windowTreatment",
+    "shell.windowBackdrop",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
+    "ArdiaShell.setMenuState",
+    "ArdiaShell.setMenuBookmarks",
     "ArdiaShell.windowIdentity",
     "ArdiaShell.copyText",
     "ArdiaShell.readText",
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    "ArdiaShell.startDictation",
     ardia::desktop_commands::kEditCapability,
     "ArdiaShell.openWindow",
     "ArdiaShell.focusWindow",
@@ -94,7 +125,6 @@ base::FilePath DocumentDirectory() {
   return DataDirectory();
 }
 
-constexpr size_t kBootstrapDocumentLimit = 1024 * 1024;
 constexpr size_t kBootstrapBudget = 8 * 1024 * 1024;
 
 bool ValidDocumentName(const std::string& name) {
@@ -172,10 +202,10 @@ base::DictValue ReadDocuments() {
     std::string text;
     const std::string name = path.BaseName().value();
     if (ValidDocumentName(name) && name.ends_with(".json") &&
-        !name.starts_with("session-backup") &&
-        files.GetInfo().GetSize() <= static_cast<int64_t>(kBootstrapDocumentLimit) &&
+        !name.starts_with("session-backup") && !DocumentSession::Reserved(name) &&
+        files.GetInfo().GetSize() <= static_cast<int64_t>(kDocumentLimit) &&
         static_cast<size_t>(files.GetInfo().GetSize()) <= budget &&
-        base::ReadFileToStringWithMaxSize(path, &text, kBootstrapDocumentLimit)) {
+        base::ReadFileToStringWithMaxSize(path, &text, kDocumentLimit)) {
       budget -= text.size();
       documents.Set(name, std::move(text));
     }
@@ -284,11 +314,14 @@ std::string ShellHostView::BootstrapJson() const {
   SystemServices::AppendCapabilities(capabilities);
   ExtensionViews::AppendCapabilities(capabilities);
   PipPresenter::AppendCapabilities(capabilities);
+  ScrollGestures::AppendCapabilities(capabilities);
   if (popover::kPopoverRendererShipped) {
     for (std::string_view capability : kPopoverCapabilities) {
       capabilities.Append(capability);
     }
   }
+  share::AppendCapabilities(capabilities);
+  shared_folders::AppendCapabilities(capabilities);
   for (std::string_view capability : LifecycleCapabilities()) {
     capabilities.Append(capability);
   }
@@ -298,13 +331,17 @@ std::string ShellHostView::BootstrapJson() const {
   for (std::string_view route : page_policy::kZoomRoutes) {
     capabilities.Append(route);
   }
+  AppendLinkCapabilities(capabilities);
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
   bootstrap.Set("startup", startup_);
   bootstrap.Set("profileId", "default");
-  bootstrap.Set("nativeModules",
-                base::DictValue().Set(
-                    "ArdiaApp", base::DictValue().Set("systemInfo", std::move(info))));
+  bootstrap.Set(
+      "nativeModules",
+      base::DictValue()
+          .Set("ArdiaApp", base::DictValue().Set("systemInfo", std::move(info)))
+          .Set("ArdiaGlassEffect",
+               base::DictValue().Set("isLiquidGlass", LiquidGlassAvailable())));
   bootstrap.Set("capabilities", std::move(capabilities));
   bootstrap.Set("glassPanels", true);
   bootstrap.Set("pageProfile", page_profile_);
@@ -330,6 +367,10 @@ std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
     bootstrap->GetDict().Set("session", std::move(*session));
   }
   bootstrap->GetDict().Set("documents", ReadDocuments());
+  bootstrap->GetDict()
+      .EnsureDict("nativeModules")
+      ->EnsureDict("ArdiaSharedFolders")
+      ->Set("location", shared_folders::Location());
   std::optional<std::string> json = base::WriteJson(*bootstrap);
   std::optional<std::string> literal = json ? base::WriteJson(base::Value(*json))
                                             : std::nullopt;
@@ -355,6 +396,12 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "tab.create") {
     return CreateTab(args, std::move(done));
   }
+  if (share::Handles(method)) {
+    return share::Invoke(*this, method, values, std::move(done));
+  }
+  if (shared_folders::Handles(method)) {
+    return shared_folders::Invoke(*this, method, values, std::move(done));
+  }
   if (method == "tab.viewport") {
     return SetViewport(args, std::move(done));
   }
@@ -378,6 +425,9 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (pip_ && PipPresenter::Handles(method)) {
     return pip_->Invoke(method, args, std::move(done));
+  }
+  if (scroll_gestures_ && ScrollGestures::Handles(method)) {
+    return scroll_gestures_->Invoke(method, args, std::move(done));
   }
   if (method == "shell.inputRegions") {
     return SetInputRegions(args, std::move(done));
@@ -403,7 +453,17 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.setMenuState" ||
       method == "ArdiaShell.setMenuBookmarks") {
-    return std::move(done).Run(true, base::Value());
+    if (!values || values->size() != 1) {
+      return std::move(done).Run(false, base::Value("One menu update is required"));
+    }
+    const std::optional<std::string> error =
+        method == "ArdiaShell.setMenuState"
+            ? SetWindowMenuState(window_id_, (*values)[0])
+            : SetWindowMenuBookmarks(window_id_, (*values)[0]);
+    if (error) {
+      return std::move(done).Run(false, base::Value(*error));
+    }
+    return Reply(std::move(done), base::Value());
   }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));
@@ -459,6 +519,10 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.writeDocument" ||
       method == "ArdiaShell.saveDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name) || !values || values->size() != 2 ||
         !(*values)[1].is_string() ||
         (*values)[1].GetString().size() > kDocumentLimit) {
@@ -487,6 +551,10 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.removeDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name)) {
       return std::move(done).Run(
           false, Failure("ERR_DOCUMENT_NAME", "Invalid document name"));
@@ -538,6 +606,7 @@ void ShellHostView::Invoke(const std::string& method,
                  base::Value([name isEqualToString:NSAppearanceNameDarkAqua]));
   }
   if (method == "ArdiaShell.shellPainted") {
+    shell_ready_generation_ = renderer_generation_;
     if (!painted_) {
       painted_ = true;
       Note("shell painted in window " + window_id_);
@@ -565,6 +634,16 @@ void ShellHostView::Invoke(const std::string& method,
             },
             std::move(done)));
     return;
+  }
+  if (method == "ArdiaShell.startDictation") {
+    if (BackgroundInstance()) {
+      Trace("dictation (background run, not started)");
+    } else {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp sendAction:@selector(startDictation:) to:nil from:nil];
+      });
+    }
+    return Reply(std::move(done), base::Value(true));
   }
   if (method == "ArdiaShell.focusWindow") {
     ShellHostView* target =
@@ -596,6 +675,22 @@ void ShellHostView::Invoke(const std::string& method,
     return std::move(done).Run(
         false, Failure("ERR_UNAVAILABLE", "The Mac WebUI spike sends nothing"));
   }
+  if (method == "tabs.strips") {
+    return Reply(std::move(done), base::Value(base::DictValue()
+                                                  .Set("rev", 0)
+                                                  .Set("cmd", base::Value())
+                                                  .Set("strips", base::ListValue())));
+  }
+  if (method == "search.setEngineName") {
+    const auto text = [values](std::size_t index) {
+      return values && values->size() > index && (*values)[index].is_string() ? (*values)[index].GetString()
+                                                                               : std::string();
+    };
+    if (const std::optional<std::string> error = ardiacore::SetLinuxDefaultSearchEngine(text(0), text(1), text(2))) {
+      return std::move(done).Run(false, Failure("ERR_ENGINE", *error));
+    }
+    return Reply(std::move(done), base::Value());
+  }
   if (method == "engine.info") {
     return Reply(std::move(done),
                  base::Value(base::DictValue()
@@ -624,6 +719,36 @@ void ShellHostView::EngineCall(const std::string& name,
                                               "profiles", std::move(loaded)))
                               .value_or("{}")));
   }
+  if (ListedCall(kInvokedEngineCalls, name)) {
+    std::optional<base::Value> parsed =
+        args && args->is_string() ? base::JSONReader::Read(args->GetString(), base::JSON_PARSE_RFC, 8) : std::nullopt;
+    base::ListValue values;
+    if (name == "search.setEngineName" && parsed && parsed->is_dict()) {
+      for (const char* key : {"name", "keyword", "url"}) {
+        const std::string* field = parsed->GetDict().FindString(key);
+        values.Append(field ? *field : std::string());
+      }
+    }
+    return Invoke(name, base::DictValue().Set("args", std::move(values)),
+                  base::BindOnce(
+                      [](Done done, bool ok, base::Value result) {
+                        if (!ok) {
+                          return std::move(done).Run(false, std::move(result));
+                        }
+                        std::move(done).Run(true, base::Value(base::WriteJson(result).value_or("null")));
+                      },
+                      std::move(done)));
+  }
+  if (ListedCall(kInertEngineCalls, name)) {
+    NoteUnhandled("engine.call " + name + " (answered null)");
+    return std::move(done).Run(true, base::Value("null"));
+  }
+  if (DocumentSession::Handles(name)) {
+    if (!documents_) {
+      return std::move(done).Run(false, Failure("ERR_DOCUMENT_AUTH", "Document access denied"));
+    }
+    return documents_->Call(name, args, renderer_generation_, std::move(done));
+  }
   if (SystemServices::HandlesEngineCall(name) || ExtensionViews::HandlesEngineCall(name)) {
     return WithProfile(profile, base::BindOnce(&ServiceCall, GetWeakPtr(), name,
                                                args ? std::optional<base::Value>(args->Clone()) : std::nullopt,
@@ -631,6 +756,9 @@ void ShellHostView::EngineCall(const std::string& name,
   }
   if (pip_ && PipPresenter::HandlesEngineCall(name)) {
     return pip_->EngineCall(name, args, std::move(done));
+  }
+  if (HandlesLinkRoute(name)) {
+    return LinkRouteCall(name, args, std::move(done));
   }
   if (page_policy::IsZoomRoute(name)) {
     return WithProfile(profile,

@@ -4,12 +4,14 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_writer.h"
 #include "base/task/sequenced_task_runner.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_not_drawn.h"
@@ -40,12 +42,88 @@
 
 @end
 
+@interface ArdiaMacVibrancyView : NSVisualEffectView
+@property(nonatomic) BOOL windowTreatment;
+- (void)applyTreatment;
+@end
+
+@implementation ArdiaMacVibrancyView
+
+@synthesize windowTreatment = _windowTreatment;
+
+- (void)applyTreatment {
+  self.emphasized = self.windowTreatment;
+  if (!self.windowTreatment) {
+    return;
+  }
+  const bool dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[
+    NSAppearanceNameDarkAqua, NSAppearanceNameAqua
+  ]] isEqualToString:NSAppearanceNameDarkAqua];
+  self.material = static_cast<NSVisualEffectMaterial>(
+      ardia_mac::glass::TreatmentMaterial(dark));
+  self.state = NSVisualEffectStateFollowsWindowActiveState;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
+  [self applyTreatment];
+}
+
+@end
+
 namespace ardia_mac {
 
 namespace {
 
 Class GlassEffectClass() {
   return NSClassFromString(@"NSGlassEffectView");
+}
+
+Class GlassContainerClass() {
+  return NSClassFromString(@"NSGlassEffectContainerView");
+}
+
+NSString* const kTintLayer = @"ardia.tint";
+
+NSColor* ColorOf(const std::optional<glass::Color>& color) {
+  if (!color) return nil;
+  return [NSColor colorWithSRGBRed:color->red green:color->green blue:color->blue alpha:color->alpha];
+}
+
+NSAppearance* AppearanceOf(glass::Appearance appearance) {
+  switch (appearance) {
+    case glass::Appearance::kLight:
+      return [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+    case glass::Appearance::kDark:
+      return [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    case glass::Appearance::kAuto:
+      return nil;
+  }
+  return nil;
+}
+
+void ApplyTintLayer(NSView* view, const std::optional<glass::Color>& tint, double radius) {
+  view.wantsLayer = YES;
+  CALayer* found = nil;
+  for (CALayer* layer in view.layer.sublayers) {
+    if ([layer.name isEqualToString:kTintLayer]) {
+      found = layer;
+      break;
+    }
+  }
+  if (!tint) {
+    [found removeFromSuperlayer];
+    return;
+  }
+  if (!found) {
+    found = [CALayer layer];
+    found.name = kTintLayer;
+    [view.layer addSublayer:found];
+  }
+  found.frame = view.layer.bounds;
+  found.cornerRadius = radius;
+  found.cornerCurve = kCACornerCurveContinuous;
+  found.backgroundColor = ColorOf(tint).CGColor;
 }
 
 NSVisualEffectMaterial VibrancyMaterial(glass::Material material) {
@@ -59,6 +137,7 @@ NSVisualEffectMaterial VibrancyMaterial(glass::Material material) {
     case glass::Material::kLiquidClear:
       return NSVisualEffectMaterialPopover;
     case glass::Material::kHud:
+    case glass::Material::kWindowTreatment:
       return NSVisualEffectMaterialHUDWindow;
     case glass::Material::kWindow:
       return NSVisualEffectMaterialWindowBackground;
@@ -75,8 +154,8 @@ NSView* MakeEffect(const glass::Placement& placement, glass::Plane plane) {
       glass::Effect::kLiquidGlass) {
     return [[GlassEffectClass() alloc] initWithFrame:NSZeroRect];
   }
-  NSVisualEffectView* view =
-      [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+  ArdiaMacVibrancyView* view =
+      [[ArdiaMacVibrancyView alloc] initWithFrame:NSZeroRect];
   view.blendingMode = plane == glass::Plane::kBehindWindow
                           ? NSVisualEffectBlendingModeBehindWindow
                           : NSVisualEffectBlendingModeWithinWindow;
@@ -119,14 +198,38 @@ void ApplyCornerMask(NSView* view, const glass::CornerShape& shape) {
   view.layer.mask = mask;
 }
 
+void ApplySliceMask(NSView* view, const glass::SliceMask& mask) {
+  view.wantsLayer = YES;
+  const glass::Rect& outline = mask.outline;
+  const NSRect shape =
+      NSMakeRect(outline.x, view.isFlipped ? outline.y : NSHeight(view.bounds) - outline.y - outline.height,
+                 outline.width, outline.height);
+  CAShapeLayer* layer = [CAShapeLayer layer];
+  layer.frame = view.bounds;
+  CGPathRef path = CornerPath(shape, mask.radii, view.isFlipped);
+  layer.path = path;
+  CGPathRelease(path);
+  view.layer.mask = layer;
+}
+
+void ApplyMask(NSView* view, const glass::CornerShape& shape, const glass::SliceMask& slice) {
+  if (slice.active) {
+    ApplySliceMask(view, slice);
+  } else {
+    ApplyCornerMask(view, shape);
+  }
+}
+
 void Style(NSView* view, const glass::Placement& placement) {
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
   view.frame = NSMakeRect(placement.frame.x, placement.frame.y,
                           placement.frame.width, placement.frame.height);
   view.alphaValue = placement.opacity;
+  view.appearance = AppearanceOf(placement.appearance);
   const glass::CornerShape shape = glass::ShapeFor(placement.radii);
-  const double native = glass::NativeCornerRadius(shape);
+  const glass::SliceMask slice = glass::MaskFor(placement);
+  const double native = slice.active ? 0 : glass::NativeCornerRadius(shape);
   if ([view isKindOfClass:GlassEffectClass()]) {
     if ([view respondsToSelector:NSSelectorFromString(@"setStyle:")]) {
       [view setValue:@(glass::GlassStyle(placement.material)) forKey:@"style"];
@@ -134,14 +237,25 @@ void Style(NSView* view, const glass::Placement& placement) {
     if ([view respondsToSelector:NSSelectorFromString(@"setCornerRadius:")]) {
       [view setValue:@(native) forKey:@"cornerRadius"];
     }
-    ApplyCornerMask(view, shape);
+    if ([view respondsToSelector:NSSelectorFromString(@"setTintColor:")]) {
+      [view setValue:ColorOf(placement.tint) forKey:@"tintColor"];
+    }
+    ApplyMask(view, shape, slice);
   } else if ([view isKindOfClass:NSVisualEffectView.class]) {
     NSVisualEffectView* vibrancy = static_cast<NSVisualEffectView*>(view);
     vibrancy.material = VibrancyMaterial(placement.material);
+    vibrancy.state = NSVisualEffectStateActive;
+    if ([view isKindOfClass:ArdiaMacVibrancyView.class]) {
+      ArdiaMacVibrancyView* treated = static_cast<ArdiaMacVibrancyView*>(view);
+      treated.windowTreatment =
+          placement.material == glass::Material::kWindowTreatment;
+      [treated applyTreatment];
+    }
     view.layer.cornerRadius = native;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.masksToBounds = native > 0;
-    ApplyCornerMask(view, shape);
+    ApplyMask(view, shape, slice);
+    ApplyTintLayer(view, placement.tint, native);
   }
   [CATransaction commit];
 }
@@ -192,7 +306,194 @@ std::optional<glass::Region> RegionOf(const base::Value& value, glass::Layer def
   if (!parsed_layer || !parsed_material) return std::nullopt;
   region.layer = *parsed_layer;
   region.material = *parsed_material;
+  if (const base::Value* tint = dict->Find("tint")) {
+    if (!tint->is_string()) return std::nullopt;
+    region.tint = glass::ColorFrom(tint->GetString());
+    if (!region.tint) return std::nullopt;
+  }
+  if (const base::Value* group = dict->Find("group")) {
+    if (!group->is_string() || !glass::ValidGroup(group->GetString())) return std::nullopt;
+    region.group = group->GetString();
+  }
+  const std::string* appearance = dict->FindString("appearance");
+  const std::optional<glass::Appearance> parsed_appearance =
+      glass::AppearanceNamed(appearance ? *appearance : std::string_view());
+  if (!parsed_appearance) return std::nullopt;
+  region.appearance = *parsed_appearance;
   return region;
+}
+
+
+namespace theme = backdrop_theme;
+
+std::optional<theme::Color> ThemeColorOf(const base::Value* value) {
+  const base::ListValue* list = value ? value->GetIfList() : nullptr;
+  if (!list || list->size() != 5) return std::nullopt;
+  std::array<double, 5> parts{};
+  for (std::size_t index = 0; index < 5; ++index) {
+    const base::Value& part = (*list)[index];
+    if (!part.is_int() && !part.is_double()) return std::nullopt;
+    parts[index] = part.GetDouble();
+  }
+  return theme::ColorFrom(parts);
+}
+
+std::optional<double> PointPart(const base::ListValue* point, std::size_t index) {
+  if (!point || point->size() != 2) return std::nullopt;
+  const base::Value& value = (*point)[index];
+  if (!value.is_int() && !value.is_double()) return std::nullopt;
+  return theme::GradientPoint(value.GetDouble());
+}
+
+std::optional<theme::Theme> ThemeOf(const base::DictValue* dict) {
+  const base::ListValue* layers = dict ? dict->FindList("layers") : nullptr;
+  if (!layers || !theme::LayerCountFits(layers->size())) return std::nullopt;
+  theme::Theme parsed;
+  parsed.opacity = theme::Unit(Number(dict, "opacity").value_or(1));
+  if (const base::DictValue* radii = dict->FindDict("radii")) {
+    const char* const keys[] = {"upperLeft", "upperRight", "lowerRight", "lowerLeft"};
+    for (std::size_t index = 0; index < 4; ++index) {
+      parsed.radii[index] = theme::ThemeRadius(Number(radii, keys[index]).value_or(0));
+    }
+  }
+  for (const base::Value& entry : *layers) {
+    const base::DictValue* layer = entry.GetIfDict();
+    const std::string* kind = layer ? layer->FindString("kind") : nullptr;
+    if (!kind) return std::nullopt;
+    theme::Layer out;
+    out.opacity = theme::Unit(Number(layer, "opacity").value_or(1));
+    if (*kind == "fill") {
+      const std::optional<theme::Color> color = ThemeColorOf(layer->Find("color"));
+      if (!color) return std::nullopt;
+      out.kind = theme::Kind::kFill;
+      out.color = *color;
+    } else if (*kind == "gradient") {
+      const base::ListValue* start = layer->FindList("start");
+      const base::ListValue* end = layer->FindList("end");
+      const base::ListValue* stops = layer->FindList("stops");
+      const auto sx = PointPart(start, 0), sy = PointPart(start, 1), ex = PointPart(end, 0), ey = PointPart(end, 1);
+      if (!sx || !sy || !ex || !ey || !stops || !theme::StopCountFits(stops->size())) return std::nullopt;
+      out.kind = theme::Kind::kGradient;
+      out.start_x = *sx;
+      out.start_y = *sy;
+      out.end_x = *ex;
+      out.end_y = *ey;
+      for (const base::Value& stop : *stops) {
+        const base::DictValue* item = stop.GetIfDict();
+        const std::optional<theme::Color> color = item ? ThemeColorOf(item->Find("color")) : std::nullopt;
+        if (!color) return std::nullopt;
+        out.stops.push_back(theme::Stop{theme::Unit(Number(item, "offset").value_or(0)), *color});
+      }
+    } else if (*kind == "grain") {
+      const std::string* texture = layer->FindString("texture");
+      if (!texture || !theme::KnownTexture(*texture)) return std::nullopt;
+      out.kind = theme::Kind::kGrain;
+      out.texture = *texture;
+      out.points = theme::GrainPoints(Number(layer, "points").value_or(theme::kGrainSide));
+    } else {
+      return std::nullopt;
+    }
+    parsed.layers.push_back(std::move(out));
+  }
+  return parsed;
+}
+
+CGColorRef CreateThemeColor(const theme::Color& color) {
+  NSColor* made = color.display_p3
+                      ? [NSColor colorWithDisplayP3Red:color.red green:color.green blue:color.blue alpha:color.alpha]
+                      : [NSColor colorWithSRGBRed:color.red green:color.green blue:color.blue alpha:color.alpha];
+  return CGColorRetain(made.CGColor);
+}
+
+NSColor* GrainPattern(NSMutableDictionary<NSString*, NSColor*>* cache,
+                      const std::string& texture,
+                      double points,
+                      double backing_scale,
+                      double zoom) {
+  const double scale = theme::Finite(backing_scale) && backing_scale > 0 ? backing_scale : 1;
+  const int side = theme::GrainImagePixels(points, scale, zoom);
+  NSString* key = [NSString stringWithFormat:@"%s:%d:%g", texture.c_str(), side, scale];
+  if (NSColor* found = cache[key]) return found;
+  const auto alpha = theme::GrainAlpha(texture);
+  const std::size_t pixels_side = static_cast<std::size_t>(side);
+  const std::size_t tile = static_cast<std::size_t>(theme::kGrainSide);
+  std::vector<std::uint8_t> pixels(pixels_side * pixels_side * 4, 0);
+  for (std::size_t y = 0; y < pixels_side; ++y) {
+    for (std::size_t x = 0; x < pixels_side; ++x) {
+      const std::size_t source = (y * tile / pixels_side) * tile + x * tile / pixels_side;
+      pixels[(y * pixels_side + x) * 4 + 3] = alpha[source];
+    }
+  }
+  CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  CGContextRef context = CGBitmapContextCreate(pixels.data(), pixels_side, pixels_side, 8, pixels_side * 4, space,
+                                               static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast));
+  CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
+  if (context) CGContextRelease(context);
+  CGColorSpaceRelease(space);
+  if (!image) return nil;
+  NSImage* tile_image = [[NSImage alloc] initWithCGImage:image size:NSMakeSize(side / scale, side / scale)];
+  CGImageRelease(image);
+  NSColor* pattern = [NSColor colorWithPatternImage:tile_image];
+  cache[key] = pattern;
+  return pattern;
+}
+
+CALayer* MakeThemeLayer(const theme::Layer& layer,
+                        NSMutableDictionary<NSString*, NSColor*>* grain_cache,
+                        double backing_scale,
+                        double zoom) {
+  switch (layer.kind) {
+    case theme::Kind::kFill: {
+      CALayer* fill = [CALayer layer];
+      CGColorRef color = CreateThemeColor(layer.color);
+      fill.backgroundColor = color;
+      CGColorRelease(color);
+      fill.opacity = static_cast<float>(layer.opacity);
+      return fill;
+    }
+    case theme::Kind::kGradient: {
+      CAGradientLayer* gradient = [CAGradientLayer layer];
+      NSMutableArray* colors = [NSMutableArray array];
+      NSMutableArray<NSNumber*>* locations = [NSMutableArray array];
+      for (const theme::Stop& stop : layer.stops) {
+        CGColorRef color = CreateThemeColor(stop.color);
+        [colors addObject:(__bridge id)color];
+        CGColorRelease(color);
+        [locations addObject:@(stop.offset)];
+      }
+      gradient.colors = colors;
+      gradient.locations = locations;
+      gradient.startPoint = CGPointMake(layer.start_x, layer.start_y);
+      gradient.endPoint = CGPointMake(layer.end_x, layer.end_y);
+      gradient.opacity = static_cast<float>(layer.opacity);
+      return gradient;
+    }
+    case theme::Kind::kGrain: {
+      CALayer* grain = [CALayer layer];
+      grain.backgroundColor = GrainPattern(grain_cache, layer.texture, layer.points, backing_scale, zoom).CGColor;
+      grain.opacity = static_cast<float>(layer.opacity);
+      return grain;
+    }
+  }
+  return [CALayer layer];
+}
+
+void ApplyThemeCorners(CALayer* group, const theme::Theme& spec) {
+  const auto& r = spec.radii;
+  const bool uniform = r[0] == r[1] && r[1] == r[2] && r[2] == r[3];
+  if (uniform) {
+    group.mask = nil;
+    group.cornerRadius = r[0];
+    group.cornerCurve = kCACornerCurveContinuous;
+    return;
+  }
+  group.cornerRadius = 0;
+  CAShapeLayer* mask = [CAShapeLayer layer];
+  mask.frame = group.bounds;
+  CGPathRef path = CornerPath(NSRectFromCGRect(group.bounds), glass::Radii{r[0], r[1], r[2], r[3]}, true);
+  mask.path = path;
+  CGPathRelease(path);
+  group.mask = mask;
 }
 
 }
@@ -204,9 +505,25 @@ bool LiquidGlassAvailable() {
   return false;
 }
 
+bool GlassGroupsAvailable() {
+  if (@available(macOS 26, *)) {
+    Class container = GlassContainerClass();
+    return LiquidGlassAvailable() && container &&
+           [container instancesRespondToSelector:NSSelectorFromString(@"setContentView:")];
+  }
+  return false;
+}
+
 struct GlassRegions::Views {
   ArdiaMacGlassSlotView* behind = nil;
+  ArdiaMacGlassSlotView* vibrancy = nil;
+  ArdiaMacGlassSlotView* theme = nil;
+  ArdiaMacGlassSlotView* glass = nil;
+  std::vector<CALayer*> theme_groups;
+  std::vector<std::string> theme_keys;
+  NSMutableDictionary<NSString*, NSColor*>* grain_cache = [NSMutableDictionary dictionary];
   std::map<glass::SlotKey, NSView*> effects;
+  std::map<glass::GroupKey, NSView*> groups;
   std::map<int, std::unique_ptr<ui::LayerNotDrawn>> page_clips;
   std::map<glass::SlotKey, std::unique_ptr<ui::LayerSolidColor>> under_shell;
   std::map<std::string, double> blur;
@@ -229,11 +546,22 @@ void GlassRegions::Clear() {
     [view removeFromSuperview];
   }
   views_->effects.clear();
+  for (auto& [key, group] : views_->groups) {
+    [group removeFromSuperview];
+  }
+  views_->groups.clear();
   views_->under_shell.clear();
   views_->page_clips.clear();
   views_->blur.clear();
   [views_->behind removeFromSuperview];
   views_->behind = nil;
+  views_->vibrancy = nil;
+  views_->theme = nil;
+  views_->glass = nil;
+  views_->theme_groups.clear();
+  views_->theme_keys.clear();
+  [views_->grain_cache removeAllObjects];
+  themes_.clear();
   placed_.clear();
   regions_.clear();
   backdrops_.clear();
@@ -279,7 +607,7 @@ base::Value GlassRegions::Apply(const base::DictValue& args, double shell_zoom) 
                                   weak_factory_.GetWeakPtr(),
                                   gate_.Issue(*presentable)));
   }
-  for (const std::string& id : glass::MountedGlass(mounted.placements)) {
+  for (const std::string& id : glass::MountedGlass(mounted)) {
     accepted.Append(id);
   }
   reply.Set("accepted", std::move(accepted));
@@ -292,6 +620,7 @@ base::Value GlassRegions::ApplyBackdrops(const base::DictValue& args, double she
     return base::Value(false);
   }
   std::vector<glass::Region> backdrops;
+  std::vector<std::optional<backdrop_theme::Theme>> themes;
   backdrops.reserve(list->size());
   for (std::size_t index = 0; index < list->size(); ++index) {
     const base::DictValue* dict = (*list)[index].GetIfDict();
@@ -303,14 +632,16 @@ base::Value GlassRegions::ApplyBackdrops(const base::DictValue& args, double she
       continue;
     }
     glass::Region region;
-    region.id = "backdrop:" + std::to_string(index);
+    region.id = backdrop_theme::BackdropId(backdrops.size());
     region.rect = *rect;
     region.layer = glass::Layer::kBehind;
     region.source = glass::Source::kBackdrop;
     region.material = *parsed;
     backdrops.push_back(std::move(region));
+    themes.push_back(ThemeOf(dict->FindDict("theme")));
   }
   backdrops_ = std::move(backdrops);
+  themes_ = std::move(themes);
   zoom_ = glass::SanitizedScale(shell_zoom);
   Relayout();
   return base::Value(static_cast<int>(backdrops_.size()));
@@ -393,6 +724,13 @@ glass::Layout GlassRegions::Relayout() {
   if (!views_->behind) {
     views_->behind = [[ArdiaMacGlassSlotView alloc] initWithFrame:NSZeroRect];
     [frame addSubview:views_->behind positioned:NSWindowBelow relativeTo:content];
+    for (ArdiaMacGlassSlotView* __strong* plane : {&views_->vibrancy, &views_->theme, &views_->glass}) {
+      *plane = [[ArdiaMacGlassSlotView alloc] initWithFrame:NSZeroRect];
+      (*plane).autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      (*plane).wantsLayer = YES;
+      [views_->behind addSubview:*plane];
+    }
+    views_->theme.layer.geometryFlipped = YES;
   }
   const CGFloat top = content.isFlipped
                           ? shell_.y
@@ -400,6 +738,9 @@ glass::Layout GlassRegions::Relayout() {
   views_->behind.frame = [content
       convertRect:NSMakeRect(shell_.x, top, shell_.width, shell_.height)
            toView:frame];
+  for (NSView* plane : {views_->vibrancy, views_->theme, views_->glass}) {
+    plane.frame = views_->behind.bounds;
+  }
 
   std::erase_if(views_->under_shell, [&page_rects](const auto& entry) {
     return !page_rects.contains(entry.first.page);
@@ -407,7 +748,43 @@ glass::Layout GlassRegions::Relayout() {
   std::erase_if(views_->page_clips, [&page_rects](const auto& entry) {
     return !page_rects.contains(entry.first);
   });
+  const bool groups_glass = GlassGroupsAvailable();
+  const std::set<glass::GroupKey> live_groups =
+      glass::LiveGroups(layout.placements, groups_glass);
+  for (auto it = views_->groups.begin(); it != views_->groups.end();) {
+    if (!live_groups.contains(it->first)) {
+      [it->second removeFromSuperview];
+      it = views_->groups.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  const auto group_for = [&](const glass::GroupKey& key) -> NSView* {
+    NSView* plane = views_->glass;
+    auto found = views_->groups.find(key);
+    if (found == views_->groups.end()) {
+      NSView* container = [[GlassContainerClass() alloc] initWithFrame:plane.bounds];
+      ArdiaMacGlassSlotView* members =
+          [[ArdiaMacGlassSlotView alloc] initWithFrame:plane.bounds];
+      [container setValue:members forKey:@"contentView"];
+      container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      found = views_->groups.emplace(key, container).first;
+    }
+    NSView* container = found->second;
+    if (container.superview != plane) {
+      [plane addSubview:container];
+    }
+    container.frame = plane.bounds;
+    NSView* members = [container valueForKey:@"contentView"];
+    members.frame = container.bounds;
+    return members;
+  };
+  const auto parent_of = [&](const glass::Placement& placement) -> NSView* {
+    if (glass::EffectFor(placement.material, liquid) != glass::Effect::kLiquidGlass) return views_->vibrancy;
+    return glass::Grouped(placement, groups_glass) ? group_for(glass::GroupOf(placement)) : views_->glass;
+  };
 
+  LayOutThemes(layout);
   const glass::Diff diff =
       glass::DiffPlacements(placed_, layout.placements, liquid);
   for (const glass::SlotKey& key : diff.remove) {
@@ -420,9 +797,10 @@ glass::Layout GlassRegions::Relayout() {
   }
   for (const glass::Placement& placement : diff.create) {
     if (placement.plane != glass::Plane::kBehindWindow) continue;
+    NSView* parent = parent_of(placement);
     NSView* effect = MakeEffect(placement, placement.plane);
     Style(effect, placement);
-    [views_->behind addSubview:effect];
+    [parent addSubview:effect];
     views_->effects[glass::KeyOf(placement)] = effect;
   }
   for (const glass::Placement& placement : diff.update) {
@@ -443,18 +821,84 @@ glass::Layout GlassRegions::Relayout() {
     }
     auto found = views_->effects.find(key);
     if (found == views_->effects.end()) continue;
-    if (found->second.superview != views_->behind) {
-      [views_->behind addSubview:found->second];
+    NSView* parent = parent_of(placement);
+    if (found->second.superview != parent) {
+      [parent addSubview:found->second];
     } else if (!diff.create.empty()) {
-      [views_->behind addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
+      [parent addSubview:found->second positioned:NSWindowAbove relativeTo:nil];
     }
-    if (found->second.superview == views_->behind) {
+    if (found->second.superview == parent) {
       attached.insert(key);
     }
   }
   glass::Layout mounted = glass::KeepAttached(layout, attached);
   placed_ = mounted.placements;
   return mounted;
+}
+
+void GlassRegions::LayOutThemes(const glass::Layout& layout) {
+  NSView* plane = views_->theme;
+  if (!plane) return;
+  CALayer* host = plane.layer;
+  const double backing = plane.window ? plane.window.backingScaleFactor : 2;
+  std::vector<std::pair<const backdrop_theme::Theme*, const glass::Placement*>> shown_themes;
+  for (const glass::Placement& placement : layout.placements) {
+    if (placement.source != glass::Source::kBackdrop || placement.plane != glass::Plane::kBehindWindow ||
+        placement.slice != 0) {
+      continue;
+    }
+    const std::optional<std::size_t> index = backdrop_theme::BackdropIndex(placement.id, themes_.size());
+    if (!index || !themes_[*index]) {
+      continue;
+    }
+    shown_themes.emplace_back(&*themes_[*index], &placement);
+  }
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  std::size_t shown = 0;
+  for (const auto& [spec, placement] : shown_themes) {
+    if (views_->theme_groups.size() <= shown) {
+      CALayer* group = [CALayer layer];
+      group.masksToBounds = YES;
+      group.anchorPoint = CGPointZero;
+      [host addSublayer:group];
+      views_->theme_groups.push_back(group);
+      views_->theme_keys.emplace_back();
+    }
+    CALayer* group = views_->theme_groups[shown];
+    group.hidden = NO;
+    group.frame = CGRectMake(placement->frame.x, placement->frame.y, placement->frame.width, placement->frame.height);
+    group.opacity = static_cast<float>(spec->opacity * placement->opacity);
+    std::string key = std::to_string(backing) + "@" + std::to_string(zoom_);
+    for (const backdrop_theme::Layer& layer : spec->layers) {
+      key += "|" + std::to_string(static_cast<int>(layer.kind)) + ":" + std::to_string(layer.opacity) + ":" + layer.texture +
+             ":" + std::to_string(layer.points) + ":" + std::to_string(layer.start_x) + "," + std::to_string(layer.start_y) +
+             "," + std::to_string(layer.end_x) + "," + std::to_string(layer.end_y) + ":" + std::to_string(layer.color.red) +
+             "," + std::to_string(layer.color.green) + "," + std::to_string(layer.color.blue) + "," +
+             std::to_string(layer.color.alpha) + (layer.color.display_p3 ? "p" : "s");
+      for (const backdrop_theme::Stop& stop : layer.stops) {
+        key += ";" + std::to_string(stop.offset) + "," + std::to_string(stop.color.red) + "," +
+               std::to_string(stop.color.green) + "," + std::to_string(stop.color.blue) + "," +
+               std::to_string(stop.color.alpha) + (stop.color.display_p3 ? "p" : "s");
+      }
+    }
+    if (views_->theme_keys[shown] != key) {
+      views_->theme_keys[shown] = key;
+      group.sublayers = nil;
+      for (const backdrop_theme::Layer& layer : spec->layers) {
+        [group addSublayer:MakeThemeLayer(layer, views_->grain_cache, backing, zoom_)];
+      }
+    }
+    for (CALayer* sublayer in group.sublayers) {
+      sublayer.frame = group.bounds;
+    }
+    ApplyThemeCorners(group, *spec);
+    ++shown;
+  }
+  for (std::size_t index = shown; index < views_->theme_groups.size(); ++index) {
+    views_->theme_groups[index].hidden = YES;
+  }
+  [CATransaction commit];
 }
 
 }

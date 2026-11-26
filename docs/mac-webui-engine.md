@@ -40,7 +40,19 @@ that branch). It is a development tool and never runs in a release. Like Windows
   - `shell.glassRegions` (`apps/desktop/src/glassRegions.ts`) puts glass in a per-page under-glass slot. The slot is a
     pass-through view inside the page's own `WebContentsViewCocoa`, above its render view and below the shell's
     transparent view, so the glass refracts the live page.
-  - A glass region over no page falls back behind the window.
+  - A glass region over no page falls back behind the window, and the part of a region that no page covers (a menu
+    straddling the sidebar and a page) gets behind-window slices for exactly the uncovered rectangles; the slices and the page side are all masked by the whole
+    region's rounded outline, so the corner curve is the same on both sides of the seam; `accepted` names a region only once every
+    slice mounted, so a half-mounted region keeps its DOM fallback. The host advertises `shell.glassBehindWindow`, so
+    `glassRegions.ts` also sends regions over the sidebar, toolbar or empty space instead of dropping them.
+  - A region may carry `material` (`regular`, `clear`, `sidebar`, `header`, `menu`, `popover`, `hud`, `window`,
+    `underWindow`), `tint` (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`), `appearance` (`light` or `dark`)
+    and `group`. `<GlassEffect>` sends its style, tint, corner radius and appearance; `<VisualEffect>` and
+    `<PopoverBubble>` send their vibrancy material, so their opaque fallback fill drops once the native view is
+    presented. Regions sharing a `group` (from `<GlassGroup>`) join one `NSGlassEffectContainerView` on macOS 26+
+    and mount alone elsewhere.
+  - The bootstrap sets `ArdiaGlassEffect.isLiquidGlass` from `NSGlassEffectView`'s presence, so the shared UI picks
+    its Liquid Glass look on macOS 26+.
   - After a `shell.glassRegions` call's regions are committed, the host posts `ArdiaGlass` `presented {generation}`
     on a later main-thread turn, which `shellGlass.ts` waits for before dropping its opaque fallback. A reload clears
     the glass and drops any `presented` still pending. `accepted` lists only the glass regions that
@@ -50,22 +62,90 @@ that branch). It is a development tool and never runs in a release. Like Windows
     `packages/shell/ios/LiquidGlass.swift`), and `NSVisualEffectView` elsewhere.
   - The math is in `ac_mac_glass_layout.h`: validation, zoom, CSS-style radius scaling, planes, diffing and input
     pass-through.
-- **Popovers** follow Wave 3B's contract, but `shell.popover.*` is not advertised and `shell.popover.open` is refused
-  until `apps/desktop` renders a `chrome://ardia/?popover=<id>` surface (`kPopoverRendererShipped`); until then
-  `popoverHost` uses DOM popovers.
+- **Popovers** follow Wave 3B's contract. `apps/desktop` renders the `chrome://ardia/?popover=<id>` surface
+  (`kPopoverRendererShipped`), so `shell.popover.*` is advertised and `popoverHost` opens native panels.
+  - `main.tsx` is a small entry that loads `popoverEntry.tsx` (`PopoverRoot.tsx`) instead of `shellEntry.tsx` when
+    the bootstrap says `surface: "popover"` and the URL's `?popover=` matches (`popoverSurface.ts`), so a panel never
+    loads the browser shell, its store or its shims; a popover URL or bootstrap that doesn't validate (one `?popover=`,
+    plain-object props) stops with an error instead of loading the shell; it draws only the requested route on a transparent page.
+  - Downloads is the first panel: with `shell.popover.*` advertised, `DownloadsPopover.tsx` opens it through
+    `popoverHost` (`nativeDownloads.ts`) under the Downloads button, pushes rows as props, runs the actions the panel
+    sends back, and falls back to the DOM panel when the host can't open one. A press on its own button closes it on
+    release however long it's held. A finished download shows Deleted only after `ArdiaSystem.fileStatus` confirms
+    the file is gone; pending, failed, non-boolean or unsupported lookups count as
+    present, and reopening the panel re-reads expired statuses.
   - Calls: `shell.popover.open | update | close` (and `beyondWindow`); the host sends `shell.popoverDismissed` with
     `escape`, `outside`, `blur`, `resize`, `host` or `failed`.
   - Each popover is a borderless, non-activating `NSPanel` child window with a glass background, showing a
     `chrome://ardia/?popover=<id>` page.
-  - That page's bridge may only close itself or send `shell.popoverMessage`.
+  - That page's bridge may only close itself, read its own props (`shell.popover.props`) or send
+    `shell.popoverMessage` (at most 64 KiB), which `popoverHost` hands to the popover's `onMessage`.
+  - `shell.popover.update` with `content.props` (at most 256 KiB) replaces the props and pushes them to the page as
+    `ArdiaPopover` `props`.
   - `rect` is in window CSS pixels and is clamped to the anchor screen's visible frame, or to the window when
     `beyondWindow` was false at open; an update without `beyondWindow` keeps the value from open.
   - With `ARDIA_BACKGROUND=1` a popover is logged and never shown.
   - Placement and lifecycle are in `ac_mac_popover_policy.h`.
-- **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu. `ArdiaShell.setMainMenu` replaces it.
-  Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs the Services, Window and Help menus.
+- **Menus.** The menu bar has a default App/File/Edit/View/Window/Help menu until `apps/desktop`
+  (`nativeMenuBar.ts`) pushes the full Ardia, File, Edit, View, Tabs, Bookmarks, History, Extensions, Window and Help
+  menus with `ArdiaShell.setMainMenu`. Every window pushes its own menu, state and bookmarks; the host keeps them by
+  window and shows the key window's, switching when another window becomes key; a background window can't rewrite the
+  bar while any Ardia window is key, and a key window with no menu yet shows a command-free Ardia, Edit, Window and
+  Help bar. Menu commands go to the key window, or to the window that owns a key popover. Settings and Import push their own Ardia, File, Edit, Window and Help bar. Edit, Minimize, Zoom, About and full screen use AppKit roles; other window actions come back
+  as `menu.pick`. Menu commands arrive as `ArdiaShell.onCommand` with `source: "menu"`. Only `setMainMenu` installs
+  the Services, Window and Help menus.
+  - `ArdiaShell.setMenuState` updates enabled, checked and titles in place by state id (`command` or
+    `command:arg`); a disabled command disables all its variants.
+  - `ArdiaShell.setMenuBookmarks` rebuilds the Bookmarks menu after its fixed items, as `appMenu.ts` builds it.
+  - The Ardia menu has Services, Hide Ardia (⌘H), Hide Others (⌥⌘H) and Show All; Quit is ⌘Q and full screen ⌃⌘F
+    whatever the desktop shortcuts say.
+  - Close Window goes through `ArdiaShell.requestWindowClose` when the host advertises it and AppKit's `performClose:`
+    otherwise, in browser and utility windows alike.
+  - Each shortcut shows the key that presses it, read from `@platform/shortcutKeys`, so on the Mac `command` is ⌘ and
+    defaults like ⌘T, ⌘W, ⌘L and ⌘, show as such; system items (Edit, Minimize, Close Window, Hide) use AppKit's
+    standard keys.
+  - `ArdiaShell.setShortcutRecording` stops the menu bar's key equivalents while that window records a shortcut.
+  - ⌘Q goes to the shell's quit flow only once that renderer's shell has painted; before that Chromium quits directly.
+  - The in-window `≡` app menu button is hidden on macOS (`platform/appMenuButton.mac.ts`), where the menu bar holds
+    those menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Share** (`ac_mac_share.mm`, rules in `ac_mac_share_policy.h`), as `packages/shell/ios/SharePicker.swift` does.
+  - `ArdiaApp.share` and `ArdiaApp.shareText` open `NSSharingServicePicker` beside their anchor (CSS pixels in the
+    shell, scaled by its zoom), or centred under the toolbar without one. They settle when the picker closes.
+  - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
+    `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
+    `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
+  - The menu bar's File › Share lists the same services, then Copy Link, Email Link and More… (the `shareServices`
+    role, filled each time the submenu opens). The in-window app menu adds them once the host lists them.
+  - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
+    and a shell reload or window close closes that window's pickers.
+  - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
+    binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
+    deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
+    into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
+    delete finishes), or that have no lock and whose process is gone, never anything else. An image reserves its slot
+    before its bytes are copied; a write for a retired window or a released, closed or rebound tab, or before
+    the instance folder is claimed, is skipped, and the write's reply alone cleans it up. A removed image stops
+    being shareable at once but keeps its slot until the unlink is done: at most five tries (four retries,
+    500 ms doubling), then the slot is given back. A share whose service the user already
+    chose keeps its file through a window close until the service finishes. The Share… items use command
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, which opens System Settings › Sharing directly on any page, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
+    button cancels an older open, and a services request that stalls for 5 s is replaced.
+  - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
+    places them, through a dev-only `RenderViewContextMenuObserver` hook in
+    `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
+    share ends, or when the window's shell reloads or closes.
+  - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
+- **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
+  `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`; Add Shared Folder… picks its
+  folder through the host's `ArdiaShell.pickFolder`. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
+  as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
+  its own queue. Finder is never shown in background mode.
 - **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
@@ -120,6 +200,33 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
   display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 
+- **Trackpad swipes** (`ac_mac_swipe`, rules in `ac_mac_swipe_policy.h`). A local `NSEvent` scroll-wheel monitor per
+  window, scoped to that window and removed with its host, reads AppKit's real `phase`, `momentumPhase` and
+  `hasPreciseScrollingDeltas`, so a live two-finger drag, its momentum and a mouse wheel click are told apart without
+  timers. Each gesture keeps the surface it began on.
+  - Over the shell it sends `ArdiaShell` `onScrollGesture {phase, momentum, dx, dy, x, y, t}` (`mayBegin`, `began`,
+    `changed`, `ended`, `cancelled`, `none` for momentum, `wheel` for a mouse click) and swallows nothing. The shell
+    advertises `shell.scrollGestures`, and `swipe.ts` then drives the profile pager from these phases alone: it ends
+    the drag on the event the fingers lift with, ignores the momentum of a swipe it tracked, and only holds a DOM
+    `wheel` off the shell's scrollers while a swipe or its momentum is its own.
+  - A gesture that moves to another surface before it starts, or whose window or app resigns, cancels the route it
+    left, so a pager held by `mayBegin` settles instead of staying held.
+  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
+    timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
+    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. Acks are matched to
+    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, converted with `EventTimeStampFromSeconds` and compared
+    to the microsecond, so a late ack from an earlier gesture is dropped. Every frame widget of the tab is watched as
+    frames come and go, so a wheel aimed at a non-scrolling cross-site iframe still opens the gesture, and a new
+    primary page cancels it. A page that
+    scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
+    vertical start (latched on the first deltas). A consumed update before the shell claims the swipe cancels it.
+    The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
+    soon as any of them changes or the tab stops being shown. `swipe.ts` routes it only to the swipe area whose
+    `pageTabId` is that tab.
+  - The host swallows a page swipe's horizontal motion only after the shell claims it with `shell.pageSwipeClaim
+    {gesture, tabId, claimed}`, which `swipe.ts` sends once it tracks the swipe (history in that direction, horizontal
+    intent) and withdraws when it lets go. The end always reaches the page. Chrome's own history swiper is turned off
+    for the shell and every hosted page (`HistorySwipingControl`).
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),
@@ -142,6 +249,45 @@ that branch). It is a development tool and never runs in a release. Like Windows
     each `tab.create`.
   - A tab whose contents Chromium replaces keeps its binding through a `pageLifecycle` rebind. A tab that leaves
     the window's tab strips loses its binding.
+- **Peek, split and link options** (`ac_mac_link_gesture.mm`, rules in `ac_mac_link_policy.h`, a port of Linux's
+  `ac_linux_link_gesture`). The host advertises and serves `webView.setPeekModifier`, `setSplitLinkModifier`,
+  `setPeekOtherSiteTabs`, `setLittleArdiaOpensNewTabLinks`, `setPopupsOpenAsTabs` and `setCommandScrollZoom`, so
+  Settings › Tabs shows its Peek and Little Ardia rows and Advanced shows ⌘-scroll zoom.
+  - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions: a renderer
+    `kNewWindow` (⇧-click, ⌥⇧-click) and `kNewSplitView` (⌥⌘-click) in the page delegate's `OpenURLFromTab`, and
+    ⌥-click's download in `RenderFrameHostImpl::DownloadURL`, which `apply.sh` hooks; the host registers through
+    `content::SetArdiaMacDownloadUrlHook`, exported with `CONTENT_EXPORT` so component builds link.
+    Each must match the last left mouse-up that page's `RenderWidgetHost` saw, with Linux's gate (on that page, unused,
+    no press since, at most 10 s old, exactly the configured keys), carry a user gesture, and go to the link the
+    pointer was over at that release (`UpdateTargetURL`). It is then sent as `ArdiaWebView` `openWindow` with `peek`
+    (and the click's `point`), `split`, `window` or `background`, as Linux does.
+  - The ⌥-click download hook sees the requesting frame, so it only takes a request from that tab with no suggested
+    file name that follows redirects, within 1 s of the release. Blink drops `<a download>`'s attribute on a ⌥-click,
+    so `apply.sh` also adds a dev-only hook to `HTMLAnchorElementBase::HandleClick` that keeps the attribute as the
+    suggested name; an ⌥-clicked `<a download>` then always downloads. `Content-Disposition: attachment` responses are navigations and never
+    reach it.
+  - A renderer `kNewWindow` that matches no gesture opens as a foreground tab through Chromium's own path, so its popup
+    blocker still decides.
+  - Links to other sites: `apply.sh` adds `g_ardia_mac_add_navigation_throttles` to
+    `CreateAndAddChromeThrottlesForNavigation`, and the host adds a throttle to primary main-frame navigations in the
+    shell's tabs while `setPeekOtherSiteTabs` lists any. In a listed tab, a plain cross-site anchor click is cancelled
+    in `WillStartRequest`, before any request goes out, when it is `WasInitiatedByLinkClick`, started by the primary
+    main frame (an iframe's `_top` anchor follows), carries a user gesture, isn't a POST, goes to the URL released
+    over, and its `NavigationInputStart` is that release's own timestamp (a script's `anchor.click()` carries the time
+    it was made). The peek is sent once that navigation finishes uncommitted, and not at all if the tab is being
+    destroyed (frame teardown finishes the navigation before `WebContentsDestroyed`).
+    A script's `location.href` from a click handler is not a link click and follows.
+  - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
+    (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a link that would open a new tab
+    opens in place (`openWindow` `current`) when it has no opener and isn't a form submission. Chromium routes it
+    through `OpenURLFromTab` or, for `target="_blank"` and `rel="noopener"`, through `CreateNewWindow`. There
+    `apply.sh`'s hook (`content::SetArdiaMacNewWindowInPlaceHook`) runs first for opener-suppressed requests, before
+    any child `WebContents` is created or announced to observers, and still sees `is_form_submission` and the POST
+    body.
+    `window.open` with an opener and POST forms keep their own contents.
+  - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll, routed by the native hit test at
+    the event's own location; the count restarts when the page changes or the setting is turned off, and precise
+    (trackpad, Magic Mouse) scrolling never zooms.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

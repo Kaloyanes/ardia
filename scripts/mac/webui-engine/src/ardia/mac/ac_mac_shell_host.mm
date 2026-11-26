@@ -12,6 +12,7 @@
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_delegate.h"
@@ -19,6 +20,9 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_share.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_window_policy.h"
@@ -288,14 +292,13 @@ ShellHostView* HostForShell(content::WebContents* contents) {
 
 MenuCommandHandler MainMenuHandler() {
   return base::BindRepeating([](const MenuChoice& choice) {
-    NSWindow* key = NSApp.keyWindow ?: NSApp.mainWindow;
+    const std::optional<std::string> key = KeyMenuWindowId();
     ShellHostView* target = nullptr;
     for (ShellHostView* host : Hosts()) {
-      views::Widget* widget = host->GetWidget();
       if (!target) {
         target = host;
       }
-      if (widget && widget->GetNativeWindow().GetNativeNSWindow() == key) {
+      if (key && host->window_id() == *key) {
         target = host;
         break;
       }
@@ -305,6 +308,19 @@ MenuCommandHandler MainMenuHandler() {
     } else if (choice.command == "quit") {
       QuitWithoutShell();
     }
+  });
+}
+
+MenuWindowResolver ShellMenuWindows() {
+  return base::BindRepeating([](gfx::NativeWindow window) -> std::optional<std::string> {
+    NSWindow* wanted = window.GetNativeNSWindow();
+    for (ShellHostView* host : Hosts()) {
+      views::Widget* widget = host->GetWidget();
+      if (wanted && widget && widget->GetNativeWindow().GetNativeNSWindow() == wanted) {
+        return host->window_id();
+      }
+    }
+    return std::nullopt;
   });
 }
 
@@ -329,9 +345,14 @@ PageBinding::PageBinding(ShellHostView* owner,
   events_ = std::make_unique<PageEvents>(
       contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
   commands_ = std::make_unique<PageCommands>(this);
+  links_ = std::make_unique<PageLinks>(this, contents);
 }
 
 PageBinding::~PageBinding() {
+  links_.reset();
+  if (owner_) {
+    share::RetireBinding(owner_->window_id(), id_);
+  }
   commands_.reset();
   events_.reset();
   if (viewport && owner_) {
@@ -390,11 +411,13 @@ base::DictValue PageBinding::CreationState() {
 
 void PageBinding::Rebind(content::WebContents* contents) {
   commands_->Reset();
+  links_.reset();
   events_.reset();
   Observe(contents);
   id_ = TabId(contents);
   events_ = std::make_unique<PageEvents>(
       contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  links_ = std::make_unique<PageLinks>(this, contents);
 }
 
 void PageBinding::ReportNavigation() {
@@ -501,6 +524,17 @@ ShellHostView::~ShellHostView() {
 }
 
 void ShellHostView::Initialize() {
+  documents_ = std::make_unique<DocumentSession>(
+      window_id_, base::BindRepeating(
+                      [](base::WeakPtr<ShellHostView> host, base::Value payload) {
+                        if (host) {
+                          host->Emit("ArdiaDocuments", "documents",
+                                     base::Value(base::DictValue()
+                                                     .Set("name", "documents.changed")
+                                                     .Set("data", std::move(payload))));
+                        }
+                      },
+                      GetWeakPtr()));
   view_observation_.Observe(browser_view_.get());
   focus_manager_ = GetFocusManager();
   under_shell_ = AddChildView(std::make_unique<views::View>());
@@ -557,6 +591,7 @@ void ShellHostView::DetachBrowser() {
   closing_ = true;
   recording_keys_.reset();
   RetireRenderer();
+  ForgetWindowMenu(window_id_);
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
   pip_.reset();
@@ -569,6 +604,8 @@ void ShellHostView::DetachBrowser() {
   }
   bindings_.clear();
   StopWatchingWindowDrag();
+  shared_folder_watcher_.reset();
+  share::Retire(window_id_);
   StopLifecycle();
   popovers_.reset();
   glass_.reset();
@@ -703,6 +740,9 @@ void ShellHostView::BindingGone(PageBinding* binding) {
   if (pip_) {
     pip_->CheckSource();
   }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
+  }
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<ShellHostView> host, int id) {
@@ -721,6 +761,34 @@ void ShellHostView::BindingGone(PageBinding* binding) {
 bool ShellHostView::OwnsShellNativeView(gfx::NativeView view) const {
   content::WebContents* shell = shell_contents();
   return shell && view && shell->GetNativeView() == view;
+}
+
+std::optional<gfx::PointF> ShellHostView::ShellPointFor(const PageBinding* binding,
+                                                        gfx::PointF page_point) const {
+  if (!binding || binding->host() != this || !binding->viewport || !binding->visible) {
+    return std::nullopt;
+  }
+  const gfx::Rect bounds = binding->viewport->bounds();
+  const double zoom = ShellZoom();
+  const double x = std::clamp<double>(page_point.x(), 0, bounds.width()) + bounds.x();
+  const double y = std::clamp<double>(page_point.y(), 0, bounds.height()) + bounds.y();
+  return gfx::PointF(static_cast<float>(x / zoom), static_cast<float>(y / zoom));
+}
+
+PageBinding* ShellHostView::BindingHit(gfx::NativeView hit) const {
+  NSView* view = hit.GetNativeNSView();
+  if (!view || closing_) {
+    return nullptr;
+  }
+  for (const auto& [id, binding] : bindings_) {
+    content::WebContents* contents = binding->contents();
+    NSView* page = contents ? contents->GetNativeView().GetNativeNSView() : nil;
+    if (page && binding->visible && binding->viewport && binding->viewport->GetVisible() &&
+        [view isDescendantOf:page]) {
+      return binding.get();
+    }
+  }
+  return nullptr;
 }
 
 bool ShellHostView::PassesShellPoint(double x, double y) const {
@@ -817,6 +885,9 @@ void ShellHostView::Restack() {
 }
 
 void ShellHostView::ReattachViewports() {
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
+  }
   std::set<content::WebContents*> taken;
   for (BrowserWindowInterface* member : Members()) {
     BrowserView* view = BrowserView::GetBrowserViewForBrowser(member);
@@ -920,6 +991,12 @@ void ShellHostView::RetireRenderer() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   ++renderer_generation_;
+  if (documents_) {
+    documents_->RendererRetired();
+  }
+  shared_folder_watcher_.reset();
+  share::Retire(window_id_);
+  SetMenuKeysSuppressed(window_id_, false);
   if (!had_document) {
     return;
   }
@@ -932,6 +1009,9 @@ void ShellHostView::RetireRenderer() {
       binding->viewport->SetVisible(false);
       binding->viewport->SetWebContents(nullptr);
     }
+  }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
   }
   pass_.clear();
   unclaimed_listener_.reset();
@@ -1021,6 +1101,7 @@ void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
     return;
   }
   base::DictValue delivery = binding->Envelope("pageLifecycle");
+  share::RetireBinding(window_id_, old_id);
   binding->Rebind(contents);
   binding->binding_generation = *generation;
   if (id != old_id) {
@@ -1126,6 +1207,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
     existing->commands()->CancelEvaluations();
+    share::RetireBinding(window_id_, existing->id());
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1317,11 +1399,15 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
   }
   binding->claim.clear();
   binding->commands()->CancelEvaluations();
+  share::RetireBinding(window_id_, binding->id());
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {
     binding->viewport->SetVisible(false);
     binding->viewport->SetWebContents(nullptr);
+  }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
   }
   UpdateGlassSurface();
   std::move(done).Run(true, base::Value());
@@ -1432,7 +1518,7 @@ void ShellHostView::OnMenuCommand(const std::string& command,
   if (command.empty() || shortcut_recording_) {
     return;
   }
-  if (command == "quit" && !RendererLive()) {
+  if (command == "quit" && !shell_policy::ShellTakesQuit(RendererLive(), shell_ready_generation_, renderer_generation_)) {
     return QuitWithoutShell();
   }
   if (command == "focusCommandBar" || command == "newTab") {
@@ -1457,7 +1543,7 @@ void ShellHostView::SetMainMenu(const base::DictValue& args, Done done) {
         false, base::Value("Invalid menu at " + parsed.problems[0].path + ": " +
                            parsed.problems[0].reason));
   }
-  InstallMainMenu(parsed.root, MainMenuHandler());
+  SetWindowMainMenu(window_id_, std::move(parsed.root), MainMenuHandler());
   std::move(done).Run(true, base::Value());
 }
 

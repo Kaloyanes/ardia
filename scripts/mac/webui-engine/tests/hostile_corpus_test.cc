@@ -10,13 +10,18 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_backdrop_theme.h"
 #include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
+#include "ardia/mac/ac_mac_link_policy.h"
 #include "ardia/mac/ac_mac_menu_model.h"
+#include "ardia/mac/ac_mac_menu_state.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip_policy.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
+#include "ardia/mac/ac_mac_share_policy.h"
+#include "ardia/mac/ac_mac_shared_folders_policy.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
 #include "ardia/mac/ac_mac_system_policy.h"
 #include "ardia/mac/ac_mac_webui_policy.h"
@@ -100,6 +105,9 @@ TEST(corpus_is_loaded) {
 
 TEST(glass_names_and_ids) {
   for (const std::string& text : Load().strings) {
+    if (ardia_mac::backdrop_theme::KnownTexture(text)) {
+      CHECK(text == "film" || text == "grain" || text == "sand" || text == "denim" || text == "tweed");
+    }
     if (ardia_mac::glass::ValidId(text)) {
       CHECK(!text.empty() && text.size() <= ardia_mac::glass::kMaxIdLength && Charset(text, "-_:."));
     }
@@ -120,6 +128,37 @@ TEST(glass_names_and_ids) {
   control.id = "control";
   control.rect = {0, 0, 10, 10};
   CHECK(ardia_mac::glass::Lay({control}, {}, {0, 0, 100, 100}, 1).placements.size() == 1);
+}
+
+TEST(native_backdrop_theme) {
+  namespace theme = ardia_mac::backdrop_theme;
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      if (const auto color = theme::ColorFrom({a, b, a, b, a})) {
+        for (double channel : {color->red, color->green, color->blue, color->alpha}) CHECK(channel >= 0 && channel <= 1);
+        CHECK(std::isfinite(a) && std::isfinite(b));
+      }
+      const int pixels = theme::GrainImagePixels(a, b, a);
+      CHECK(pixels >= 1 && pixels <= theme::kMaxGrainImagePixels);
+    }
+    if (const auto point = theme::GradientPoint(a)) CHECK(std::isfinite(*point) && std::abs(*point) <= theme::kMaxGradientReach);
+    const double radius = theme::ThemeRadius(a);
+    CHECK(radius >= 0 && radius <= theme::kMaxThemeRadius);
+    const double points = theme::GrainPoints(a);
+    CHECK(points > 0 && points <= theme::kMaxGrainPoints);
+    CHECK(theme::Unit(a) >= 0 && theme::Unit(a) <= 1);
+    if (std::isfinite(a) && a >= 0 && a < 1e6) {
+      const auto count = static_cast<std::size_t>(a);
+      if (theme::LayerCountFits(count)) CHECK(count <= theme::kMaxLayers);
+      if (theme::StopCountFits(count)) CHECK(count >= 1 && count <= theme::kMaxStops);
+    }
+  }
+  for (const std::string& text : Load().strings) {
+    const auto index = theme::BackdropIndex(text, 64);
+    if (index) CHECK(*index < 64 && text == theme::BackdropId(*index));
+  }
+  CHECK(theme::ColorFrom({1, 0.5, 0, 1, 1}).has_value());
+  CHECK(theme::BackdropIndex("backdrop:3", 64) == std::optional<std::size_t>(3));
 }
 
 TEST(glass_geometry) {
@@ -195,6 +234,49 @@ TEST(menu_construction) {
   CHECK(ardia_mac::menu::Validate(control).empty());
 }
 
+TEST(menu_state_and_bookmarks) {
+  ardia_mac::menu::Bookmarks bookmarks;
+  for (const std::string& text : Load().strings) {
+    ardia_mac::menu::State state;
+    if (ardia_mac::menu::AddStateEntry(state.disabled, text)) {
+      CHECK(!text.empty() && text.size() <= ardia_mac::menu::kMaxStateId && NoControls(text));
+    }
+    if (ardia_mac::menu::AddStateTitle(state, "id", text)) {
+      CHECK(ardia_mac::menu::ValidTitle(text));
+    }
+    const std::string clean = ardia_mac::menu::CleanTitle(text);
+    CHECK(ardia_mac::menu::ValidTitle(clean));
+    const auto shown = ardia_mac::menu::Resolve(text, false, false, clean, state);
+    CHECK(shown.title == clean || ardia_mac::menu::ValidTitle(shown.title));
+    bookmarks.other.push_back({text, text, text, false, {}});
+    ardia_mac::menu::Bookmark folder{text, text, "", true, {}};
+    folder.children.push_back({text + "child", text, text, false, {}});
+    bookmarks.bar.push_back(folder);
+  }
+  ardia_mac::menu::Item root;
+  root.children = ardia_mac::menu::BookmarkMenuItems(bookmarks);
+  std::size_t problems = 0;
+  for (const auto& problem : ardia_mac::menu::Validate(root)) {
+    problems += problem.reason == "too many items" || problem.reason == "too deep" ? 0 : 1;
+  }
+  CHECK(problems == 0);
+}
+
+TEST(glass_tints_groups_and_appearance) {
+  for (const std::string& text : Load().strings) {
+    if (const auto color = ardia_mac::glass::ColorFrom(text)) {
+      for (double channel : {color->red, color->green, color->blue, color->alpha}) {
+        CHECK(std::isfinite(channel) && channel >= 0 && channel <= 1);
+      }
+      CHECK(Charset(text, "#(),. "));
+    }
+    if (ardia_mac::glass::ValidGroup(text)) CHECK(text.size() <= ardia_mac::glass::kMaxIdLength && Charset(text, "-_:."));
+    if (ardia_mac::glass::AppearanceNamed(text)) CHECK(text.empty() || text == "auto" || text == "light" || text == "dark");
+    if (ardia_mac::popover::MessageFits(text.size())) CHECK(text.size() <= ardia_mac::popover::kMaxMessageBytes);
+  }
+  CHECK(ardia_mac::glass::ColorFrom("rgba(10,20,30,0.5)").has_value());
+}
+
 TEST(window_guards) {
   for (double a : Load().numbers) {
     for (double b : Load().numbers) {
@@ -236,7 +318,12 @@ TEST(bridge_documents) {
       CHECK(text.size() <= 200 && text.front() != '.' && Charset(text, "._-"));
       CHECK(!ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "session.json"));
     }
+    if (ardia_mac::shell_policy::ReservedLiveDocument(text)) {
+      CHECK(ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.json") ||
+            ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.canonical.json"));
+    }
   }
+  CHECK(ardia_mac::shell_policy::ReservedLiveDocument("LIVE.CANONICAL.JSON"));
   CHECK(ardia_mac::shell_policy::ValidDocumentName("notes.json"));
   for (const std::string& text : Load().strings) {
     if (const auto id = ardia_mac::shell_policy::ParseAdoptId(text)) {
@@ -258,7 +345,7 @@ TEST(launch_environment) {
     ArdiaLaunchStorage storage;
     const char* argv[] = {"Ardia"};
     const char* out[1 + kArdiaLaunchExtraArgs + 1] = {};
-    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), &storage, out);
+    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), text.c_str(), &storage, out);
     CHECK(count >= 1 && count <= 1 + kArdiaLaunchExtraArgs);
     for (int index = 1; index < count; ++index) {
       const std::string_view arg = out[index];
@@ -269,6 +356,77 @@ TEST(launch_environment) {
   }
   CHECK(ardia_mac::webui_policy::Active(
       ardia_mac::webui_policy::Decide(ardia_mac::webui_policy::Build::kDevelopment, "webui", std::nullopt)));
+}
+
+TEST(share_guards) {
+  namespace share = ardia_mac::share_policy;
+  for (const std::string& text : Load().strings) {
+    const share::UrlKind kind = share::ClassifyUrl(text);
+    if (kind != share::UrlKind::kRefused) {
+      CHECK(NoControls(text) && text.size() <= share::kMaxUrlBytes);
+      CHECK(text.find(':') != std::string::npos);
+      const std::string scheme = ardia_mac::shared_folders_policy::LowerAscii(text.substr(0, text.find(':')));
+      CHECK(kind == share::UrlKind::kWeb ? (scheme == "http" || scheme == "https") : scheme == "file");
+      if (kind == share::UrlKind::kFile) CHECK(text.substr(5, 3) == "///");
+    }
+    if (share::ValidServiceName(text)) CHECK(NoControls(text) && !text.empty() && text.size() <= share::kMaxServiceBytes);
+    if (share::InsideDirectory(text, "/tmp/ardia-images")) {
+      CHECK(text.starts_with("/tmp/ardia-images/") && text.find("..") == std::string::npos && NoControls(text));
+      CHECK(text.find('/', 18) == std::string::npos);
+    }
+  }
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      const double values[] = {a, b, a, b};
+      if (const auto anchor = share::AnchorFrom(4, values)) {
+        CHECK(std::isfinite(anchor->x) && std::isfinite(anchor->y) && anchor->width >= 0 && anchor->height >= 0);
+        const auto scaled = share::Scaled(*anchor, b);
+        CHECK(std::isfinite(scaled.x) && std::isfinite(scaled.height));
+      }
+    }
+  }
+  for (const std::string& text : Load().strings) {
+    if (const auto pid = share::InstancePid(text)) {
+      CHECK(*pid > 0 && text.starts_with(std::to_string(*pid) + "-") && Charset(text, "-"));
+      CHECK(text.find('/') == std::string::npos && text.find("..") == std::string::npos);
+    }
+    if (const auto name = share::InstanceDirectoryName(1, text)) CHECK(Charset(*name, "-") && name->find('/') == std::string::npos);
+    share::IssuedFiles<std::string> issued;
+    issued.Reserve("/tmp/ardia-images/1-a/image.png", "w1");
+    issued.Publish("/tmp/ardia-images/1-a/image.png");
+    if (const auto staging = share::StagingPid(text)) CHECK(*staging > 0 && text.front() == '.' && text.ends_with(".staging"));
+    const auto window = [&text](const std::string& owner) { return owner == text; };
+    CHECK(!issued.Take(text, [](const std::string& owner) { return owner == "w1"; }) ||
+          text == "/tmp/ardia-images/1-a/image.png");
+    CHECK(!issued.Take("/tmp/ardia-images/1-a/image.png", window) || text == "w1");
+    if (share::SweepsInstance(share::InstancePid(text).has_value(), false, share::InstanceLock::kFree, true)) {
+      CHECK(share::InstancePid(text).has_value());
+    }
+  }
+  CHECK(share::ClassifyUrl("https://ardia.dev/") == share::UrlKind::kWeb);
+}
+
+TEST(shared_folder_guards) {
+  namespace folders = ardia_mac::shared_folders_policy;
+  for (const std::string& text : Load().strings) {
+    if (const auto parts = folders::RelativeParts(text)) {
+      CHECK(!parts->empty() && parts->size() <= folders::kMaxParts);
+      for (const std::string& part : *parts) {
+        CHECK(!part.empty() && part != "." && part != ".." && part.find('/') == std::string::npos);
+        CHECK(part.find('\0') == std::string::npos && part.size() <= folders::kMaxNameBytes);
+      }
+    }
+    const std::string name = folders::FolderName(text);
+    CHECK(!name.empty() && name.size() <= folders::kMaxFolderNameBytes && NoControls(name));
+    CHECK(name.find('/') == std::string::npos && name.find(':') == std::string::npos && name.front() != '.');
+    if (folders::ValidAbsolutePath(text)) CHECK(text.front() == '/' && text.find('\0') == std::string::npos);
+    if (folders::WritableName(text)) CHECK(folders::IsManifest(text) || folders::IsLinkName(text));
+    CHECK(folders::OpNamed(text) == folders::OpKind::kUnknown || Charset(text, ""));
+  }
+  for (double a : Load().numbers) {
+    if (const auto identity = folders::IdentityFrom(a, a)) CHECK(identity->device >= 0 && identity->inode >= 0);
+  }
+  CHECK(folders::RelativeParts("Reading/Essay.webloc").has_value());
 }
 
 TEST(system_files_and_links) {
@@ -505,6 +663,50 @@ TEST(page_guards) {
     }
   }
   CHECK(page::Handles("find") && page::PopupId("7") == 7);
+}
+
+TEST(link_option_guards) {
+  namespace link = ardia_mac::link_policy;
+  std::vector<std::optional<std::string>> keys;
+  for (const std::string& text : Load().strings) {
+    link::PageOptions options;
+    options.SetPeek(text);
+    CHECK(options.peek == "alt" || options.peek == "shift" || options.peek == "off");
+    options.SetSplit(text);
+    CHECK(options.split == "alt" || options.split == "altShift");
+    if (link::KeyFlags(text)) CHECK(text == "alt" || text == "shift" || text == "altShift" || text == "altMeta");
+    if (options.ActionFor(text)) CHECK(link::KeyFlags(text) != 0);
+    if (link::IsRoute(text)) CHECK(text.starts_with("webView.set") && Charset(text, "."));
+    if (const auto one = link::SiteTabKeys({text})) {
+      CHECK(one->size() == 1 && !text.empty() && text.size() <= link::kTabKeyMax);
+    }
+    keys.push_back(text);
+    link::GestureGate gate;
+    gate.NoteRelease(1, link::KeyFlags(text), 1, link::Point{0, 0}, text, 1);
+    const auto release = gate.FreshRelease(1, 1);
+    CHECK(release.target.size() <= link::kUrlMax);
+    if (link::TargetMatches(release.target, text)) CHECK(!text.empty() && text.size() <= link::kUrlMax);
+    link::Request request;
+    request.surface = 1;
+    request.key = text;
+    request.http = true;
+    request.visible = true;
+    request.now = 1;
+    const link::Decision decision = gate.Decide(request, link::PageOptions());
+    if (decision.outcome == link::Outcome::kPeek || decision.outcome == link::Outcome::kSplit) {
+      CHECK(link::PageOptions().ActionFor(text).has_value());
+    }
+  }
+  if (const auto all = link::SiteTabKeys(keys)) {
+    CHECK(all->size() <= link::kSiteTabsMax);
+    for (const std::string& key : *all) CHECK(!key.empty() && key.size() <= link::kTabKeyMax);
+  }
+  link::ScrollZoom zoom;
+  for (double delta : Load().numbers) {
+    const int step = zoom.Add(delta, 1);
+    CHECK(step >= -1 && step <= 1);
+    if (!std::isfinite(delta)) CHECK(step == 0);
+  }
 }
 
 int main(int argc, char** argv) {

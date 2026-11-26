@@ -16,6 +16,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
+#include "ardia/mac/ac_mac_documents.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
@@ -28,6 +29,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
@@ -60,9 +62,16 @@ class ExtensionViews;
 class GlassRegions;
 class PageCommands;
 class PageEvents;
+class PageLinks;
 class PipPresenter;
 class PopoverHost;
+class ScrollGestures;
 class SystemServices;
+
+namespace shared_folders {
+class Watcher;
+}
+
 class ShellBridge;
 class ShellHostView;
 
@@ -115,6 +124,7 @@ ShellHostView* OpenShellWindow(Profile* profile,
 ShellHostView* HostForShell(content::WebContents* contents);
 ShellHostView* HostForPopover(content::WebContents* contents);
 MenuCommandHandler MainMenuHandler();
+MenuWindowResolver ShellMenuWindows();
 bool BackgroundInstance();
 std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
                                            const char* host_bootstrap);
@@ -139,6 +149,7 @@ class PageBinding : public content::WebContentsObserver {
   ShellHostView* host() const { return owner_; }
   PageEvents* events() const { return events_.get(); }
   PageCommands* commands() const { return commands_.get(); }
+  PageLinks* links() const { return links_.get(); }
 
   std::string claim;
   uint64_t renderer_generation = 0;
@@ -170,6 +181,7 @@ class PageBinding : public content::WebContentsObserver {
   std::string profile_;
   std::unique_ptr<PageEvents> events_;
   std::unique_ptr<PageCommands> commands_;
+  std::unique_ptr<PageLinks> links_;
 };
 
 class ShellHostView : public views::View,
@@ -194,6 +206,9 @@ class ShellHostView : public views::View,
 
   const std::string& window_id() const { return window_id_; }
   bool is_utility() const { return shell_policy::UtilityKind(kind_); }
+  bool is_small() const { return kind_ == shell_policy::kSmallWindowKind; }
+  std::optional<gfx::PointF> ShellPointFor(const PageBinding* binding, gfx::PointF page_point) const;
+  PageBinding* BindingHit(gfx::NativeView hit) const;
   void NavigateUtility(base::DictValue utility);
   void ActivateWindow();
   void ForwardRecordedKey(const input::NativeWebKeyboardEvent& event);
@@ -226,6 +241,9 @@ class ShellHostView : public views::View,
   std::optional<std::string> PopoverBootstrapJson(
       const content::WebContents* contents) const;
   PopoverHost* popovers() const { return popovers_.get(); }
+  std::unique_ptr<shared_folders::Watcher>& shared_folder_watcher() {
+    return shared_folder_watcher_;
+  }
   SystemServices* system() const { return system_.get(); }
   ExtensionViews* extension_views() const { return extension_views_.get(); }
   PipPresenter* pip() const { return pip_.get(); }
@@ -260,6 +278,7 @@ class ShellHostView : public views::View,
   friend class ExtensionViews;
   friend class PageBinding;
   friend class PipPresenter;
+  friend class ScrollGestures;
   friend class SystemServices;
 
   void LayoutOverlay();
@@ -360,6 +379,7 @@ class ShellHostView : public views::View,
   std::optional<HeldDeparture> held_departure_;
   bool closing_ = false;
   bool painted_ = false;
+  uint64_t shell_ready_generation_ = 0;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
 
   raw_ptr<views::WebView> shell_ = nullptr;
@@ -368,6 +388,7 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
   std::unique_ptr<PopoverHost> popovers_;
+  std::unique_ptr<shared_folders::Watcher> shared_folder_watcher_;
   std::unique_ptr<SystemServices> system_;
   std::unique_ptr<ExtensionViews> extension_views_;
   std::unique_ptr<PipPresenter> pip_;
@@ -387,8 +408,10 @@ class ShellHostView : public views::View,
   base::WeakPtr<ShellBridge> request_handler_;
   uint64_t request_generation_ = 0;
 
+  std::unique_ptr<DocumentSession> documents_;
   std::unique_ptr<DialogSheets> dialogs_;
   std::unique_ptr<WindowEvents> window_events_;
+  std::unique_ptr<ScrollGestures> scroll_gestures_;
   window_policy::CloseBook close_;
   std::uint64_t quit_generation_ = 0;
   std::map<std::string, std::uint64_t> close_dialogs_;

@@ -143,6 +143,13 @@ TEST(only_an_offered_unbound_tab_of_the_same_profile_is_adopted) {
   CHECK(policy::CheckAdoption(true, true, true, true, true) == AdoptRefusal::kAlreadyClaimed);
 }
 
+TEST(quit_waits_for_the_shell_that_painted_in_this_renderer) {
+  CHECK(policy::ShellTakesQuit(true, 3, 3));
+  CHECK(!policy::ShellTakesQuit(true, 0, 0));
+  CHECK(!policy::ShellTakesQuit(true, 2, 3));
+  CHECK(!policy::ShellTakesQuit(false, 3, 3));
+}
+
 TEST(shortcuts_take_only_chromium_key_modifiers) {
   CHECK(policy::kCommandDown == 16 && policy::kControlDown == 4 && policy::kAltDown == 8 && policy::kShiftDown == 2);
   CHECK(policy::ShortcutAccepted(84, policy::kCommandDown, true, false));
@@ -262,6 +269,15 @@ TEST(a_departure_is_saved_only_once_the_window_really_closes) {
   CHECK(policy::DepartureStepFor(true, false, true) == DepartureStep::kDiscard);
   CHECK(policy::DepartureStepFor(true, true, false) == DepartureStep::kDiscard);
   CHECK(policy::DepartureStepFor(true, false, false) == DepartureStep::kDiscard);
+}
+
+TEST(live_documents_are_reserved_in_any_case) {
+  for (const char* name : {"live.json", "LIVE.JSON", "Live.Json", "live.canonical.json", "LIVE.Canonical.JSON"}) {
+    CHECK(policy::ReservedLiveDocument(name));
+  }
+  for (const char* name : {"", "live", "live.json.bak", "notes.json", "xlive.json", "live.canonical.json "}) {
+    CHECK(!policy::ReservedLiveDocument(name));
+  }
 }
 
 int main(int argc, char** argv) {
