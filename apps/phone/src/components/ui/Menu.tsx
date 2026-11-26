@@ -9,7 +9,7 @@ import { useReduceMotion } from "./contrast";
 import { focusForScreenReader } from "./coverFocus";
 import { useDesign } from "./design";
 import { FabricCatchUp } from "./FabricCatchUp";
-import { LookFrost, SURFACES_FROST } from "./LookViews";
+import { LookFrost, SURFACES_FROST, useSolidChrome, usesGlass } from "./LookViews";
 import { MATERIAL_STATE } from "./materialRoles";
 import { MATERIAL_MENU_GROUP_GAP, materialMenuFill, materialMenuGroups, materialMenuHeight, materialMenuWidth, useMaterialBack } from "./MaterialSurfaces";
 import { useMaterialTheme } from "./materialTheme";
@@ -66,12 +66,19 @@ const PRESS = menuLook.pressInset;
 
 const MATERIAL = !menuLook.frosted;
 
+export const menuDrawsGlass = (frost: "thin" | "glass", source: string | null, nativeLook: boolean, nativeGlass: boolean, solidChrome: boolean) => frost === "glass" && source !== null && nativeLook && nativeGlass && !solidChrome;
+
+function useMenuGlass(source: string | null) {
+  const solidChrome = useSolidChrome();
+  return !MATERIAL && menuDrawsGlass(menuLook.frost, source, lookIsNative(), usesGlass(), solidChrome);
+}
+
 const CHECK_TRAILING = menuLook.checkSide === "trailing";
 
 const SCRIM_ACCESSIBILITY = Platform.OS === "android" ? ({ accessible: false, importantForAccessibility: "no" } as const) : ({ accessibilityLabel: "Dismiss" } as const);
 const CHECK_SHIFT = CHECK_TRAILING ? 0 : menuLook.labelInsetChecked - menuLook.labelInset;
 
-type Props = { items: MenuItem[]; place?: ViewStyle; placer?: MenuPlacer; onDismiss: (chosen?: boolean) => void; dimmed?: boolean; origin?: string; frost?: string | null; shown?: boolean; privately?: boolean };
+type Props = { items: MenuItem[]; place?: ViewStyle; placer?: MenuPlacer; onDismiss: (chosen?: boolean) => void; dimmed?: boolean; origin?: string; frost?: string | null; glassSource?: string; shown?: boolean; privately?: boolean };
 
 const menuDot = { width: startLayout.pageDot, height: startLayout.pageDot, borderRadius: startLayout.pageDot / 2 } as const;
 
@@ -235,12 +242,14 @@ function MaterialMenu({ items, place, placer, onDismiss, origin = "top", shown =
   );
 }
 
-function ClassicMenu({ items, place, placer, onDismiss, dimmed = false, origin = "top", frost, shown = true, privately = false }: Props) {
+function ClassicMenu({ items, place, placer, onDismiss, dimmed = false, origin = "top", frost, glassSource, shown = true, privately = false }: Props) {
   const theme = useTheme();
   const paint = theme.dark ? menuInk.dark : menuInk.light;
   const reduceMotion = useReduceMotion();
   const frostAround = useMenuFrost();
-  const source = frost === undefined ? frostAround : frost;
+  const frostSource = frost === undefined ? frostAround : frost;
+  const glassFace = useMenuGlass(glassSource ?? frostSource);
+  const source = glassFace ? glassSource ?? frostSource : frostSource;
   const [pages, setPages] = useState<MenuSubmenu[]>([]);
   const page = pages[pages.length - 1] ?? null;
   const openPage = (submenu: MenuSubmenu) => setPages((now) => [...now, submenu]);
@@ -404,10 +413,10 @@ function ClassicMenu({ items, place, placer, onDismiss, dimmed = false, origin =
         testID="drawnMenu"
         accessibilityRole="menu"
         accessibilityViewIsModal
-        style={[styles.panel, { boxShadow: menuLook.shadow, borderColor: paint.rim, transformOrigin: spot.origin }, spot.place, spot.maxHeight === undefined ? null : { maxHeight: spot.maxHeight }, revealed ? null : styles.unseen, grow]}
+        style={[styles.panel, { boxShadow: menuLook.shadow, borderColor: glassFace ? ink.clear : paint.rim, transformOrigin: spot.origin }, spot.place, spot.maxHeight === undefined ? null : { maxHeight: spot.maxHeight }, revealed ? null : styles.unseen, grow]}
       >
-        <MenuMaterial source={source} fill={paint.fill} solid={paint.solid} radius={menuLook.radius} style={[styles.material, spot.maxHeight === undefined ? null : { maxHeight: spot.maxHeight - 2 * menuLook.rim }]}>
-          {MATERIAL ? null : <View pointerEvents="none" style={[styles.specular, { backgroundColor: paint.specular }]} />}
+        <MenuMaterial source={source} glass={glassFace} privately={privately} fill={paint.fill} solid={paint.solid} radius={menuLook.radius} style={[styles.material, spot.maxHeight === undefined ? null : { maxHeight: spot.maxHeight - 2 * menuLook.rim }]}>
+          {MATERIAL || glassFace ? null : <View pointerEvents="none" style={[styles.specular, { backgroundColor: paint.specular }]} />}
           <ScrollView testID="drawnMenuRows" keyboardShouldPersistTaps="handled" style={styles.scroll} contentContainerStyle={styles.rows} bounces={false} overScrollMode="never" onContentSizeChange={(_width, height) => setContent(height + 2 * menuLook.rim)}>
           <Animated.View style={rowsFade}>
           {page ? (
@@ -427,11 +436,11 @@ function ClassicMenu({ items, place, placer, onDismiss, dimmed = false, origin =
   );
 }
 
-export function MenuMaterial({ source, fill, solid, radius, style, children }: { source: string | null; fill: string; solid: string; radius: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+export function MenuMaterial({ source, glass = false, privately = false, fill, solid, radius, style, children }: { source: string | null; glass?: boolean; privately?: boolean; fill: string; solid: string; radius: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   if (!source || !lookIsNative() || MATERIAL) return <View style={[style, { backgroundColor: solid, borderRadius: radius }]}>{children}</View>;
   return (
-    <LookFrost source={source} variant={menuLook.frost} cornerRadius={radius} fill={ink.clear} style={style}>
-      <View testID="menuMaterialFill" pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: fill }]} />
+    <LookFrost source={source} variant={glass ? "glass" : "thin"} privately={privately} overlay={glass} cornerRadius={radius} fill={ink.clear} style={style}>
+      {glass ? null : <View testID="menuMaterialFill" pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: fill }]} />}
       {children}
     </LookFrost>
   );
