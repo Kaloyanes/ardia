@@ -4750,8 +4750,8 @@ core has its own). Not applicable: the default-browser status (no entitlement in
 
 This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflow builds only the Expo app.
 - **The owner's rule** (2026-11-19). The owner asks for TestFlight before the dry run and upload.
-  - **Version:** one committed file, `apps/phone/ios/Config/release-version` (`1.0.1` for now), is the iPhone's
-    version (`CFBundleShortVersionString`) for TestFlight and the App Store alike. `mode=dry-run` and `mode=upload`
+  - **Version:** one committed file, `apps/phone/ios/Config/release-version` (`1.0.1` for now, one line, nothing else),
+    is the iPhone's version (`CFBundleShortVersionString`) for TestFlight and the App Store alike. `mode=dry-run` and `mode=upload`
     read it with `version` left empty and stop on any other version, such as an old `0.2.47`; `release-ios` refuses
     to upload anything else; `asc.mjs listing` and `app-store` work on that version and refuse a `--version` that
     differs. Bumping it is one commit: once `1.0.1` is on the App Store, TestFlight needs `1.0.2` or later, because
@@ -4854,30 +4854,42 @@ In order, each on the owner's word:
 4. **The submission:** `gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>`.
 
 **The listing** (`asc.mjs listing`, the App Manager key below). It reads `apps/phone/store/`:
-- `<locale>/description.txt` (at most 4,000 characters), `keywords.txt` (100), and, when present,
-  `promotional-text.txt` (170) and `subtitle.txt` (30); `<primary locale>/review-notes.txt` (4,000) is App Review's
-  notes. One folder per locale, `en-US` for now.
-- `listing.json`: `supportUrl`, `marketingUrl` and `privacyPolicyUrl` (https only; the policy is
-  `https://ardia.dev/privacy`), `primaryCategory` and `secondaryCategory` (App Store category ids such as
-  `UTILITIES`), `ageRating` (the age rating declaration's answers, by Apple's field names), `contentRights`
+- `<locale>/description.txt` (at most 4,000 characters), `keywords.txt` (100 bytes of UTF-8, as Apple counts it),
+  and, when present, `promotional-text.txt` (170 characters) and `subtitle.txt` (30 characters);
+  `<primary locale>/review-notes.txt` (4,000 bytes) is App Review's notes. One folder per locale, `en-US` for now.
+- `listing.json`: `supportUrl`, `marketingUrl` and `privacyPolicyUrl` (https strings; the policy is
+  `https://ardia.dev/privacy`), `copyright` (the year and the holder, without the ©, which Apple adds: the holder
+  in `NOTICE` is Mantra Patel, so "2026 Mantra Patel"), `primaryCategory` and, optionally, `secondaryCategory` (App
+  Store category ids such as `UTILITIES`; with no `secondaryCategory` the one App Store Connect holds is left alone,
+  so clearing it is done by hand), `ageRating` (the age rating declaration's answers by Apple's field names, each
+  checked against its type in Apple's OpenAPI description 4.6.1: true or false, or one of Apple's words such as
+  `NONE` or, for `ageRatingOverrideV2`, `EIGHTEEN_PLUS`; never null), `contentRights`
   (`DOES_NOT_USE_THIRD_PARTY_CONTENT` or `USES_THIRD_PARTY_CONTENT`), `price: "free"`, `availability: "all"` and,
   optionally, `baseTerritory` (`USA` when left out). Unknown keys are refused, so a typo never goes unnoticed.
 - `screenshots/iphone-medium/NN-<name>.png` (1206×2622 or 1179×2556, `APP_IPHONE_61`) and
   `screenshots/iphone-large/NN-<name>.png` (1320×2868, 1290×2796 or 1260×2736, `APP_IPHONE_67`), 1 to 10 a set,
-  in file name order, portrait or landscape, PNG with no alpha channel.
+  in file name order, portrait or landscape. Each is decoded: every chunk's checksum, the image data inflated to the
+  size its header gives, no interlacing, no alpha channel or transparency, nothing after `IEND`.
 
 It checks all of that before any request and lists every problem at once (`asc.mjs listing --check` stops there
-and needs no key; the workflow runs it first). Then it writes only what differs from App Store Connect: the version
-(made with a manual release, or a lone `PREPARE_FOR_SUBMISSION` draft renamed, as `app-store` does; a version in
-review is refused), each locale's text and URLs, the subtitle and privacy policy, the categories, the age rating
+and needs no key; the workflow runs it first). A `version` (`--version`) other than the pin is refused there too.
+Then it writes only what differs from App Store Connect: the version (made with a manual release and the
+copyright, or a lone `PREPARE_FOR_SUBMISSION` draft renamed, as `app-store` does; a version in review is refused)
+and its copyright, each locale's text and URLs, the subtitle and privacy policy, the categories, the age rating
 answers, the content rights, a free price from the base territory, availability in every territory and in new ones,
 and App Review Information: the notes, no demo account and the contact. The contact comes from the
 `ASC_REVIEW_CONTACT_FIRST_NAME`, `_LAST_NAME`, `_PHONE` and `_EMAIL` secrets; with any of them unset it is left alone
 and the run says which, so set them (`gh secret set ASC_REVIEW_CONTACT_EMAIL`, and so on) and run it again. The
-contact is never committed and never printed. A screenshot set is replaced only when its files differ from the
-repo's by MD5 (Apple's `sourceFileChecksum`), and only reordered when just the order differs; a new screenshot is
-reserved, uploaded to the addresses Apple gives (without the App Store Connect token) and committed with its
-checksum, and the run waits up to `--timeout` (600 s) for Apple to finish processing it. A set for any other
+contact is never committed and never printed: when Apple refuses the App Review Information, the run shows only
+the status, Apple's error code and the field it names, since Apple's message can repeat the phone number in a form
+GitHub's secret masking doesn't catch. Screenshots are matched to the repo's files by MD5 (Apple's
+`sourceFileChecksum`): a screenshot that matches and has finished uploading or is processing is kept, and only the
+files that differ are uploaded. New ones go up before the old ones are deleted, as far as a set's limit of 10
+allows (at 10 it deletes one unwanted screenshot per upload), so a failed upload leaves the old screenshots in place;
+one that never finished or that Apple refused is deleted first. The order is set last, to the file names' order.
+Each new screenshot is reserved, uploaded to the addresses Apple gives (without the App Store Connect token) and
+committed with its checksum, and the run waits up to `--timeout` (600 s) for Apple to finish processing it. A
+free price counts as set only when a free manual price is in effect today, by its start and end dates. A set for any other
 display type is left as it is. A re-run on an unchanged repo writes nothing. Two things the API can't do are
 listed at the end instead: territories missing from an existing availability, and availability in new
 territories once it was turned off.
@@ -4901,12 +4913,20 @@ territories once it was turned off.
   15 minutes and made again a minute before it runs out, so a long wait for processing keeps working.
 
 `mode=app-store`, in order:
+- **The build floor.** `apps/phone/ios/Config/first-iphone-only-build` (`22`) is the first build of the iPhone-only
+  project: builds 1 to 21 were uploaded for 1.0.1 while the project targeted iPhone and iPad. App Store Connect's
+  API says nothing about a build's device families (its `builds` and `buildBundles` resources in OpenAPI 4.6.1 carry
+  no such field), so the committed number is the check: `app-store` refuses a lower build before any request, and
+  `release-ios` refuses to upload one. Upload TestFlight builds only from a checkout that has this change; if a
+  build from an older checkout reaches App Store Connect at or above the floor, expire it and raise the floor in a
+  commit. `asc.mjs version` prints the pin, and `version --first-build` the floor; the workflow and `release-ios`
+  read both through it, and each file must be one plain line.
 - **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
   `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
   `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in
   `Config/Ardia-DefaultBrowser.entitlements`, the Release `TARGETED_DEVICE_FAMILY` of `com.ardia.browser.ios` in
   `Ardia.xcodeproj` (`1`: iPhone only), which decides the screenshots the listing needs, and the pinned version in
-  `Config/release-version`. Each missing one is named and nothing is sent.
+  `Config/release-version` and the floor in `Config/first-iphone-only-build`. Each missing one is named and nothing is sent.
 - **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
   outside is refused before a request.
 - **The build** is picked by its number and the pinned version, so a build number another version shares never
@@ -4921,7 +4941,9 @@ territories once it was turned off.
   review with other items, is being cancelled or completed, or holds anything but this version.
 - **The version.** It refuses while another version is waiting for review, in review or pending release, and when the
   build's version is already on sale (a new App Store release needs a new version, which is the owner's call). A
-  version already in review with this build is reported and left alone. Otherwise it takes this version's draft,
+  version already in review with this build is reported and left alone, but only as a success when its release is
+  manual: with any other release type the run exits non-zero and asks for Manual in App Store Connect, touching
+  nothing. A version it makes takes the copyright of the newest version that has one. Otherwise it takes this version's draft,
   makes it, or renames the one other draft only when it is alone and still `PREPARE_FOR_SUBMISSION`; a rejected
   draft, or more than one, stops the run with the list. Then it attaches the build (in place of an older one) and
   sets the release to manual.
@@ -4930,8 +4952,8 @@ territories once it was turned off.
 - **The checks** list everything missing at once and stop before the submission: the primary locale's description,
   keywords, support URL and, for each device family the app targets, at least one screenshot whose upload has
   finished (an empty set, or one still uploading or failed, counts as none), and App Review
-  Information's contact name, phone, email and notes, and a demo account's name and password when one is required.
-  For iPhone that screenshot must be in the "iPhone with Dynamic Island (medium display)" class, which App Review
+  Information's contact name, phone, email and notes, a demo account's name and password when one is required,
+  and the version's copyright, which Apple requires (`mode=listing` sets it). For iPhone that screenshot must be in the "iPhone with Dynamic Island (medium display)" class, which App Review
   requires (`APP_IPHONE_61`: 1206×2622 or 1179×2556), or in the large class it scales down from (`APP_IPHONE_67`:
   1320×2868, 1290×2796, 1260×2736); a finished set only in a smaller class (`APP_IPHONE_65`, `_58`, `_55` and older)
   counts as none, and the gap names it (Apple's Screenshot specifications, checked 2026-11-26; the display type

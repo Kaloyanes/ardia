@@ -2,6 +2,7 @@
   "supportUrl": "https://example.com/support",
   "marketingUrl": "https://example.com",
   "privacyPolicyUrl": "https://example.com/privacy",
+  "copyright": "2026 Example",
   "primaryCategory": "UTILITIES",
   "secondaryCategory": "PRODUCTIVITY",
   "ageRating": {

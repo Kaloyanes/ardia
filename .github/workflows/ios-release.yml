@@ -93,8 +93,8 @@ jobs:
         run: |
           set -euo pipefail
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs status | tee -a "$GITHUB_STEP_SUMMARY"
 
   public-link:
@@ -118,8 +118,8 @@ jobs:
           set -euo pipefail
           [ -n "$BUILD" ] || { echo "::error::public-link mode needs build"; exit 1; }
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs public-link --build "$BUILD" \
             --what-to-test apps/phone/ios/Config/TestFlight-WhatToTest.txt --privacy-policy https://ardia.dev/privacy | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -166,8 +166,8 @@ jobs:
           [ -z "$NOTES" ] || args+=(--notes "$NOTES" --notes-root "$GITHUB_WORKSPACE")
           [ "$DEFAULT_BROWSER" = true ] || args+=(--no-default-browser)
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           grep -q 'BEGIN PRIVATE KEY' "$key" || { echo "::error::ASC_APP_MANAGER_KEY_P8 isn't a base64 .p8 key"; exit 1; }
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -186,9 +186,16 @@ jobs:
         with:
           node-version: 24
       - name: Check the listing
-        run: node apps/phone/scripts/asc.mjs listing --check
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          args=(listing --check)
+          [ -z "$VERSION_INPUT" ] || args+=(--version "$VERSION_INPUT")
+          node apps/phone/scripts/asc.mjs "${args[@]}"
       - name: Push the listing
         env:
+          VERSION_INPUT: ${{ inputs.version }}
           ASC_KEY_P8: ${{ secrets.ASC_APP_MANAGER_KEY_P8 }}
           ASC_KEY_ID: ${{ secrets.ASC_APP_MANAGER_KEY_ID }}
           ASC_ISSUER: ${{ secrets.ASC_APP_MANAGER_ISSUER }}
@@ -203,10 +210,12 @@ jobs:
             exit 1
           fi
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           grep -q 'BEGIN PRIVATE KEY' "$key" || { echo "::error::ASC_APP_MANAGER_KEY_P8 isn't a base64 .p8 key"; exit 1; }
-          ASC_KEY="$key" node apps/phone/scripts/asc.mjs listing | tee -a "$GITHUB_STEP_SUMMARY"
+          args=(listing)
+          [ -z "$VERSION_INPUT" ] || args+=(--version "$VERSION_INPUT")
+          ASC_KEY="$key" node apps/phone/scripts/asc.mjs "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   add-tester:
     if: inputs.mode == 'add-tester'
@@ -230,8 +239,8 @@ jobs:
           [ -n "$EMAIL" ] || { echo "::error::add-tester mode needs email"; exit 1; }
           echo "::add-mask::$EMAIL"
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs add-tester --email "$EMAIL" | tee -a "$GITHUB_STEP_SUMMARY"
 
   expire:
@@ -255,8 +264,8 @@ jobs:
           set -euo pipefail
           [ -n "$BUILD" ] || { echo "::error::expire mode needs build"; exit 1; }
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs expire --build "$BUILD" | tee -a "$GITHUB_STEP_SUMMARY"
 
   certificate:
@@ -280,8 +289,8 @@ jobs:
           set -euo pipefail
           [ -n "$SIGNING_REQUEST" ] || { echo "::error::certificate mode needs signing_request"; exit 1; }
           key="$RUNNER_TEMP/AuthKey.p8"
-          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           printf '%s' "$SIGNING_REQUEST" | base64 -d > "$RUNNER_TEMP/request.csr"
           mkdir -p "$RUNNER_TEMP/certificate"
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs certificates --create "$RUNNER_TEMP/request.csr" --out "$RUNNER_TEMP/certificate/development.cer"
@@ -321,23 +330,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - if: inputs.mode != 'device'
-        name: Use the pinned iPhone version
-        run: |
-          set -euo pipefail
-          pinned="$(tr -d '[:space:]' < apps/phone/ios/Config/release-version)"
-          [[ "$pinned" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::apps/phone/ios/Config/release-version holds '$pinned', not a version such as 1.0.1"; exit 1; }
-          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$pinned" ]; then
-            echo "::error::Leave version empty for TestFlight. This workflow uses $pinned from apps/phone/ios/Config/release-version (docs/phone.md)."
-            exit 1
-          fi
-          echo "RELEASE_VERSION=$pinned" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: apps/phone/pnpm-lock.yaml
+      - if: inputs.mode != 'device'
+        name: Use the pinned iPhone version
+        run: |
+          set -euo pipefail
+          pinned="$(node apps/phone/scripts/asc.mjs version)"
+          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$pinned" ]; then
+            echo "::error::Leave version empty for TestFlight. This workflow uses $pinned from apps/phone/ios/Config/release-version (docs/phone.md)."
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$pinned" >> "$GITHUB_ENV"
       - name: Toolchain
         run: xcodebuild -version
       - id: cas-key

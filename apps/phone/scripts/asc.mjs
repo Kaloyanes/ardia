@@ -3,6 +3,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32, inflateSync } from "node:zlib";
 
 const HELP = `App Store Connect, for the iPhone app's TestFlight and App Store builds.
 
@@ -19,7 +20,8 @@ const HELP = `App Store Connect, for the iPhone app's TestFlight and App Store b
   node apps/phone/scripts/asc.mjs expire --build <number>
   node apps/phone/scripts/asc.mjs app-store --build <number> [--version <x.y.z>] [--notes <file> [--notes-root <dir>]]
       [--timeout <seconds>] [--no-default-browser] [--ios-dir <dir>]
-  node apps/phone/scripts/asc.mjs listing [--check] [--store <dir>] [--timeout <seconds>] [--ios-dir <dir>]
+  node apps/phone/scripts/asc.mjs listing [--check] [--version <x.y.z>] [--store <dir>] [--timeout <seconds>] [--ios-dir <dir>]
+  node apps/phone/scripts/asc.mjs version [--first-build] [--ios-dir <dir>]
   node apps/phone/scripts/asc.mjs preflight [--no-default-browser] [--ios-dir <dir>]
 
 Reads the API key from ASC_KEY (path to AuthKey_<id>.p8), ASC_KEY_ID and ASC_ISSUER.
@@ -41,7 +43,9 @@ good: nobody can install it again and Apple can't undo it. It refuses the newest
 register-device adds an iPhone to the team's devices, so a development-signed build
 (apps/phone/scripts/release-ios --development) installs on it; an iPhone already there is left as it is.
 The iPhone's release version is pinned in apps/phone/ios/Config/release-version: TestFlight uploads, listing
-and app-store all take it, and app-store refuses a --version that differs from it.
+and app-store all take it, and listing and app-store refuse a --version that differs from it. app-store also
+refuses a build below apps/phone/ios/Config/first-iphone-only-build, the first build of the iPhone-only project.
+version prints the pin (or, with --first-build, that build number) and fails unless each file is one plain line.
 app-store sends a processed build to App Review with an App Manager key. It picks the build of the pinned
 version by number; finds or makes the App Store version for it;
 attaches the build; sets What's New from --notes (a short default without it); keeps the release manual;
@@ -97,26 +101,33 @@ const DEVICE_FAMILIES = new Map([
   ["2", { name: "iPad", prefix: "APP_IPAD_", required: "APP_IPAD_*", counts: (type) => type?.startsWith("APP_IPAD_") ?? false }],
 ]);
 const RELEASE_VERSION_FILE = join("Config", "release-version");
+const FIRST_BUILD_FILE = join("Config", "first-iphone-only-build");
 const STORE_DIR = fileURLToPath(new URL("../store", import.meta.url));
 const LOCALE_DIR = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const LISTING_TEXT = [
-  { file: "description.txt", field: "description", label: "description", limit: 4000, required: true },
-  { file: "keywords.txt", field: "keywords", label: "keywords", limit: 100, required: true },
-  { file: "promotional-text.txt", field: "promotionalText", label: "promotional text", limit: 170, required: false },
-  { file: "subtitle.txt", field: "subtitle", label: "subtitle", limit: 30, required: false },
+  { file: "description.txt", field: "description", rule: "the description takes", limit: 4000, unit: "characters", required: true },
+  { file: "keywords.txt", field: "keywords", rule: "the keywords take", limit: 100, unit: "bytes", required: true },
+  { file: "promotional-text.txt", field: "promotionalText", rule: "the promotional text takes", limit: 170, unit: "characters", required: false },
+  { file: "subtitle.txt", field: "subtitle", rule: "the subtitle takes", limit: 30, unit: "characters", required: false },
 ];
 const REVIEW_NOTES_FILE = "review-notes.txt";
-const REVIEW_NOTES_LIMIT = 4000;
+const REVIEW_NOTES = { rule: "App Review notes take", limit: 4000, unit: "bytes" };
 const SCREENSHOTS_PER_SET = 10;
-const LISTING_KEYS = new Set(["supportUrl", "marketingUrl", "privacyPolicyUrl", "primaryCategory", "secondaryCategory", "ageRating", "contentRights", "price", "availability", "baseTerritory"]);
-const AGE_RATING_FIELDS = new Set([
-  "advertising", "alcoholTobaccoOrDrugUseOrReferences", "contests", "datingAndRelationships", "gambling", "gamblingSimulated",
-  "gunsOrOtherWeapons", "healthOrWellnessTopics", "kidsAgeBand", "lootBox", "medicalOrTreatmentInformation", "messagingAndChat",
-  "parentalControls", "profanityOrCrudeHumor", "ageAssurance", "sexualContentGraphicAndNudity", "sexualContentOrNudity",
-  "sharedLocation", "socialMedia", "socialMediaAgeRestricted", "horrorOrFearThemes", "matureOrSuggestiveThemes",
-  "unrestrictedWebAccess", "userGeneratedContent", "violenceCartoonOrFantasy", "violenceRealisticProlongedGraphicOrSadistic",
-  "violenceRealistic", "ageRatingOverride", "ageRatingOverrideV2", "koreaAgeRatingOverride", "gracRatingClassificationNumber",
-  "developerAgeRatingInfoUrl",
+const LISTING_KEYS = new Set(["supportUrl", "marketingUrl", "privacyPolicyUrl", "copyright", "primaryCategory", "secondaryCategory", "ageRating", "contentRights", "price", "availability", "baseTerritory"]);
+const FREQUENCY = ["NONE", "INFREQUENT_OR_MILD", "FREQUENT_OR_INTENSE", "INFREQUENT", "FREQUENT"];
+const AGE_RATING_ANSWERS = new Map([
+  ...["advertising", "datingAndRelationships", "gambling", "healthOrWellnessTopics", "lootBox", "messagingAndChat", "parentalControls", "ageAssurance", "sharedLocation", "socialMedia", "socialMediaAgeRestricted", "unrestrictedWebAccess", "userGeneratedContent"].map((key) => [key, "boolean"]),
+  ...[
+    "alcoholTobaccoOrDrugUseOrReferences", "contests", "gamblingSimulated", "gunsOrOtherWeapons", "medicalOrTreatmentInformation", "profanityOrCrudeHumor",
+    "sexualContentGraphicAndNudity", "sexualContentOrNudity", "horrorOrFearThemes", "matureOrSuggestiveThemes", "violenceCartoonOrFantasy",
+    "violenceRealisticProlongedGraphicOrSadistic", "violenceRealistic",
+  ].map((key) => [key, FREQUENCY]),
+  ["kidsAgeBand", ["FIVE_AND_UNDER", "SIX_TO_EIGHT", "NINE_TO_ELEVEN"]],
+  ["ageRatingOverride", ["NONE", "NINE_PLUS", "THIRTEEN_PLUS", "SIXTEEN_PLUS", "SEVENTEEN_PLUS", "UNRATED"]],
+  ["ageRatingOverrideV2", ["NONE", "NINE_PLUS", "THIRTEEN_PLUS", "SIXTEEN_PLUS", "EIGHTEEN_PLUS", "UNRATED"]],
+  ["koreaAgeRatingOverride", ["NONE", "ALL", "TWELVE_PLUS", "FIFTEEN_PLUS", "NINETEEN_PLUS"]],
+  ["gracRatingClassificationNumber", "text"],
+  ["developerAgeRatingInfoUrl", "url"],
 ]);
 const CONTENT_RIGHTS = new Set(["DOES_NOT_USE_THIRD_PARTY_CONTENT", "USES_THIRD_PARTY_CONTENT"]);
 const REVIEW_CONTACT = [
@@ -150,9 +161,10 @@ function token() {
 }
 
 class ApiError extends Error {
-  constructor(status, detail) {
+  constructor(status, detail, errors = []) {
     super(`${status} ${detail}`);
     this.status = status;
+    this.errors = errors;
   }
 }
 
@@ -166,10 +178,13 @@ function authorization() {
 async function fail(response) {
   const text = await response.text();
   let detail = text.slice(0, 200);
+  let errors = [];
   try {
-    detail = JSON.parse(text).errors.map((error) => error.detail ?? error.title).join("; ");
+    errors = JSON.parse(text).errors;
+    detail = errors.map((error) => error.detail ?? error.title).join("; ");
   } catch {}
-  throw new ApiError(response.status, detail);
+  const safe = (Array.isArray(errors) ? errors : []).map((error) => ({ code: typeof error?.code === "string" ? error.code : null, pointer: typeof error?.source?.pointer === "string" ? error.source.pointer : null }));
+  throw new ApiError(response.status, detail, safe);
 }
 
 const RETRY_AFTER_MS = [1000, 3000, 9000];
@@ -694,7 +709,7 @@ function refuse(message) {
 async function listAppStoreVersions(appId) {
   const { rows, included } = await get(`/v1/apps/${appId}/appStoreVersions`, {
     "filter[platform]": "IOS",
-    "fields[appStoreVersions]": "versionString,appStoreState,appVersionState,releaseType,createdDate,build",
+    "fields[appStoreVersions]": "versionString,appStoreState,appVersionState,releaseType,copyright,createdDate,build",
     include: "build",
     "fields[builds]": "version",
     limit: "50",
@@ -707,6 +722,7 @@ async function listAppStoreVersions(appId) {
       version: row.attributes.versionString,
       state: row.attributes.appVersionState ?? row.attributes.appStoreState ?? "?",
       releaseType: row.attributes.releaseType ?? "?",
+      copyright: row.attributes.copyright ?? null,
       created: day(row.attributes.createdDate),
       buildId: link?.id ?? null,
       build: link ? (builds.get(link.id)?.attributes.version ?? "?") : null,
@@ -827,9 +843,32 @@ function shown(path) {
   return relative(process.cwd(), path) || path;
 }
 
+function pinnedLine(iosDir, file, pattern) {
+  const raw = contents(join(iosDir, file));
+  return raw !== null && pattern.test(raw) ? raw.replace(/\n$/, "") : null;
+}
+
 function pinnedVersion(iosDir) {
-  const text = contents(join(iosDir, RELEASE_VERSION_FILE))?.trim() ?? "";
-  return /^\d+\.\d+\.\d+$/.test(text) ? text : null;
+  return pinnedLine(iosDir, RELEASE_VERSION_FILE, /^\d+\.\d+\.\d+\n?$/);
+}
+
+function firstIphoneOnlyBuild(iosDir) {
+  const line = pinnedLine(iosDir, FIRST_BUILD_FILE, /^[1-9]\d*\n?$/);
+  return line === null ? null : Number(line);
+}
+
+function pinProblems(iosDir) {
+  const problems = [];
+  if (!pinnedVersion(iosDir)) problems.push(`${shown(join(iosDir, RELEASE_VERSION_FILE))} must hold one line with the version as x.y.z`);
+  if (!firstIphoneOnlyBuild(iosDir)) problems.push(`${shown(join(iosDir, FIRST_BUILD_FILE))} must hold one line with a build number`);
+  return problems;
+}
+
+async function version(args) {
+  const iosDir = option(args, "--ios-dir") ?? IOS_DIR;
+  const problems = pinProblems(iosDir);
+  if (problems.length > 0) refuse(problems.join("\n"));
+  console.log(args.includes("--first-build") ? firstIphoneOnlyBuild(iosDir) : pinnedVersion(iosDir));
 }
 
 function preflightGaps(iosDir, defaultBrowser) {
@@ -845,7 +884,7 @@ function preflightGaps(iosDir, defaultBrowser) {
   if (!targetedFamilies(iosDir)) {
     gaps.push(`${shown(projectPath(iosDir))} gives ${BUNDLE_PREFIX}'s Release build no TARGETED_DEVICE_FAMILY, so the screenshots it needs are unknown`);
   }
-  if (!pinnedVersion(iosDir)) gaps.push(`${shown(join(iosDir, RELEASE_VERSION_FILE))} doesn't hold the iPhone release version as x.y.z`);
+  gaps.push(...pinProblems(iosDir));
   if (defaultBrowser) {
     const entitlementsPath = join(iosDir, "Config", "Ardia-DefaultBrowser.entitlements");
     if (!/<key>com\.apple\.developer\.web-browser<\/key>\s*<true\/>/.test(contents(entitlementsPath) ?? "")) {
@@ -862,11 +901,12 @@ function requirePreflight(args) {
   if (gaps.length > 0) refuse(`the iPhone app isn't ready for App Review:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
   const families = targetedFamilies(iosDir);
   const version = pinnedVersion(iosDir);
+  const firstBuild = firstIphoneOnlyBuild(iosDir);
   console.log(
     `preflight passed: export compliance answered, privacy manifest present${defaultBrowser ? ", default browser entitlement present" : ""}, ` +
-      `version ${version}, for ${families.map((family) => family.name).join(" and ")}`,
+      `version ${version} from build ${firstBuild}, for ${families.map((family) => family.name).join(" and ")}`,
   );
-  return { families, version };
+  return { families, version, firstBuild };
 }
 
 async function preflight(args) {
@@ -1039,6 +1079,18 @@ function allowOwnWrite(expected) {
   for (const state of [...expected.states]) for (const next of STATES_AFTER_OWN_WRITE.get(state) ?? []) expected.states.add(next);
 }
 
+function requireManualAlready(version, where) {
+  if (version.releaseType === "MANUAL") return;
+  refuse(
+    `${where}, but its release is ${version.releaseType}, so Apple would release it as soon as it's approved; ` +
+      "set it to Manual in App Store Connect (the version's App Store Version Release). Nothing was changed, and the submission is left as it is",
+  );
+}
+
+function carriedCopyright(versions) {
+  return versions.toSorted((a, b) => b.created.localeCompare(a.created)).find((row) => row.copyright?.trim())?.copyright ?? null;
+}
+
 async function appStore(args) {
   const number = option(args, "--build");
   if (!number) {
@@ -1050,7 +1102,17 @@ async function appStore(args) {
     console.error("asc: --timeout takes seconds");
     process.exit(64);
   }
-  const { families, version: pinned } = requirePreflight(args);
+  if (!/^[1-9]\d*$/.test(number)) {
+    console.error("asc: --build takes a build number");
+    process.exit(64);
+  }
+  const { families, version: pinned, firstBuild } = requirePreflight(args);
+  if (Number(number) < firstBuild) {
+    refuse(
+      `build ${number} is older than build ${firstBuild}, the first iPhone-only build (apps/phone/ios/${FIRST_BUILD_FILE}); ` +
+        "builds before it were made for iPhone and iPad, so upload a new build to TestFlight and submit that one",
+    );
+  }
   const asked = option(args, "--version");
   if (asked !== undefined && asked !== pinned) {
     refuse(`--version ${asked} isn't the pinned iPhone version ${pinned} (apps/phone/ios/${RELEASE_VERSION_FILE}), which TestFlight uploads too; change the pin in a commit instead`);
@@ -1064,6 +1126,7 @@ async function appStore(args) {
   const plan = planVersion(versions, versionString, build.id);
   if (plan.act === "refuse") refuse(plan.message);
   if (plan.act === "done") {
+    requireManualAlready(plan.version, `version ${versionString} is ${plan.version.state} with build ${number}`);
     console.log(`version ${versionString} with build ${number} is already ${plan.version.state}; nothing to do`);
     return;
   }
@@ -1079,6 +1142,7 @@ async function appStore(args) {
           "remove it from review in App Store Connect before sending another build",
       );
     }
+    requireManualAlready(reviewed, `version ${versionString} is in a review submission that is ${early.submission.state} with build ${number}`);
     console.log(`version ${versionString} is already in a review submission that is ${early.submission.state}; nothing to do`);
     return;
   }
@@ -1086,15 +1150,16 @@ async function appStore(args) {
   let version = plan.version;
   let wroteVersion = plan.act !== "use";
   if (plan.act === "create") {
+    const copyright = carriedCopyright(versions);
     const made = await post("/v1/appStoreVersions", {
       data: {
         type: "appStoreVersions",
-        attributes: { platform: "IOS", versionString, releaseType: "MANUAL" },
+        attributes: { platform: "IOS", versionString, releaseType: "MANUAL", ...(copyright ? { copyright } : {}) },
         relationships: { app: { data: { type: "apps", id: app.id } } },
       },
     });
-    version = { id: made.id, version: versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: made.attributes?.releaseType ?? "MANUAL", buildId: null, build: null };
-    console.log(`made App Store version ${versionString}`);
+    version = { id: made.id, version: versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: made.attributes?.releaseType ?? "MANUAL", copyright, buildId: null, build: null };
+    console.log(`made App Store version ${versionString}${copyright ? `, copyright carried from the last version` : ""}`);
   } else if (plan.act === "rename") {
     await patch(`/v1/appStoreVersions/${version.id}`, { data: { type: "appStoreVersions", id: version.id, attributes: { versionString } } });
     console.log(`App Store version ${version.version} (${version.state}) is now ${versionString}`);
@@ -1144,6 +1209,7 @@ async function appStore(args) {
 
   const detail = await reviewDetail(version.id);
   const gaps = [...(await listingGaps(primary, locale, families)), ...reviewDetailGaps(detail)];
+  if (!version.copyright?.trim()) gaps.push(`version ${versionString} copyright (mode=listing sets it from apps/phone/store/listing.json)`);
   if (gaps.length > 0) {
     refuse(`fill these in App Store Connect before version ${versionString} goes to App Review, then run this again:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
   }
@@ -1252,33 +1318,63 @@ function characters(text) {
 }
 
 function pngFacts(bytes) {
-  if (bytes.length < 33 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return null;
-  let width = 0;
-  let height = 0;
-  let colorType = -1;
+  if (bytes.length < 8 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return { problem: "no PNG signature" };
+  let header = null;
   let transparency = false;
-  for (let at = 8; at + 8 <= bytes.length; ) {
+  let ended = false;
+  const data = [];
+  let at = 8;
+  while (at < bytes.length && !ended) {
+    if (at + 12 > bytes.length) return { problem: "a chunk is cut off" };
     const length = bytes.readUInt32BE(at);
     const type = bytes.toString("latin1", at + 4, at + 8);
-    if (type === "IHDR" && length >= 13) {
-      width = bytes.readUInt32BE(at + 8);
-      height = bytes.readUInt32BE(at + 12);
-      colorType = bytes[at + 17];
-    }
-    if (type === "tRNS") transparency = true;
-    if (type === "IDAT" || type === "IEND") break;
-    at += 12 + length;
+    const end = at + 12 + length;
+    if (end > bytes.length) return { problem: `its ${type} chunk is cut off` };
+    if (crc32(bytes.subarray(at + 4, at + 8 + length)) !== bytes.readUInt32BE(at + 8 + length)) return { problem: `its ${type} chunk fails its checksum` };
+    if (header === null && type !== "IHDR") return { problem: "it doesn't start with IHDR" };
+    const body = bytes.subarray(at + 8, at + 8 + length);
+    if (type === "IHDR") {
+      if (length !== 13) return { problem: "its IHDR is the wrong size" };
+      header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8], colorType: body[9], compression: body[10], filter: body[11], interlace: body[12] };
+    } else if (type === "IDAT") data.push(body);
+    else if (type === "tRNS") transparency = true;
+    else if (type === "IEND") ended = true;
+    at = end;
   }
-  if (!width || !height) return null;
-  return { width, height, alpha: colorType === 4 || colorType === 6 || transparency };
+  if (!header) return { problem: "it has no IHDR" };
+  if (data.length === 0) return { problem: "it has no image data" };
+  if (!ended) return { problem: "it has no IEND" };
+  if (at !== bytes.length) return { problem: "it has bytes after IEND" };
+  const channels = new Map([[0, 1], [2, 3], [3, 1], [4, 2], [6, 4]]).get(header.colorType);
+  if (!channels || ![1, 2, 4, 8, 16].includes(header.depth) || header.compression !== 0 || header.filter !== 0) return { problem: "its IHDR isn't a valid PNG header" };
+  if (header.interlace !== 0) return { problem: "it's interlaced; save it without interlacing" };
+  let pixels;
+  try {
+    pixels = inflateSync(Buffer.concat(data));
+  } catch {
+    return { problem: "its image data doesn't decompress" };
+  }
+  const rowBytes = Math.ceil((header.width * channels * header.depth) / 8);
+  if (pixels.length !== header.height * (1 + rowBytes)) return { problem: "its image data doesn't fill the image" };
+  return { width: header.width, height: header.height, alpha: header.colorType === 4 || header.colorType === 6 || transparency };
 }
 
 function httpsUrl(value) {
+  if (typeof value !== "string") return false;
   try {
     return new URL(value).protocol === "https:";
   } catch {
     return false;
   }
+}
+
+function ageRatingProblem(key, value) {
+  const kind = AGE_RATING_ANSWERS.get(key);
+  if (!kind) return `has an unknown answer ${key}`;
+  if (kind === "boolean") return typeof value === "boolean" ? null : `.${key} must be true or false`;
+  if (kind === "text") return typeof value === "string" && value.trim() ? null : `.${key} must be text`;
+  if (kind === "url") return httpsUrl(value) ? null : `.${key} must be an https URL`;
+  return kind.includes(value) ? null : `.${key} must be one of ${kind.join(", ")}`;
 }
 
 function listingProblems(listing, where) {
@@ -1294,20 +1390,29 @@ function listingProblems(listing, where) {
     if (typeof listing[key] !== "string" || !/^[A-Z][A-Z_]*$/.test(listing[key])) problems.push(`${where} ${key} must be an App Store category id such as UTILITIES`);
   }
   if (listing.primaryCategory && listing.primaryCategory === listing.secondaryCategory) problems.push(`${where} secondaryCategory repeats primaryCategory`);
+  if (typeof listing.copyright !== "string" || !/^\d{4} \S/.test(listing.copyright) || listing.copyright.includes("©")) {
+    problems.push(`${where} copyright must be the year and the holder, such as "2026 Example, Inc." (Apple adds the ©)`);
+  }
   const rating = listing.ageRating;
   if (typeof rating !== "object" || rating === null || Array.isArray(rating) || Object.keys(rating).length === 0) {
     problems.push(`${where} ageRating must hold the age rating answers`);
   } else {
     for (const [key, value] of Object.entries(rating)) {
-      if (!AGE_RATING_FIELDS.has(key)) problems.push(`${where} ageRating has an unknown answer ${key}`);
-      else if (value !== null && typeof value !== "boolean" && typeof value !== "string") problems.push(`${where} ageRating.${key} must be true, false, null or one of Apple's words`);
+      const problem = ageRatingProblem(key, value);
+      if (problem) problems.push(`${where} ageRating${problem.startsWith(".") ? problem : ` ${problem}`}`);
     }
   }
   if (!CONTENT_RIGHTS.has(listing.contentRights)) problems.push(`${where} contentRights must be ${[...CONTENT_RIGHTS].join(" or ")}`);
   if (listing.price !== "free") problems.push(`${where} price must be "free": listing sets no other price`);
   if (listing.availability !== "all") problems.push(`${where} availability must be "all": listing makes the app available in every territory`);
-  if (listing.baseTerritory !== undefined && !/^[A-Z]{3}$/.test(listing.baseTerritory)) problems.push(`${where} baseTerritory must be a territory code such as USA`);
+  if (listing.baseTerritory !== undefined && (typeof listing.baseTerritory !== "string" || !/^[A-Z]{3}$/.test(listing.baseTerritory))) {
+    problems.push(`${where} baseTerritory must be a territory code such as USA`);
+  }
   return problems;
+}
+
+function measured(text, unit) {
+  return unit === "bytes" ? Buffer.byteLength(text, "utf8") : characters(text);
 }
 
 function readLocale(dir, locale, problems) {
@@ -1319,17 +1424,16 @@ function readLocale(dir, locale, problems) {
       if (field.required) problems.push(`${shown(path)} is ${value === undefined ? "missing" : "empty"}`);
       continue;
     }
-    if (characters(value) > field.limit) problems.push(`${shown(path)} has ${characters(value)} characters; the ${field.label} takes at most ${field.limit}`);
+    const size = measured(value, field.unit);
+    if (size > field.limit) problems.push(`${shown(path)} has ${size} ${field.unit}; ${field.rule} at most ${field.limit}`);
     text[field.field] = value;
   }
   const notesPath = join(dir, REVIEW_NOTES_FILE);
   const reviewNotes = contents(notesPath)?.trim() || null;
-  if (reviewNotes && characters(reviewNotes) > REVIEW_NOTES_LIMIT) {
-    problems.push(`${shown(notesPath)} has ${characters(reviewNotes)} characters; App Review notes take at most ${REVIEW_NOTES_LIMIT}`);
-  }
+  const notesSize = reviewNotes ? measured(reviewNotes, REVIEW_NOTES.unit) : 0;
+  if (notesSize > REVIEW_NOTES.limit) problems.push(`${shown(notesPath)} has ${notesSize} ${REVIEW_NOTES.unit}; ${REVIEW_NOTES.rule} at most ${REVIEW_NOTES.limit}`);
   return { locale, text, reviewNotes };
 }
-
 function readScreenshots(dir, kind, problems) {
   const files = [];
   const accepted = kind.sizes.map(([width, height]) => `${width}×${height}`).join(", ");
@@ -1341,8 +1445,8 @@ function readScreenshots(dir, kind, problems) {
     }
     const bytes = readFileSync(path);
     const facts = pngFacts(bytes);
-    if (!facts) {
-      problems.push(`${shown(path)} isn't a PNG`);
+    if (facts.problem) {
+      problems.push(`${shown(path)} isn't a complete PNG: ${facts.problem}`);
       continue;
     }
     const fits = kind.sizes.some(([width, height]) => (facts.width === width && facts.height === height) || (facts.width === height && facts.height === width));
@@ -1371,11 +1475,11 @@ function readStore(storeDir) {
   else {
     try {
       listing = JSON.parse(raw);
+      problems.push(...listingProblems(listing, shown(listingPath)));
     } catch (error) {
       problems.push(`${shown(listingPath)} isn't JSON: ${error.message}`);
     }
   }
-  if (listing !== null) problems.push(...listingProblems(listing, shown(listingPath)));
   const locales = entries(storeDir)
     .filter((entry) => entry.isDirectory() && LOCALE_DIR.test(entry.name))
     .toSorted((a, b) => a.name.localeCompare(b.name))
@@ -1412,25 +1516,30 @@ function planListingVersion(versions, versionString) {
   return planVersion(versions, versionString, null);
 }
 
-async function listingVersion(app, versionString) {
+async function listingVersion(app, versionString, copyright, changed) {
   const plan = planListingVersion(await listAppStoreVersions(app.id), versionString);
   if (plan.act === "refuse") refuse(plan.message);
   if (plan.act === "create") {
     const made = await post("/v1/appStoreVersions", {
       data: {
         type: "appStoreVersions",
-        attributes: { platform: "IOS", versionString, releaseType: "MANUAL" },
+        attributes: { platform: "IOS", versionString, releaseType: "MANUAL", copyright },
         relationships: { app: { data: { type: "apps", id: app.id } } },
       },
     });
-    return { version: { id: made.id, version: versionString }, change: `made App Store version ${versionString} with a manual release` };
+    changed(`made App Store version ${versionString} with a manual release and its copyright`);
+    return { id: made.id, version: versionString };
   }
-  if (plan.act === "rename") {
-    await patch(`/v1/appStoreVersions/${plan.version.id}`, { data: { type: "appStoreVersions", id: plan.version.id, attributes: { versionString } } });
-    return { version: { ...plan.version, version: versionString }, change: `App Store version ${plan.version.version} (${plan.version.state}) is now ${versionString}` };
+  const attributes = {};
+  if (plan.act === "rename") attributes.versionString = versionString;
+  if (plan.version.copyright !== copyright) attributes.copyright = copyright;
+  if (Object.keys(attributes).length === 0) console.log(`App Store version ${versionString} is ${plan.version.state}, its copyright already set`);
+  else {
+    await patch(`/v1/appStoreVersions/${plan.version.id}`, { data: { type: "appStoreVersions", id: plan.version.id, attributes } });
+    if (attributes.versionString) changed(`App Store version ${plan.version.version} (${plan.version.state}) is now ${versionString}`);
+    if (attributes.copyright) changed(`version ${versionString} copyright set`);
   }
-  console.log(`App Store version ${versionString} is ${plan.version.state}`);
-  return { version: plan.version, change: null };
+  return { ...plan.version, version: versionString };
 }
 
 async function screenshotState(id) {
@@ -1474,10 +1583,20 @@ async function uploadScreenshot(setId, file) {
   return made.id;
 }
 
-function inChecksumOrder(held, files) {
-  const byChecksum = new Map();
-  for (const row of held) byChecksum.set(row.checksum, [...(byChecksum.get(row.checksum) ?? []), row.id]);
-  return files.map((file) => byChecksum.get(file.checksum).shift());
+const USABLE_SCREENSHOT_STATES = new Set(["COMPLETE", "UPLOAD_COMPLETE"]);
+
+function planScreenshots(held, files) {
+  const usable = new Map();
+  for (const row of held.filter((candidate) => USABLE_SCREENSHOT_STATES.has(candidate.state) && candidate.checksum)) {
+    usable.set(row.checksum, [...(usable.get(row.checksum) ?? []), row]);
+  }
+  const slots = files.map((file) => ({ file, row: usable.get(file.checksum)?.shift() ?? null }));
+  const kept = new Set(slots.filter((slot) => slot.row).map((slot) => slot.row.id));
+  return {
+    slots,
+    broken: held.filter((row) => !USABLE_SCREENSHOT_STATES.has(row.state) || !row.checksum),
+    unwanted: held.filter((row) => USABLE_SCREENSHOT_STATES.has(row.state) && row.checksum && !kept.has(row.id)),
+  };
 }
 
 async function pushScreenshots(localizationId, classes, deadline, changed) {
@@ -1489,6 +1608,7 @@ async function pushScreenshots(localizationId, classes, deadline, changed) {
     limit: "50",
   });
   const shots = new Map(included.filter((row) => row.type === "appScreenshots").map((row) => [row.id, row.attributes ?? {}]));
+  const remove = (row) => send("DELETE", `/v1/appScreenshots/${row.id}`);
   for (const kind of classes) {
     if (kind.files.length === 0) {
       console.log(`no screenshots in screenshots/${kind.dir}, so ${kind.displayType} is left as it is`);
@@ -1500,20 +1620,8 @@ async function pushScreenshots(localizationId, classes, deadline, changed) {
       checksum: shots.get(link.id)?.sourceFileChecksum ?? null,
       state: shots.get(link.id)?.assetDeliveryState?.state ?? null,
     }));
-    const wanted = kind.files.map((file) => file.checksum);
-    const sameFiles = held.length === wanted.length && held.map((row) => row.checksum).toSorted().join() === wanted.toSorted().join();
-    const settled = held.every((row) => row.state === "COMPLETE" || row.state === "UPLOAD_COMPLETE");
-    if (set && sameFiles && settled) {
-      await settleScreenshots(held.filter((row) => row.state === "UPLOAD_COMPLETE").map((row) => row.id), deadline);
-      if (held.map((row) => row.checksum).join() === wanted.join()) {
-        console.log(`${kind.displayType}: ${counted(held.length, "screenshot")} already ${held.length === 1 ? "matches" : "match"} screenshots/${kind.dir}`);
-      } else {
-        const order = inChecksumOrder(held, kind.files);
-        await patch(`/v1/appScreenshotSets/${set.id}/relationships/appScreenshots`, { data: order.map((id) => ({ type: "appScreenshots", id })) });
-        changed(`${kind.displayType}: screenshots put in the order of screenshots/${kind.dir}`);
-      }
-      continue;
-    }
+    const { slots, broken, unwanted } = planScreenshots(held, kind.files);
+    const missing = slots.filter((slot) => !slot.row);
     if (!set) {
       set = await post("/v1/appScreenshotSets", {
         data: {
@@ -1523,12 +1631,38 @@ async function pushScreenshots(localizationId, classes, deadline, changed) {
         },
       });
     }
-    for (const row of held) await send("DELETE", `/v1/appScreenshots/${row.id}`);
-    const made = [];
-    for (const file of kind.files) made.push(await uploadScreenshot(set.id, file));
-    await settleScreenshots(made, deadline);
-    await patch(`/v1/appScreenshotSets/${set.id}/relationships/appScreenshots`, { data: made.map((id) => ({ type: "appScreenshots", id })) });
-    changed(`${kind.displayType}: ${held.length > 0 ? `${counted(held.length, "screenshot")} replaced by` : "uploaded"} the ${made.length} in screenshots/${kind.dir}`);
+    for (const row of broken) await remove(row);
+    let count = held.length - broken.length;
+    const spare = [...unwanted];
+    for (const slot of missing) {
+      if (count >= SCREENSHOTS_PER_SET) {
+        await remove(spare.shift());
+        count--;
+      }
+      slot.id = await uploadScreenshot(set.id, slot.file);
+      count++;
+    }
+    await settleScreenshots(
+      slots.map((slot) => (slot.row ? (slot.row.state === "UPLOAD_COMPLETE" ? slot.row.id : null) : slot.id)).filter(Boolean),
+      deadline,
+    );
+    for (const row of spare) await remove(row);
+    const order = slots.map((slot) => slot.row?.id ?? slot.id);
+    const settledOrder = held.filter((row) => order.includes(row.id)).map((row) => row.id);
+    const changedFiles = missing.length + broken.length + unwanted.length;
+    if (changedFiles === 0 && settledOrder.join() === order.join()) {
+      console.log(`${kind.displayType}: ${counted(order.length, "screenshot")} already ${order.length === 1 ? "matches" : "match"} screenshots/${kind.dir}`);
+      continue;
+    }
+    await patch(`/v1/appScreenshotSets/${set.id}/relationships/appScreenshots`, { data: order.map((id) => ({ type: "appScreenshots", id })) });
+    if (changedFiles === 0) changed(`${kind.displayType}: screenshots put in the order of screenshots/${kind.dir}`);
+    else {
+      const kept = slots.length - missing.length;
+      changed(
+        `${kind.displayType}: ${counted(missing.length, "screenshot")} uploaded${kept > 0 ? `, ${kept} kept` : ""}` +
+          `${broken.length + unwanted.length > 0 ? `, ${broken.length + unwanted.length} removed` : ""}, in the order of screenshots/${kind.dir}`,
+      );
+    }
   }
 }
 
@@ -1542,7 +1676,7 @@ async function freePrice(app, baseTerritory, changed) {
       limit: "200",
     });
     const today = new Date().toISOString().slice(0, 10);
-    const current = prices.filter((row) => !row.attributes?.endDate || row.attributes.endDate > today);
+    const current = prices.filter((row) => (!row.attributes?.startDate || row.attributes.startDate <= today) && (!row.attributes?.endDate || row.attributes.endDate > today));
     const customerPrice = (row) => included.find((point) => point.type === "appPricePoints" && point.id === row.relationships?.appPricePoint?.data?.id)?.attributes?.customerPrice;
     const free = current.length > 0 && current.every((row) => Number(customerPrice(row)) === 0);
     if (free && schedule.relationships?.baseTerritory?.data?.id === baseTerritory) {
@@ -1609,6 +1743,16 @@ async function everywhere(app, changed, byHand) {
   if (availability.attributes?.availableInNewTerritories === false) byHand.push("turn on availability in new territories in Pricing and Availability: Apple's API has no way to change it");
 }
 
+async function withoutContactInErrors(what, write) {
+  try {
+    return await write();
+  } catch (error) {
+    if (!(error instanceof ApiError)) throw error;
+    const where = error.errors.map((entry) => [entry.code, entry.pointer].filter(Boolean).join(" at ")).filter(Boolean).join("; ");
+    refuse(`App Store Connect refused ${what} with ${error.status}${where ? ` (${where})` : ""}; its message is left out because it can repeat the App Review contact`);
+  }
+}
+
 async function listing(args) {
   const storeDir = option(args, "--store") ?? STORE_DIR;
   const iosDir = option(args, "--ios-dir") ?? IOS_DIR;
@@ -1620,7 +1764,11 @@ async function listing(args) {
   const store = readStore(storeDir);
   const contact = reviewContact(store.problems);
   const versionString = pinnedVersion(iosDir);
-  if (!versionString) store.problems.push(`${shown(join(iosDir, RELEASE_VERSION_FILE))} doesn't hold the iPhone release version as x.y.z`);
+  store.problems.push(...pinProblems(iosDir));
+  const asked = option(args, "--version");
+  if (asked !== undefined && versionString && asked !== versionString) {
+    store.problems.push(`--version ${asked} isn't the pinned iPhone version ${versionString} (apps/phone/ios/${RELEASE_VERSION_FILE}); change the pin in a commit instead`);
+  }
   const families = targetedFamilies(iosDir) ?? [];
   if (families.some((family) => family.name !== "iPhone")) {
     store.problems.push(`${shown(projectPath(iosDir))} targets ${families.map((family) => family.name).join(" and ")}; listing pushes only iPhone screenshots`);
@@ -1644,8 +1792,7 @@ async function listing(args) {
   if (!primary) refuse(`the app's primary language is ${primaryLocale}, and ${shown(storeDir)} has no ${primaryLocale} folder; nothing was sent`);
   if (!primary.reviewNotes) refuse(`${shown(join(storeDir, primaryLocale, REVIEW_NOTES_FILE))} is missing; App Review reads the primary language's notes`);
 
-  const { version, change } = await listingVersion(app, versionString);
-  if (change) changed(change);
+  const version = await listingVersion(app, versionString, wanted.copyright, changed);
 
   const { rows: localizations } = await get(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations`, {
     "fields[appStoreVersionLocalizations]": "locale,description,keywords,promotionalText,supportUrl,marketingUrl",
@@ -1713,14 +1860,14 @@ async function listing(args) {
     }
   }
 
-  const categories = { primaryCategory: wanted.primaryCategory, secondaryCategory: wanted.secondaryCategory ?? null };
+  const categories = { primaryCategory: wanted.primaryCategory, ...(wanted.secondaryCategory ? { secondaryCategory: wanted.secondaryCategory } : {}) };
   const heldCategories = Object.fromEntries(Object.keys(categories).map((key) => [key, info.relationships?.[key]?.data?.id ?? null]));
   const categoryDiff = differing(heldCategories, categories);
-  if (!categoryDiff) console.log(`categories already ${[categories.primaryCategory, categories.secondaryCategory].filter(Boolean).join(" and ")}`);
+  if (!categoryDiff) console.log(`categories already ${Object.values(categories).join(" and ")}`);
   else {
-    const relationships = Object.fromEntries(Object.entries(categoryDiff).map(([key, id]) => [key, { data: id ? { type: "appCategories", id } : null }]));
+    const relationships = Object.fromEntries(Object.entries(categoryDiff).map(([key, id]) => [key, { data: { type: "appCategories", id } }]));
     await patch(`/v1/appInfos/${info.id}`, { data: { type: "appInfos", id: info.id, relationships } });
-    changed(`categories set: ${Object.entries(categoryDiff).map(([key, id]) => `${key} ${id ?? "none"}`).join(", ")}`);
+    changed(`categories set: ${Object.entries(categoryDiff).map(([key, id]) => `${key} ${id}`).join(", ")}`);
   }
 
   const declaration = await optional(`/v1/appInfos/${info.id}/ageRatingDeclaration`, {});
@@ -1751,15 +1898,19 @@ async function listing(args) {
   }
   const shownFields = (fields) => Object.keys(fields).map((key) => (key.startsWith("contact") ? "contact" : key)).filter((key, at, all) => all.indexOf(key) === at).join(", ");
   if (!review) {
-    await post("/v1/appStoreReviewDetails", {
-      data: { type: "appStoreReviewDetails", attributes: reviewWanted, relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: version.id } } } },
-    });
+    await withoutContactInErrors("the App Review information", () =>
+      post("/v1/appStoreReviewDetails", {
+        data: { type: "appStoreReviewDetails", attributes: reviewWanted, relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: version.id } } } },
+      }),
+    );
     changed(`App Review information set: ${shownFields(reviewWanted)}`);
   } else {
     const diff = differing(review.attributes, reviewWanted);
     if (!diff) console.log("the App Review information already matches");
     else {
-      await patch(`/v1/appStoreReviewDetails/${review.id}`, { data: { type: "appStoreReviewDetails", id: review.id, attributes: diff } });
+      await withoutContactInErrors("the App Review information", () =>
+        patch(`/v1/appStoreReviewDetails/${review.id}`, { data: { type: "appStoreReviewDetails", id: review.id, attributes: diff } }),
+      );
       changed(`App Review information updated: ${shownFields(diff)}`);
     }
   }
@@ -1800,6 +1951,7 @@ const commands = {
   "app-store": appStore,
   listing,
   preflight,
+  version,
 };
 if (!command || command === "-h" || command === "--help" || !commands[command]) {
   console.log(HELP);

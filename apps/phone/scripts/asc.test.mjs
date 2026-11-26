@@ -195,7 +195,7 @@ function fakeAppStore() {
   const versionRow = (version) => ({
     id: version.id,
     type: "appStoreVersions",
-    attributes: { versionString: version.version, appVersionState: version.state, releaseType: version.releaseType ?? "MANUAL" },
+    attributes: { versionString: version.version, appVersionState: version.state, releaseType: version.releaseType ?? "MANUAL", copyright: "copyright" in version ? version.copyright : "2026 Example" },
     relationships: { build: { data: version.build ? { type: "builds", id: version.build } : null } },
   });
   globalThis.fetch = async (url, init = {}) => {
@@ -235,7 +235,7 @@ function fakeAppStore() {
       return reply(state.versions.map(versionRow), 200, state.builds.map((build) => ({ id: build.id, type: "builds", attributes: { version: build.number } })));
     }
     if (method === "POST" && path === "/v1/appStoreVersions") {
-      const version = { id: id(), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType };
+      const version = { id: id(), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType, copyright: body.data.attributes.copyright ?? state.copyrightOnCreate ?? null };
       state.versions.push(version);
       return reply(versionRow(version), 201);
     }
@@ -349,7 +349,7 @@ function appStore(state, extra = [], iosDir) {
   const log = join(dir, "requests.jsonl");
   writeFileSync(log, "");
   const preload = `import { appendFileSync } from "node:fs";\n(${fakeAppStore})();`;
-  const args = ["app-store", "--build", "12", ...extra, "--ios-dir", iosDir ?? fakeIosDir("1")];
+  const args = ["app-store", ...(extra.includes("--build") ? [] : ["--build", "12"]), ...extra, "--ios-dir", iosDir ?? fakeIosDir("1")];
   const run = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, ...args], {
     env: { ...process.env, ASC_KEY: key, ASC_KEY_ID: "key", ASC_ISSUER: "issuer", ASC_FAKE_STATE: JSON.stringify(state), ASC_FAKE_LOG: log },
     encoding: "utf8",
@@ -360,7 +360,7 @@ function appStore(state, extra = [], iosDir) {
   return { code: run.status, out: run.stdout, err: run.stderr, writes, tokens, steps: writes.map((write) => `${write.method} ${write.path}`) };
 }
 
-const shippedBefore = { id: "v100", version: "1.0.0", state: "READY_FOR_SALE", build: "b9" };
+const shippedBefore = { id: "v100", version: "1.0.0", state: "READY_FOR_SALE", build: "b9", copyright: "2026 Example" };
 
 test("app-store makes the version, attaches the build, keeps the release manual and submits it", () => {
   const run = appStore(appStoreState({ versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }));
@@ -373,7 +373,8 @@ test("app-store makes the version, attaches the build, keeps the release manual 
     "POST /v1/reviewSubmissionItems",
     "PATCH /v1/reviewSubmissions/made-2",
   ]);
-  assert.deepEqual(run.writes[0].body.data.attributes, { platform: "IOS", versionString: "1.0.1", releaseType: "MANUAL" });
+  assert.deepEqual(run.writes[0].body.data.attributes, { platform: "IOS", versionString: "1.0.1", releaseType: "MANUAL", copyright: "2026 Example" });
+  assert.match(run.out, /copyright carried from the last version/);
   assert.deepEqual(run.writes[1].body, { data: { type: "builds", id: "b12" } });
   assert.equal(run.writes[2].body.data.attributes.whatsNew, "Bug fixes and improvements.");
   assert.match(run.out, /no --notes given/);
@@ -388,7 +389,7 @@ test("app-store takes What's New from the notes file, and leaves it out on the a
   assert.equal(second.code, 0, second.err);
   assert.equal(second.writes.find((write) => write.path === "/v1/appStoreVersionLocalizations/loc").body.data.attributes.whatsNew, "Faster tabs.");
   assert.doesNotMatch(second.out, /no --notes given/);
-  const first = appStore(appStoreState({ localizations: { "made-1": [{ id: "loc", ...listing }] } }), ["--notes", notes]);
+  const first = appStore(appStoreState({ versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION" }], localizations: { v101: [{ id: "loc", ...listing }] } }), ["--notes", notes]);
   assert.equal(first.code, 0, first.err);
   assert.ok(!first.steps.some((step) => step.includes("Localizations")));
   assert.match(first.out, /What's New left out/);
@@ -512,23 +513,25 @@ test("preflight refuses a missing export compliance answer, privacy manifest or 
   assert.match(bare.err, /PrivacyInfo\.xcprivacy is missing/);
   assert.match(bare.err, /com\.apple\.developer\.web-browser/);
   assert.match(bare.err, /TARGETED_DEVICE_FAMILY/);
-  assert.match(bare.err, /release-version doesn't hold the iPhone release version/);
+  assert.match(bare.err, /release-version must hold one line with the version as x\.y\.z/);
+  assert.match(bare.err, /first-iphone-only-build must hold one line with a build number/);
   assert.deepEqual(bare.writes, []);
   writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
   mkdirSync(join(ios, "Ardia.xcodeproj"));
   writeFileSync(join(ios, "Ardia.xcodeproj", "project.pbxproj"), readFileSync(join(fakeIosDir('"1,2"'), "Ardia.xcodeproj", "project.pbxproj")));
   writeFileSync(join(ios, "Config", "release-version"), "1.0.1\n");
+  writeFileSync(join(ios, "Config", "first-iphone-only-build"), "1\n");
   const unsigned = spawnSync(process.execPath, [script, "preflight", "--no-default-browser", "--ios-dir", ios], { encoding: "utf8", env: { ...process.env, ASC_KEY: "", ASC_KEY_ID: "", ASC_ISSUER: "" } });
   assert.equal(unsigned.status, 0, unsigned.stderr);
-  assert.match(unsigned.stdout, /preflight passed: [^\n]*version 1\.0\.1, for iPhone and iPad/);
+  assert.match(unsigned.stdout, /preflight passed: [^\n]*version 1\.0\.1 from build 1, for iPhone and iPad/);
   const signed = spawnSync(process.execPath, [script, "preflight", "--ios-dir", ios], { encoding: "utf8" });
   assert.equal(signed.status, 1);
   assert.match(signed.stderr, /--no-default-browser/);
   const repo = spawnSync(process.execPath, [script, "preflight"], { encoding: "utf8" });
   assert.equal(repo.status, 0, repo.stderr);
   const pinned = readFileSync(fileURLToPath(new URL("../ios/Config/release-version", import.meta.url)), "utf8").trim();
-  assert.match(repo.stdout, new RegExp(`version ${pinned.replaceAll(".", "\\.")}, for iPhone\n`));
+  assert.match(repo.stdout, new RegExp(`version ${pinned.replaceAll(".", "\\.")} from build \\d+, for iPhone\n`));
 });
 
 test("status lists the App Store versions with their state and the newest review submission first", () => {
@@ -579,7 +582,7 @@ test("app-store submits with its own App Manager key, and says so when Apple ref
 test("app-store writes nothing when this version is already in a submitted review submission, whatever the version's state says", () => {
   const submitted = (build) =>
     appStoreState({
-      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build, releaseType: "AFTER_APPROVAL" })],
+      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build })],
       localizations: { v101: [{ id: "loc", ...listing }] },
       submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }],
     });
@@ -712,7 +715,7 @@ test("app-store counts only screenshots whose upload has finished", () => {
   assert.equal(one.code, 0, one.err);
 });
 
-function fakeIosDir(family, version = "1.0.1") {
+function fakeIosDir(family, version = "1.0.1", firstBuild = 1) {
   const ios = mkdtempSync(join(tmpdir(), "asc-ios-"));
   mkdirSync(join(ios, "Ardia"));
   mkdirSync(join(ios, "Config"));
@@ -722,6 +725,7 @@ function fakeIosDir(family, version = "1.0.1") {
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
   writeFileSync(join(ios, "Config", "Ardia-DefaultBrowser.entitlements"), plist("\t<key>com.apple.developer.web-browser</key>\n\t<true/>"));
   writeFileSync(join(ios, "Config", "release-version"), `${version}\n`);
+  writeFileSync(join(ios, "Config", "first-iphone-only-build"), `${firstBuild}\n`);
   const config = (id, name, bundle, value) =>
     `\t\t${id} /* ${name} */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = ${bundle};\n\t\t\t\tTARGETED_DEVICE_FAMILY = ${value};\n\t\t\t};\n\t\t\tname = ${name};\n\t\t};\n`;
   writeFileSync(
@@ -759,7 +763,12 @@ test("app-store wants a finished screenshot for each device family the app targe
   assert.equal(both.code, 1);
   assert.match(both.err, /- en-US iPad screenshots/);
   assert.doesNotMatch(both.err, /iPhone screenshots/);
-  const repo = appStore(ready101(iphoneOnly), [], fileURLToPath(new URL("../ios", import.meta.url)));
+  const repoFloor = readFileSync(fileURLToPath(new URL("../ios/Config/first-iphone-only-build", import.meta.url)), "utf8").trim();
+  const repo = appStore(
+    ready101({ ...iphoneOnly, builds: [{ id: "bfloor", number: repoFloor, version: "1.0.1", processing: [] }], versions: [shippedBefore, draft101({ build: "bfloor" })] }),
+    ["--build", repoFloor],
+    fileURLToPath(new URL("../ios", import.meta.url)),
+  );
   assert.equal(repo.code, 0, repo.err);
   assert.doesNotMatch(repo.out + repo.err, /iPad/);
   const phone = appStore(ready101(iphoneOnly), [], fakeIosDir("1"));
@@ -939,15 +948,17 @@ function fakeListing() {
       return reply({ id: "app", type: "apps" });
     }
     if (path === "/v1/apps/app/appStoreVersions") {
-      return reply(state.versions.map((version) => ({ id: version.id, type: "appStoreVersions", attributes: { versionString: version.version, appVersionState: version.state, releaseType: "MANUAL" }, relationships: { build: { data: null } } })), 200, []);
+      return reply(state.versions.map((version) => ({ id: version.id, type: "appStoreVersions", attributes: { versionString: version.version, appVersionState: version.state, releaseType: "MANUAL", copyright: version.copyright ?? null }, relationships: { build: { data: null } } })), 200, []);
     }
     if (path === "/v1/appStoreVersions" && method === "POST") {
-      state.versions.push({ id: made("version"), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType });
+      state.versions.push({ id: made("version"), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType, copyright: body.data.attributes.copyright ?? null });
       return reply({ id: state.versions.at(-1).id, type: "appStoreVersions", attributes: body.data.attributes }, 201);
     }
     let match = path.match(/^\/v1\/appStoreVersions\/([^/]+)$/);
     if (match && method === "PATCH") {
-      Object.assign(state.versions.find((version) => version.id === match[1]), { version: body.data.attributes.versionString });
+      const edited = state.versions.find((version) => version.id === match[1]);
+      const { versionString, ...rest } = body.data.attributes;
+      Object.assign(edited, rest, versionString === undefined ? {} : { version: versionString });
       return reply({ id: match[1], type: "appStoreVersions" });
     }
     match = path.match(/^\/v1\/appStoreVersions\/([^/]+)\/appStoreVersionLocalizations$/);
@@ -991,7 +1002,7 @@ function fakeListing() {
     }
     if (path === "/v1/appPriceSchedules/schedule/manualPrices") {
       return reply(
-        [{ id: "price", type: "appPrices", attributes: { startDate: null, endDate: null }, relationships: { appPricePoint: { data: { type: "appPricePoints", id: state.price.point } } } }],
+        [{ id: "price", type: "appPrices", attributes: { startDate: state.price.start ?? null, endDate: state.price.end ?? null }, relationships: { appPricePoint: { data: { type: "appPricePoints", id: state.price.point } } } }],
         200,
         state.pricePoints.filter((point) => point.id === state.price.point).map((point) => ({ id: point.id, type: "appPricePoints", attributes: { customerPrice: point.customerPrice } })),
       );
@@ -1029,6 +1040,9 @@ function fakeListing() {
       const { version, ...attributes } = detail;
       return reply(row("appStoreReviewDetails", attributes));
     }
+    if (state.reviewError && path.startsWith("/v1/appStoreReviewDetails") && method !== "GET") {
+      return new Response(JSON.stringify({ errors: [{ status: "422", code: "ENTITY_ERROR.ATTRIBUTE.INVALID", title: "An attribute value is invalid.", detail: `Phone must be international: ${state.reviewError}`, source: { pointer: "/data/attributes/contactPhone" } }] }), { status: 422 });
+    }
     if (path === "/v1/appStoreReviewDetails" && method === "POST") {
       state.review = { id: "review", version: body.data.relationships.appStoreVersion.data.id, ...body.data.attributes };
       return reply({ id: "review", type: "appStoreReviewDetails" }, 201);
@@ -1056,6 +1070,8 @@ function fakeListing() {
       return reply(undefined, 204);
     }
     if (path === "/v1/appScreenshots" && method === "POST") {
+      const target = state.sets.find((set) => set.id === body.data.relationships.appScreenshotSet.data.id);
+      if (target.shots.length >= 10) return new Response(JSON.stringify({ errors: [{ status: "409", code: "ENTITY_ERROR", detail: "A screenshot set holds at most 10 screenshots" }] }), { status: 409 });
       const id = made("shot");
       const { fileName, fileSize } = body.data.attributes;
       const half = Math.ceil(fileSize / 2);
@@ -1088,6 +1104,12 @@ function fakeListing() {
     const authorized = Object.keys(init.headers ?? {}).some((name) => name.toLowerCase() === "authorization");
     if (hostname === "upload.test") {
       const [, id, offset] = path.split("/");
+      if (state.failUploads > 0) {
+        state.failUploads--;
+        log({ method, path: `upload.test${path}`, failed: true, authorized });
+        writeFileSync(file, JSON.stringify(state));
+        return new Response(null, { status: 503 });
+      }
       state.shots[id].received += init.body.length;
       log({ method, path: `upload.test${path}`, length: init.body.length, offset: Number(offset), authorized });
       writeFileSync(file, JSON.stringify(state));
@@ -1128,7 +1150,7 @@ function listingState(changes = {}) {
 const CONTACT = { ASC_REVIEW_CONTACT_FIRST_NAME: "Quillon", ASC_REVIEW_CONTACT_LAST_NAME: "Marrowby", ASC_REVIEW_CONTACT_PHONE: "+1 555 010 0100", ASC_REVIEW_CONTACT_EMAIL: "contact@example.com" };
 const NO_CONTACT = Object.fromEntries(Object.keys(CONTACT).map((name) => [name, ""]));
 
-function listingRun(state, { store = storeDir(), contact = CONTACT, extra = [], key = true } = {}) {
+function listingRun(state, { store = storeDir(), contact = CONTACT, extra = [], key = true, ios = fakeIosDir("1") } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "asc-"));
   const keyPath = join(dir, "AuthKey.p8");
   writeFileSync(keyPath, generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({ type: "pkcs8", format: "pem" }));
@@ -1137,7 +1159,7 @@ function listingRun(state, { store = storeDir(), contact = CONTACT, extra = [], 
   const stateFile = typeof state === "string" ? state : join(dir, "state.json");
   if (typeof state !== "string") writeFileSync(stateFile, JSON.stringify(state));
   const preload = `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";\n(${fakeListing})();`;
-  const run = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, "listing", "--store", store, "--ios-dir", fakeIosDir("1"), ...extra], {
+  const run = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, "listing", "--store", store, "--ios-dir", ios, ...extra], {
     env: { ...process.env, ...(key ? { ASC_KEY: keyPath, ASC_KEY_ID: "key", ASC_ISSUER: "issuer" } : { ASC_KEY: "", ASC_KEY_ID: "", ASC_ISSUER: "" }), ...contact, ASC_FAKE_STATE_FILE: stateFile, ASC_FAKE_LOG: log },
     encoding: "utf8",
   });
@@ -1154,7 +1176,7 @@ test("listing pushes the text, URLs, categories, age rating, rights, free price,
   const run = listingRun(listingState(), { store });
   assert.equal(run.code, 0, run.err);
   const version = run.writes.find((write) => write.path === "/v1/appStoreVersions");
-  assert.deepEqual(version.body.data.attributes, { platform: "IOS", versionString: "1.0.1", releaseType: "MANUAL" });
+  assert.deepEqual(version.body.data.attributes, { platform: "IOS", versionString: "1.0.1", releaseType: "MANUAL", copyright: "2026 Example" });
   assert.deepEqual(run.state.versionLocalizations.map(({ id, version: _, ...entry }) => entry), [
     {
       locale: "en-US",
@@ -1207,8 +1229,9 @@ test("listing replaces only the screenshot set whose files changed, and reorders
   const oldMedium = first.state.sets.find((set) => set.type === "APP_IPHONE_61").shots;
   const changed = listingRun(first.stateFile, { store: storeDir({ medium: [png(1206, 2622, { shade: 10 }), png(1206, 2622, { shade: 99 })] }) });
   assert.equal(changed.code, 0, changed.err);
-  assert.deepEqual(changed.steps.filter((step) => step.startsWith("DELETE")), oldMedium.map((id) => `DELETE /v1/appScreenshots/${id}`));
-  assert.equal(changed.steps.filter((step) => step === "POST /v1/appScreenshots").length, 2);
+  assert.deepEqual(changed.steps.filter((step) => step.startsWith("DELETE")), [`DELETE /v1/appScreenshots/${oldMedium[1]}`]);
+  assert.equal(changed.steps.filter((step) => step === "POST /v1/appScreenshots").length, 1);
+  assert.ok(changed.steps.indexOf("POST /v1/appScreenshots") < changed.steps.findIndex((step) => step.startsWith("DELETE")), "the new screenshot is uploaded before the old one goes");
   assert.ok(!changed.steps.some((step) => step.startsWith("POST /v1/appScreenshotSets")));
   const large = changed.state.sets.find((set) => set.type === "APP_IPHONE_67");
   assert.deepEqual(large.shots, first.state.sets.find((set) => set.type === "APP_IPHONE_67").shots, "the large set is left alone");
@@ -1231,10 +1254,10 @@ test("listing refuses text over Apple's limits, bad URLs, a wrong size, alpha an
     assert.equal(run.code, 1, run.out);
     for (const problem of [
       /subtitle\.txt has 31 characters; the subtitle takes at most 30/,
-      /keywords\.txt has 101 characters; the keywords takes at most 100/,
+      /keywords\.txt has 101 bytes; the keywords take at most 100/,
       /description\.txt has 4001 characters; the description takes at most 4000/,
       /promotional-text\.txt has 171 characters; the promotional text takes at most 170/,
-      /review-notes\.txt has 4001 characters; App Review notes take at most 4000/,
+      /review-notes\.txt has 4001 bytes; App Review notes take at most 4000/,
       /supportUrl must be an https URL/,
       /price must be "free"/,
       /ageRating has an unknown answer spaceTravel/,
@@ -1276,7 +1299,7 @@ test("listing skips the App Review contact with a note when its secrets are unse
 test("listing renames a lone draft, refuses a version in review, and makes the app free and available where it wasn't", () => {
   const renamed = listingRun(listingState({ versions: [{ id: "v100", version: "1.0", state: "PREPARE_FOR_SUBMISSION" }] }));
   assert.equal(renamed.code, 0, renamed.err);
-  assert.deepEqual(renamed.writes[0], { method: "PATCH", path: "/v1/appStoreVersions/v100", body: { data: { type: "appStoreVersions", id: "v100", attributes: { versionString: "1.0.1" } } } });
+  assert.deepEqual(renamed.writes[0], { method: "PATCH", path: "/v1/appStoreVersions/v100", body: { data: { type: "appStoreVersions", id: "v100", attributes: { versionString: "1.0.1", copyright: "2026 Example" } } } });
   assert.ok(!renamed.steps.includes("POST /v1/appStoreVersions"));
   for (const state of ["WAITING_FOR_REVIEW", "IN_REVIEW"]) {
     const run = listingRun(listingState({ versions: [{ id: "v101", version: "1.0.1", state }] }));
@@ -1295,4 +1318,207 @@ test("listing renames a lone draft, refuses a version in review, and makes the a
   assert.deepEqual(partly.steps.filter((step) => step.includes("territoryAvailabilities")), ["PATCH /v1/territoryAvailabilities/ta-GBR"]);
   assert.match(partly.out, /1 territory isn't in the app's availability \(IND\)/);
   assert.match(partly.out, /turn on availability in new territories/);
+});
+
+test("round 5: app-store never reports success for a version in review whose release isn't manual, and writes nothing", () => {
+  for (const state of ["WAITING_FOR_REVIEW", "IN_REVIEW", "PENDING_DEVELOPER_RELEASE"]) {
+    const run = appStore(appStoreState({ versions: [{ id: "v101", version: "1.0.1", state, build: "b12", releaseType: "AFTER_APPROVAL" }] }));
+    assert.equal(run.code, 1, `${state}: ${run.out}`);
+    assert.match(run.err, /release is AFTER_APPROVAL[^\n]*set it to Manual in App Store Connect/);
+    assert.deepEqual(run.writes, []);
+  }
+  const submitted = appStore(
+    appStoreState({
+      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", releaseType: "AFTER_APPROVAL" })],
+      localizations: { v101: [{ id: "loc", ...listing }] },
+      submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }],
+    }),
+  );
+  assert.equal(submitted.code, 1, submitted.out);
+  assert.match(submitted.err, /release is AFTER_APPROVAL[^\n]*set it to Manual in App Store Connect/);
+  assert.deepEqual(submitted.writes, []);
+});
+
+test("round 5: app-store wants the version's copyright before it submits", () => {
+  const run = appStore(ready101({ versions: [shippedBefore, draft101({ copyright: null })] }));
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /- version 1\.0\.1 copyright/);
+  assert.ok(!run.steps.some((step) => step.includes("reviewSubmission")), run.steps.join("\n"));
+});
+
+test("round 5: app-store refuses a build made before the app became iPhone only", () => {
+  const ios = fakeIosDir("1", "1.0.1", 13);
+  const old = appStore(ready101(), [], ios);
+  assert.equal(old.code, 1, old.out);
+  assert.match(old.err, /build 12 is older than build 13, the first iPhone-only build/);
+  assert.deepEqual(old.writes, []);
+  const builds = [...appStoreState().builds, { id: "b13", number: "13", version: "1.0.1", processing: [] }];
+  const fresh = appStore(ready101({ builds, versions: [shippedBefore, draft101({ build: "b13" })] }), ["--build", "13"], ios);
+  const edge = appStore(ready101(), [], fakeIosDir("1", "1.0.1", 12));
+  assert.equal(edge.code, 0, edge.err);
+  assert.equal(fresh.code, 0, fresh.err);
+  const repo = readFileSync(fileURLToPath(new URL("../ios/Config/first-iphone-only-build", import.meta.url)), "utf8");
+  assert.match(repo, /^[1-9]\d*\n$/);
+});
+
+test("round 5: listing sets the version's copyright from listing.json and leaves a matching one alone", () => {
+  const first = listingRun(listingState());
+  assert.equal(first.code, 0, first.err);
+  assert.equal(first.writes.find((write) => write.path === "/v1/appStoreVersions").body.data.attributes.copyright, "2026 Example");
+  const drifted = JSON.parse(readFileSync(first.stateFile, "utf8"));
+  drifted.versions[0].copyright = "2025 Someone";
+  writeFileSync(first.stateFile, JSON.stringify(drifted));
+  const fixed = listingRun(first.stateFile);
+  assert.equal(fixed.code, 0, fixed.err);
+  assert.deepEqual(fixed.writes.map((write) => [write.path, write.body.data.attributes]), [[`/v1/appStoreVersions/${drifted.versions[0].id}`, { copyright: "2026 Example" }]]);
+});
+
+test("round 5: a failed screenshot upload keeps the old set, and a partial match keeps what matches", () => {
+  const first = listingRun(listingState(), { store: storeDir() });
+  assert.equal(first.code, 0, first.err);
+  const medium = (run) => run.state.sets.find((set) => set.type === "APP_IPHONE_61");
+  const before = medium(first).shots;
+  const broken = JSON.parse(readFileSync(first.stateFile, "utf8"));
+  broken.failUploads = 1;
+  writeFileSync(first.stateFile, JSON.stringify(broken));
+  const replacement = storeDir({ medium: [png(1206, 2622, { shade: 10 }), png(1206, 2622, { shade: 77 })] });
+  const failed = listingRun(first.stateFile, { store: replacement });
+  assert.equal(failed.code, 1, failed.out);
+  assert.match(failed.err, /uploading 02-shot\.png failed with 503/);
+  assert.ok(!failed.steps.some((step) => step.startsWith("DELETE")), failed.steps.join("\n"));
+  for (const id of before) assert.equal(failed.state.shots[id].state, "COMPLETE");
+  const retried = listingRun(first.stateFile, { store: replacement });
+  assert.equal(retried.code, 0, retried.err);
+  const finalShots = medium(retried).shots.map((id) => retried.state.shots[id]);
+  assert.deepEqual(finalShots.map((shot) => [shot.checksum, shot.state]), [[md5(png(1206, 2622, { shade: 10 })), "COMPLETE"], [md5(png(1206, 2622, { shade: 77 })), "COMPLETE"]]);
+  assert.equal(medium(retried).shots[0], before[0], "the screenshot that already matched is kept, never uploaded again");
+  assert.equal(retried.steps.filter((step) => step === "POST /v1/appScreenshots").length, 1);
+});
+
+test("round 5: replacing a full set of ten makes room one at a time and never empties it", () => {
+  const ten = Array.from({ length: 10 }, (_, at) => png(1206, 2622, { shade: 100 + at }));
+  const first = listingRun(listingState(), { store: storeDir({ medium: ten }) });
+  assert.equal(first.code, 0, first.err);
+  const next = Array.from({ length: 10 }, (_, at) => png(1206, 2622, { shade: at < 8 ? 100 + at : 150 + at }));
+  const run = listingRun(first.stateFile, { store: storeDir({ medium: next }) });
+  assert.equal(run.code, 0, run.err);
+  assert.equal(run.steps.filter((step) => step === "POST /v1/appScreenshots").length, 2);
+  assert.equal(run.steps.filter((step) => step.startsWith("DELETE")).length, 2);
+  const set = run.state.sets.find((entry) => entry.type === "APP_IPHONE_61");
+  assert.deepEqual(set.shots.map((id) => run.state.shots[id].checksum), next.map(md5));
+});
+
+test("round 5: a PNG that only has a header, a truncated one or one with a bad checksum is refused", () => {
+  const good = png(1206, 2622, { shade: 5 });
+  const headerOnly = good.subarray(0, 33);
+  const truncated = good.subarray(0, good.length - 40);
+  const badCrc = Buffer.from(good);
+  badCrc[29] ^= 0xff;
+  const run = listingRun(listingState(), { store: storeDir({ medium: [headerOnly, truncated, badCrc] }), extra: ["--check"], key: false });
+  assert.equal(run.code, 1, run.out);
+  for (const name of ["01-shot.png", "02-shot.png", "03-shot.png"]) assert.match(run.err, new RegExp(`${name.replace(".", "\\.")} isn't a complete PNG`));
+  assert.deepEqual(run.requests, []);
+});
+
+test("round 5: an App Review error never prints Apple's words, which can carry the contact", () => {
+  const run = listingRun(listingState({ reviewError: "15550100100" }));
+  assert.equal(run.code, 1, run.out);
+  assert.doesNotMatch(run.out + run.err, /15550100100|Phone must be/);
+  assert.match(run.err, /422/);
+  assert.match(run.err, /ENTITY_ERROR\.ATTRIBUTE\.INVALID at \/data\/attributes\/contactPhone/);
+});
+
+test("round 5: listing counts keywords and review notes in UTF-8 bytes, type-checks listing.json and refuses null, all before any request", () => {
+  const bytes = listingRun(listingState(), { store: storeDir({ text: { "keywords.txt": "é".repeat(51), "review-notes.txt": "é".repeat(2001) } }) });
+  assert.equal(bytes.code, 1, bytes.out);
+  assert.match(bytes.err, /keywords\.txt has 102 bytes; the keywords take at most 100/);
+  assert.match(bytes.err, /review-notes\.txt has 4002 bytes; App Review notes take at most 4000/);
+  assert.deepEqual(bytes.requests, []);
+  const typed = listingRun(listingState(), {
+    store: storeDir({ listing: { supportUrl: ["https://example.com/support"], ageRating: { advertising: "NONE", violenceRealistic: true, ageRatingOverrideV2: "SEVENTEEN_PLUS", lootBox: null }, copyright: "© 2026 Example" } }),
+  });
+  assert.equal(typed.code, 1, typed.out);
+  for (const problem of [/supportUrl must be an https URL/, /ageRating\.advertising must be true or false/, /ageRating\.violenceRealistic must be one of NONE/, /ageRating\.ageRatingOverrideV2 must be one of NONE, NINE_PLUS, THIRTEEN_PLUS, SIXTEEN_PLUS, EIGHTEEN_PLUS, UNRATED/, /ageRating\.lootBox must be true or false/, /copyright must be the year and the holder/]) {
+    assert.match(typed.err, problem);
+  }
+  assert.deepEqual(typed.requests, []);
+  const store = storeDir();
+  writeFileSync(join(store, "listing.json"), "null");
+  for (const run of [listingRun(listingState(), { store }), listingRun(listingState(), { store, extra: ["--check"], key: false })]) {
+    assert.equal(run.code, 1, run.out);
+    assert.match(run.err, /listing\.json must hold one JSON object/);
+    assert.deepEqual(run.requests, []);
+  }
+  const fine = listingRun(listingState(), { store: storeDir({ text: { "keywords.txt": "é".repeat(50) }, listing: { ageRating: { ageRatingOverrideV2: "EIGHTEEN_PLUS", violenceRealistic: "NONE" } } }), extra: ["--check"], key: false });
+  assert.equal(fine.code, 0, fine.err);
+});
+
+test("round 5: listing leaves a secondary category alone when listing.json names none", () => {
+  const store = storeDir();
+  const listing = JSON.parse(readFileSync(join(store, "listing.json"), "utf8"));
+  delete listing.secondaryCategory;
+  writeFileSync(join(store, "listing.json"), JSON.stringify(listing));
+  const run = listingRun(listingState({ appInfos: [{ id: "info", state: "PREPARE_FOR_SUBMISSION", primaryCategory: "UTILITIES", secondaryCategory: "PRODUCTIVITY" }] }), { store });
+  assert.equal(run.code, 0, run.err);
+  assert.ok(!run.steps.includes("PATCH /v1/appInfos/info"), run.steps.join("\n"));
+  assert.equal(run.state.appInfos[0].secondaryCategory, "PRODUCTIVITY");
+});
+
+test("round 5: listing refuses a --version other than the pin, and the workflow passes the input on", () => {
+  const run = listingRun(listingState(), { extra: ["--version", "1.0.2"] });
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /--version 1\.0\.2 isn't the pinned iPhone version 1\.0\.1/);
+  assert.deepEqual(run.requests, []);
+  const same = listingRun(listingState(), { extra: ["--version", "1.0.1", "--check"], key: false });
+  assert.equal(same.code, 0, same.err);
+  const workflow = readFileSync(fileURLToPath(new URL("../../../.github/workflows/ios-release.yml", import.meta.url)), "utf8");
+  const job = workflow.split("\n  listing:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+  assert.match(job, /VERSION_INPUT: \$\{\{ inputs\.version \}\}/);
+  assert.match(job, /\[ -z "\$VERSION_INPUT" \] \|\| args\+=\(--version "\$VERSION_INPUT"\)/);
+});
+
+test("round 5: every job that decodes a key removes it on exit, with the trap set before the decode", () => {
+  const workflow = readFileSync(fileURLToPath(new URL("../../../.github/workflows/ios-release.yml", import.meta.url)), "utf8");
+  const decodes = [...workflow.matchAll(/^( +)\(umask 077 && printf '%s' "\$ASC_KEY_P8" \| base64 -d > "\$key"\)$/gm)];
+  assert.ok(decodes.length >= 6, `${decodes.length} decodes`);
+  for (const decode of decodes) {
+    const before = workflow.slice(Math.max(0, decode.index - 200), decode.index);
+    assert.match(before, /trap 'rm -f "\$key"' EXIT\n$/, `the trap comes right before the decode at ${decode.index}`);
+  }
+  assert.doesNotMatch(workflow, /base64 -d > "\$key"\)\n +trap/);
+});
+
+test("round 5: a free price that starts in the future isn't the price now", () => {
+  const run = listingRun(listingState({ price: { base: "USA", point: "point-free", start: "2099-01-01" } }));
+  assert.equal(run.code, 0, run.err);
+  assert.ok(run.steps.includes("POST /v1/appPriceSchedules"), run.steps.join("\n"));
+  const ended = listingRun(listingState({ price: { base: "USA", point: "point-free", start: "2020-01-01", end: "2021-01-01" } }));
+  assert.ok(ended.steps.includes("POST /v1/appPriceSchedules"), ended.steps.join("\n"));
+  const now = listingRun(listingState({ price: { base: "USA", point: "point-free", start: "2020-01-01" } }));
+  assert.ok(!now.steps.includes("POST /v1/appPriceSchedules"), now.steps.join("\n"));
+});
+
+test("round 5: the pinned version and the first iPhone-only build are each one plain line, read by one parser", () => {
+  const read = (version, firstBuild = "1\n") => {
+    const ios = fakeIosDir("1");
+    writeFileSync(join(ios, "Config", "release-version"), version);
+    writeFileSync(join(ios, "Config", "first-iphone-only-build"), firstBuild);
+    return spawnSync(process.execPath, [script, "version", "--ios-dir", ios], { encoding: "utf8" });
+  };
+  for (const good of ["1.0.1\n", "1.0.1"]) {
+    const run = read(good);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout, "1.0.1\n");
+  }
+  for (const bad of ["1.0.\n1\n", "1.0.1\n\n", " 1.0.1\n", "1.0.1 \n", "1.0\n", "v1.0.1\n"]) {
+    const run = read(bad);
+    assert.notEqual(run.status, 0, JSON.stringify(bad));
+    assert.match(run.stderr, /release-version must hold one line with the version as x\.y\.z/);
+  }
+  const badBuild = read("1.0.1\n", "2\n2\n");
+  assert.notEqual(badBuild.status, 0);
+  assert.match(badBuild.stderr, /first-iphone-only-build must hold one line with a build number/);
+  const first = spawnSync(process.execPath, [script, "version", "--first-build"], { encoding: "utf8" });
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /^[1-9]\d*\n$/);
 });
