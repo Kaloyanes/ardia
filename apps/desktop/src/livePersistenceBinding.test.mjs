@@ -7,7 +7,7 @@ const platform = new URL("../../browser/src/platform/livePersistence.ts", import
 registerHooks({
   resolve(specifier, context, next) {
     const resolved = next(specifier, context);
-    return resolved.url === platform ? { url: new URL("./platform/livePersistence.desktop.ts", import.meta.url).href, shortCircuit: true } : resolved;
+    return resolved.url === platform ? { url: new URL("./livePersistence.ts", import.meta.url).href, shortCircuit: true } : resolved;
   },
 });
 const listeners = new Set();
@@ -108,7 +108,7 @@ test("Linux binding keeps a folder's hidden repos and their pull requests throug
 
 
 test("Linux save telemetry describes queued intent on failure and does not recount retries", async () => {
-  const { createLivePersistence } = await import("./platform/livePersistence.desktop.ts");
+  const { createLivePersistence } = await import("./livePersistence.ts");
   const activity = [];
   const binding = createLivePersistence((changed, kind) => activity.push({ changed, kind }));
   let current;

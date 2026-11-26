@@ -524,6 +524,17 @@ ShellHostView::~ShellHostView() {
 }
 
 void ShellHostView::Initialize() {
+  documents_ = std::make_unique<DocumentSession>(
+      window_id_, base::BindRepeating(
+                      [](base::WeakPtr<ShellHostView> host, base::Value payload) {
+                        if (host) {
+                          host->Emit("ArdiaDocuments", "documents",
+                                     base::Value(base::DictValue()
+                                                     .Set("name", "documents.changed")
+                                                     .Set("data", std::move(payload))));
+                        }
+                      },
+                      GetWeakPtr()));
   view_observation_.Observe(browser_view_.get());
   focus_manager_ = GetFocusManager();
   under_shell_ = AddChildView(std::make_unique<views::View>());
@@ -980,6 +991,9 @@ void ShellHostView::RetireRenderer() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   ++renderer_generation_;
+  if (documents_) {
+    documents_->RendererRetired();
+  }
   shared_folder_watcher_.reset();
   share::Retire(window_id_);
   SetMenuKeysSuppressed(window_id_, false);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AFTERIMAGE_MS, GLASS_MAX_REGIONS, STABLE_FRAMES, createGlassRegions } from "./glassRegions.ts";
+import { AFTERIMAGE_MS, GLASS_MAX_REGIONS, STABLE_FRAMES, createGlassRegions, offPagePieces } from "./glassRegions.ts";
 
 const RADII = { upperLeft: 10, upperRight: 10, lowerRight: 10, lowerLeft: 10 };
 const PAGE = { x: 0, y: 0, width: 1000, height: 800 };
@@ -471,4 +471,32 @@ test("native behind-window glass publishes holes only while it is presented and 
   assert.equal(h.holes.length, count, "unchanged holes are not republished");
   remove();
   assert.deepEqual(h.holes.at(-1), []);
+});
+
+test("a pill that straddles a page edge keeps the hole for the slice AppKit mounts behind the window", () => {
+  const rect = { x: 200, y: 100, width: 100, height: 40 };
+  const pieces = offPagePieces(rect, RADII, [{ x: 250, y: 0, width: 800, height: 800 }]);
+  assert.deepEqual(pieces, [{ rect: { x: 200, y: 100, width: 50, height: 40 }, radii: { upperLeft: 10, upperRight: 0, lowerRight: 0, lowerLeft: 10 } }]);
+  assert.deepEqual(offPagePieces(rect, RADII, []), [{ rect, radii: RADII }]);
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 0, y: 0, width: 1000, height: 800 }]), []);
+});
+
+test("a scrolling glass region leaves AppKit until it settles, then comes back", async () => {
+  const h = harness({ behindWindow: true });
+  const scroller = node(null);
+  const pill = node(menu(1200), scroller);
+  h.glass.add(pill);
+  h.tick(STABLE_FRAMES + 2);
+  await h.accept();
+  h.glass.presented(h.sent.at(-1).generation);
+  assert.equal(h.sent.at(-1).regions.length, 1);
+  h.glass.motion(scroller, true);
+  pill.geometry = menu(1210);
+  h.tick(1);
+  assert.equal(pill.attributes.glass, "off");
+  assert.equal(h.sent.at(-1).regions.length, 0, "the moving region was still submitted to AppKit");
+  await h.accept();
+  h.tick(STABLE_FRAMES + 2);
+  assert.equal(h.sent.at(-1).regions.length, 1, "the settled region never came back");
+  assert.equal(h.sent.at(-1).regions[0].rect.x, 1210);
 });

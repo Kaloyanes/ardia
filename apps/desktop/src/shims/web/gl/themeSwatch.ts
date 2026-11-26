@@ -138,7 +138,7 @@ export function grainAlpha(texture: string): Uint8ClampedArray {
 }
 
 export const FILM_GRAIN_SIDE = 128;
-export const FILM_GRAIN_POINTS = FILM_GRAIN_SIDE / 2;
+export const FILM_GRAIN_POINTS = FILM_GRAIN_SIDE;
 
 const fract = (v: number) => v - Math.floor(v);
 

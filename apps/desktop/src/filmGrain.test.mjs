@@ -53,7 +53,8 @@ test("stock-preset vibrancy renders a crisp grain layer over its gradient", asyn
   const html = renderToStaticMarkup(createElement(Vibrancy, { dark: false, grainOpacity: 0.09, grainScale: 1 }));
   assert.match(html, /data-ardia-film-grain/);
   assert.match(html, /opacity:0\.09/);
-  assert.match(html, /background-size:64px 64px/);
+  assert.match(html, /background-size:128px 128px/);
+  assert.equal(FILM_GRAIN_POINTS, FILM_GRAIN_SIDE, "one grain cell per point, as WindowBackdropView draws it");
   assert.match(html, /image-rendering:pixelated/);
   assert.match(html, /GRAIN/);
   assert.equal(painted.length, 1);

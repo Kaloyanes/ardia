@@ -16,6 +16,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
+#include "ardia/mac/ac_mac_documents.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
@@ -407,6 +408,7 @@ class ShellHostView : public views::View,
   base::WeakPtr<ShellBridge> request_handler_;
   uint64_t request_generation_ = 0;
 
+  std::unique_ptr<DocumentSession> documents_;
   std::unique_ptr<DialogSheets> dialogs_;
   std::unique_ptr<WindowEvents> window_events_;
   std::unique_ptr<ScrollGestures> scroll_gestures_;

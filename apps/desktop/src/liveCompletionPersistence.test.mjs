@@ -4,7 +4,7 @@ import { registerHooks } from "node:module";
 import { projectLiveIntent } from "./liveDocumentIntent.ts";
 
 const platform = new URL("../../browser/src/platform/livePersistence.ts", import.meta.url).href;
-registerHooks({ resolve(specifier, context, next) { const result = next(specifier, context); return result.url === platform ? { url: new URL("./platform/livePersistence.desktop.ts", import.meta.url).href, shortCircuit: true } : result; } });
+registerHooks({ resolve(specifier, context, next) { const result = next(specifier, context); return result.url === platform ? { url: new URL("./livePersistence.ts", import.meta.url).href, shortCircuit: true } : result; } });
 const deferred = () => { let resolve; const promise = new Promise((yes) => { resolve = yes; }); return { promise, resolve }; };
 const item = { id: "i", source: "github", url: "https://example.test/item", title: "Item", subtitle: "", icon: null, updatedAt: 0 };
 const folder = { id: "f", profileId: "p", kind: "pullRequests", name: "f", icon: null, collapsed: false, sources: ["github"], filters: { authored: true, reviewRequests: true }, groupStacks: true, showCompleted: true, createdAt: 0 };

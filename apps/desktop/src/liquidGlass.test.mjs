@@ -322,7 +322,7 @@ test("macOS 26 hands glass to NSGlassEffectView: WebGL is off however its native
   assert.equal(canvases.length, 0, "importing the glass creates no canvas");
   const chrome = readFileSync(new URL("./shims/web/chrome.tsx", import.meta.url), "utf8");
   assert.match(chrome, /enabled=\{scrolled === false && webLiquidGlassAllowed\(ardiaHost\)\}/, "GlassEffect gates WebGL on the synchronous bootstrap flag alone");
-  assert.match(chrome, /tahoe && !scrolled && nativeGlassFor\(shellOverPages\(\)\)/, "only Tahoe registers GlassEffect with the native registry");
+  assert.match(chrome, /tahoe && nativeGlassBehindWindow\(\)\);/, "only Tahoe registers GlassEffect with the native registry, scrolled pinned tiles and utility windows included");
   assert.match(readFileSync(new URL("./platform/nativeGlass.mac.ts", import.meta.url), "utf8"), /NATIVE_GLASS_PLATFORM = true/);
   const layer = readFileSync(new URL("./shims/web/liquidGlass.tsx", import.meta.url), "utf8");
   assert.match(layer, /const ctx = enabled \? surface\?\.getContext\("2d"\) : null;/, "a disabled layer never touches a canvas or the engine");

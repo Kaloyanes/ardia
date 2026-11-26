@@ -177,7 +177,7 @@ export function startShellGlass(host: ArdiaHost, holes?: (holes: readonly GlassH
   const motion = (event: Event) => {
     if (event.target instanceof Element) glass.motion(event.target);
   };
-  const scrolled = (event: Event) => glass.motion(event.target instanceof Element ? event.target : document.documentElement);
+  const scrolled = (event: Event) => glass.motion(event.target instanceof Element ? event.target : document.documentElement, true);
   for (const type of MOTION_EVENTS) document.addEventListener(type, motion, true);
   document.addEventListener("scroll", scrolled, { capture: true, passive: true });
   return {

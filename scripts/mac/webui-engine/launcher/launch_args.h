@@ -15,9 +15,19 @@ typedef struct {
   char ardia_data[kArdiaLaunchPathLimit + 32];
 } ArdiaLaunchStorage;
 
+static inline int ArdiaSwitchEnd(int argc, const char* const argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] && strcmp(argv[i], "--") == 0) {
+      return i;
+    }
+  }
+  return argc;
+}
+
 static inline int ArdiaHasSwitch(int argc, const char* const argv[], const char* prefix) {
   const size_t length = strlen(prefix);
-  for (int i = 1; i < argc; ++i) {
+  const int end = ArdiaSwitchEnd(argc, argv);
+  for (int i = 1; i < end; ++i) {
     if (argv[i] && strncmp(argv[i], prefix, length) == 0) {
       return 1;
     }
@@ -55,10 +65,14 @@ static inline int ArdiaBuildLaunchArgs(int argc,
                                        ArdiaLaunchStorage* storage,
                                        const char** out) {
   int count = 0;
-  for (int i = 0; i < argc; ++i) {
+  const int end = ArdiaSwitchEnd(argc, argv);
+  for (int i = 0; i < end; ++i) {
     out[count++] = argv[i];
   }
   if (ArdiaHasSwitch(argc, argv, "--type=")) {
+    for (int i = end; i < argc; ++i) {
+      out[count++] = argv[i];
+    }
     return count;
   }
   if (!ArdiaHasSwitch(argc, argv, "--user-data-dir=")) {
@@ -76,6 +90,9 @@ static inline int ArdiaBuildLaunchArgs(int argc,
   }
   if (ArdiaBackgroundValue(background) && !ArdiaHasSwitch(argc, argv, "--ardia-background")) {
     out[count++] = "--ardia-background";
+  }
+  for (int i = end; i < argc; ++i) {
+    out[count++] = argv[i];
   }
   return count;
 }

@@ -77,6 +77,15 @@ export function windowCornerRadii(rect: Rect, window: WindowSize, radius: number
   };
 }
 
+export function engineEnclosedRect({ x, y, width, height }: Rect, zoom = 1): Rect {
+  const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  const left = Math.floor(x * scale + 1e-6) / scale;
+  const top = Math.floor(y * scale + 1e-6) / scale;
+  const right = Math.ceil((x + width) * scale - 1e-6) / scale;
+  const bottom = Math.ceil((y + height) * scale - 1e-6) / scale;
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
 export function holeClipPath(box: { width: number; height: number }, holes: readonly Hole[], radius = PAGE_CORNER_RADIUS, pieces: readonly HolePiece[] = []) {
   if (!holes.length && !pieces.length) return "";
   const outer = `M0 0H${n(box.width)}V${n(box.height)}H0Z`;
@@ -288,7 +297,7 @@ export function createPageHoles(root: HTMLElement, zoom: () => number = () => 1,
 
   return {
     pagesChanged(next: readonly PageArea[]) {
-      pageAreas = next;
+      pageAreas = next.map((area) => ({ ...area, rect: engineEnclosedRect(area.rect, zoom()) }));
       pages = [...pageAreas, ...glassAreas];
       for (const layer of layers) paintLayer(layer);
       syncHosts();

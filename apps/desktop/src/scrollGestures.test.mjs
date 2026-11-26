@@ -599,3 +599,14 @@ test("mid-settle, an accidental 10 px reverse bump stays put while a deliberate 
   flick.input("ended", 40, 1, WIDTH, 1.01);
   assert.equal(flick.selected, 0, "a deliberate 40 px reverse flick did not go back");
 });
+
+test("mayBegin, then a began that already carries the flick, then a still lift switches profiles", (t) => {
+  const { fake, pager } = pagerTarget(t, ["a", "b", "c"]);
+  fake.set(800);
+  native({ phase: "mayBegin" }, 800);
+  native({ phase: "began", dx: -15 }, 800.4);
+  native({ phase: "ended", dx: 0 }, 800.402);
+  assert.equal(pager.snapshot().selected, 1, "a began-carried flick computed no velocity and snapped back");
+  fake.pump();
+  assert.equal(pager.snapshot().position, 1);
+});

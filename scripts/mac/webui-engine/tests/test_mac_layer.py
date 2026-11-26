@@ -719,6 +719,47 @@ class ContractTests(unittest.TestCase):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         self.assertIn('ReportSidebarEdge(edge_.Covered());', lifecycle.split('void ShellHostView::OnPointerMoved(', 1)[1].split('\n}\n', 1)[0])
 
+    def test_live_documents_use_the_shared_canonical_store(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        documents = self.read('ac_mac_documents.mm')
+        host = self.read('ac_mac_shell_host.mm')
+        self.assertIn('if (DocumentSession::Handles(name)) {', calls)
+        self.assertIn('documents_->Call(name, args, renderer_generation_, std::move(done));', calls)
+        self.assertIn('!DocumentSession::Reserved(name)', calls)
+        self.assertNotIn('kBootstrapDocumentLimit', calls)
+        self.assertIn('ReadFileToStringWithMaxSize(path, &text, kDocumentLimit)', calls)
+        self.assertIn('&LinuxDocumentService::DispatchTracked', documents)
+        self.assertIn('ardia::kLinuxLiveMaxBytes', documents)
+        self.assertIn('.Set("name", "documents.changed")', host)
+        self.assertIn('documents_->RendererRetired();', host)
+        copied = (ROOT / 'dev-copies.tsv').read_text()
+        for name in ('ac_linux_documents', 'ac_linux_document_reducer', 'ac_linux_document_service'):
+            self.assertIn(f'ardia/mac/shared/{name}.cc', copied)
+            self.assertIn(f'ardia/mac/shared/ardia/linux/{name}.h', copied)
+        self.assertIn('ardia/mac/shared/ac_linux_document_schema.cc', copied)
+        gn = (MAC / 'BUILD.gn').read_text()
+        for source in ('shared/ac_linux_documents.cc', 'shared/ac_linux_document_service.cc', 'ac_mac_documents.mm'):
+            self.assertIn(f'"{source}"', gn)
+
+    def test_startup_engine_calls_are_answered_not_failed(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        invoked = calls.split('constexpr std::string_view kInvokedEngineCalls[] = {', 1)[1].split('};', 1)[0]
+        inert = calls.split('constexpr std::string_view kInertEngineCalls[] = {', 1)[1].split('};', 1)[0]
+        for name in ('engine.info', 'tabs.strips', 'search.setEngineName'):
+            self.assertIn(f'"{name}"', invoked)
+        for name in ('engine.memorySaver', 'engine.systemState', 'webKit.setFraudWarnings', 'webView.setSelectionPopover'):
+            self.assertIn(f'"{name}"', inert)
+        engine = calls.split('void ShellHostView::EngineCall(', 1)[1]
+        self.assertLess(engine.index('kInvokedEngineCalls'), engine.index('"This engine call is not in the Mac WebUI shell"'))
+
+    def test_popover_panels_clip_their_page_and_leave_no_square_rim(self):
+        popover = self.read('ac_mac_popover.mm')
+        embed = popover.split('void Embed(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('content.layer.cornerRadius = kPanelRadius;', embed)
+        self.assertIn('content.layer.masksToBounds = YES;', embed)
+        self.assertIn('window.hasShadow = !LiquidGlassAvailable();', popover)
+        self.assertIn('[panel.panel invalidateShadow];', popover)
+
     def test_window_close_runs_the_shared_close_protocol(self):
         lifecycle = self.read('ac_mac_shell_lifecycle.mm')
         for name in ('shell.closeRequested', 'shell.closeCancelled'):

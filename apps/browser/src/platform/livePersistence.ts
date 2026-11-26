@@ -1,6 +1,15 @@
 import { readDocument, writeDocument } from "./documents";
-import { parseSaved, versionedJson } from "../lib/savedDocument";
-import { LIVE_DOCUMENT as DOC, LIVE_DOCUMENT_MIGRATIONS as DOC_MIGRATIONS, LIVE_DOCUMENT_VERSION as DOC_VERSION } from "./liveDocumentFormat";
+import { parseSaved, unchanged, versionedJson, type Migrations } from "../lib/savedDocument";
+
+const DOC = "live.json";
+const DOC_VERSION = 2;
+const DOC_MIGRATIONS: Migrations = {
+  0: unchanged,
+  1: (doc) => ({
+    ...doc,
+    folders: Object.fromEntries(Object.entries((doc.folders ?? {}) as Record<string, object>).map(([id, f]) => [id, { showNewRepos: true, shownRepos: [], ...f }])),
+  }),
+};
 
 export type LiveProjection = Record<string, unknown>;
 export type LiveCompletionInvalidation = { folderId: string; fence: unknown };

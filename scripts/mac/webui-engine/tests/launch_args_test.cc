@@ -76,6 +76,28 @@ TEST(the_shell_is_always_webui_unless_asked) {
   CHECK(!Has(Build({"Ardia Helper", "--type=gpu-process"}, nullptr, nullptr), "--ardia-shell=webui"));
 }
 
+TEST(injected_switches_stay_before_the_argument_terminator) {
+  const auto args = Build({"Ardia", "--enable-logging", "--", "https://example.com", "--user-data-dir=/x"}, nullptr, "1");
+  std::size_t terminator = args.size();
+  for (std::size_t i = 0; i < args.size(); ++i) {
+    if (args[i] == "--") terminator = i;
+  }
+  CHECK(terminator < args.size());
+  CHECK(args[terminator + 1] == "https://example.com");
+  CHECK(args[terminator + 2] == "--user-data-dir=/x");
+  CHECK(args.size() == terminator + 3);
+  for (const char* injected : {"--ardia-shell=webui", "--use-mock-keychain", "--ardia-background"}) {
+    bool before = false;
+    for (std::size_t i = 0; i < terminator; ++i) before = before || args[i] == injected;
+    CHECK(before);
+  }
+  bool profile = false;
+  for (std::size_t i = 0; i < terminator; ++i) profile = profile || args[i].starts_with("--user-data-dir=/Users/tester/");
+  CHECK(profile);
+  const auto helper = Build({"Ardia Helper", "--type=renderer", "--", "x"}, nullptr, nullptr);
+  CHECK(helper.size() == 4 && helper[2] == "--" && helper[3] == "x");
+}
+
 TEST(hostile_sinks) {
   const std::string huge(10000, 'a');
   const auto args = Build({"Ardia"}, huge.c_str(), "1");
