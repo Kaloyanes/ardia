@@ -12,7 +12,7 @@ import Animated, { cancelAnimation, FadeIn, FadeOut, runOnJS, runOnUI, useAnimat
 import type { GestureType } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { activateRow, cancelSearch, submitSearch, toggleTrayIncognito } from "../../state/browse/store";
-import { copyLink, menuOpenedHaptic, trayRowActions, type RowAction } from "../../state/browse/tabMenus";
+import { copyLink, menuOpenedHaptic, trayRowActions, trayRowHoldAction, type RowAction } from "../../state/browse/tabMenus";
 import { rowMenuItems, useRowConfirm } from "./rowConfirm";
 import { useSearchEditsPage, useSearchFieldVersion, useSearchInitialText, useSearchOpen, useSearchOrigin, useSearchRows, useSearchSession, useSearchText } from "../../state/search/hooks";
 import { SEARCH_ANCHOR_ID, SEARCH_FACE_ID, SEARCH_FIELD_ID, SEARCH_REVEAL_ID, SEARCH_ROWS_REVEAL_ID, setStageMorphs, stageExit, stageOpened, stagePresented, stageSettled, useStageBar } from "../../state/search/stageBar";
@@ -1298,11 +1298,16 @@ function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
   useEffect(() => (menuOpen ? coverTray() : undefined), [menuOpen]);
   const window = useWindowDimensions();
   const keyboardTop = useKeyboardTopFromBottom();
-  const showMenu = useCallback((row: TrayRow, at: Point) => {
-    if (!trayRowActions(row).length) return;
-    menuOpenedHaptic();
-    setMenu({ row, at });
-  }, []);
+  const showMenu = useCallback(
+    (row: TrayRow, at: Point) => {
+      const hold = trayRowHoldAction(row);
+      if (!hold && !trayRowActions(row).length) return;
+      menuOpenedHaptic();
+      if (hold) confirm.choose(hold);
+      else setMenu({ row, at });
+    },
+    [confirm.choose],
+  );
   const arc = useContext(SearchPanelContext);
   const list = useContext(TrayListContext);
   const reportRows = useContext(TrayContentContext);

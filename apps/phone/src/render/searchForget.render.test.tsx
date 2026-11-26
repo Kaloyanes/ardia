@@ -1,4 +1,6 @@
+import { ActionSheetIOS, Platform } from "react-native";
 import { act } from "react-test-renderer";
+import "../platform/copy";
 import { DesignProvider } from "../components/ui";
 import { SearchTray } from "../components/search/SearchTray";
 import * as browse from "../state/browse/store";
@@ -7,6 +9,9 @@ import { history } from "../state/history/store";
 import { presentSearch, useSearch } from "../state/search/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
+const onIos = Platform.OS === "ios" ? test : test.skip;
+const onAndroid = Platform.OS === "android" ? test : test.skip;
+
 const OTTERS = "https://duckduckgo.com/?q=otters";
 const OTTERS_GOOGLE = "https://www.google.com/search?q=OTTERS";
 const TAPAS = "https://duckduckgo.com/?q=tapas";
@@ -14,9 +19,9 @@ const TAPAS = "https://duckduckgo.com/?q=tapas";
 function openIdleTray() {
   withTabs(1);
   history().clear(null);
-  history().record(OTTERS, "otters", "generated", null, 1_000);
-  history().record(OTTERS_GOOGLE, "otters", "generated", null, 2_000);
-  history().record(TAPAS, "tapas", "generated", null, 3_000);
+  history().record(OTTERS, "otters", "typed", null, 1_000);
+  history().record(OTTERS_GOOGLE, "otters", "typed", null, 2_000);
+  history().record(TAPAS, "tapas", "typed", null, 3_000);
   browse.useBrowse.setState({ surface: "start" });
   presentSearch("start", "");
   act(() => jest.runOnlyPendingTimers());
@@ -56,15 +61,14 @@ describe("deleting a past search", () => {
     jest.useRealTimers();
   });
 
-  test("holding a past search offers Delete, which asks first and only deletes on Delete", () => {
+  onAndroid("holding a past search opens only the Cancel/Delete dialog, and only Delete deletes", () => {
     const root = openIdleTray();
     expect(idleQueries()).toEqual(["tapas", "OTTERS"]);
     holdRow(root, "otters");
-    const remove = menuItems(root).find((item) => item.label === "Delete")!;
-    expect(remove.destructive).toBe(true);
-    act(() => remove.onPress());
+    expect(menuItems(root)).toEqual([]);
     const dialog = confirmDialog(root)!;
     expect(dialog.props.confirmation.title).toBe("Delete This Search?");
+    expect(dialog.props.confirmation.message).toBe("“OTTERS” will be removed from your history on this phone.");
     expect(dialog.props.confirmation.action).toBe("Delete");
     act(() => dialog.props.onClose());
     expect(confirmDialog(root)).toBeUndefined();
@@ -72,7 +76,6 @@ describe("deleting a past search", () => {
     expect(counted).not.toHaveBeenCalledWith("searches_forgotten");
 
     holdRow(root, "otters");
-    act(() => menuItems(root).find((item) => item.label === "Delete")!.onPress());
     act(() => confirmDialog(root)!.props.confirmation.run());
     expect(history().summary().map((row) => row.url)).toEqual([TAPAS]);
     expect(idleQueries()).toEqual(["tapas"]);
@@ -80,7 +83,24 @@ describe("deleting a past search", () => {
     unmount(root);
   });
 
-  test("a suggestion that was never searched has no Delete", () => {
+  onIos("on iPhone, holding a past search opens the system action sheet, and only Delete deletes", () => {
+    const answers = [1, 0];
+    const sheet = jest.spyOn(ActionSheetIOS, "showActionSheetWithOptions").mockImplementation((_options, answer) => answer(answers.shift()!));
+    const root = openIdleTray();
+    holdRow(root, "otters");
+    expect(menuItems(root)).toEqual([]);
+    expect(confirmDialog(root)).toBeUndefined();
+    expect(sheet.mock.calls[0]![0]).toMatchObject({ title: "Delete This Search?", message: "“OTTERS” will be removed from your history on this iPhone.", options: ["Delete", "Cancel"], destructiveButtonIndex: 0, cancelButtonIndex: 1 });
+    expect(history().summary().map((row) => row.url)).toContain(OTTERS);
+
+    holdRow(root, "otters");
+    expect(history().summary().map((row) => row.url)).toEqual([TAPAS]);
+    expect(counted).toHaveBeenCalledWith("searches_forgotten");
+    sheet.mockRestore();
+    unmount(root);
+  });
+
+  test("a suggestion that was never searched keeps its menu and has no Delete", () => {
     const root = openIdleTray();
     act(() => useSearch.setState({ text: "otter", rows: [{ key: "q:otter facts", kind: "query", title: "otter facts", url: "https://duckduckgo.com/?q=otter+facts", query: "otter facts" }] }));
     holdRow(root, "otter facts");

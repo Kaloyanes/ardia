@@ -27,7 +27,7 @@ export type RowAction = {
 export const FORGET_SEARCH = "Delete";
 
 export function forgetSearchConfirmation(query: string): RowConfirmation {
-  return { title: "Delete This Search?", message: `“${query.trim()}” will be removed from your history on this phone.`, action: FORGET_SEARCH };
+  return { title: "Delete This Search?", message: `“${query.trim()}” will be removed from ${copy().forgottenSearchLeaves}.`, action: FORGET_SEARCH };
 }
 
 function openSwitchingMode(url: string, origin: "search" | "typed") {
@@ -35,13 +35,18 @@ function openSwitchingMode(url: string, origin: "search" | "typed") {
   openPage(url, origin);
 }
 
+export function trayRowHoldAction(row: TrayRow): RowAction | null {
+  if (row.kind !== "query" || !canForgetSearch(row.query)) return null;
+  return { label: FORGET_SEARCH, icon: "trash", destructive: true, confirm: forgetSearchConfirmation(row.query), run: () => forgetSearch(row.query) };
+}
+
 export function trayRowActions(row: TrayRow): RowAction[] {
   const incognito = useTabs.getState().incognito;
   const icon = incognito ? "squareOnSquare" : "eyes";
   if (row.kind === "query") {
     const search: RowAction = { label: incognito ? "Search in New Tab" : "Search in Incognito Tab", icon, run: () => openSwitchingMode(row.url, "search") };
-    if (!canForgetSearch(row.query)) return [search];
-    return [search, { label: FORGET_SEARCH, icon: "trash", destructive: true, confirm: forgetSearchConfirmation(row.query), run: () => forgetSearch(row.query) }];
+    const forget = trayRowHoldAction(row);
+    return forget ? [search, forget] : [search];
   }
   if (row.kind === "calc") return [{ label: actionWords.copyText, icon: iconRoles.copyText, run: () => quietly(() => copyText(row.value)) }];
   if (row.kind === "paste" || row.kind === "browseForMe") return [];

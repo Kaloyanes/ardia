@@ -6,7 +6,7 @@ import { inlineOffer } from "../../lib/inlineOffer";
 import { trayMaxHeight } from "../../lib/trayMotion";
 import { MaterialSearchBar, type MaterialSearchBarHandle } from "../../platform/completingField";
 import { activateRow, cancelSearch, submitSearch, toggleTrayIncognito } from "../../state/browse/store";
-import { menuOpenedHaptic, trayRowActions } from "../../state/browse/tabMenus";
+import { menuOpenedHaptic, trayRowActions, trayRowHoldAction } from "../../state/browse/tabMenus";
 import { rowMenuItems, useRowConfirm } from "./rowConfirm";
 import { useSurface } from "../../state/browse/hooks";
 import { useSearchCompletedFor, useSearchCompletion, useSearchFieldVersion, useSearchFromDockedMenu, useSearchInitialText, useSearchOpen, useSearchRows, useSearchSession, useSearchText } from "../../state/search/hooks";
@@ -202,11 +202,16 @@ export function MaterialSearchResults({ scrollY }: { scrollY: SharedValue<number
   const menuOpen = menu !== null;
   useEffect(() => (menuOpen ? coverTray() : undefined), [menuOpen]);
   const refine = useCallback((row: TrayRow) => setSearchText(refinedText(row)), []);
-  const showMenu = useCallback((row: TrayRow, at: Point) => {
-    if (!trayRowActions(row).length) return;
-    menuOpenedHaptic();
-    setMenu({ row, at });
-  }, []);
+  const showMenu = useCallback(
+    (row: TrayRow, at: Point) => {
+      const hold = trayRowHoldAction(row);
+      if (!hold && !trayRowActions(row).length) return;
+      menuOpenedHaptic();
+      if (hold) confirm.choose(hold);
+      else setMenu({ row, at });
+    },
+    [confirm.choose],
+  );
   if (incognito && !typed.trim())
     return (
       <View testID="materialSearchIncognitoNote" style={[styles.group, styles.note, materialSegmentCorners(0, 1), { backgroundColor: scheme.surfaceContainer }]}>
