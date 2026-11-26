@@ -138,4 +138,6 @@ Android search reports full-screen sheet expansions as the consent-gated daily `
 
 Compare `usage_counts.site_settings_sheet_expanded` with `site_settings_sheet_opened` to track use of the full-screen Android address bar menu. Both are consent-gated counts that exclude Incognito.
 
+Android release builds count their update checks on `ardia-phone` as `usage_counts.app_update_checks`, the one-time "Ardia <version> is available" toast as `app_update_offers_shown`, and opening that APK download (toast or Settings › About) as `app_update_offers_opened`. Checks should hold steady at about one per active install per 6 hours; shown should rise the day an Android release is published. All three are consent-gated counts, never the version.
+
 Android Find on Page: compare phone `usage_counts.find_closed_bar` with `find_opened_bar`. The close counter counts each non-private session once, whether it ends through Close or Back. Counts require usage sharing.

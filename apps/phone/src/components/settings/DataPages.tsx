@@ -9,6 +9,8 @@ import { copy } from "../../lib/platformCopy";
 import { libraryCredits } from "../../state/settings/libraryCredits";
 import { ButtonRow, Divider, Group, NavRow, PickerRow, SettingsPage, ToggleRow, ValueRow } from "./SettingsKit";
 import { destinationWords } from "../../lib/sharedWords";
+import { updateRowWords } from "../../lib/appUpdate";
+import { appUpdatesOffered, checkForUpdate, openUpdate, useAppUpdate } from "../../state/appUpdate/store";
 
 export function ClearDataPage({ onBack = popSettings }: { onBack?: () => void }) {
   const [range, setRange] = useState<ClearRange>("today");
@@ -66,6 +68,17 @@ function LinkRow({ title, icon, url, divider }: { title: string; icon: SymbolNam
   );
 }
 
+function UpdateGroup() {
+  const status = useAppUpdate((s) => s.status);
+  const offer = useAppUpdate((s) => s.offer);
+  const words = updateRowWords(status, offer);
+  return (
+    <Group>
+      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={status === "available" ? openUpdate : checkForUpdate} />
+    </Group>
+  );
+}
+
 export function AboutPage() {
   const theme = useTheme();
   return (
@@ -79,6 +92,7 @@ export function AboutPage() {
           <Text style={[font.subheadline, { color: theme.secondaryLabel }]}>{appVersion()}</Text>
         </View>
       </View>
+      {appUpdatesOffered() ? <UpdateGroup /> : null}
       <Group footer={copy().privacy}>
         <LinkRow title="ardia.dev" icon="globe" url="https://ardia.dev" divider />
         <LinkRow title="Release Notes" icon="sparkles" url="https://ardia.dev/release-notes" divider />
