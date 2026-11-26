@@ -58,6 +58,10 @@ class DownloadsModule : Module() {
             }
         }.runOnQueue(Queues.MAIN)
 
+        AsyncFunction("handOffAppUpdate") { url: String, title: String ->
+            AppUpdateHandoff.start(context, appContext.currentActivity, url, title)
+        }.runOnQueue(Queues.MAIN)
+
         AsyncFunction("files") { -> DownloadedFiles.list(context) }
 
         AsyncFunction("delete") { uri: String -> DownloadedFiles.delete(context, uri) }

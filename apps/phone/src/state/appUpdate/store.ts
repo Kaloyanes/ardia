@@ -1,23 +1,50 @@
 import { AppState, Platform } from "react-native";
 import { create } from "zustand";
-import { dueForUpdateCheck, findUpdate, installedReleaseVersion, isReleaseDownloadUrl, parseCheckedAt, updateOfferMessage, updateOfferWanted, UPDATE_CHECK_TIMEOUT_MS, type OfferedRelease, type ReleaseVersion, type UpdateStatus } from "../../lib/appUpdate";
+import {
+  dueForUpdateCheck,
+  findUpdate,
+  installedReleaseVersion,
+  nextCheckAt,
+  parseCheckAt,
+  parseOfferedVersions,
+  parseUnpublished,
+  releasePageUrl,
+  rememberUnpublished,
+  updateDownloadingMessage,
+  updateDownloadRequest,
+  updateHandoffOf,
+  updateOfferMessage,
+  updateOfferWanted,
+  updateUnavailableMessage,
+  UPDATE_CHECK_TIMEOUT_MS,
+  withOfferedVersion,
+  type OfferedRelease,
+  type ReleaseVersion,
+  type UpdateHandoff,
+  type UpdateStatus,
+} from "../../lib/appUpdate";
+import { actionWords } from "../../lib/sharedWords";
 import { whenIdle } from "../../lib/whenIdle";
+import { downloads } from "../../platform/downloads";
 import { pages } from "../../platform/pages";
 import { fetchGitHubJson } from "../../platform/releases";
-import { openExternal } from "../../platform/system";
+import { copyText, openExternal } from "../../platform/system";
 import { readPreference, writePreference } from "../store/browserDatabase";
 import { browserDatabase } from "../store/database";
 import { countUsage } from "../telemetry/telemetry";
-import { showToast } from "../toasts/store";
+import { showToast, TOAST_LONG_DURATION_MS } from "../toasts/store";
 
-export const UPDATE_CHECKED_AT_KEY = "app_update_checked_at";
-export const UPDATE_OFFERED_KEY = "app_update_offered";
+export const UPDATE_NEXT_CHECK_KEY = "app_update_next_check_at";
+export const UPDATE_OFFERED_KEY = "app_update_offered_versions";
+export const UPDATE_UNPUBLISHED_KEY = "app_update_unpublished";
 
 const OFFER_TOAST_MS = 6_000;
 const LAUNCH_QUIET_MS = 8_000;
 const LAUNCH_IDLE_TIMEOUT_MS = 5_000;
 
-export const useAppUpdate = create<{ status: UpdateStatus; offer: OfferedRelease | null }>()(() => ({ status: "idle", offer: null }));
+type UpdateState = { status: UpdateStatus; offer: OfferedRelease | null; handoff: UpdateHandoff | null };
+
+export const useAppUpdate = create<UpdateState>()(() => ({ status: "idle", offer: null, handoff: null }));
 
 let installed: ReleaseVersion | null | undefined;
 
@@ -49,29 +76,38 @@ function writeStored(key: string, value: string) {
   }
 }
 
-async function runCheck(version: ReleaseVersion, offersToast: boolean) {
+const inFront = () => AppState.currentState === "active";
+
+function offerInFront() {
+  const { status, offer } = useAppUpdate.getState();
+  if (status !== "available" || !inFront()) return;
+  const offered = parseOfferedVersions(readStored(UPDATE_OFFERED_KEY));
+  if (!updateOfferWanted(offer, offered)) return;
+  showToast(updateOfferMessage(offer), "download", OFFER_TOAST_MS, { label: "Download", run: openUpdate });
+  writeStored(UPDATE_OFFERED_KEY, JSON.stringify(withOfferedVersion(offered, offer.version)));
+  countUsage("app_update_offers_shown");
+}
+
+async function runCheck(version: ReleaseVersion, automatic: boolean) {
   useAppUpdate.setState({ status: "checking" });
   countUsage("app_update_checks");
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS);
   try {
-    const result = await findUpdate(version, (url) => fetchGitHubJson(url, controller.signal));
-    if (result.kind !== "failed" || result.answered) writeStored(UPDATE_CHECKED_AT_KEY, String(Date.now()));
-    if (result.kind === "failed") {
-      useAppUpdate.setState({ status: "failed" });
+    const startedAt = Date.now();
+    const known = parseUnpublished(readStored(UPDATE_UNPUBLISHED_KEY), startedAt);
+    const result = await findUpdate(version, (url) => fetchGitHubJson(url, controller.signal), known);
+    const now = Date.now();
+    if (result.unpublished.length > 0) writeStored(UPDATE_UNPUBLISHED_KEY, JSON.stringify(rememberUnpublished(known, result.unpublished, now)));
+    const next = nextCheckAt(result, now);
+    if (next !== null) writeStored(UPDATE_NEXT_CHECK_KEY, String(next));
+    if (result.kind === "available") {
+      const same = useAppUpdate.getState().offer?.version === result.offer.version;
+      useAppUpdate.setState({ status: "available", offer: result.offer, handoff: same ? useAppUpdate.getState().handoff : null });
+      if (automatic) offerInFront();
       return;
     }
-    if (result.kind === "current") {
-      useAppUpdate.setState({ status: "current", offer: null });
-      return;
-    }
-    const { offer } = result;
-    useAppUpdate.setState({ status: "available", offer });
-    if (!updateOfferWanted(offer, readStored(UPDATE_OFFERED_KEY))) return;
-    writeStored(UPDATE_OFFERED_KEY, offer.version);
-    if (!offersToast) return;
-    countUsage("app_update_offers_shown");
-    showToast(updateOfferMessage(offer), "download", OFFER_TOAST_MS, { label: "Download", run: openUpdate });
+    useAppUpdate.setState({ status: result.kind, offer: result.kind === "current" ? null : useAppUpdate.getState().offer, handoff: result.kind === "current" ? null : useAppUpdate.getState().handoff });
   } catch {
     useAppUpdate.setState({ status: "failed" });
   } finally {
@@ -87,8 +123,11 @@ export function checkForUpdate() {
 
 function checkIfDue() {
   const version = installedVersion();
-  if (!version || useAppUpdate.getState().status === "checking") return;
-  if (!dueForUpdateCheck(Date.now(), parseCheckedAt(readStored(UPDATE_CHECKED_AT_KEY)))) return;
+  if (!version || !inFront() || useAppUpdate.getState().status === "checking") return;
+  if (!dueForUpdateCheck(Date.now(), parseCheckAt(readStored(UPDATE_NEXT_CHECK_KEY)))) {
+    offerInFront();
+    return;
+  }
   void runCheck(version, true);
 }
 
@@ -103,9 +142,37 @@ export function startUpdateChecks() {
   });
 }
 
-export function openUpdate() {
+function showUnavailable(version: ReleaseVersion) {
+  showToast(updateUnavailableMessage(), "warning", TOAST_LONG_DURATION_MS, { label: actionWords.copyLink, run: () => void copyText(releasePageUrl(version)).catch(() => undefined) });
+}
+
+async function handOff(url: string, title: string): Promise<UpdateHandoff> {
+  if (Platform.OS === "android" && downloads.handsOffAppUpdates()) {
+    try {
+      return updateHandoffOf(await downloads.handOffAppUpdate(url, title));
+    } catch {
+      return "unavailable";
+    }
+  }
+  try {
+    await openExternal(url);
+    return "browser";
+  } catch {
+    return "unavailable";
+  }
+}
+
+export async function openUpdate() {
   const { offer } = useAppUpdate.getState();
-  if (!offer || !isReleaseDownloadUrl(offer.downloadUrl)) return;
+  const request = updateDownloadRequest(offer);
+  if (!offer || !request) return;
+  const { version } = request;
   countUsage("app_update_offers_opened");
-  openExternal(offer.downloadUrl).catch(() => showToast("Couldn’t open the download", "warning"));
+  const handoff = await handOff(request.url, request.title);
+  if (useAppUpdate.getState().offer?.version === offer.version) useAppUpdate.setState({ handoff });
+  if (handoff === "notifications") showToast(updateDownloadingMessage(offer), "download", TOAST_LONG_DURATION_MS);
+  if (handoff === "unavailable") {
+    countUsage("app_update_handoffs_failed");
+    showUnavailable(version);
+  }
 }

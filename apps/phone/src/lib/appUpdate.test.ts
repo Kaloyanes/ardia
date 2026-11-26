@@ -7,18 +7,31 @@ import {
   dueForUpdateCheck,
   findUpdate,
   installedReleaseVersion,
+  isPublishedTime,
   isReleaseDownloadUrl,
   MAX_GITHUB_BODY_CHARS,
   newerTaggedVersions,
+  nextCheckAt,
   parseAndroidVersion,
-  parseCheckedAt,
+  parseCheckAt,
+  parseOfferedVersions,
+  parseUnpublished,
   publishedRelease,
   readGitHubJson,
   releaseLookupUrl,
+  releaseOfDownloadUrl,
   releaseTagsUrl,
+  rememberUnpublished,
+  retryAtFrom,
+  UNPUBLISHED_REMEMBERED_MS,
   UPDATE_CHECK_EVERY_MS,
+  UPDATE_CHECK_LONGEST_WAIT_MS,
+  UPDATE_RETRY_INCOMPLETE_MS,
+  updateDownloadRequest,
+  updateHandoffOf,
   updateOfferWanted,
   updateRowWords,
+  withOfferedVersion,
   type GitHubJsonAnswer,
   type ReleaseVersion,
 } from "./appUpdate.ts";
@@ -31,17 +44,18 @@ const v = (text: string): ReleaseVersion => {
 
 const tags = (...versions: string[]) => versions.map((version) => ({ ref: `refs/tags/android-v${version}`, object: { type: "commit" } }));
 
+const apk = (version: string) => ({ name: `Ardia-${version}.apk`, state: "uploaded", browser_download_url: `https://github.com/ardia-browser/ardia/releases/download/android-v${version}/Ardia-${version}.apk` });
+
 const release = (version: string, overrides: Record<string, unknown> = {}) => ({
   tag_name: `android-v${version}`,
   draft: false,
   prerelease: true,
   published_at: "2026-11-26T01:00:00Z",
-  assets: [
-    { name: `Ardia-${version}.apk.sha256`, state: "uploaded", browser_download_url: `https://github.com/ardia-browser/ardia/releases/download/android-v${version}/Ardia-${version}.apk.sha256` },
-    { name: `Ardia-${version}.apk`, state: "uploaded", browser_download_url: `https://github.com/ardia-browser/ardia/releases/download/android-v${version}/Ardia-${version}.apk` },
-  ],
+  assets: [{ ...apk(version), name: `Ardia-${version}.apk.sha256`, browser_download_url: `${apk(version).browser_download_url}.sha256` }, apk(version)],
   ...overrides,
 });
+
+const NOW = 1_800_000_000_000;
 
 test("versions sort nightlies below the stable of the same base and above the stable before it", () => {
   const ordered = ["1.0.2", "1.0.3-nightly.1", "1.0.3-nightly.2", "1.0.3-nightly.10", "1.0.3", "1.0.4-nightly.1", "1.0.4", "1.1.0", "2.0.0"];
@@ -55,7 +69,7 @@ test("versions sort nightlies below the stable of the same base and above the st
 
 test("only release-shaped versions parse", () => {
   for (const good of ["0.2.47", "1.0.3", "1.0.3-nightly.2", "20.99.999-nightly.998"]) assert.ok(parseAndroidVersion(good), good);
-  for (const bad of ["", "1.0", "1.0.3.4", "v1.0.3", "1.0.3-beta.1", "1.0.3-nightly.0", "1.0.3-nightly.", "1.0.3-nightly.01", " 1.0.3", "1.0.3\n", "1.0.3-nightly.2-x", "1e3.0.0", "-1.0.0"]) assert.equal(parseAndroidVersion(bad), null, JSON.stringify(bad));
+  for (const bad of ["", "1.0", "1.0.3.4", "v1.0.3", "1.0.3-beta.1", "1.0.3-nightly.0", "1.0.3-nightly.", "1.0.3-nightly.01", "1.0.1000", "1.0.4-nightly.1000", " 1.0.3", "1.0.3\n", "1.0.3-nightly.2-x", "1e3.0.0", "-1.0.0"]) assert.equal(parseAndroidVersion(bad), null, JSON.stringify(bad));
   for (const { id, value } of HOSTILE_VALUES) assert.equal(parseAndroidVersion(value), null, id);
 });
 
@@ -74,7 +88,6 @@ test("a stable sees only newer stables; a nightly sees newer nightlies and stabl
   assert.deepEqual(newerTaggedVersions(listed, v("1.0.2")).map((x) => x.text), ["1.0.3"]);
   assert.deepEqual(newerTaggedVersions(listed, v("1.0.3")).map((x) => x.text), []);
   assert.deepEqual(newerTaggedVersions(listed, v("1.0.3-nightly.1")).map((x) => x.text), ["1.0.4-nightly.1", "1.0.3", "1.0.3-nightly.2"]);
-  assert.deepEqual(newerTaggedVersions(listed, v("1.0.3-nightly.1"), 1).map((x) => x.text), ["1.0.4-nightly.1"]);
   assert.deepEqual(newerTaggedVersions(listed, v("1.0.4-nightly.1")).map((x) => x.text), []);
 });
 
@@ -91,7 +104,7 @@ test("tag listings that aren't a list of Android release tags offer nothing", ()
   assert.deepEqual(newerTaggedVersions([{ ref: "refs/tags/android-v9.9.9" }], installed).map((x) => x.text), ["9.9.9"], "positive control");
 });
 
-test("a release is offered only when published, for its own tag, with its APK on this repo's release download", () => {
+test("a release is offered only when published, for its own tag, with its uploaded APK on this repo's release download", () => {
   const version = v("1.0.3");
   assert.deepEqual(publishedRelease(release("1.0.3"), version), { version: "1.0.3", downloadUrl: "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk" });
   assert.equal(publishedRelease(release("1.0.3", { draft: true }), version), null);
@@ -100,20 +113,31 @@ test("a release is offered only when published, for its own tag, with its APK on
   assert.equal(publishedRelease(release("1.0.3", { tag_name: "android-v1.0.4" }), version), null);
   assert.equal(publishedRelease(release("1.0.3", { assets: [] }), version), null);
   assert.equal(publishedRelease(release("1.0.3", { assets: "Ardia-1.0.3.apk" }), version), null);
-  assert.equal(publishedRelease(release("1.0.3", { assets: [{ name: "Ardia-1.0.3.apk", state: "starter", browser_download_url: apkDownloadUrl(version) }] }), version), null);
+  assert.equal(publishedRelease(release("1.0.3", { assets: [{ ...apk("1.0.3"), state: "starter" }] }), version), null);
   for (const url of ["http://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk", "https://evil.example/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk", "https://github.com/someone/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk", "https://objects.githubusercontent.com/Ardia-1.0.3.apk"]) {
-    assert.equal(publishedRelease(release("1.0.3", { assets: [{ name: "Ardia-1.0.3.apk", state: "uploaded", browser_download_url: url }] }), version), null, url);
+    assert.equal(publishedRelease(release("1.0.3", { assets: [{ ...apk("1.0.3"), browser_download_url: url }] }), version), null, url);
   }
   for (const { id, value } of HOSTILE_VALUES) {
     assert.equal(publishedRelease(value, version), null, id);
     for (const field of ["tag_name", "draft", "published_at", "assets"]) if (!(field === "draft" && value === false)) assert.equal(publishedRelease(release("1.0.3", { [field]: value }), version), null, `${field} ${id}`);
-    assert.equal(publishedRelease(release("1.0.3", { assets: [{ name: "Ardia-1.0.3.apk", state: "uploaded", browser_download_url: value }] }), version), null, `url ${id}`);
-    assert.equal(publishedRelease(release("1.0.3", { assets: [{ name: value, state: "uploaded", browser_download_url: apkDownloadUrl(version) }] }), version), null, `name ${id}`);
+    for (const field of ["name", "state", "browser_download_url"]) assert.equal(publishedRelease(release("1.0.3", { assets: [{ ...apk("1.0.3"), [field]: value }] }), version), null, `asset ${field} ${id}`);
   }
+});
+
+test("P3: an asset without an uploaded state, or a publish time that isn't a real time, offers nothing", () => {
+  const version = v("1.0.3");
+  const { state: _state, ...stateless } = apk("1.0.3");
+  assert.equal(publishedRelease(release("1.0.3", { assets: [stateless] }), version), null);
+  for (const at of ["2026-99-99T99:99:99Z", "2026-02-30T00:00:00Z", "2026-11-26T24:00:00Z", "2026-11-26T01:00:00", "2026-11-26T01:00:00+01:00", "2026-11-26"]) {
+    assert.equal(isPublishedTime(at), false, at);
+    assert.equal(publishedRelease(release("1.0.3", { published_at: at }), version), null, at);
+  }
+  for (const at of ["2026-11-26T01:00:00Z", "2026-11-26T01:00:00.123Z", "2024-02-29T23:59:59Z"]) assert.equal(isPublishedTime(at), true, at);
 });
 
 test("only https downloads of an Android APK on github.com for this repo open", () => {
   assert.ok(isReleaseDownloadUrl("https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3-nightly.2/Ardia-1.0.3-nightly.2.apk"));
+  assert.equal(releaseOfDownloadUrl("https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3-nightly.2/Ardia-1.0.3-nightly.2.apk")?.text, "1.0.3-nightly.2");
   for (const url of [
     "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.4.apk",
     "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk?x=1",
@@ -123,6 +147,7 @@ test("only https downloads of an Android APK on github.com for this repo open", 
     "https://GITHUB.com/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk",
     "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.3/../android-v1.0.3/Ardia-1.0.3.apk",
     "https://github.com.evil.example/ardia-browser/ardia/releases/download/android-v1.0.3/Ardia-1.0.3.apk",
+    "https://github.com/ardia-browser/ardia/releases/download/android-v1.0.03/Ardia-1.0.03.apk",
     "https://github.com/ardia-browser/ardia/releases/download/v0.2.49/Ardia-0.2.49.dmg",
     "javascript:alert(1)",
   ]) {
@@ -140,23 +165,52 @@ test("GitHub bodies parse only as bounded JSON", () => {
   assert.equal(readGitHubJson(null), undefined);
 });
 
-test("the launch check runs at most every 6 hours, and again when the clock went backwards", () => {
-  const now = 1_800_000_000_000;
-  assert.equal(dueForUpdateCheck(now, null), true);
-  assert.equal(dueForUpdateCheck(now, now), false);
-  assert.equal(dueForUpdateCheck(now, now - UPDATE_CHECK_EVERY_MS + 1), false);
-  assert.equal(dueForUpdateCheck(now, now - UPDATE_CHECK_EVERY_MS), true);
-  assert.equal(dueForUpdateCheck(now, now + 60_000), true);
-  assert.equal(parseCheckedAt(String(now)), now);
-  for (const text of [null, undefined, "", "-1", "0", "1e12", "12.5", "abc", " 1", "99999999999999999"]) assert.equal(parseCheckedAt(text), null, String(text));
+test("the automatic check waits 6 hours after an answer, 10 minutes after an unfinished walk, and again when the clock went backwards", () => {
+  assert.equal(dueForUpdateCheck(NOW, null), true);
+  assert.equal(dueForUpdateCheck(NOW, NOW + UPDATE_CHECK_EVERY_MS), false);
+  assert.equal(dueForUpdateCheck(NOW, NOW), true);
+  assert.equal(dueForUpdateCheck(NOW, NOW + UPDATE_CHECK_LONGEST_WAIT_MS + 1), true);
+  assert.equal(nextCheckAt({ kind: "current", unpublished: [] }, NOW), NOW + UPDATE_CHECK_EVERY_MS);
+  assert.equal(nextCheckAt({ kind: "available", offer: { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) }, unpublished: [] }, NOW), NOW + UPDATE_CHECK_EVERY_MS);
+  assert.equal(nextCheckAt({ kind: "incomplete", unpublished: [] }, NOW), NOW + UPDATE_RETRY_INCOMPLETE_MS);
+  assert.equal(nextCheckAt({ kind: "failed", answered: false, retryAt: null, unpublished: [] }, NOW), null);
+  assert.equal(nextCheckAt({ kind: "failed", answered: true, retryAt: null, unpublished: [] }, NOW), NOW + UPDATE_CHECK_EVERY_MS);
+  assert.equal(parseCheckAt(String(NOW)), NOW);
+  for (const text of [null, undefined, "", "-1", "0", "1e12", "12.5", "abc", " 1", "99999999999999999"]) assert.equal(parseCheckAt(text), null, String(text));
 });
 
-test("each version is offered once: a dismissed offer isn't shown again, a newer one is", () => {
-  const offer = { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) };
-  assert.equal(updateOfferWanted(offer, null), true);
-  assert.equal(updateOfferWanted(offer, "1.0.3"), true);
-  assert.equal(updateOfferWanted(offer, "1.0.4"), false);
-  assert.equal(updateOfferWanted(null, null), false);
+test("a rate limit waits for GitHub's own Retry-After or reset time, within a minute and a day", () => {
+  const headers = (values: Record<string, string>) => (name: string) => values[name] ?? null;
+  assert.equal(retryAtFrom(429, headers({ "retry-after": "120" }), NOW), NOW + 120_000);
+  assert.equal(retryAtFrom(503, headers({ "retry-after": "Thu, 26 Nov 2026 03:00:00 GMT" }), NOW), Date.parse("2026-11-26T03:00:00Z"));
+  assert.equal(retryAtFrom(403, headers({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000900" }), NOW), 1_800_000_900_000);
+  assert.equal(retryAtFrom(403, headers({ "x-ratelimit-remaining": "12", "x-ratelimit-reset": "1800000900" }), NOW), null);
+  assert.equal(retryAtFrom(500, headers({}), NOW), null);
+  assert.equal(retryAtFrom(429, headers({ "retry-after": "soon" }), NOW), null);
+  const limited = (retryAt: number) => nextCheckAt({ kind: "failed", answered: true, retryAt, unpublished: [] }, NOW);
+  assert.equal(limited(NOW + 900_000), NOW + 900_000);
+  assert.equal(limited(NOW - 5_000), NOW + 60_000);
+  assert.equal(limited(NOW + 10 * UPDATE_CHECK_LONGEST_WAIT_MS), NOW + UPDATE_CHECK_LONGEST_WAIT_MS);
+  for (const { id, value } of HOSTILE_VALUES) if (typeof value === "string") assert.equal(retryAtFrom(429, () => value, NOW) === null || Number.isFinite(retryAtFrom(429, () => value, NOW)), true, id);
+});
+
+test("P2: each version is offered once, a set of offered versions keeps 1.0.4 from showing twice when 1.0.3 came between", () => {
+  const offer = (version: string) => ({ version, downloadUrl: apkDownloadUrl(v(version)) });
+  let offered: string[] = [];
+  assert.equal(updateOfferWanted(offer("1.0.4"), offered), true);
+  offered = withOfferedVersion(offered, "1.0.4");
+  offered = withOfferedVersion(offered, "1.0.3");
+  assert.equal(updateOfferWanted(offer("1.0.4"), offered), false);
+  assert.equal(updateOfferWanted(offer("1.0.5"), offered), true);
+  assert.equal(updateOfferWanted(null, offered), false);
+  assert.deepEqual(parseOfferedVersions(JSON.stringify(offered)), ["1.0.4", "1.0.3"]);
+  assert.deepEqual(parseOfferedVersions('["1.0.4", 7, "nope", "1.0.4", "__proto__"]'), ["1.0.4"]);
+  for (const text of [null, "", "{}", "[", '"1.0.4"']) assert.deepEqual(parseOfferedVersions(text), [], String(text));
+  for (const { id, value } of HOSTILE_VALUES) assert.deepEqual(parseOfferedVersions(JSON.stringify([value])), [], id);
+  let many: string[] = [];
+  for (let i = 0; i < 30; i += 1) many = withOfferedVersion(many, `1.0.${i}`);
+  assert.equal(many.length, 20);
+  assert.ok(many.includes("1.0.29") && !many.includes("1.0.0"));
 });
 
 const answering = (answers: Record<string, GitHubJsonAnswer>) => {
@@ -164,33 +218,78 @@ const answering = (answers: Record<string, GitHubJsonAnswer>) => {
   return { asked, fetchJson: async (url: string): Promise<GitHubJsonAnswer> => (asked.push(url), answers[url] ?? { kind: "missing" }) };
 };
 
-test("the check skips tags whose release is a draft or missing and offers the newest published one", async () => {
+test("the check skips tags whose release is missing and offers the newest published one", async () => {
   const { asked, fetchJson } = answering({
     [releaseTagsUrl()]: { kind: "json", body: tags("1.0.2", "1.0.3", "1.0.4", "1.0.5") },
     [releaseLookupUrl(v("1.0.4"))]: { kind: "json", body: release("1.0.4") },
     [releaseLookupUrl(v("1.0.3"))]: { kind: "json", body: release("1.0.3") },
   });
-  assert.deepEqual(await findUpdate(v("1.0.2"), fetchJson), { kind: "available", offer: { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) } });
+  assert.deepEqual(await findUpdate(v("1.0.2"), fetchJson), { kind: "available", offer: { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) }, unpublished: ["1.0.5"] });
   assert.deepEqual(asked, [releaseTagsUrl(), releaseLookupUrl(v("1.0.5")), releaseLookupUrl(v("1.0.4"))]);
+});
+
+test("P2: three unpublished tags above a published one don't hide it: the first check is unfinished, the next walks past them", async () => {
+  const answers = { [releaseTagsUrl()]: { kind: "json", body: tags("1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6") }, [releaseLookupUrl(v("1.0.3"))]: { kind: "json", body: release("1.0.3") } } as const;
+  const first = answering(answers);
+  const firstResult = await findUpdate(v("1.0.2"), first.fetchJson, {});
+  assert.deepEqual(firstResult, { kind: "incomplete", unpublished: ["1.0.6", "1.0.5", "1.0.4"] });
+  assert.equal(first.asked.length, 4);
+  const known = rememberUnpublished({}, firstResult.unpublished, NOW);
+  const second = answering(answers);
+  assert.deepEqual(await findUpdate(v("1.0.2"), second.fetchJson, parseUnpublished(JSON.stringify(known), NOW + UPDATE_RETRY_INCOMPLETE_MS)), { kind: "available", offer: { version: "1.0.3", downloadUrl: apkDownloadUrl(v("1.0.3")) }, unpublished: [] });
+  assert.deepEqual(second.asked, [releaseTagsUrl(), releaseLookupUrl(v("1.0.3"))]);
+  assert.deepEqual(parseUnpublished(JSON.stringify(known), NOW + UNPUBLISHED_REMEMBERED_MS), {}, "a remembered draft is looked up again once its memory runs out, in case it was published");
+});
+
+test("the unpublished memory keeps only release versions with plausible times", () => {
+  assert.deepEqual(parseUnpublished(JSON.stringify({ "1.0.4": NOW - 1000, "1.0.5": NOW + 10 * 60_000, nope: NOW, "1.0.6": "x", "1.0.7": NOW - UNPUBLISHED_REMEMBERED_MS }), NOW), { "1.0.4": NOW - 1000 });
+  for (const text of [null, "", "[]", "[", '"x"']) assert.deepEqual(parseUnpublished(text, NOW), {}, String(text));
+  for (const { id, value } of HOSTILE_VALUES) {
+    if (typeof value === "string") assert.deepEqual(parseUnpublished(JSON.stringify({ [value]: NOW }), NOW), {}, id);
+    assert.deepEqual(parseUnpublished(JSON.stringify({ "1.0.4": value }), NOW), {}, id);
+  }
+  assert.deepEqual(parseUnpublished('{"__proto__": 1800000000000, "1.0.4": 1800000000000}', NOW), { "1.0.4": NOW });
 });
 
 test("the check is up to date when nothing newer is published, and fails quietly offline, on a rate limit or on malformed answers", async () => {
   const current = answering({ [releaseTagsUrl()]: { kind: "json", body: tags("1.0.2", "1.0.3") }, [releaseLookupUrl(v("1.0.3"))]: { kind: "json", body: release("1.0.3", { draft: true }) } });
-  assert.deepEqual(await findUpdate(v("1.0.2"), current.fetchJson), { kind: "current" });
-  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "unreachable" })), { kind: "failed", answered: false });
-  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "refused" })), { kind: "failed", answered: true });
-  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "missing" })), { kind: "failed", answered: true });
-  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "json", body: { message: "API rate limit exceeded" } })), { kind: "failed", answered: true });
-  const limited = answering({ [releaseTagsUrl()]: { kind: "json", body: tags("1.0.3") }, [releaseLookupUrl(v("1.0.3"))]: { kind: "refused" } });
-  assert.deepEqual(await findUpdate(v("1.0.2"), limited.fetchJson), { kind: "failed", answered: true });
+  assert.deepEqual(await findUpdate(v("1.0.2"), current.fetchJson), { kind: "current", unpublished: ["1.0.3"] });
+  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "unreachable" })), { kind: "failed", answered: false, retryAt: null, unpublished: [] });
+  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "refused", retryAt: NOW + 5 })), { kind: "failed", answered: true, retryAt: NOW + 5, unpublished: [] });
+  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "missing" })), { kind: "failed", answered: true, retryAt: null, unpublished: [] });
+  assert.deepEqual(await findUpdate(v("1.0.2"), async () => ({ kind: "json", body: { message: "API rate limit exceeded" } })), { kind: "failed", answered: true, retryAt: null, unpublished: [] });
+  const limited = answering({ [releaseTagsUrl()]: { kind: "json", body: tags("1.0.4", "1.0.3") }, [releaseLookupUrl(v("1.0.3"))]: { kind: "refused", retryAt: null } });
+  assert.deepEqual(await findUpdate(v("1.0.2"), limited.fetchJson), { kind: "failed", answered: true, retryAt: null, unpublished: ["1.0.4"] });
   const malformed = answering({ [releaseTagsUrl()]: { kind: "json", body: tags("1.0.3") }, [releaseLookupUrl(v("1.0.3"))]: { kind: "json", body: [release("1.0.3")] } });
-  assert.deepEqual(await findUpdate(v("1.0.2"), malformed.fetchJson), { kind: "current" });
+  assert.deepEqual(await findUpdate(v("1.0.2"), malformed.fetchJson), { kind: "current", unpublished: ["1.0.3"] });
 });
 
-test("the Settings row says what the check found", () => {
-  assert.equal(updateRowWords("idle", null).title, "Check for updates");
-  assert.equal(updateRowWords("checking", null).detail, "Checking…");
-  assert.equal(updateRowWords("current", null).detail, "Ardia is up to date.");
-  assert.equal(updateRowWords("failed", null).detail, "Couldn’t check. Try again later.");
-  assert.equal(updateRowWords("available", { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) }).title, "Download Ardia 1.0.4");
+test("the Settings row says what the check found and where the download went", () => {
+  const offer = { version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) };
+  assert.equal(updateRowWords("idle", null, null).title, "Check for updates");
+  assert.equal(updateRowWords("checking", null, null).detail, "Checking…");
+  assert.equal(updateRowWords("current", null, null).detail, "Ardia is up to date.");
+  assert.equal(updateRowWords("incomplete", null, null).detail, "Some releases weren’t checked yet. Try again in a few minutes.");
+  assert.equal(updateRowWords("failed", null, null).detail, "Couldn’t check. Try again later.");
+  assert.equal(updateRowWords("available", offer, null).title, "Download Ardia 1.0.4");
+  assert.match(updateRowWords("available", offer, "notifications").detail ?? "", /notification/);
+  assert.match(updateRowWords("available", offer, "unavailable").detail ?? "", /github\.com\/ardia-browser\/ardia\/releases/);
+  assert.equal(updateHandoffOf("notifications"), "notifications");
+  assert.equal(updateHandoffOf("browser"), "browser");
+  for (const { id, value } of HOSTILE_VALUES) assert.equal(updateHandoffOf(value), "unavailable", id);
+});
+
+test("the download action builds its request only from this repo's exact APK address and its own version: the shared hostile list never reaches the sink", () => {
+  assert.deepEqual(updateDownloadRequest({ version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) })?.url, apkDownloadUrl(v("1.0.4")), "positive control");
+  assert.equal(updateDownloadRequest({ version: "1.0.4", downloadUrl: apkDownloadUrl(v("1.0.4")) })?.title, "Ardia 1.0.4");
+  for (const offer of [null, undefined, {}, { version: "1.0.5", downloadUrl: apkDownloadUrl(v("1.0.4")) }]) assert.equal(updateDownloadRequest(offer as never), null, JSON.stringify(offer));
+  for (const { id, value } of HOSTILE_VALUES) {
+    assert.equal(updateDownloadRequest({ version: "1.0.4", downloadUrl: value }), null, `url ${id}`);
+    assert.equal(updateDownloadRequest({ version: value, downloadUrl: apkDownloadUrl(v("1.0.4")) }), null, `version ${id}`);
+    assert.equal(updateDownloadRequest(value as never), null, `offer ${id}`);
+    if (typeof value === "string" && value !== "") {
+      assert.equal(updateDownloadRequest({ version: "1.0.4", downloadUrl: `${apkDownloadUrl(v("1.0.4"))}${value}` }), null, `suffix ${id}`);
+      assert.equal(updateDownloadRequest({ version: "1.0.4", downloadUrl: `https://github.com/ardia-browser/ardia/releases/download/android-v1.0.4${value}/Ardia-1.0.4.apk` }), null, `path ${id}`);
+    }
+  }
 });

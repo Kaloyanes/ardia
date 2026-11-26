@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for needed in apps/phone/scripts/android-version.ts apps/phone/scripts/build-apk apps/phone/scripts/sign-release-apk apps/phone/scripts/check-release-apk apps/phone/test/release/sign-release-apk.test.sh apps/phone/test/r8/check-names.py; do
+          for needed in apps/phone/scripts/android-version.ts apps/phone/src/lib/androidRelease.ts apps/phone/scripts/build-apk apps/phone/scripts/sign-release-apk apps/phone/scripts/check-release-apk apps/phone/test/release/sign-release-apk.test.sh apps/phone/test/r8/check-names.py; do
             [ -f "$needed" ] || missing="$missing $needed"
           done
           if [ -n "$missing" ]; then

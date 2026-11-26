@@ -2743,13 +2743,17 @@
   {
    "id": "phone-update:findUpdate",
    "source": "release-list",
-   "guard": "Android release builds only; a 10 s deadline and a 1,000,000-character cap on each answer; tags must be refs/tags/android-v<release version> on the installed build's channel and newer than it, at most 3 looked up; a release is offered only when draft is false, its tag_name is that tag, published_at is an ISO time and an uploaded asset named Ardia-<version>.apk has exactly the download URL the app builds itself; the app opens only https://github.com/ardia-browser/ardia/releases/download/android-v<v>/Ardia-<v>.apk, and the system installer checks the signature. The shared hostile list runs through every guard in apps/phone/src/lib/appUpdate.test.ts",
+   "guard": "Android release builds only, in the front; a 10 s deadline and a 1,000,000-character cap on each answer; tags must be refs/tags/android-v<release version> (androidRelease.ts, the parser the release script uses) on the installed build's channel and newer than it, at most 3 looked up a check; a release is offered only when draft is false, its tag_name is that tag, published_at is a real UTC time and an asset in state uploaded named Ardia-<version>.apk has exactly the download URL the app builds itself; stored memory (next check, offered versions, unpublished tags) is re-validated on read; the download request is rebuilt from that URL (updateDownloadRequest) and AppUpdateHandoff.kt checks it again before the DownloadManager or another browser gets it. The shared hostile list runs through every guard and the download request in apps/phone/src/lib/appUpdate.test.ts",
    "checks": [
     "apps/phone/src/lib/appUpdate.ts#newerTaggedVersions",
     "apps/phone/src/lib/appUpdate.ts#publishedRelease",
     "apps/phone/src/lib/appUpdate.ts#isReleaseDownloadUrl",
+    "apps/phone/src/lib/appUpdate.ts#updateDownloadRequest",
+    "apps/phone/src/lib/appUpdate.ts#parseUnpublished",
     "apps/phone/src/lib/appUpdate.ts#readGitHubJson",
-    "apps/phone/src/lib/appUpdate.test.ts#tag listings that aren't a list of Android release tags offer nothing"
+    "apps/phone/src/lib/androidRelease.ts#parseAndroidRelease",
+    "packages/phone/android/src/main/java/com/ardia/phone/AppUpdateHandoff.kt#releaseApkName",
+    "apps/phone/src/lib/appUpdate.test.ts#the download action builds its request only from this repo's exact APK address"
    ],
    "detected": false
   }

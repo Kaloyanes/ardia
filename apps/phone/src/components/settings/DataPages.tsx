@@ -71,10 +71,11 @@ function LinkRow({ title, icon, url, divider }: { title: string; icon: SymbolNam
 function UpdateGroup() {
   const status = useAppUpdate((s) => s.status);
   const offer = useAppUpdate((s) => s.offer);
-  const words = updateRowWords(status, offer);
+  const handoff = useAppUpdate((s) => s.handoff);
+  const words = updateRowWords(status, offer, handoff);
   return (
     <Group>
-      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={status === "available" ? openUpdate : checkForUpdate} />
+      <NavRow title={words.title} icon="arrowDownCircle" detail={words.detail} chevron={false} onPress={status === "available" ? () => void openUpdate() : checkForUpdate} />
     </Group>
   );
 }
