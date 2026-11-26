@@ -9,7 +9,7 @@ import { idleRows, remoteSuggestions, searchEngineRevision, setSearchEngine, set
 import { withPasteRow, type PasteOffer } from "./pasteRow";
 import { clipboardOffer } from "../../platform/system";
 import { settled } from "../pages/store";
-import { buildSources, recentSearches, searchesByQuery, sourcesKey } from "./sources";
+import { buildSources, recentSearches, searchKey, searchesByQuery, sourcesKey } from "./sources";
 import { spaceTabs } from "../tabs/tabsState";
 import { browseForMeOffered } from "../browseForMe/offer";
 import { markSearchClosing, markSearchPhase, markSearchPressed } from "./searchTiming";
@@ -216,10 +216,8 @@ function searchedUrls(query: string): readonly string[] {
 export const canForgetSearch = (query: string) => searchedUrls(query).length > 0;
 
 export function forgetSearch(query: string) {
-  const urls = searchedUrls(query);
-  if (!urls.length) return;
   const forgotten = query.trim().toLowerCase();
-  history().forget(urls);
+  if (!forgotten || !history().forget((url) => searchKey(url) === forgotten)) return;
   if (!useTabs.getState().incognito) countUsage("searches_forgotten");
   feedSources();
   useSearch.setState((state) => (state.text.trim() ? { rows: state.rows.filter((row) => row.kind !== "query" || row.query.trim().toLowerCase() !== forgotten || row.query.trim().toLowerCase() === state.text.trim().toLowerCase()) } : { rows: rowsFor(state.text, []) }));

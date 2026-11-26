@@ -186,6 +186,8 @@ export function deleteVisitsFor(db: SqlDatabase, urls: readonly string[], profil
   else db.run(`DELETE FROM visits WHERE url IN (${marks}) AND profileSyncId = ?`, [...urls, profileSyncId]);
 }
 
+export const distinctVisitUrls = (db: SqlDatabase) => db.all<{ url: string }>("SELECT DISTINCT url FROM visits").map((row) => row.url);
+
 export function deleteVisitsEverywhere(db: SqlDatabase, urls: readonly string[]) {
   if (!urls.length) return;
   db.run(`DELETE FROM visits WHERE url IN (${urls.map(() => "?").join(",")})`, [...urls]);

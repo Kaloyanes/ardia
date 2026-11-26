@@ -5,6 +5,7 @@ import {
   deleteVisitsEverywhere,
   deleteVisitsFor,
   deleteVisitsSince,
+  distinctVisitUrls,
   insertVisit,
   maxVisitId,
   newestVisits,
@@ -24,7 +25,7 @@ export type HistoryLog = {
   pruneBefore(cutoff: number): void;
   clear(since: number | null): void;
   removeVisits(urls: readonly string[], profileSyncId: string | null): void;
-  forget(urls: readonly string[]): void;
+  forget(matches: (url: string) => boolean): number;
 };
 
 export function createHistoryLog(db: SqlDatabase): HistoryLog {
@@ -77,10 +78,12 @@ export function createHistoryLog(db: SqlDatabase): HistoryLog {
       deleteVisitsFor(db, urls, profileSyncId);
       bump();
     },
-    forget(urls) {
-      if (!urls.length) return;
+    forget(matches) {
+      const urls = distinctVisitUrls(db).filter(matches);
+      if (!urls.length) return 0;
       deleteVisitsEverywhere(db, urls);
       bump();
+      return urls.length;
     },
   };
 }

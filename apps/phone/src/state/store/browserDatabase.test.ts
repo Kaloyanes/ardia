@@ -186,3 +186,19 @@ test("received keys already in the store are known, and the Mac's history remova
     ["https://b.example/"],
   );
 });
+
+test("forgetting a search removes every matching visit, also ones older than the summary reads", () => {
+  const db = nodeDatabase();
+  migrate(db);
+  const log = createHistoryLog(db);
+  log.record("https://duckduckgo.com/?q=otters", "otters", "typed", "work", 1);
+  for (let at = 2; at < 40; at += 1) log.record(`https://site${at}.example/`, "site", "link", null, at);
+  log.record("https://www.google.com/search?q=Otters", "Otters", "typed", null, 50);
+  assert.equal(log.summary(10, 10).some((row) => row.url.startsWith("https://duckduckgo.com")), false);
+  const before = log.revision();
+  assert.equal(log.forget((url) => url.includes("otters") || url.includes("Otters")), 2);
+  assert.ok(log.revision() > before);
+  assert.equal(log.search("otters", 10).length, 0);
+  assert.equal(log.search("", 100).length, 38);
+  assert.equal(log.forget(() => false), 0);
+});
