@@ -6,6 +6,8 @@ import { notePlugin } from "../telemetry/pluginCounts";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
 import { warnFor } from "../telemetry/consoleConsent";
 import { activeManifest, currentPlugins, usePlugins } from "./store";
+import { manifestInProfile, windowProfileId } from "./profileScope";
+import { focusedWindowId } from "../browser/current";
 import { invokePluginCall } from "./tools";
 
 const OMNIBOX_TIMEOUT_MS = 1500;
@@ -46,9 +48,10 @@ function providerFor(plugin: string, spec: OmniboxSpec): OmniboxProvider & { glo
     global: spec.global,
     plugin,
     async query(text, signal) {
-      if (signal.aborted || !activeManifest(currentPlugins(), plugin)) return [];
+      const profile = windowProfileId(focusedWindowId() ?? undefined);
+      if (signal.aborted || !manifestInProfile(currentPlugins(), plugin, profile)) return [];
       notePlugin("plugin_omnibox_queries");
-      const outcome = await invokePluginCall(plugin, { kind: "omnibox", provider: spec.id, query: text.slice(0, OMNIBOX_LIMITS.query) }, { kind: "host" }, OMNIBOX_TIMEOUT_MS, { signal });
+      const outcome = await invokePluginCall(plugin, { kind: "omnibox", provider: spec.id, query: text.slice(0, OMNIBOX_LIMITS.query) }, { kind: "host" }, OMNIBOX_TIMEOUT_MS, { signal, profile });
       if (signal.aborted || !outcome.ok) return [];
       return sanitizedRows(outcome.result);
     },

@@ -12,7 +12,7 @@ import { isNativeTier, verifyOfficialArtifact } from "@ardia/plugin-sdk/registry
 import { pluginSubtle } from "../../platform/pluginCrypto";
 import { newInPlan, planInstall, runningPlatform, storeFolderOf, type InstallPlan, type PlannedPlugin, type PlanRequest } from "./installPlan";
 import { ALREADY_ASKING, approvePlugin, requestPluginConsent, rescanPlugins, settledPromotions } from "./lifecycle";
-import { currentLock, dropStagedLock, stageLockEntry, updateLock, type LockEntry } from "./lockfile";
+import { currentLock, dropStagedLock, stageLockEntries, updateLock, type LockEntry } from "./lockfile";
 import { revocationPreflight } from "./revocations";
 import { activeManifest, currentPlugins, recordOf, setPluginFetch, usePlugins } from "./store";
 import { githubDetail } from "./githubSource";
@@ -116,9 +116,9 @@ export function lockEntriesFor(plan: InstallPlan, downloaded: readonly Downloade
   );
 }
 
-export function stagePlanLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest) {
+export function stagePlanLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null): Promise<boolean> {
   const entries = lockEntriesFor(plan, downloaded, requested);
-  for (const d of downloaded) stageLockEntry(d.folderId, entries[d.plugin.id]!);
+  return stageLockEntries(downloaded.map((d) => ({ folderId: d.folderId, entry: entries[d.plugin.id]! })), consent);
 }
 
 export function recordUnchangedInLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null) {
@@ -170,7 +170,7 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
     notePlugin(planned.code === "offline" ? "registry_offline" : planned.code === "verify" || planned.code === "official" ? "registry_verify_failures" : "registry_install_refusals", consent);
     return { ok: false, reason: planned.code === "offline" || planned.code === "keys" ? `${OFFLINE_REGISTRY}. ${planned.reason}` : planned.reason };
   }
-  await rescanPlugins(consent);
+  if (!(await rescanPlugins(consent))) return { ok: false, reason: "Ardia couldn't read its plugin store to see what's already there, so nothing was installed. Try again." };
   const fetching = newInPlan(planned.plan);
   const got = await downloadPlan(fetching, consent, quiet);
   if (!got.ok) return got;
@@ -186,7 +186,11 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
       return { ok: false, reason: unsigned ?? `${d.plugin.id}: ${problem}` };
     }
   }
-  stagePlanLock(planned.plan, got.downloaded, request);
+  if (!(await stagePlanLock(planned.plan, got.downloaded, request, consent))) {
+    dropDownloads(got.downloaded);
+    await rescanPlugins(consent);
+    return { ok: false, reason: "Ardia couldn't save what it downloaded to plugins-lock.json, so it wasn't installed. Try again." };
+  }
   return { ok: true, plan: planned.plan, downloaded: got.downloaded };
 }
 

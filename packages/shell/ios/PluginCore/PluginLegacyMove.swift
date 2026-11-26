@@ -15,6 +15,7 @@ enum ReservedPrograms {
 
 enum PluginLegacyMove {
   static let legacyStoreFolder = "OfficialPlugins"
+  static var swapLink: (BinFolder, String, [UInt8]) -> Bool = { bin, name, target in bin.swap(name, toBytes: target) }
 
   static func adopt(from: String, to: String, appData: String, places: ProgramPlaces, replaced: Bool) -> [String: Any] {
     guard PluginPrograms.isName(from), PluginPrograms.isKey(to), from != to else { return ["ok": false, "found": false, "moved": [], "leftover": false, "reason": "those aren't plugin names"] }
@@ -89,33 +90,44 @@ enum PluginLegacyMove {
       PluginPrograms.discard(staging)
       return "its programs couldn't be put in place (\(String(cString: strerror(failed))))"
     }
-    if let problem = retarget(from: oldPrograms, to: newPrograms, places: places) {
-      _ = retarget(from: newPrograms, to: oldPrograms, places: places)
+    guard let held = PluginPrograms.binLock(places) else {
       PluginPrograms.discard(newPrograms)
-      return problem
+      return "its programs on PATH couldn't be locked"
     }
-    PluginPrograms.discard(oldPrograms)
-    return nil
+    defer { close(held) }
+    let forward = retargetHeld(from: oldPrograms, to: newPrograms, places: places)
+    guard let problem = forward.problem else {
+      PluginPrograms.discard(oldPrograms)
+      return nil
+    }
+    let back = retargetHeld(from: newPrograms, to: oldPrograms, places: places, only: Set(forward.moved))
+    if back.problem == nil { PluginPrograms.discard(newPrograms) }
+    return problem
   }
 
   static func retarget(from oldPrograms: String, to newPrograms: String, places: ProgramPlaces) -> String? {
     guard let held = PluginPrograms.binLock(places) else { return "its programs on PATH couldn't be locked" }
     defer { close(held) }
+    return retargetHeld(from: oldPrograms, to: newPrograms, places: places).problem
+  }
+
+  static func retargetHeld(from oldPrograms: String, to newPrograms: String, places: ProgramPlaces, only: Set<String>? = nil) -> (moved: [String], problem: String?) {
     let bin: BinFolder
     switch PluginPrograms.openBin(places) {
     case .success(let opened): bin = opened
     case .failure(let refusal):
       var info = stat()
-      return lstat(places.binDir, &info) != 0 && errno == ENOENT ? nil : "its programs on PATH couldn't be read (\(refusal.reason))"
+      return ([], lstat(places.binDir, &info) != 0 && errno == ENOENT ? nil : "its programs on PATH couldn't be read (\(refusal.reason))")
     }
-    guard let names = bin.names() else { return "its programs on PATH couldn't be listed" }
+    guard let names = bin.names() else { return ([], "its programs on PATH couldn't be listed") }
     let oldBase = PluginPrograms.storeBase(oldPrograms)
     let newBase = PluginPrograms.storeBase(newPrograms)
+    var moved: [String] = []
     var stuck: [String] = []
-    for name in names {
+    for name in names where only?.contains(name) ?? true {
       guard let target = bin.targetBytes(name), target.starts(with: oldBase) else { continue }
-      if !bin.swap(name, toBytes: newBase + target.dropFirst(oldBase.count)) { stuck.append(name) }
+      if swapLink(bin, name, newBase + target.dropFirst(oldBase.count)) { moved.append(name) } else { stuck.append(name) }
     }
-    return stuck.isEmpty ? nil : "\(stuck.sorted().joined(separator: ", ")) on PATH couldn't be pointed at its new folder"
+    return (moved, stuck.isEmpty ? nil : "\(stuck.sorted().joined(separator: ", ")) on PATH couldn't be pointed at its new folder")
   }
 }

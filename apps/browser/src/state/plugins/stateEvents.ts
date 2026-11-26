@@ -10,6 +10,7 @@ import { consentToken, stillValid, type ConsentToken } from "../telemetry/choice
 import { warnFor } from "../telemetry/consoleConsent";
 import { acceptsRun } from "./process";
 import { activeManifest, currentPlugins } from "./store";
+import { limitedProfiles, profileView } from "./profileScope";
 import { commitCursor, commitsAfter, forgetCommitsThrough, listenForPluginStateCommits } from "./stateCommits";
 import { packFrames, takeRound, wireLine, type Frame } from "./stateEventPacking";
 import { commitItems, diffRows, itemsFor, REMOVED, rowsOf, type Rows, type Sent, type SnapshotTopic } from "./stateProjection";
@@ -172,6 +173,9 @@ function flushFor(sub: Subscriber, topics: Set<StateTopic>, s: BrowserState, cac
     return;
   }
   const r = redactionFor(m.permissions);
+  const limited = limitedProfiles(currentPlugins(), sub.name);
+  const view = limited ? profileView(s, limited) : s;
+  const viewCache = limited ? new Map<string, Rows>() : cache;
   for (const topic of sub.topics) {
     if (!topics.has(topic) || !grantsTopic(m.permissions.state, topic)) continue;
     if (sub.outbox.some((f) => f.topic === topic)) {
@@ -179,7 +183,7 @@ function flushFor(sub: Subscriber, topics: Set<StateTopic>, s: BrowserState, cac
       continue;
     }
     try {
-      queueTopic(sub, topic, s, r, cache, consent);
+      queueTopic(sub, topic, view, r, viewCache, consent);
     } catch (error) {
       sub.sent.delete(topic);
       notePlugin("plugin_state_events_dropped", consent);

@@ -2,7 +2,7 @@ import { isNativeTier, verifyOfficialArtifact, type PlatformKey } from "@ardia/p
 import { removePluginFiles, rollbackStorePlugin } from "../../platform/plugins";
 import { pluginSubtle } from "../../platform/pluginCrypto";
 import { isOfficialId } from "../../lib/pluginIds";
-import { commitStagedLock, lockEntryByKey, lockSaved, provenance, stagedLockEntry, type LockEntry, type LockProvenance } from "./lockfile";
+import { commitStagedLock, lockEntryByKey, provenance, stagedLockEntry, type LockEntry, type LockProvenance } from "./lockfile";
 import { officialNativeKeys } from "./registryKeys";
 import { shaOfFolderId } from "./revocationChecks";
 import { currentPlugins, type PluginListing, type PluginRecord } from "./store";
@@ -50,7 +50,7 @@ export function promotedLockEntry(name: string, candidate: PluginListing): LockE
 export async function lockAfterPromotion(name: string, candidate: PluginListing, consent: ConsentToken | null): Promise<boolean> {
   const next = promotedLockEntry(name, candidate);
   if (!next) return true;
-  return commitStagedLock(name, next, consent) && (await lockSaved());
+  return commitStagedLock(name, next, consent);
 }
 
 export function candidateProvenance(name: string, candidate: Pick<PluginListing, "folderId">): LockProvenance | null {

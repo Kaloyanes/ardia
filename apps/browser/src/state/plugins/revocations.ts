@@ -35,11 +35,12 @@ async function loadCache() {
 }
 
 async function persist(): Promise<boolean> {
-  if (persistedSeq >= seq) return true;
+  const savedSeq = seq;
+  if (persistedSeq >= savedSeq) return true;
   try {
-    writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq, envelope })}\n`);
+    writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq: savedSeq, envelope })}\n`);
     await documentSaved(CACHE_DOC);
-    persistedSeq = seq;
+    persistedSeq = Math.max(persistedSeq, savedSeq);
     return true;
   } catch {
     return false;

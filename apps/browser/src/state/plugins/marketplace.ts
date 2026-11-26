@@ -9,7 +9,7 @@ import { wantCandidate } from "./candidates";
 import { installPlugin, OFFLINE_REGISTRY } from "./installer";
 import type { InstallResult } from "./installWaiters";
 import { requestPluginConsent, rescanPlugins, updateRecord } from "./lifecycle";
-import { currentLock, stageLockEntry, updateLock, type Channel } from "./lockfile";
+import { currentLock, stageLockEntries, updateLock, type Channel } from "./lockfile";
 import { customRegistries, defaultRegistry, fetchIndex, registryForId, type RegistryRef } from "./registryClient";
 import { revocationPreflight, revocationReason, stoppingRevocation } from "./revocations";
 import { dropCandidate } from "./candidates";
@@ -145,8 +145,12 @@ export async function installFromFile(path: string): Promise<{ ok: true; name: s
     await rescanPlugins(consent);
     return { ok: false, reason: `${result.id} ${version} was turned off by Ardia's registry: ${revocationReason(revoked)}` };
   }
-  if (archive && isPluginId(result.id) && result.candidate)
-    stageLockEntry(result.candidate.folderId, { id: result.id, key: result.name, version, channel: "latest", source: { kind: "file" }, sha256: result.sha256 ?? null, payloadDigest: null, dependencies: Object.keys(listed?.manifest?.v3?.dependencies ?? {}).sort(), root: true, official: false, installedAt: Date.now() });
+  const entry = archive && isPluginId(result.id) && result.candidate ? { id: result.id, key: result.name, version, channel: "latest" as const, source: { kind: "file" as const }, sha256: result.sha256 ?? null, payloadDigest: null, dependencies: Object.keys(listed?.manifest?.v3?.dependencies ?? {}).sort(), root: true, official: false, installedAt: Date.now() } : null;
+  if (entry && result.candidate && !(await stageLockEntries([{ folderId: result.candidate.folderId, entry }], consent))) {
+    dropCandidate(result.name);
+    await rescanPlugins(consent);
+    return { ok: false, reason: "Ardia couldn't save the archive's details to plugins-lock.json, so it wasn't installed. Try again." };
+  }
   if (!requestPluginConsent(result.name)) return { ok: false, reason: currentPlugins().candidates[result.name]?.problems[0] ?? currentPlugins().listings[result.name]?.problems[0] ?? "It can't load." };
   openSettings("plugins", null, result.name);
   return { ok: true, name: result.name };

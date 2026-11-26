@@ -4,7 +4,7 @@ import { notePlugin } from "../telemetry/pluginCounts";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
 import { activeManifest, currentPlugins } from "./store";
 import { ensurePluginActivated, pluginReadyRun } from "./activation";
-import { eventProfileId, windowProfileId } from "./profileScope";
+import { eventProfileId, manifestInProfile, windowProfileId } from "./profileScope";
 import { focusedWindowId } from "../browser/current";
 
 const MAX_CALLS_PER_PLUGIN = 16;
@@ -50,7 +50,6 @@ function finish(id: string, outcome: ToolOutcome) {
 }
 
 export function callProfile(plugin: string, call: PluginCall): string | null {
-  if (activeManifest(currentPlugins(), plugin)?.scope !== "profile") return null;
   if (call.kind === "command") return typeof call.context.windowId === "string" ? windowProfileId(call.context.windowId) : null;
   if (call.kind === "decide") return eventProfileId(call.data);
   if (call.kind === "omnibox") return windowProfileId(focusedWindowId() ?? undefined);
@@ -68,12 +67,12 @@ function lineOf(id: string, call: PluginCall, given: ToolCaller, deadline: numbe
 
 const labelOf = (call: PluginCall) => (call.kind === "tool" ? call.tool : call.kind === "command" ? call.command : call.kind === "omnibox" ? `omnibox ${call.provider}` : call.event);
 
-function send(plugin: string, run: number, call: PluginCall, caller: ToolCaller, timeoutMs: number, consent: ConsentToken | null, signal?: AbortSignal): Promise<ToolOutcome> {
+function send(plugin: string, run: number, call: PluginCall, caller: ToolCaller, timeoutMs: number, consent: ConsentToken | null, signal: AbortSignal | undefined, profileId: string | null): Promise<ToolOutcome> {
   if (signal?.aborted) return Promise.resolve(CANCELLED);
   const id = `c${++seq}`;
   let line: string;
   try {
-    line = lineOf(id, call, caller, timeoutMs, callProfile(plugin, call));
+    line = lineOf(id, call, caller, timeoutMs, profileId);
   } catch {
     return Promise.resolve(failed("bad_request", "The call's input isn't JSON."));
   }
@@ -130,7 +129,13 @@ function whileCallerRuns(caller: string | null, ready: Promise<number | ToolOutc
   });
 }
 
-export async function invokePluginCall(plugin: string, call: PluginCall, caller: ToolCaller, timeoutMs: number, options: { activate?: boolean; consent?: ConsentToken | null; signal?: AbortSignal } = {}): Promise<ToolOutcome> {
+export type CallOptions = { activate?: boolean; consent?: ConsentToken | null; signal?: AbortSignal; profile?: string | null };
+
+export const callReaches = (plugin: string, call: PluginCall, profileId: string | null) => call.kind === "tool" && profileId === null ? true : !!manifestInProfile(currentPlugins(), plugin, profileId);
+
+export async function invokePluginCall(plugin: string, call: PluginCall, caller: ToolCaller, timeoutMs: number, options: CallOptions = {}): Promise<ToolOutcome> {
+  const profileId = options.profile !== undefined ? options.profile : callProfile(plugin, call);
+  if (!callReaches(plugin, call, profileId)) return failed("refused", `${plugin} isn't on in that profile.`);
   const consent = options.consent !== undefined ? options.consent : consentToken();
   const trigger = call.kind === "tool" ? `onTool:${call.tool}` : call.kind === "command" ? `onCommand:${call.command}` : call.kind === "omnibox" ? `onOmnibox:${call.provider}` : `onEvent:${call.event}`;
   const callerName = caller.kind === "plugin" ? caller.plugin : null;
@@ -139,17 +144,18 @@ export async function invokePluginCall(plugin: string, call: PluginCall, caller:
   if (typeof run !== "number") return run;
   if (callerName !== null && !callerStillRuns(callerName, callerRun)) return callerStopped(callerName);
   if (pluginReadyRun(plugin) !== run) return failed("failed", `${plugin} stopped before the call went out.`);
-  return send(plugin, run, call, caller, timeoutMs, consent, options.signal);
+  if (!callReaches(plugin, call, profileId)) return failed("refused", `${plugin} isn't on in that profile.`);
+  return send(plugin, run, call, caller, timeoutMs, consent, options.signal, activeManifest(currentPlugins(), plugin)?.scope === "profile" ? profileId : null);
 }
 
-export function callTool(plugin: string, tool: string, input: unknown, caller: ToolCaller, consentTaken?: ConsentToken | null): Promise<ToolOutcome> {
+export function callTool(plugin: string, tool: string, input: unknown, caller: ToolCaller, consentTaken?: ConsentToken | null, profile?: string | null): Promise<ToolOutcome> {
   const consent = consentTaken !== undefined ? consentTaken : consentToken();
   const manifest = activeManifest(currentPlugins(), plugin);
   if (!manifest) return Promise.resolve(failed("refused", `There's no plugin ${plugin} that is on.`));
   const spec = manifest.tools.find((t) => t.name === tool);
   if (!spec) return Promise.resolve(failed("bad_request", `${plugin} has no tool ${tool}.`));
   if (!manifest.main && runningRun(plugin) === null) return Promise.resolve(failed("failed", `${plugin}'s helper isn't running.`));
-  return invokePluginCall(plugin, { kind: "tool", tool, input }, caller, spec.timeout * 1000, { consent });
+  return invokePluginCall(plugin, { kind: "tool", tool, input }, caller, spec.timeout * 1000, { consent, ...(profile !== undefined ? { profile } : {}) });
 }
 
 export function answerCall(plugin: string, run: number, params: Record<string, unknown>): string | null {

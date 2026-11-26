@@ -10,7 +10,7 @@ import { warnFor } from "../telemetry/consoleConsent";
 import { dropCandidate, wantCandidate } from "./candidates";
 import { prepareInstall, recordUnchangedInLock, type Downloaded } from "./installer";
 import { approvePlugin, reconcilePlugins, requestPluginConsent, rescanPlugins, settledPromotions, updateRecord } from "./lifecycle";
-import { currentLock, lockEntryByKey, lockSaved, provenance, updateLock, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
+import { currentLock, lockEntryByKey, provenance, updateLockDurably, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
 import { fetchIndex, registryForUrl } from "./registryClient";
 import { officialNativeKeys } from "./registryKeys";
 import { currentRevocations, refreshRevocations, revocationReason, revocationsFor, stoppingRevocation } from "./revocations";
@@ -146,7 +146,7 @@ export async function rollbackPlugin(key: string): Promise<{ ok: boolean; reason
   if (!switched.ok) return switched;
   if (entry) {
     const restored: LockProvenance = target ?? { version: listing.previousVersion, source: entry.source, sha256, payloadDigest: null, dependencies: [] };
-    const written = updateLock((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent) && (await lockSaved());
+    const written = await updateLockDurably((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent);
     const currentSha = shaOfFolderId(listing.folderId);
     if (!written && listing.manifest && currentSha) {
       await rollbackStorePlugin(key, listing.manifest.version, currentSha).catch(() => null);

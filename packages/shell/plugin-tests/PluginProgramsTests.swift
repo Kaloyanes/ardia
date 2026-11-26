@@ -621,6 +621,39 @@ extension PluginProgramsTests {
     XCTAssertEqual(run("\(places.binDir)/hello-tool"), "old", "the command on PATH still runs")
   }
 
+  func partlyRetargeted(reverseWorks: Bool) throws -> (appData: String, moved: [String: Any]) {
+    let folder = try makePlugin("cli", version: "0.2.49", say: "old")
+    _ = try install(folder, plugin: "cli", version: "0.2.49")
+    let launcher = try XCTUnwrap(PluginPrograms.linkTarget("\(places.binDir)/hello-tool"))
+    XCTAssertEqual(symlink(launcher, "\(places.binDir)/extra-tool"), 0)
+    let appData = "\(root)/AppData"
+    let oldBase = PluginPrograms.storeBase(places.pluginStore("cli"))
+    let original = PluginLegacyMove.swapLink
+    PluginLegacyMove.swapLink = { bin, name, target in
+      if name == "extra-tool" || (!reverseWorks && target.starts(with: oldBase)) { return false }
+      return original(bin, name, target)
+    }
+    defer { PluginLegacyMove.swapLink = original }
+    return (appData, PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places, replaced: true))
+  }
+
+  func testAPartlyRetargetedMoveIsReversedAndOnlyThenDropsTheCopy() throws {
+    let (_, moved) = try partlyRetargeted(reverseWorks: true)
+    XCTAssertEqual(moved["ok"] as? Bool, false)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: places.pluginStore("ardia__cli")), "every link went back, so the copy goes")
+    XCTAssertTrue(PluginPrograms.isLauncherPath(PluginPrograms.linkTarget("\(places.binDir)/hello-tool") ?? "", in: places.store, plugin: "cli"))
+    XCTAssertEqual(run("\(places.binDir)/hello-tool"), "old")
+  }
+
+  func testAMoveThatCantBeReversedKeepsTheCopySoNoLinkDangles() throws {
+    let (_, moved) = try partlyRetargeted(reverseWorks: false)
+    XCTAssertEqual(moved["ok"] as? Bool, false)
+    XCTAssertTrue(PluginPrograms.isRealFolder(places.pluginStore("ardia__cli")), "a link still points at the copy, so it stays")
+    XCTAssertTrue(PluginPrograms.isRealFolder(places.pluginStore("cli")))
+    XCTAssertEqual(run("\(places.binDir)/hello-tool"), "old", "the retargeted link still runs")
+    XCTAssertEqual(run("\(places.binDir)/extra-tool"), "old", "the untouched link still runs")
+  }
+
   func testUnsignedOfficialScopeCopiesPutNoProgramOnPATH() {
     XCTAssertNotNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: false), "an unverified @ardia copy links no program, reserved or not")
     XCTAssertNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: true))

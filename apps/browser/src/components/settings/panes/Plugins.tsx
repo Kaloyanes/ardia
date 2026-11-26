@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import type { PluginManifest, RowSpec, RowValue } from "../../../lib/pluginManifest";
 import { PLATFORM_FEATURES } from "../../../lib/platformFeatures";
@@ -206,16 +206,24 @@ function SecretRow({ name, row }: { name: string; row: Extract<RowSpec, { type: 
   const [saved, setSaved] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const asked = useRef(0);
   useEffect(() => {
     let live = true;
+    asked.current += 1;
+    setDraft("");
+    setProblem(null);
+    setSaved(null);
+    setBusy(false);
     void pluginSecretRowIsSet(name, row.key, space).then((set) => live && setSaved(set));
     return () => {
       live = false;
     };
   }, [name, row.key, space]);
   const write = async (value: string | null) => {
+    const mine = ++asked.current;
     setBusy(true);
     const outcome = await setPluginSecretRow(name, row.key, value, space);
+    if (mine !== asked.current) return;
     setBusy(false);
     if (!outcome.ok) return setProblem(outcome.message);
     setProblem(null);

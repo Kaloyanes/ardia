@@ -1905,7 +1905,7 @@
       if (signal.cancelled) return;
       await sendResult({ call: message.call, error: `The plugin didn't activate: ${errorMessage(activationError)}` });
     }
-    function deliverEvent(name, data, time) {
+    function deliverEvent(name, data, time, profile) {
       if (name.startsWith(STATE_PREFIX)) return subscriptions.deliverState(name, data, time);
       if (name === "plugin.values") {
         const values = data.values ?? data;
@@ -1915,7 +1915,7 @@
       const targets = [...registry.events.get(name) ?? [], ...name === "plugin.values" ? [] : registry.events.get("*") ?? []];
       for (const listener of targets) {
         try {
-          listener(data, { name, time });
+          listener(data, { name, time, ...profile ? { profile } : {} });
         } catch (error) {
           report(error);
         }
@@ -1955,9 +1955,10 @@
         subscriptions.noteDropped(record.dropped);
         const data = typeof record.data === "object" && record.data !== null ? record.data : {};
         const time = typeof record.time === "number" ? record.time : void 0;
+        const profile = typeof record.profile === "string" ? record.profile : void 0;
         if (record.event === "plugin.values") return deliverEvent(record.event, data, time);
         if (record.event === "plugin.stopping") return void stop().catch(report);
-        return whenActive(() => deliverEvent(record.event, data, time));
+        return whenActive(() => deliverEvent(record.event, data, time, profile));
       }
     }
     transport.onLine((line) => {

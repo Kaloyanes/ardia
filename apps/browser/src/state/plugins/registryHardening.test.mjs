@@ -504,7 +504,7 @@ describe("round 2: official code at consent and activation", () => {
   test("a recorded signature that doesn't verify stops the switch, so nothing activates", async () => {
     const { wantCandidate } = await import("./candidates.ts");
     host.folders = [candidateFolder()];
-    lockfile.stageLockEntry(`store-${sha(4)}`, entry({ officialSig: "A".repeat(86), platform: "universal" }));
+    assert.ok(await lockfile.stageLockEntries([{ folderId: `store-${sha(4)}`, entry: entry({ officialSig: "A".repeat(86), platform: "universal" }) }]));
     wantCandidate("ardia__tool", `store-${sha(4)}`);
     await lifecycle.rescanPlugins(null);
     assert.ok(lifecycle.requestPluginConsent("ardia__tool"));
@@ -651,5 +651,113 @@ describe("round 2: per-profile isolation", () => {
     await storageMethod({ name: "acme__m", run: 1 }, P().listings.acme__m.manifest, "storage.set", { key: "k", value: 1, profile: "work" });
     assert.equal(host.storage["profiles/work/acme__m"], '{"k":1}', "the write lands in the invoking profile, not the focused window's");
     assert.equal(host.storage["profiles/default/acme__m"], undefined);
+  });
+});
+
+describe("round 3: the lock is durable or nothing changes", () => {
+  test("an install whose staged provenance can't be saved fails before the sheet and activates nothing", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    shell.refusedLandings.add(LOCK_DOC);
+    try {
+      const result = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /couldn't save what it downloaded/);
+    } finally {
+      shell.refusedLandings.delete(LOCK_DOC);
+    }
+    assert.equal(P().consent, null);
+    assert.deepEqual(host.activations, []);
+    assert.equal(lockfile.stagedLockEntry("acme__a", `store-${sha(1)}`), null, "nothing half-staged is left in memory");
+  });
+
+  test("a lock write that never lands puts back the earlier lock in memory and on disk, and the switch with it", async () => {
+    await promptedUpdate();
+    assert.ok(updater.reviewUpdate("acme__a"));
+    shell.refusedLandings.add(LOCK_DOC);
+    try {
+      assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+      const promoted = await lifecycle.settledPromotions(["acme__a"]);
+      assert.equal(promoted.ok, false);
+    } finally {
+      shell.refusedLandings.delete(LOCK_DOC);
+    }
+    await lifecycle.rescanPlugins(null);
+    assert.equal(P().listings.acme__a.manifest.version, "1.0.0");
+    assert.equal(lockfile.currentLock()["@acme/a"].version, "1.0.0", "memory holds the earlier lock");
+    assert.equal(lockfile.parseLock(stub.docs.get(LOCK_DOC))["@acme/a"].version, "1.0.0", "the file holds it too");
+  });
+
+  test("a store that can't be listed fails the install instead of trusting a stale listing", async () => {
+    await installed("@acme/a", "1.0.0");
+    const before = host.artifactLog.length;
+    host.listFails = true;
+    try {
+      const result = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /couldn't read its plugin store/);
+    } finally {
+      host.listFails = false;
+    }
+    assert.equal(host.artifactLog.length, before);
+  });
+
+  test("an older revocation save finishing late can't mark a newer unsaved seq as saved", async () => {
+    const CACHE = "Plugins/revocations-cache.json";
+    let release;
+    shell.landingGates.set(CACHE, new Promise((resolve) => (release = resolve)));
+    await registry.publish([], revocationList(1, []));
+    const first = revocations.refreshRevocations();
+    for (let i = 0; i < 50 && !stub.docs.get(CACHE); i++) await tick();
+    shell.landingGates.delete(CACHE);
+    await registry.put("revocations.json", revocationList(2, []));
+    client.resetRegistryCacheForTests();
+    shell.refusedLandings.add(CACHE);
+    assert.equal((await revocations.refreshRevocations()).ok, false, "seq 2 didn't land");
+    shell.refusedLandings.delete(CACHE);
+    release();
+    assert.equal((await first).ok, true);
+    let writes = 0;
+    const realSet = stub.docs.set.bind(stub.docs);
+    stub.docs.set = (key, value) => (key === CACHE && writes++, realSet(key, value));
+    try {
+      client.resetRegistryCacheForTests();
+      assert.equal((await revocations.refreshRevocations()).ok, true);
+    } finally {
+      stub.docs.set = realSet;
+    }
+    assert.equal(writes, 1, "seq 2 is written again");
+    assert.ok(stub.docs.get(CACHE).includes('"seq":2'));
+  });
+});
+
+describe("round 3: work-only plugins see only work", () => {
+  test("omnibox queries, decide hooks and profile-bound tool calls from another profile are refused before they go out", async () => {
+    await scopedPlugin(["work"]);
+    const { invokePluginCall, callReaches } = await import("./tools.ts");
+    const omnibox = await invokePluginCall("acme__m", { kind: "omnibox", provider: "p", query: "q" }, { kind: "host" }, 1000, { profile: "default" });
+    assert.deepEqual([omnibox.ok, omnibox.code], [false, "refused"]);
+    const decide = await invokePluginCall("acme__m", { kind: "decide", event: "tab.opening", data: { windowId: "wd" } }, { kind: "host" }, 1000);
+    assert.deepEqual([decide.ok, decide.code], [false, "refused"]);
+    const tool = await invokePluginCall("acme__m", { kind: "tool", tool: "t", input: {} }, { kind: "command" }, 1000, { profile: "default" });
+    assert.deepEqual([tool.ok, tool.code], [false, "refused"], "a tool a command runs keeps the command's profile");
+    assert.equal(callReaches("acme__m", { kind: "decide", event: "tab.opening", data: {} }, "work"), true);
+    assert.equal(callReaches("acme__m", { kind: "tool", tool: "t", input: {} }, null), true, "a tool called with no profile isn't held to one");
+  });
+
+  test("state snapshots for a work-only plugin hold only work windows, tabs and groups", async () => {
+    await scopedPlugin(["work"]);
+    const { limitedProfiles, profileView } = await import("./profileScope.ts");
+    assert.deepEqual(limitedProfiles(P(), "acme__m"), ["work"]);
+    const b = useBrowser.getState();
+    const s = {
+      ...b,
+      windowOrder: ["ww", "wd"],
+      tabs: { tw: { id: "tw", windowId: "ww", profileId: "work" }, td: { id: "td", windowId: "wd", profileId: "default" } },
+      groups: { gw: { id: "gw", windowId: "ww", profileId: "work" }, gd: { id: "gd", windowId: "wd", profileId: "default" } },
+      ui: { ...b.ui, focusOrder: ["wd", "ww"] },
+    };
+    const view = profileView(s, ["work"]);
+    assert.deepEqual([Object.keys(view.windows), view.windowOrder, Object.keys(view.tabs), Object.keys(view.groups), view.ui.focusOrder], [["ww"], ["ww"], ["tw"], ["gw"], ["ww"]]);
   });
 });

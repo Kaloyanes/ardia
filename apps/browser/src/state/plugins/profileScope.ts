@@ -1,4 +1,5 @@
-import { useBrowser } from "../browser/store";
+import { useBrowser, type BrowserState } from "../browser/store";
+import { engineProfile } from "../browser/model";
 import { ownValue } from "../../lib/decode";
 import { activeManifest, activeNames, shownManifest, type PluginsStore } from "./store";
 import type { PluginManifest } from "../../lib/pluginManifest";
@@ -22,4 +23,27 @@ export function manifestInProfile(s: Pick<PluginsStore, "listings" | "records">,
   const profiles = ownValue(s.records, name)?.profiles;
   if (!profiles || profiles === "all") return manifest;
   return profileId !== null && profiles.includes(profileId) ? manifest : null;
+}
+
+export function limitedProfiles(s: Pick<PluginsStore, "listings" | "records">, name: string): string[] | null {
+  if (activeManifest(s, name)?.scope !== "profile") return null;
+  const profiles = ownValue(s.records, name)?.profiles;
+  return Array.isArray(profiles) ? profiles : null;
+}
+
+const kept = <T,>(all: Record<string, T>, keep: (value: T) => boolean): Record<string, T> => Object.fromEntries(Object.entries(all).filter(([, value]) => keep(value)));
+
+export function profileView(s: BrowserState, profiles: readonly string[]): BrowserState {
+  const allowed = new Set(profiles);
+  const engines = new Set(profiles.map((id) => engineProfile(s, id)));
+  const windows = kept(s.windows, (w) => allowed.has(w.profileId));
+  return {
+    ...s,
+    windows,
+    windowOrder: s.windowOrder.filter((id) => Object.hasOwn(windows, id)),
+    tabs: kept(s.tabs, (t) => allowed.has(t.profileId)),
+    groups: kept(s.groups, (g) => allowed.has(g.profileId)),
+    downloads: s.downloads.filter((d) => engines.has(d.profile ?? "")),
+    ui: { ...s.ui, focusOrder: s.ui.focusOrder.filter((id) => Object.hasOwn(windows, id)) },
+  };
 }

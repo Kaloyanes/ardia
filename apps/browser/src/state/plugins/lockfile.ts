@@ -169,6 +169,29 @@ function saveLock(next: PluginLock, nextStaged: StagedLock, consent: ConsentToke
 
 export const writeLock = (next: PluginLock, consent: ConsentToken | null): boolean => saveLock(next, currentStaged(), consent);
 
+async function saveLockDurably(next: PluginLock, nextStaged: StagedLock, consent: ConsentToken | null): Promise<boolean> {
+  const priorLock = currentLock();
+  const priorStaged = currentStaged();
+  if (!saveLock(next, nextStaged, consent)) return false;
+  const landed = await documentSaved(LOCK_DOC).then(
+    () => true,
+    () => false,
+  );
+  if (landed) return true;
+  warnFor(consent, "[plugins] plugins-lock.json didn't reach the disk; Ardia put back what it held before");
+  if (lock === next && staged === nextStaged) saveLock(priorLock, priorStaged, consent);
+  return false;
+}
+
+export const updateLockDurably = (change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): Promise<boolean> => saveLockDurably(change({ ...currentLock() }), currentStaged(), consent);
+
+export function stageLockEntries(given: readonly { folderId: string; entry: LockEntry }[], consent: ConsentToken | null = null): Promise<boolean> {
+  if (!given.length) return Promise.resolve(true);
+  const next = { ...currentStaged() };
+  for (const { folderId, entry } of given) next[entry.key] = { folderId, entry };
+  return saveLockDurably(currentLock(), next, consent);
+}
+
 export function updateLock(change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): boolean {
   return writeLock(change({ ...currentLock() }), consent);
 }
@@ -197,9 +220,6 @@ export function orphanedBy(removed: string, given: PluginLock = currentLock()): 
   return Object.keys(rest).filter((id) => !needed.has(id)).sort();
 }
 
-export const stageLockEntry = (folderId: string, entry: LockEntry, consent: ConsentToken | null = null): boolean =>
-  saveLock(currentLock(), { ...currentStaged(), [entry.key]: { folderId, entry } }, consent);
-
 export const stagedLockEntry = (key: string, folderId: string): LockEntry | null => {
   const found = currentStaged()[key];
   return found?.folderId === folderId ? found.entry : null;
@@ -211,9 +231,9 @@ export function dropStagedLock(key: string, consent: ConsentToken | null = null)
   return !currentStaged()[key] || saveLock(currentLock(), withoutStaged(key), consent);
 }
 
-export function commitStagedLock(key: string, next: LockEntry, consent: ConsentToken | null): boolean {
+export function commitStagedLock(key: string, next: LockEntry, consent: ConsentToken | null): Promise<boolean> {
   const kept = Object.fromEntries(Object.entries(currentLock()).filter(([id, entry]) => entry.key !== key || id === next.id));
-  return saveLock({ ...kept, [next.id]: next }, withoutStaged(key), consent);
+  return saveLockDurably({ ...kept, [next.id]: next }, withoutStaged(key), consent);
 }
 
 export function forgetLockKey(key: string, consent: ConsentToken | null): boolean {

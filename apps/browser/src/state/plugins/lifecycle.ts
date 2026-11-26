@@ -98,16 +98,17 @@ function applyListings(listings: PluginListing[], consent: ConsentToken | null, 
   reconcilePlugins(consent);
 }
 
-let scanning: Promise<void> | null = null;
+let scanning: Promise<boolean> | null = null;
 let nextScan: { consent: ConsentToken | null } | null = null;
 
-export function rescanPlugins(consent: ConsentToken | null): Promise<void> {
+export function rescanPlugins(consent: ConsentToken | null): Promise<boolean> {
   if (scanning) {
     nextScan = { consent };
     return scanning;
   }
   scanning = (async () => {
     let scan: { consent: ConsentToken | null } | null = { consent };
+    let listed = false;
     while (scan) {
       const asked = scan.consent;
       nextScan = null;
@@ -115,6 +116,7 @@ export function rescanPlugins(consent: ConsentToken | null): Promise<void> {
         warnFor(asked, "[plugins] couldn't list the plugins folder", error);
         return null;
       });
+      listed = entries !== null;
       if (entries) {
         const listings = listingsOf(entries);
         const withdrawing = withdrawBefore({ listings: listingsByName(listings), records: currentPlugins().records }, asked);
@@ -126,6 +128,7 @@ export function rescanPlugins(consent: ConsentToken | null): Promise<void> {
       if (!currentPlugins().scanned) usePlugins.setState({ scanned: true });
       scan = nextScan;
     }
+    return listed;
   })().finally(() => {
     scanning = null;
   });

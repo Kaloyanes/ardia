@@ -104,7 +104,7 @@ async function runCommandSpec(name: string, title: string, permissions: PluginPe
     if (!opened.ok) showToast(windowId, `${title}: ${command.title} didn't work`, opened.reason.slice(0, MESSAGE_LIMIT), { icon: "exclamationmark.triangle" });
     return;
   }
-  if ("tool" in action) return reportOutcome(windowId, title, command, await callTool(name, action.tool, action.input, { kind: "command" }, consent));
+  if ("tool" in action) return reportOutcome(windowId, title, command, await callTool(name, action.tool, action.input, { kind: "command" }, consent, windowProfileId(windowId)));
   reportOutcome(windowId, title, command, await invokePluginCall(name, { kind: "command", command: command.name, context: { ...shownCommandContext(permissions, context), windowId } }, { kind: "command" }, COMMAND_TIMEOUT_MS, { consent }));
 }
 
