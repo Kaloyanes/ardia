@@ -17,7 +17,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 
 const LEGACY_FILE = "history.json";
-export const INDEX_WHEN_QUIET_MS = 2000;
+export const INDEX_WITHIN_MS = 2000;
 const LEGACY_TOLERANCE_MS = 60_000;
 const CHUNK = 500;
 const LEGACY_KEPT_MS = 15_000;
@@ -91,7 +91,8 @@ function setView(engine: string, list: HistoryEntry[], floor?: number) {
 
 const byLastVisit = (a: HistoryEntry, b: HistoryEntry) => b.lastVisit - a.lastVisit;
 
-const indexTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; list: readonly HistoryEntry[] }>();
+type IndexBuild = { timer: ReturnType<typeof setTimeout>; list: readonly HistoryEntry[] };
+const indexTimers = new Map<string, IndexBuild>();
 
 function forgetIndexTimer(engine: string) {
   const pending = indexTimers.get(engine);
@@ -109,15 +110,30 @@ function forgetIndexTimers() {
   for (const engine of [...indexTimers.keys()]) forgetIndexTimer(engine);
 }
 
-function indexWhenQuiet(engine: string) {
-  forgetIndexTimer(engine);
+function handOverIndexBuild(engine: string, from: readonly HistoryEntry[], to: readonly HistoryEntry[]) {
+  const build = indexTimers.get(engine);
+  if (build && build.list === from) build.list = to;
+}
+
+function indexSoon(engine: string) {
   const list = viewOf(engine);
-  if (isQuitting() || !list.length || historyListIndexed(list)) return;
-  const timer = setTimeout(() => {
-    indexTimers.delete(engine);
-    if (!isQuitting() && loaded.has(engine) && inApp(engine) && viewOf(engine) === list) indexHistoryList(list);
-  }, INDEX_WHEN_QUIET_MS);
-  indexTimers.set(engine, { timer, list });
+  if (isQuitting() || !list.length || historyListIndexed(list)) {
+    forgetIndexTimer(engine);
+    return;
+  }
+  const pending = indexTimers.get(engine);
+  if (pending) {
+    pending.list = list;
+    return;
+  }
+  const build: IndexBuild = {
+    timer: setTimeout(() => {
+      indexTimers.delete(engine);
+      if (!isQuitting() && loaded.has(engine) && inApp(engine) && viewOf(engine) === build.list) indexHistoryList(build.list);
+    }, INDEX_WITHIN_MS),
+    list,
+  };
+  indexTimers.set(engine, build);
 }
 
 type Load = { running: Promise<void>; again: boolean; queued: HistoryChange[]; epoch: string };
@@ -159,7 +175,7 @@ function load(engine: string): Promise<void> {
         if (state.queued.some((c) => c.kind === "deleted" && c.all)) state.again = true;
         setView(engine, list, floor);
         if (inApp(engine)) loaded.add(engine);
-        if (replayed.length && loaded.has(engine)) indexWhenQuiet(engine);
+        if (replayed.length && loaded.has(engine)) indexSoon(engine);
       } while (state.again && inApp(engine) && readEpoch(engine) === epoch);
     } catch (error) {
       const failure = ardiaError(error);
@@ -185,8 +201,11 @@ function applyPending() {
   const show = () => {
     during("historyApply", () => {
       for (const [engine, batch] of batches) {
-        setView(engine, applyHistoryChanges(viewOf(engine), batch, gapNoter(engine)));
-        indexWhenQuiet(engine);
+        const was = viewOf(engine);
+        const next = applyHistoryChanges(was, batch, gapNoter(engine));
+        handOverIndexBuild(engine, was, next);
+        setView(engine, next);
+        indexSoon(engine);
       }
     });
     batches.clear();
