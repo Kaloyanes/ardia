@@ -86,7 +86,7 @@ function idleRowsNow(): TrayRow[] {
   const scope = idleScope();
   const made = idleMade.get(scope);
   if (made && made.revision === idleRevision()) return made.rows;
-  const rows = useTabs.getState().incognito ? [] : idleRows(recentSearches(history().summary()), idleMacTabs(selectedProfile(), syncData().view.devices));
+  const rows = useTabs.getState().incognito ? [] : markPastSearches(idleRows(recentSearches(history().summary()), idleMacTabs(selectedProfile(), syncData().view.devices)));
   idleMade.delete(scope);
   idleMade.set(scope, { revision: idleRevision(), engine: searchEngineRevision(), rows });
   if (idleMade.size > IDLE_SCOPES_KEPT) idleMade.delete(idleMade.keys().next().value!);
@@ -167,14 +167,16 @@ export function feedSources() {
 
 function suggestionsFor(text: string, remoteValues: readonly string[]): { rows: TrayRow[]; completion: string } {
   if (!text.trim()) return { rows: rowsFor(text, remoteValues), completion: "" };
-  return suggest(text, remoteValues, context, macTabIndex(selectedProfile(), syncData().view.devices), browseForMeOffered());
+  const suggested = suggest(text, remoteValues, context, macTabIndex(selectedProfile(), syncData().view.devices), browseForMeOffered());
+  return { ...suggested, rows: markPastSearches(suggested.rows) };
 }
 
 function rowsFor(text: string, remoteValues: readonly string[]): TrayRow[] {
-  const profile = selectedProfile();
-  if (text.trim()) return suggest(text, remoteValues, context, macTabIndex(profile, syncData().view.devices), browseForMeOffered()).rows;
+  if (text.trim()) return suggestionsFor(text, remoteValues).rows;
   return withPasteRow(idleRowsNow(), text, paste);
 }
+
+const markPastSearches = (rows: TrayRow[]): TrayRow[] => rows.map((row) => (row.kind === "query" && canForgetSearch(row.query) ? { ...row, past: true } : row));
 
 function offerPaste(session: number) {
   void settled(() => clipboardOffer(), null).then((offer) => {

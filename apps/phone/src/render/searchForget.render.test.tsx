@@ -61,6 +61,20 @@ describe("deleting a past search", () => {
     jest.useRealTimers();
   });
 
+  test("past searches show the history clock, and a suggestion never searched keeps the magnifier", () => {
+    const root = openIdleTray();
+    const leading = (index: number) =>
+      root.root
+        .findAll((node) => node.props.testID === `trayRow:${index}`)[0]!
+        .findAll((node) => typeof node.type !== "string" && (node.props.name === "clockArrow" || node.props.name === "magnifyingglass"))
+        .map((node) => node.props.name as string)[0];
+    expect(useSearch.getState().rows.map((row) => row.kind === "query" && row.past)).toEqual([true, true]);
+    expect([leading(0), leading(1)]).toEqual(["clockArrow", "clockArrow"]);
+    act(() => useSearch.setState({ text: "otter", rows: [{ key: "q:otter facts", kind: "query", title: "otter facts", url: "https://duckduckgo.com/?q=otter+facts", query: "otter facts" }] }));
+    expect(leading(0)).toBe("magnifyingglass");
+    unmount(root);
+  });
+
   onAndroid("holding a past search opens only the Cancel/Delete dialog, and only Delete deletes", () => {
     const root = openIdleTray();
     expect(idleQueries()).toEqual(["tapas", "OTTERS"]);
