@@ -291,6 +291,25 @@ describe("channel edge cases", () => {
     assert.equal(channels.openCount(), 0);
   });
 
+  test("a socket message too big for the plugin channel is refused before it's written, and a host backpressure close reaches onError", async () => {
+    const { rpc, calls } = fakeRpc({ "net.ws.connect": () => ({ open: true }), "net.ws.send": () => ({ ok: true }) });
+    const channels = createChannels(rpc, () => {});
+    const socket = await channels.connect("wss://a.com/");
+    await assert.rejects(socket.send("x".repeat(1024 * 1024)), (error) => error.code === "too_big");
+    await assert.rejects(socket.send("\u00e9".repeat(520 * 1024)), (error) => error.code === "too_big", "the limit counts encoded bytes, not characters");
+    await assert.rejects(socket.send("\"".repeat(600 * 1024)), (error) => error.code === "too_big", "and JSON escaping");
+    assert.equal(calls.filter(([m]) => m === "net.ws.send").length, 0, "nothing oversized reached the wire");
+    await socket.send("y".repeat(900 * 1024));
+    assert.equal(calls.filter(([m]) => m === "net.ws.send").length, 1, "a message that fits still goes");
+    const errors = [];
+    socket.onError((message) => errors.push(message));
+    channels.deliver("net.ws.error", { socket: socket.id, message: "the plugin didn't read the socket's messages in time", code: "backpressure" });
+    channels.deliver("net.ws.close", { socket: socket.id, code: 1008, reason: "The plugin fell behind." });
+    await Promise.resolve();
+    assert.deepEqual(errors, ["the plugin didn't read the socket's messages in time"]);
+    assert.equal(socket.state, "closed");
+  });
+
   test("socket events that arrive before a listener attaches are held for it", async () => {
     const { rpc } = fakeRpc({ "net.ws.connect": () => ({ open: true }) });
     const channels = createChannels(rpc, () => {});

@@ -9,7 +9,10 @@ import { activeNames } from "./store";
 import { runPluginCommand, type CommandContext } from "./commands";
 import { urlParts } from "../../lib/urlParts";
 import { useBrowser } from "../browser/store";
-import { isIncognitoProfile } from "../browser/model";
+import { activeTabId, isIncognitoProfile, viewTabIds } from "../browser/model";
+import { groupOf } from "../pins/tabGrouping";
+import { splitOf } from "../splits/splits";
+import { webviews } from "../../platform/webviews";
 
 const PLUGIN_MENU_PREFIX = "plugin-menu:";
 const SUBMENU_AFTER = 2;
@@ -57,13 +60,24 @@ export async function runPluginMenuChoice(choice: string, windowId: string, cont
 
 const PAGE_MENU_LIMIT = 8;
 
-function pageMenuContext(tabId: string): { windowId: string; context: PluginMenuContext } | null {
+function pageMenuContext(tabId: string): { windowId: string; profileId: string; url: string; context: PluginMenuContext } | null {
   const s = useBrowser.getState();
   const tab = s.tabs[tabId];
   if (!tab || isIncognitoProfile(tab.profileId) || !/^https?:/i.test(tab.url)) return null;
   const parts = urlParts(tab.url);
-  return { windowId: tab.windowId, context: { when: { urlHost: parts?.host ?? "", urlScheme: parts?.scheme ?? "" }, data: { tabId, windowId: tab.windowId } } };
+  const when: WhenContext = {
+    urlHost: parts?.host ?? "",
+    urlScheme: parts?.scheme ?? "",
+    isPinned: !!tab.pin,
+    isInGroup: !!groupOf(s, tab.id),
+    isSplit: !!splitOf(s, tab.id),
+    isActive: activeTabId(s, tab.windowId) === tab.id,
+    tabCount: viewTabIds(s, tab.windowId).length,
+  };
+  return { windowId: tab.windowId, profileId: tab.profileId, url: tab.url, context: { when, data: { tabId, windowId: tab.windowId } } };
 }
+
+const documentOf = (tabId: string) => webviews.get(tabId)?.pluginDocument().catch(() => null) ?? Promise.resolve(null);
 
 export type PluginPageMenuItem = { id: `plugin-menu:${string}`; title: string; slot: "page" | "selection" };
 
@@ -79,10 +93,13 @@ export function pluginPageMenuItems(tabId: string, s: Pick<PluginsStore, "listin
   );
 }
 
-export function runPluginPageMenu(tabId: string, choice: string, text: string, consent?: ConsentToken | null): Promise<boolean> {
+export async function runPluginPageMenu(tabId: string, choice: string, text: string, document: string, consent?: ConsentToken | null): Promise<boolean> {
   const found = pageMenuContext(tabId);
-  if (!found) return Promise.resolve(false);
-  if (choice.startsWith(`${PLUGIN_MENU_PREFIX}page/`)) return runPluginMenuChoice(choice, found.windowId, found.context, consent);
-  if (!choice.startsWith(`${PLUGIN_MENU_PREFIX}selection/`) || !text.trim()) return Promise.resolve(false);
-  return runPluginMenuChoice(choice, found.windowId, { when: found.context.when, data: { ...found.context.data, selection: text.slice(0, 20_000) } }, consent);
+  if (!found || !document) return false;
+  const now = await documentOf(tabId);
+  const again = pageMenuContext(tabId);
+  if (now !== document || !again || again.profileId !== found.profileId || again.url !== found.url) return false;
+  if (choice.startsWith(`${PLUGIN_MENU_PREFIX}page/`)) return runPluginMenuChoice(choice, again.windowId, again.context, consent);
+  if (!choice.startsWith(`${PLUGIN_MENU_PREFIX}selection/`) || !text.trim()) return false;
+  return runPluginMenuChoice(choice, again.windowId, { when: again.context.when, data: { ...again.context.data, selection: text.slice(0, 20_000) } }, consent);
 }

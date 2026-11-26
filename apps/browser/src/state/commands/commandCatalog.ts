@@ -1,6 +1,6 @@
 import type { BrowserCommand } from "../../platform/commands";
 import type { Settings } from "../settings/settings";
-import { parseShortcut, type ShortcutSource } from "./shortcuts";
+import { comboKey, normalShortcut, parseShortcut, type ShortcutSource } from "./shortcuts";
 import { defaultKeys, profileSwitchKey } from "./keyNotation";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { splitViewAvailable } from "../splits/splits";
@@ -301,16 +301,19 @@ export function staticShortcutSources(): ShortcutSource[] {
 
 const STATIC_SOURCES = staticShortcutSources();
 
-const keyText = (s: { key: string; modifiers: readonly string[] }) => `${[...s.modifiers].sort().join("+")}+${s.key.toLowerCase()}`;
-const STATIC_KEYS = new Set(STATIC_SOURCES.flatMap((source) => source.keys.map(keyText)));
+const STATIC_KEYS = new Set(STATIC_SOURCES.flatMap((source) => source.keys.map(comboKey)));
 
-export const heldByArdia = (shortcut: { key: string; modifiers: readonly string[] }) => STATIC_KEYS.has(keyText(shortcut));
+export const heldByArdia = (shortcut: { key: string; modifiers: readonly string[] }) => STATIC_KEYS.has(comboKey(normalShortcut(shortcut.key, shortcut.modifiers)));
 
 let extraSources: () => ShortcutSource[] = () => [];
+let extraSignature: () => string = () => "";
 
-export function provideShortcutSources(provider: () => ShortcutSource[]) {
+export function provideShortcutSources(provider: () => ShortcutSource[], signature: () => string = () => "") {
   extraSources = provider;
+  extraSignature = signature;
 }
+
+export const shortcutSourcesKey = () => extraSignature();
 
 export function shortcutSources(profileIds: readonly string[], overriddenIds: readonly string[]): ShortcutSource[] {
   const perItem = overriddenIds.filter((id) => OVERRIDABLE_PER_ITEM_COMMANDS.some((command) => id.startsWith(`${command}:`)));

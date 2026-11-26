@@ -200,13 +200,17 @@ final class PluginWebSocket {
       if case .binary = message { binary = true } else { binary = false }
       let body: [String: Any] = ["data": binary ? payload.base64EncodedString() : String(decoding: payload, as: UTF8.self), "binary": binary]
       guard events.fits("net.ws.message", body) else {
-        events.send("net.ws.error", ["message": "a message was over the plugin channel's 1 MB line"]) { _ in }
-        return close(code: 1009, reason: "Message too big for the plugin channel.")
+        let notice = PluginWebSocketCodec.tooBig
+        events.send("net.ws.error", ["message": notice.message, "code": notice.code]) { _ in }
+        return close(code: notice.close, reason: notice.reason)
       }
       events.send("net.ws.message", body) { [weak self] delivered in
         self?.queue.async {
           guard let self else { return }
-          if delivered { self.deliver(rest, complete: complete) } else { self.close(code: 1008, reason: "The plugin fell behind.") }
+          if delivered { return self.deliver(rest, complete: complete) }
+          let notice = PluginWebSocketCodec.fellBehind
+          self.events.send("net.ws.error", ["message": notice.message, "code": notice.code]) { _ in }
+          self.close(code: notice.close, reason: notice.reason)
         }
       }
     }

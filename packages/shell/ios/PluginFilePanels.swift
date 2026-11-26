@@ -7,7 +7,6 @@ import UniformTypeIdentifiers
 enum PluginFilePanels {
   static let maxFiles = 16
   static let maxFileBytes = 64 << 20
-  static let inlineBytes = 256 * 1024
   static let maxTypes = 32
 
   static func unavailable() -> [String: Any]? {
@@ -64,33 +63,19 @@ enum PluginFilePanels {
   }
 
   static func open(_ paths: [String], owner: (name: String, run: Int), maxBytes: Int) -> [String: Any] {
-    var files: [[String: Any]] = []
-    for path in paths {
-      let url = URL(fileURLWithPath: path)
-      switch PluginBoundedFile.openRegular(path) {
-      case .failure(let refusal): return ["ok": false, "reason": "\(url.lastPathComponent): \(refusal.reason)"]
-      case .success(let opened):
-        guard opened.size <= maxBytes else {
-          Darwin.close(opened.fd)
-          return ["ok": false, "reason": "\(url.lastPathComponent) is over \(maxBytes >> 20 > 0 ? "\(maxBytes >> 20) MB" : "\(maxBytes) bytes")"]
-        }
-        var row: [String: Any] = ["name": url.lastPathComponent, "size": opened.size, "mimeType": mimeType(url)]
-        if opened.size <= inlineBytes {
-          defer { Darwin.close(opened.fd) }
-          guard let data = PluginBoundedFile.readWhole(opened.fd, max: inlineBytes) else { return ["ok": false, "reason": "\(url.lastPathComponent) couldn't be read"] }
-          let text = isText(url) ? String(data: data, encoding: .utf8) : nil
-          row["data"] = text ?? data.base64EncodedString()
-          row["encoding"] = text == nil ? "base64" : "utf8"
-        } else {
-          guard let handle = PluginFileHandles.shared.addRead(owner.name, owner.run, fd: opened.fd, size: opened.size) else { return ["ok": false, "reason": "the plugin has too many files open"] }
-          row["data"] = ""
-          row["encoding"] = "base64"
-          row["handle"] = handle
-        }
-        files.append(row)
+    let live = { PluginHost.shared.isLive(owner.name, run: owner.run) }
+    let batch = PluginFileBatch.open(paths, maxBytes: maxBytes, textual: { isText(URL(fileURLWithPath: $0)) }, mimeType: { mimeType(URL(fileURLWithPath: $0)) }) { fd, size in
+      PluginFileHandles.shared.addRead(owner.name, owner.run, fd: fd, size: size, live: live)
+    } discard: { PluginFileHandles.shared.discard(owner.name, owner.run, $0) }
+    switch batch {
+    case .failure(let refusal): return ["ok": false, "reason": refusal.reason]
+    case .success(let opened):
+      guard live() else {
+        PluginFileHandles.shared.discard(owner.name, owner.run, opened.handles)
+        return ["ok": false, "reason": "the plugin stopped while the files were being opened"]
       }
+      return ["ok": true, "files": opened.files]
     }
-    return ["ok": true, "files": files]
   }
 
   static func safeName(_ given: String) -> String {
@@ -110,7 +95,7 @@ enum PluginFilePanels {
       let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).part").path
       let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
       guard fd >= 0 else { return reply(["ok": false, "reason": "the file couldn't be created there"]) }
-      guard let handle = PluginFileHandles.shared.addWrite(owner.name, owner.run, fd: fd, temporary: temporary, destination: url) else { return reply(["ok": false, "reason": "the plugin has too many files open"]) }
+      guard let handle = PluginFileHandles.shared.addWrite(owner.name, owner.run, fd: fd, temporary: temporary, destination: url, live: { PluginHost.shared.isLive(owner.name, run: owner.run) }) else { return reply(["ok": false, "reason": "the plugin has too many files open"]) }
       reply(["ok": true, "saved": true, "handle": handle, "name": url.lastPathComponent])
     }
     if let window = anchorWindow() { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }

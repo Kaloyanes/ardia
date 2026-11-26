@@ -156,8 +156,8 @@ test("the world's teardown stops the script's intervals, timeouts and listeners"
   const runTimers = () => [...timers.values()].forEach((fn) => fn());
   const context = vm.createContext({ setTimeout: addTimeout, clearTimeout: dropTimer, setInterval: addTimer, clearInterval: dropTimer, EventTarget, console, location: { href: "https://github.com/a" }, document: { querySelectorAll: () => [] }, fired, target, JSON, Object, Set, Promise, Error, TypeError, RangeError });
   context.globalThis = context;
-  vm.runInContext(worldBootstrap("ardia-plugin:pages", "poll", "dtokenabc123", "https://github.com/a"), context);
-  vm.runInContext(worldScript({ id: "s", code: "setInterval(() => fired.interval++, 5); setTimeout(() => fired.timeout++, 40); target.addEventListener('ping', () => fired.listener++);" }, "dtokenabc123"), context);
+  vm.runInContext(worldBootstrap("ardia-plugin:pages", "poll", "dtokenabc123", "https://github.com/a", "doc-1"), context);
+  vm.runInContext(worldScript({ id: "s", code: "setInterval(() => fired.interval++, 5); setTimeout(() => fired.timeout++, 40); target.addEventListener('ping', () => fired.listener++);" }, "dtokenabc123", "https://github.com/a"), context);
   target.dispatchEvent(new Event("ping"));
   runTimers();
   runTimers();
@@ -168,8 +168,8 @@ test("the world's teardown stops the script's intervals, timeouts and listeners"
   runTimers();
   assert.equal(timers.size, 0, "every timer the script started was cleared");
   assert.deepEqual(fired, after, "nothing fires once the world is torn down");
-  assert.equal(vm.runInContext(worldScript({ id: "late", code: "fired.interval = -1;" }, "dtokenabc123"), context), false, "a script for a torn-down world doesn't run");
-  assert.equal(vm.runInContext(worldBootstrap("ardia-plugin:pages", "poll", "other12345", "https://gitlab.com/a"), context), "", "a world never starts on a page it wasn't meant for");
+  assert.equal(vm.runInContext(worldScript({ id: "late", code: "fired.interval = -1;" }, "dtokenabc123", "https://github.com/a"), context), false, "a script for a torn-down world doesn't run");
+  assert.equal(vm.runInContext(worldBootstrap("ardia-plugin:pages", "poll", "other12345", "https://gitlab.com/a", "doc-1"), context), "", "a world never starts on a page it wasn't meant for");
 });
 
 test("a refused profile request fails instead of falling back, for browser data, services and tools", async () => {
@@ -277,21 +277,23 @@ test("page and selection menu slots, and plugin commands in the menu bar with co
   await activated("data");
   const w = S().createWindow({ url: "https://a.example/" });
   const tab = activeTabId(S(), w);
+  webviews.set(tab, fakeWeb("doc-menu"));
   const items = pluginPageMenuItems(tab);
   assert.deepEqual(items.map((i) => [i.slot, i.title]), [["page", "Go"], ["selection", "Find Selection"]]);
   const before = host.events.length;
-  assert.equal(await runPluginPageMenu(tab, items[1].id, "picked text", consentToken()), true);
+  assert.equal(await runPluginPageMenu(tab, items[1].id, "picked text", "doc-menu", consentToken()), true);
   await settle();
   const call = host.events.slice(before).map((e) => JSON.parse(e.line)).find((l) => l.kind === "command");
   assert.deepEqual([call.name, call.context.selection], ["find", "picked text"]);
-  assert.equal(await runPluginPageMenu(tab, items[1].id, "  ", consentToken()), false, "a selection item needs a selection");
+  assert.equal(await runPluginPageMenu(tab, items[1].id, "  ", "doc-menu", consentToken()), false, "a selection item needs a selection");
+  webviews.delete(tab);
   const bar = pluginMenuBarItems(S(), w);
   assert.deepEqual(bar.map((i) => i.id), ["plugin:data/go", "plugin:data/find"]);
   assert.deepEqual(parsePluginMenuItem("plugin:data/go"), { plugin: "data", command: "go" });
-  assert.equal(heldByArdia({ key: "T", modifiers: ["command"] }), true, "⌘T is Ardia's own New Tab");
-  const sources = pluginShortcutSources((shortcut) => heldByArdia(shortcut) || shortcut.key === "U");
+  assert.equal(heldByArdia({ key: "t", modifiers: ["command"] }), true, "⌘T is Ardia's own New Tab");
+  const sources = pluginShortcutSources((shortcut) => heldByArdia(shortcut) || shortcut.key === "u");
   assert.deepEqual(sources.find((s) => s.id === "openExtension:plugin:data/go").keys, [], "a key Ardia already holds leaves the plugin's default off");
-  assert.deepEqual(sources.find((s) => s.id === "openExtension:plugin:data/find").keys, [{ key: "Y", modifiers: ["shift", "command"] }]);
+  assert.deepEqual(sources.find((s) => s.id === "openExtension:plugin:data/find").keys, [{ key: "y", modifiers: ["shift", "command"] }]);
   const privateWindow = S().createWindow({ url: "https://a.example/", kind: "private" });
   assert.deepEqual(pluginMenuBarItems(S(), privateWindow), []);
 });

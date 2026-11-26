@@ -12,8 +12,12 @@ extension WebKitTab {
     let plugin = WebKitPluginWorldHandler.isPluginWorld(world)
     guard plugin || world == Self.pluginStylesWorld, !closed, let view = webView, WebKitPluginWorldHandler.document(of: self) == document else { return completion(false) }
     let content = plugin ? WebKitPluginWorldHandler.attach(view: view, world: world) : WKContentWorld.world(name: world)
-    view.evaluateJavaScript(source, in: nil, in: content) { [weak self] result in
-      guard let self, WebKitPluginWorldHandler.document(of: self) == document, case .success(let value) = result else { return completion(false) }
+    view.evaluateJavaScript(source, in: nil, in: content) { [weak self, weak view] result in
+      guard let self, WebKitPluginWorldHandler.document(of: self) == document else {
+        if plugin, let view, let stale = WebKitPluginWorldHandler.staleTeardown(document) { view.evaluateJavaScript(stale, in: nil, in: content) { _ in } }
+        return completion(false)
+      }
+      guard case .success(let value) = result else { return completion(false) }
       completion((value as? Bool) ?? ((value as? String).map { !$0.isEmpty } ?? true))
     }
   }

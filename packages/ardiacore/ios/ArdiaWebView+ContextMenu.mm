@@ -353,8 +353,29 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
   });
 }
 
+- (void)notePageMenuDocument {
+  self.pageMenuDocument = nil;
+  if (!self.pageMenuItems.count || self.pageMenuWaiting) return;
+  self.pageMenuWaiting = [NSMutableArray array];
+  __weak ArdiaWebView *weakSelf = self;
+  [self pluginDocument:^(NSString *document) {
+    ArdiaWebView *strong = weakSelf;
+    if (!strong) return;
+    strong.pageMenuDocument = document ?: @"";
+    NSArray<dispatch_block_t> *waiting = strong.pageMenuWaiting ?: @[];
+    strong.pageMenuWaiting = nil;
+    for (dispatch_block_t send in waiting) send();
+  }];
+}
+
+- (void)whenPageMenuDocument:(dispatch_block_t)send {
+  if (self.pageMenuWaiting) [self.pageMenuWaiting addObject:[send copy]];
+  else send();
+}
+
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)tab:(ArdiaCoreTab *)tab
                            contextMenuItemsForSelection:(NSString *)text {
+  [self notePageMenuDocument];
   NSMutableArray *items = [NSMutableArray arrayWithObject:@{
     @"id" : @"search",
     @"title" : [NSString stringWithFormat:@"Search %@ for “%@”", gSearchEngineName, SelectionLabel(text)],
@@ -369,6 +390,7 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
 }
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)tab:(ArdiaCoreTab *)tab contextMenuItemsForPage:(NSString *)url {
+  if (!self.pageMenuDocument && !self.pageMenuWaiting) [self notePageMenuDocument];
   NSMutableArray *items = [NSMutableArray array];
   for (NSDictionary *item in self.pageMenuItems) {
     NSString *itemId = Field<NSString>(item, @"id");
@@ -390,7 +412,14 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
   for (NSDictionary *item in self.pageMenuItems)
     if ([Field<NSString>(item, @"id") isEqualToString:itemId]) {
       const BOOL selected = [Field<NSString>(item, @"slot") isEqualToString:@"selection"];
-      [self emit:@"command" payload:@{@"command" : itemId, @"text" : selected ? (selection ?: @"") : @""}];
+      NSString *text = selected ? (selection ?: @"") : @"";
+      __weak ArdiaWebView *weakSelf = self;
+      [self whenPageMenuDocument:^{
+        ArdiaWebView *strong = weakSelf;
+        if (!strong) return;
+        [strong emit:@"command" payload:@{@"command" : itemId, @"text" : text, @"document" : strong.pageMenuDocument ?: @""}];
+        strong.pageMenuDocument = nil;
+      }];
       return;
     }
 }

@@ -162,14 +162,14 @@ export async function invokePluginCall(plugin: string, call: PluginCall, caller:
   return send(plugin, run, call, caller, timeoutMs, consent, options.signal, activeManifest(currentPlugins(), plugin)?.scope === "profile" ? profileId : null);
 }
 
-export function callTool(plugin: string, tool: string, input: unknown, caller: ToolCaller, consentTaken?: ConsentToken | null, profile?: string | null): Promise<ToolOutcome> {
+export function callTool(plugin: string, tool: string, input: unknown, caller: ToolCaller, consentTaken?: ConsentToken | null, profile?: string | null, allowed?: () => string | null): Promise<ToolOutcome> {
   const consent = consentTaken !== undefined ? consentTaken : consentToken();
   const manifest = activeManifest(currentPlugins(), plugin);
   if (!manifest) return Promise.resolve(failed("refused", `There's no plugin ${plugin} that is on.`));
   const spec = manifest.tools.find((t) => t.name === tool);
   if (!spec) return Promise.resolve(failed("bad_request", `${plugin} has no tool ${tool}.`));
   if (!manifest.main && runningRun(plugin) === null) return Promise.resolve(failed("failed", `${plugin}'s helper isn't running.`));
-  return invokePluginCall(plugin, { kind: "tool", tool, input }, caller, spec.timeout * 1000, { consent, ...(profile !== undefined ? { profile } : {}) });
+  return invokePluginCall(plugin, { kind: "tool", tool, input }, caller, spec.timeout * 1000, { consent, ...(profile !== undefined ? { profile } : {}), ...(allowed ? { allowed } : {}) });
 }
 
 export function answerCall(plugin: string, run: number, params: Record<string, unknown>): string | null {

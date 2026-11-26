@@ -1,13 +1,14 @@
 import { allowedHostsOf } from "../../lib/pluginPermissions";
 import { matchesAllowedHost } from "../../lib/pluginNetwork";
 import { urlParts } from "../../lib/urlParts";
-import { loadPluginImage, openDroppedPluginFiles, pickPluginFiles, readPluginAssetImage, type PluginPickResult } from "../../platform/plugins";
+import { finishPluginFile, loadPluginImage, openDroppedPluginFiles, pickPluginFiles, readPluginAssetImage, type PluginPickResult } from "../../platform/plugins";
 import { notePlugin } from "../telemetry/pluginCounts";
 import { consentToken } from "../telemetry/choice";
 import { pluginReadyRun } from "./activation";
 import { pickedFilesOf } from "./fileApis";
 import { activeManifest, currentPlugins } from "./store";
-import { isMountedSurface } from "./surfaces";
+import { manifestInProfile, windowProfileId } from "./profileScope";
+import { mountedEntry } from "./surfaces";
 
 const DATA_IMAGE = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/;
 const ASSET_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._\-/]{1,256}\.(png|jpe?g|gif|webp)$/i;
@@ -56,23 +57,75 @@ export const forgetPluginImages = (plugin: string) => {
 };
 
 type ViewFiles = { accept: string[]; multiple: boolean; maxBytes: number | null };
+type Picked = { name: string; mimeType: string; handle?: string };
 
-async function filesForView(plugin: string, surfaceId: string, open: (name: string, run: number) => Promise<PluginPickResult>) {
-  const m = activeManifest(currentPlugins(), plugin);
-  const run = pluginReadyRun(plugin);
-  if (m?.permissions.files !== "picker" || run === null || !isMountedSurface(plugin, surfaceId)) return null;
-  const consent = consentToken();
-  const picked = await open(plugin, run).catch(() => null);
-  const still = activeManifest(currentPlugins(), plugin)?.permissions.files === "picker" && pluginReadyRun(plugin) === run && isMountedSurface(plugin, surfaceId);
-  if (!picked?.ok || !still) return null;
-  notePlugin("plugin_file_picks", consent);
-  return pickedFilesOf(picked.files);
+const extensionOf = (name: string) => {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+};
+
+export function acceptsFile(accept: readonly string[], file: { name: string; mimeType?: string }): boolean {
+  if (!accept.length) return true;
+  const ext = extensionOf(file.name);
+  const mime = (file.mimeType ?? "").toLowerCase();
+  return accept.some((raw) => {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) return false;
+    if (entry.includes("/")) return entry.endsWith("/*") ? !!mime && mime.startsWith(entry.slice(0, -1)) : mime === entry;
+    return ext !== "" && ext === entry.replace(/^\./, "");
+  });
 }
 
-export const pickFilesForPluginView = (plugin: string, surfaceId: string, options: ViewFiles) =>
-  filesForView(plugin, surfaceId, (name, run) => pickPluginFiles({ name, run, multiple: options.multiple, types: options.accept.slice(0, 32), ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
+export const droppedFilePaths = (items: readonly { kind: string; url?: string }[]) =>
+  items.flatMap((item) => {
+    if (item.kind !== "file" || typeof item.url !== "string" || !item.url.startsWith("file://")) return [];
+    try {
+      return [decodeURIComponent(new URL(item.url).pathname)];
+    } catch {
+      return [];
+    }
+  });
 
-export const dropFilesOnPluginView = (plugin: string, surfaceId: string, paths: string[], options: ViewFiles) =>
-  filesForView(plugin, surfaceId, (name, run) => openDroppedPluginFiles({ name, run, paths: paths.slice(0, options.multiple ? 16 : 1), ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
+const extensionsOnly = (accept: readonly string[]) => accept.every((a) => !a.includes("/"));
+
+function closeHandles(plugin: string, run: number, files: readonly Picked[]) {
+  for (const f of files) if (f.handle) void finishPluginFile(plugin, run, f.handle, false).catch(() => undefined);
+}
+
+async function filesForView(plugin: string, surfaceId: string, windowId: string, options: ViewFiles, open: (name: string, run: number) => Promise<PluginPickResult>) {
+  const m = activeManifest(currentPlugins(), plugin);
+  const run = pluginReadyRun(plugin);
+  const instance = mountedEntry(plugin, surfaceId);
+  const profileId = windowProfileId(windowId);
+  if (m?.permissions.files !== "picker" || run === null || !instance || instance.windowId !== windowId || !manifestInProfile(currentPlugins(), plugin, profileId)) return null;
+  const consent = consentToken();
+  const picked = await open(plugin, run).catch(() => null);
+  const still =
+    activeManifest(currentPlugins(), plugin)?.permissions.files === "picker" &&
+    pluginReadyRun(plugin) === run &&
+    mountedEntry(plugin, surfaceId) === instance &&
+    instance.windowId === windowId &&
+    windowProfileId(windowId) === profileId &&
+    !!manifestInProfile(currentPlugins(), plugin, profileId);
+  if (!picked?.ok) return null;
+  if (!still) {
+    closeHandles(plugin, run, picked.files);
+    return null;
+  }
+  const kept = picked.files.filter((f) => acceptsFile(options.accept, f)).slice(0, options.multiple ? picked.files.length : 1);
+  closeHandles(plugin, run, picked.files.filter((f) => !kept.includes(f)));
+  if (!kept.length) return null;
+  notePlugin("plugin_file_picks", consent);
+  return pickedFilesOf(kept);
+}
+
+export const pickFilesForPluginView = (plugin: string, surfaceId: string, windowId: string, options: ViewFiles) =>
+  filesForView(plugin, surfaceId, windowId, options, (name, run) => pickPluginFiles({ name, run, multiple: options.multiple, types: options.accept.slice(0, 32), ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
+
+export function dropFilesOnPluginView(plugin: string, surfaceId: string, windowId: string, paths: string[], options: ViewFiles) {
+  const wanted = (extensionsOnly(options.accept) ? paths.filter((path) => acceptsFile(options.accept, { name: path.slice(path.lastIndexOf("/") + 1) })) : paths).slice(0, options.multiple ? 16 : 1);
+  if (!wanted.length) return Promise.resolve(null);
+  return filesForView(plugin, surfaceId, windowId, options, (name, run) => openDroppedPluginFiles({ name, run, paths: wanted, ...(options.maxBytes ? { maxBytes: options.maxBytes } : {}) }));
+}
 
 export const pluginCanPickFiles = (plugin: string) => activeManifest(currentPlugins(), plugin)?.permissions.files === "picker";

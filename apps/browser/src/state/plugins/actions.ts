@@ -9,14 +9,14 @@ export { UNSAVED } from "./store";
 export const disablePlugin = (name: string) => turnOffPlugin(name, consentNow());
 export { restartProcess as restartPlugin } from "./process";
 export { removePluginAfterConfirm } from "./removeConfirmed";
-export { openPluginPage, pluginPagePath } from "./pages";
+export { openPluginPage, pluginPagePath, routePluginPage } from "./pages";
 export { consentLines, fullControlLine, FULL_CONTROL_SUMMARY } from "./consent";
 export { canRelink, relinkPrograms } from "./programs";
 export { installPlugin, cancelInstall, FETCH_REASONS, OFFLINE_REGISTRY } from "./installer";
 export { addRegistry, removeRegistry, getPlugin, installFromFile, installFromDeepLink, refreshCatalog, setPluginChannel, setPluginProfiles, filterCatalog, catalogCategories, CATEGORIES_ALL, type CatalogEntry } from "./marketplace";
 export { reviewUpdate, rollbackPlugin, checkPlugins } from "./updater";
 export { ensurePluginActivated } from "./activation";
-export { pluginImage, pickFilesForPluginView, dropFilesOnPluginView, pluginCanPickFiles } from "./surfaceMedia";
+export { droppedFilePaths, pluginImage, pickFilesForPluginView, dropFilesOnPluginView, pluginCanPickFiles } from "./surfaceMedia";
 export { grantTabLease, revokeTabLease } from "./pageApis";
 export const resumePlugin = (name: string) => resumeWatchedPlugin(name, consentNow());
 

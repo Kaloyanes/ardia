@@ -3,7 +3,7 @@ import { StyleSheet, View } from "react-native";
 import type { PanelSpec } from "../../lib/pluginManifest";
 import { Box, Button, Text } from "../ui";
 import { useTab, useWindowId } from "../../state/browser/hooks";
-import { usePluginActive, usePluginManifest, usePluginPageContext, usePluginPageSpec, usePluginPageUrl, usePluginProcess, usePluginWindowEligible } from "../../state/plugins/hooks";
+import { usePluginActive, usePluginLoadPath, usePluginManifest, usePluginPageContext, usePluginPageSpec, usePluginPageUrl, usePluginProcess, usePluginWindowEligible } from "../../state/plugins/hooks";
 import { pluginPagePath } from "../../state/plugins/actions";
 import { panelOfPath, wakeForFilePage } from "../../state/plugins/pages";
 import { openSettings } from "../../state/settings/settingsWindows";
@@ -34,7 +34,7 @@ function viewPanelOf(panels: readonly PanelSpec[], path: string): PanelSpec | nu
 export function PluginPage({ tabId, name }: { tabId: string; name: string }) {
   const windowId = useWindowId();
   const eligible = usePluginWindowEligible(windowId);
-  const path = useTab(tabId, (t) => pluginPagePath(t?.url ?? ""));
+  const path = usePluginLoadPath(tabId, useTab(tabId, (t) => pluginPagePath(t?.url ?? "")));
   const spec = usePluginPageSpec(name);
   const manifest = usePluginManifest(name);
   const active = usePluginActive(name);

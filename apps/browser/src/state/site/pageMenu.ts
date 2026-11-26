@@ -10,10 +10,10 @@ export function usePageMenuItems(tabId: string) {
   return usePluginPageMenuItems(tabId, base);
 }
 
-export function runPageMenuCommand(tabId: string, command: string, text = ""): boolean {
+export function runPageMenuCommand(tabId: string, command: string, text = "", document = ""): boolean {
   if (command === "translatePage") void translatePage(tabId, defaultTarget(), "page_menu");
   else if (command === "showOriginal") void revertPage(tabId);
-  else if (command.startsWith("plugin-menu:")) void runPluginPageMenu(tabId, command, text, consentToken());
+  else if (command.startsWith("plugin-menu:")) void runPluginPageMenu(tabId, command, text, document, consentToken());
   else return false;
   return true;
 }

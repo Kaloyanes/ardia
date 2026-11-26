@@ -11,6 +11,16 @@ enum PluginWebSocketMessage: Equatable {
 }
 
 enum PluginWebSocketCodec {
+  struct Notice {
+    let message: String
+    let code: String
+    let close: Int
+    let reason: String
+  }
+
+  static let fellBehind = Notice(message: "the plugin didn't read the socket's messages in time", code: "backpressure", close: 1008, reason: "The plugin fell behind.")
+  static let tooBig = Notice(message: "a message was over the plugin channel's 1 MB line", code: "too_big", close: 1009, reason: "Message too big for the plugin channel.")
+
   static let guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
   static let maxHeadBytes = 16 * 1024
   static let maxControlPayload = 125

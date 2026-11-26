@@ -55,6 +55,20 @@
   };
   var CHANNEL_EVENT_NAMES = Object.values(CHANNEL_EVENTS);
   var FILE_CHUNK_BYTES = 384 * 1024;
+  var SOCKET_SEND_BYTES = 1024 * 1024 - 8 * 1024;
+  function utf8Length(text) {
+    let bytes = 0;
+    for (let i = 0; i < text.length; i++) {
+      const unit = text.charCodeAt(i);
+      if (unit < 128) bytes += 1;
+      else if (unit < 2048) bytes += 2;
+      else if (unit >= 55296 && unit <= 56319 && i + 1 < text.length && (text.charCodeAt(i + 1) & 64512) === 56320) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    }
+    return bytes;
+  }
 
   var definedKeys = (record) => Object.keys(record).filter((key) => record[key] !== void 0);
   function deepEqual(a, b) {
@@ -1412,7 +1426,10 @@
         },
         send: (data) => {
           if (state !== "open") return Promise.reject(new PluginError("closed", "The socket isn't open."));
-          return rpc.request(HOST_METHODS_V3.wsSend, { socket: id, data }).then(() => void 0);
+          if (typeof data !== "string") return Promise.reject(new PluginError("bad_request", "socket.send takes a string."));
+          const params2 = { socket: id, data };
+          if (utf8Length(JSON.stringify(params2)) > SOCKET_SEND_BYTES) return Promise.reject(new PluginError("too_big", `socket.send takes up to ${Math.floor(SOCKET_SEND_BYTES / 1024)} KB per message.`));
+          return rpc.request(HOST_METHODS_V3.wsSend, params2).then(() => void 0);
         },
         close: (code = 1e3, reason = "") => {
           if (state === "closed" || state === "closing") return Promise.resolve();

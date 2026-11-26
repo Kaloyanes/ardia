@@ -80,6 +80,7 @@ export type PageCommand = {
   point?: [number, number];
   modifiers?: { metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; middle?: boolean };
   share?: PageShare;
+  document?: string;
   anchor?: [number, number, number, number];
 };
 export type LoadError = { url: string; code: number; text: string };

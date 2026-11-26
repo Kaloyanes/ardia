@@ -354,13 +354,13 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
       onWindowClose={() => pageAskedToClose(tabId)}
       onTransferRefused={(from) => returnRefusedMove(tabId, from)}
       onNotification={(notification) => showWebNotification(tabId, notification)}
-      onCommand={({ command, text, modifiers, share, anchor, point }) => {
+      onCommand={({ command, text, modifiers, share, anchor, point, document }) => {
         if (command === "search") searchSelection(tabId, text, modifiers);
         else if (command === "share" && share) void shareFromPage(tab(), share, anchor);
         else if (command === "copyLinkToHighlight") void copyLinkToSelection(tabId);
         else if (command === "escape") escapePressed(tabId, "page");
         else if (command === "hideElement" && point) void startHidingElement(tabId, point);
-        else runPageMenuCommand(tabId, command, text);
+        else runPageMenuCommand(tabId, command, text, document ?? "");
       }}
       onSelection={(selection) => setPageSelection(tabId, selection)}
       onScroll={(state) => noteScroll(tabId, state)}

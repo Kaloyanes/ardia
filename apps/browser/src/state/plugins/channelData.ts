@@ -8,7 +8,8 @@ import { useBrowser } from "../browser/store";
 import { activeTabId, isIncognitoProfile } from "../browser/model";
 import type { Tab } from "../browser/types";
 import { failure } from "../automation/automationMethods";
-import { eligibleKind, isEligibleTab } from "../automation/automationWindows";
+import { eligibleKind, isEligibleTab, lastFocusedEligibleWindow } from "../automation/automationWindows";
+import { manifestInProfile } from "./profileScope";
 import type { Body } from "../automation/controlSocket";
 import { consentToken } from "../telemetry/choice";
 import { notePlugin } from "../telemetry/pluginCounts";
@@ -59,6 +60,20 @@ export function callerProfile(name: string, m: Pick<PluginManifest, "scope">, pa
   const front = focused ? b.windows[focused]?.profileId : undefined;
   const id = [front, b.settings.defaultProfileId].find(usable);
   return id ? { ok: true, profileId: id } : { ok: false, message: "There's no profile to use." };
+}
+
+export function pluginWindow(name: string, m: Pick<PluginManifest, "scope">, params: Record<string, unknown>): { ok: true; windowId: string } | { ok: false; body: Body } {
+  const s = useBrowser.getState();
+  const inScope = (id: string) => eligibleKind(s, id) && !!manifestInProfile(currentPlugins(), name, s.windows[id]?.profileId ?? null);
+  if (params.profile !== undefined) {
+    const profile = callerProfile(name, m, params);
+    if (!profile.ok) return { ok: false, body: failure("refused", profile.message) };
+    const windowId = [...s.ui.focusOrder, ...s.windowOrder].find((id) => s.windows[id]?.profileId === profile.profileId && inScope(id));
+    return windowId ? { ok: true, windowId } : { ok: false, body: failure("no_window", "There's no window in that profile.") };
+  }
+  const front = lastFocusedEligibleWindow(s);
+  if (!front) return { ok: false, body: failure("no_window", "No window to use.") };
+  return inScope(front) ? { ok: true, windowId: front } : { ok: false, body: failure("refused", "This plugin isn't on in the front window's profile.") };
 }
 
 export function storageMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Promise<Body> | Body {

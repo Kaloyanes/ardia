@@ -1127,10 +1127,14 @@ turning a permission off takes effect at once. macOS serves all of it; Linux and
   (headers included) leaves before the policy passes and DNS can't swap the address after. Events are `net.ws.open`,
   `net.ws.message {data, binary}` (binary as base64), `net.ws.close {code, reason, wasClean}` and `net.ws.error`.
   A message is at most 1 MB, and its event line must fit the channel's 1 MB line once encoded: a bigger one ends the
-  socket with 1009 and an explicit `net.ws.error`, never a silent drop. `net.ws.send` takes 1 MB with 64 waiting;
-  `net.ws.close` takes 1000, 1001, 1008, 1009 or 3000–4999. A stream or socket starts only on a live run, checked,
-  counted and registered in one step, and every one closes when the run stops; a stream the plugin stops reading
-  (backpressure) or the host fails ends with `net.fetch.error` (`plugin_net_sockets`, `plugin_net_socket_failures`).
+  socket with 1009 and an explicit `net.ws.error`, never a silent drop; a plugin that stops reading gets
+  `net.ws.error` (code `backpressure`) and then a 1008 close. The SDK's `socket.send` refuses (`too_big`) a message
+  whose encoded request wouldn't fit the plugin's own 1 MB line, before anything is written, so one big send can't
+  end the plugin's connection; `net.ws.send` takes 64 waiting. `net.ws.close` takes 1000, 1001, 1008, 1009 or
+  3000–4999. A stream or socket starts only on a live run, checked, counted and registered in one step, each under its
+  own token, so a cancelled stream's late completion or backpressure can't touch a new one reusing its id
+  (`PluginRunTable`); every one closes when the run stops, and a stream the plugin stops reading or the host fails
+  ends with `net.fetch.error` (`plugin_net_sockets`, `plugin_net_socket_failures`).
 - `permissions.network` may list `localhost:<port>` or `127.0.0.1:<port>` (1–65535). Only that port on loopback opens,
   over http or https; a bare `localhost` never does, and every other private, link-local and metadata address stays
   refused (`PluginFetchPolicy.loopbackAddress`).
@@ -1178,15 +1182,19 @@ can't call Ardia's API, restarts after a crash (1, 4 and 16 s, then gives up), a
   pauses it: the run stops, its scripts and styles leave every page, a toast says *Paused for high CPU* (memory,
   requests), and nothing restarts it until **Resume** on its Settings page (`watchdog.ts`, `plugin_watchdog_cpu`,
   `plugin_watchdog_memory`, `plugin_watchdog_ipc`).
-- Settings › Plugins › a plugin shows a **Health** row: running, asleep, paused, starting or stopped, its memory, the
-  tabs its scripts are in, its open connections and the last error (`PluginHealthDetails.tsx`).
+- Settings › Plugins › a plugin shows a **Health** row: running, asleep, paused, starting or stopped, its memory (the
+  main run's plus the live sidecar run's; a sample from a replaced sidecar is never added), the tabs its scripts are
+  in, its open connections and the last error (`PluginHealthDetails.tsx`).
 
 ### Pages: reads, scripts, styles
 
 - `page.readActive {markdown?, metadata?, selection?, screenshot?}` reads the page you used the plugin from, as
   `tabs.readActivePage` does, adding Markdown (article or main), metadata (description, site name, author, published
   time, image, language, canonical URL), headings, links and form fields (names, types and labels, never values),
-  and with `activePage.screenshot` a JPEG of the visible page. URLs are minimized without `fullUrls`
+  and with `activePage.screenshot` a JPEG of the visible page. Without `fullUrls`, every URL (links, images, the
+  canonical URL and each Markdown link and image) loses its query and fragment inside the read itself, before the
+  Markdown is written, with `(`, `)`, `<`, `>` and spaces escaped in each destination; Markdown is cut at whole blocks
+  only, so a link is never left half-written, and the host runs a parenthesis-aware pass over it again
   (`pluginPageRead.ts`, `pageApis.ts`, `plugin_page_reads`, `plugin_page_screenshots`).
 - `page.readTab {tabId}` with `activePage.multiTab` reads a tab you attached: typing `@tab` in a plugin's input mode
   grants a lease on that tab's current document (its native identity: Chromium's loader id, WebKit's commit), which
@@ -1199,8 +1207,14 @@ can't call Ardia's API, restarts after a crash (1, 4 and 16 s, then gives up), a
   own isolated world (`ardia-plugin:<key>`): a `WKContentWorld` on WebKit, a DevTools-created isolated world on
   Chromium (`ArdiaPluginWorlds.mm`, no engine change), neither able to see the page's scripts. Styles go in one
   shared styles world. Every injection is bound to the document it was meant for: native refuses it once that
-  document is gone (Chromium's loader id, WebKit's commit serial), the world carries a per-document token every script
-  and message must match, and the plugin's access is checked again right before each step. `document_start` scripts
+  document is gone (Chromium checks the main frame's loader id before and after creating the world, before caching
+  its context and before each poll hands messages on; WebKit checks its commit serial before evaluating, and a run
+  that lands in a newer document tears down the world it started there), the world carries a per-document token every
+  script and message must match, and the plugin's access is checked again right before each step. Each contribution is
+  tracked on its own: when a same-document move (`pushState`) takes a page out of a script's `matches`, that plugin's
+  world is torn down and rebuilt with a new token for the scripts that still match, the stored address follows the
+  move so newly matching styles and scripts apply, and bridge messages and `page.sendToContent` reach only a
+  contribution that matches the current address. `document_start` scripts
   run as soon as the document is there, `document_idle` ones once it has loaded, each stage on its own. Turning the
   plugin off, pausing it, revoking it or blocking the site tears its world down at once (its timers, intervals,
   animation frames, mutation observers and event listeners stop) and reloads a tab its scripts ran in, so nothing it
@@ -1224,10 +1238,14 @@ the `profile` it names or the front window's; a refused profile is refused, neve
 (`clipboard: write|read`, both just after you use the plugin), `ui.notify` (`notifications`; at most one every 2 s
 and 30 an hour; clicking it runs the named command), and `fs.pickFiles`/`saveFile` (`files: picker`, just after you
 use the plugin; native panels hand over only what you pick). A picked file is opened once (`O_NOFOLLOW`, a regular
-file, read only from that descriptor): up to 256 KB comes back inline, a bigger one (up to 64 MB) as a handle the
-SDK reads in 384 KB chunks (`fs.readChunk`, `fs.closeFile`); `saveFile` opens the save panel first (`fs.saveBegin`),
-then sends chunks (`fs.saveChunk`) and commits atomically (`fs.saveCommit`), up to 64 MB. Handles belong to the run and
-close when it stops (`fileApis.ts`, `PluginFileHandles.swift`). Storage holds 16 MB.
+file, read only from that descriptor). A file of up to 256 KB comes back inline while the whole pick stays within a
+640 KB encoded budget (escaped text counted at its encoded size), so a reply always fits the 1 MB channel line;
+anything bigger, or past the budget, comes back (up to 64 MB) as a handle the SDK reads in 384 KB chunks
+(`fs.readChunk`, `fs.closeFile`; `PluginFileBatch`). `saveFile` opens the save panel first (`fs.saveBegin`), then sends
+chunks (`fs.saveChunk`) and commits atomically (`fs.saveCommit`), up to 64 MB. Handles belong to the run: a stopped
+run can't register one, a pick that fails partway closes the ones it opened, and a read in flight keeps its
+descriptor open until it ends, however the run stops (`fileApis.ts`, `PluginCore/PluginFileHandles.swift`). Storage
+holds 16 MB.
 
 ### Views
 
@@ -1236,9 +1254,11 @@ close when it stops (`fileApis.ts`, `PluginFileHandles.swift`). Storage holds 16
 `plugin_surface_patches`, `plugin_surface_patch_failures`). The renderer adds `ListItemDetail` (a list item's child
 shows beside the list), `Grid`, `Table`, `Tabs`, `CodeBlock` (highlighted, with Copy), `Image` (a `data:image` URL or
 an https URL on the plugin's hosts, fetched by the host with every redirect checked, or an image file inside the
-plugin's own folder; PNG, JPEG, GIF or WebP up to 4 MB), `TagList` and `FileDropZone` (click to pick or drop files
-on it, needs `files: picker`; the files go to the surface only if it's still mounted on the same run)
-(`SurfaceRich.tsx`, `codeTokens.ts`).
+plugin's own folder; PNG, JPEG, GIF or WebP up to 4 MB), `TagList` and `FileDropZone` (click to pick, or drop files
+on it through Ardia's `FileDropArea`; needs `files: picker`; `accept` (extensions like `.png`, or MIME types like
+`image/*`) filters both the picker and the drop; the files go to the surface only if the same mounted instance,
+window, profile and run are still there, and otherwise their handles are closed) (`SurfaceRich.tsx`,
+`surfaceMedia.ts`, `codeTokens.ts`).
 
 ### Input modes
 
@@ -1249,12 +1269,20 @@ tabs?}` (`inputModes.ts`, `plugin_input_modes`).
 ### Menus, shortcuts and page tabs
 
 - `contributes.menus.selection` shows in the selection menu on both engines and hands the command `{selection}` (with
-  `activePage`); `page` shows in the page's own menu.
+  `activePage`); `page` shows in the page's own menu. Their `when` sees the same context as tab menus (`urlHost`,
+  `urlScheme`, `isActive`, `isPinned`, `isInGroup`, `isSplit`, `tabCount`). The menu carries the document it was
+  shown for, and choosing an item runs it only if the tab is still on that document and in the same profile.
 - Every plugin command is in the menu bar's Extensions menu, so Settings › Shortcuts lists it and you can bind or change
-  its key. A command's `shortcut` is its default, left off when Ardia or another plugin already holds that key.
-- A plugin page tab (`ardia://<scope>/<name>`) stays mounted once shown, hidden while you're on another tab, so its
-  view keeps its state; its page's title becomes the tab's, and Back and Forward step through its own history. It's a
-  tab like any other, so it can lead a group.
+  its key. A command's `shortcut` is its default, left off when Ardia or another plugin already holds that key. Keys
+  are read the way recorded shortcuts are (`normalShortcut`, `comboKey`): `cmd+y` is ⌘Y, not ⇧⌘Y, and the same
+  reading decides whether Ardia holds a key. Changing only a command's `shortcut` refreshes the menu bar and the
+  resolver at once.
+- A plugin page tab (`ardia://<key>/<route>`, where `<key>` is the plugin's key, like `sample__notes`;
+  `ardia://@scope/name/<route>` opens the same tab) stays mounted once shown, under one stable parent, hidden while
+  you're on another tab, so its view keeps its state (up to the 6 most recently shown, `keptPages.ts`). Its page's
+  title becomes the tab's, and Back and Forward step through its own history. When the page sets its route with
+  `?ardiaPath=` (`history.pushState`), the address follows it without reloading the page; an address you type loads it
+  fresh. It's a tab like any other, so it can lead a group.
 
 ### Not done yet (each needs an engine rebuild)
 
@@ -1300,9 +1328,10 @@ tabs?}` (`inputModes.ts`, `plugin_input_modes`).
   `lib/pluginPageRead.ts` build the injected scripts; natively `PluginNetChannels.swift`, `PluginWebSocket.swift`,
   `PluginAuthSession.swift`, `PluginFilePanels.swift`, `PluginsModule+Runtime.swift`, `PluginCore/PluginAuthRequest`,
   `PluginUtf8Chunks`, `PluginUsage`, `PluginWebSocketCodec`, `PluginBoundedFile`, `PluginImageBytes` and
-  `ControlLineBudget`, `PluginFileHandles.swift`, `PluginImageLoader.swift`, and in `packages/ardiacore/ios` `ArdiaPluginWorlds.mm`,
+  `ControlLineBudget`, `PluginRunTable`, `PluginFileHandles`, `PluginFileBatch`, `PluginImageLoader.swift`, and in `packages/ardiacore/ios` `ArdiaPluginWorlds.mm`,
   `ArdiaWebView+PluginWorlds.mm`, `WebKitTab+PluginWorlds.swift` and `WebKitPluginWorldHandler.swift`;
-  `state/plugins/runtimeV3.test.mjs` and `runtimeV3Round2.test.mjs`.
+  `state/plugins/runtimeV3.test.mjs`, `runtimeV3Round2.test.mjs` and `runtimeV3Review2.test.mjs`; natively
+  `plugin-tests/PluginRunTableTests.swift`.
 - The example plugin used by the tests: `tests/fixtures/plugins/example/`.
 
 ## Telemetry

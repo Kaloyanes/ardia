@@ -60,8 +60,14 @@ NSString *ContextKey(NSString *world, NSString *document) { return [NSString str
     [tab devToolsCall:@"Page.createIsolatedWorld" params:params timeout:kCallTimeout completion:^(NSDictionary *made, NSString *madeError) {
       NSNumber *context = [made[@"executionContextId"] isKindOfClass:NSNumber.class] ? made[@"executionContextId"] : nil;
       ArdiaPluginWorlds *again = weakSelf;
-      if (again && context) again->_contexts[key] = context;
-      then(context);
+      if (!again || !context) return then(nil);
+      [again frameOfTab:tab completion:^(NSString *madeFrame, NSString *after) {
+        ArdiaPluginWorlds *still = weakSelf;
+        if (!still || ![after isEqualToString:document] || ![madeFrame isEqualToString:frame]) return then(nil);
+        if (NSNumber *raced = still->_contexts[key]) return then(raced);
+        still->_contexts[key] = context;
+        then(context);
+      }];
     }];
   }];
 }
@@ -113,8 +119,18 @@ NSString *ContextKey(NSString *world, NSString *document) { return [NSString str
       if ([strong->_contexts[key] isEqual:context]) [strong->_contexts removeObjectForKey:key];
       return;
     }
-    if ([value isKindOfClass:NSString.class] && [value length] > 2 && [value length] <= kMaxJSON) strong->_messages(world, document, value);
-    [strong pollOnce:world document:document context:context onTab:liveTab];
+    [strong frameOfTab:liveTab completion:^(NSString *frame, NSString *current) {
+      ArdiaPluginWorlds *again = weakSelf;
+      ArdiaCoreTab *stillTab = weakTab;
+      if (!again || ![again->_polls[key] isEqual:context]) return;
+      if (![current isEqualToString:document] || !stillTab || stillTab.closed) {
+        [again->_polls removeObjectForKey:key];
+        if ([again->_contexts[key] isEqual:context]) [again->_contexts removeObjectForKey:key];
+        return;
+      }
+      if ([value isKindOfClass:NSString.class] && [value length] > 2 && [value length] <= kMaxJSON) again->_messages(world, document, value);
+      [again pollOnce:world document:document context:context onTab:stillTab];
+    }];
   }];
 }
 

@@ -26,7 +26,6 @@ type Grant = { kind: "gesture"; id: number } | { kind: "lease"; lease: Lease };
 
 const READ_DEADLINE_MS = 4000;
 const MAX_LEASES = 8;
-const MARKDOWN_URL = /(\]\()(https?:\/\/[^)\s]+)(\))/g;
 const leases = new Map<string, Map<string, Lease>>();
 
 function tabReadable(plugin: string, tab: Tab | undefined): tab is Tab {
@@ -68,7 +67,23 @@ type Read = { text?: unknown; markdown?: unknown; selection?: unknown; lang?: un
 
 const flag = (params: Record<string, unknown>, key: string) => params[key] === true;
 
-export const minimizedMarkdown = (markdown: string) => markdown.replace(MARKDOWN_URL, (_all, open: string, url: string, close: string) => `${open}${minimizedUrl(url)}${close}`);
+export function minimizedMarkdown(markdown: string): string {
+  let out = "";
+  let at = 0;
+  for (let open = markdown.indexOf("](", at); open >= 0; open = markdown.indexOf("](", at)) {
+    let depth = 1;
+    let end = open + 2;
+    while (end < markdown.length && depth > 0 && !/\s/.test(markdown[end]!)) {
+      if (markdown[end] === "(") depth++;
+      else if (markdown[end] === ")") depth--;
+      if (depth > 0) end++;
+    }
+    const url = markdown.slice(open + 2, end);
+    out += markdown.slice(at, open + 2) + (/^https?:\/\//i.test(url) ? minimizedUrl(url) : url);
+    at = end;
+  }
+  return out + markdown.slice(at);
+}
 
 function grantHolds(c: Caller, tab: Tab, grant: Grant): boolean {
   if (!acceptsRun(c.name, c.run) || !activeManifest(currentPlugins(), c.name)?.permissions.activePage) return false;
@@ -86,7 +101,8 @@ async function readTab(c: Caller, m: PluginManifest, tab: Tab, grant: Grant, par
   if (wantsShot && !m.permissions.screenshot) return failure("refused", "A screenshot needs activePage.screenshot.");
   const before = await web.pluginDocument().catch(() => null);
   if (!before || (grant.kind === "lease" && grant.lease.document !== before)) return failure("refused", "That tab moved on to another page since it was attached.");
-  const flags = { markdown: flag(params, "markdown"), metadata: flag(params, "metadata"), selection: params.selection !== false };
+  const full = m.permissions.fullUrls === true;
+  const flags = { markdown: flag(params, "markdown"), metadata: flag(params, "metadata"), selection: params.selection !== false, fullUrls: full };
   const [read, shot] = await Promise.all([
     withDeadline(web.evaluate<Read>(pageReadScript(flags)), READ_DEADLINE_MS, null).catch(() => null) as Promise<Read | null>,
     wantsShot ? withDeadline(web.capturePicture(0.5), READ_DEADLINE_MS, null).catch(() => null) : Promise.resolve(null),
@@ -95,7 +111,7 @@ async function readTab(c: Caller, m: PluginManifest, tab: Tab, grant: Grant, par
   const now = useBrowser.getState().tabs[tab.id];
   if (after !== before || !now || now.url !== tab.url || !grantHolds(c, now, grant)) return failure("refused", "The page changed while it was being read, or the plugin lost its access.");
   if (!read || typeof read.text !== "string") return failure("failed", "The page didn't answer.");
-  const full = activeManifest(currentPlugins(), c.name)?.permissions.fullUrls === true;
+  if (full && activeManifest(currentPlugins(), c.name)?.permissions.fullUrls !== true) return failure("refused", "The plugin lost fullUrls while the page was being read.");
   const shown = (url: unknown) => (typeof url === "string" ? (full ? url : minimizedUrl(url)) : "");
   const metadata = isFields(read.metadata) ? { ...read.metadata, canonicalUrl: shown(read.metadata.canonicalUrl), image: shown(read.metadata.image) } : undefined;
   const links = Array.isArray(read.links) ? read.links.flatMap((l) => (isFields(l) ? [{ text: String(l.text ?? ""), url: shown(l.url) }] : [])) : undefined;

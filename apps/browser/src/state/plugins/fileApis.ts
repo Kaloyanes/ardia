@@ -50,7 +50,10 @@ export async function filesMethod(c: Caller, m: PluginManifest, method: string, 
     const types = Array.isArray(params.types) ? params.types.filter((t): t is string => typeof t === "string" && t.length <= 100).slice(0, FILE_LIMITS.types) : [];
     const title = text(params.title, 120);
     const picked = await pickPluginFiles({ name: c.name, run: c.run, multiple: params.multiple === true, types, ...(title ? { title } : {}) }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
-    if (!stillAllowed(c)) return ended();
+    if (!stillAllowed(c)) {
+      if (picked.ok) for (const f of picked.files) if (f.handle) void finishPluginFile(c.name, c.run, f.handle, false).catch(() => undefined);
+      return ended();
+    }
     if (!picked.ok) return "cancelled" in picked && picked.cancelled ? { result: { files: [] } } : failure("failed", picked.reason);
     notePlugin("plugin_file_picks", consent);
     return { result: { files: pickedFilesOf(picked.files) } };

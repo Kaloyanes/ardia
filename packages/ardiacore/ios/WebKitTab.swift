@@ -180,6 +180,8 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
 
   func dropViewForDiscard() -> WebKitWebView? {
     guard let view = webView else { return nil }
+    WebKitPluginWorldHandler.detachAll(view: view)
+    documentSerial += 1
     observations = []
     webView = nil
     stopListening(to: view)

@@ -23,24 +23,38 @@ const literal = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c
 
 const pageAt = (href: string) => `(String(location.href).split("#")[0] === ${literal(href.split("#")[0])})`;
 
-export function worldBootstrap(world: string, transport: "webkit" | "poll", token: string, href: string): string {
+export function worldBootstrap(world: string, transport: "webkit" | "poll", token: string, href: string, document: string): string {
   return `(() => {
   if (!${pageAt(href)}) return "";
-  if (globalThis.__ardiaWorld) return globalThis.__ardiaWorld.doc;
+  const prior = globalThis.__ardiaWorld;
+  if (prior && prior.doc === ${literal(token)}) return prior.doc;
+  if (prior) prior.teardown(prior.doc);
   const world = ${literal(world)};
   const doc = ${literal(token)};
+  const native = ${literal(document)};
   const max = ${MAX_WORLD_MESSAGE};
   const outbox = [];
   let waiting = null;
   let disposed = false;
   const listeners = new Set();
   const handler = ${transport === "webkit" ? "globalThis.webkit && globalThis.webkit.messageHandlers && globalThis.webkit.messageHandlers.ardiaPluginWorld" : "null"};
-  const realSetTimeout = globalThis.setTimeout.bind(globalThis);
-  const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
-  const realSetInterval = globalThis.setInterval.bind(globalThis);
-  const realClearInterval = globalThis.clearInterval.bind(globalThis);
-  const realFrame = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame.bind(globalThis) : null;
-  const realCancelFrame = globalThis.cancelAnimationFrame ? globalThis.cancelAnimationFrame.bind(globalThis) : null;
+  const reals = prior ? prior.reals : Object.freeze({
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    setInterval: globalThis.setInterval.bind(globalThis),
+    clearInterval: globalThis.clearInterval.bind(globalThis),
+    frame: globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame.bind(globalThis) : null,
+    cancelFrame: globalThis.cancelAnimationFrame ? globalThis.cancelAnimationFrame.bind(globalThis) : null,
+    Observer: globalThis.MutationObserver || null,
+    add: EventTarget.prototype.addEventListener,
+    remove: EventTarget.prototype.removeEventListener,
+  });
+  const realSetTimeout = reals.setTimeout;
+  const realClearTimeout = reals.clearTimeout;
+  const realSetInterval = reals.setInterval;
+  const realClearInterval = reals.clearInterval;
+  const realFrame = reals.frame;
+  const realCancelFrame = reals.cancelFrame;
   const timeouts = new Set();
   const intervals = new Set();
   const frames = new Set();
@@ -69,14 +83,14 @@ export function worldBootstrap(world: string, transport: "webkit" | "poll", toke
     };
     globalThis.cancelAnimationFrame = (id) => { frames.delete(id); realCancelFrame(id); };
   }
-  const RealObserver = globalThis.MutationObserver;
+  const RealObserver = reals.Observer;
   if (RealObserver) {
     globalThis.MutationObserver = class extends RealObserver {
       constructor(fn) { super((records, observer) => { if (!disposed) fn(records, observer); }); observers.add(this); }
     };
   }
-  const realAdd = EventTarget.prototype.addEventListener;
-  const realRemove = EventTarget.prototype.removeEventListener;
+  const realAdd = reals.add;
+  const realRemove = reals.remove;
   EventTarget.prototype.addEventListener = function (type, fn, options) {
     if (disposed || !fn) return;
     const wrapped = typeof fn === "function" ? function (event) { if (!disposed) return fn.call(this, event); } : { handleEvent: (event) => { if (!disposed) fn.handleEvent(event); } };
@@ -131,15 +145,15 @@ export function worldBootstrap(world: string, transport: "webkit" | "poll", toke
     send: (message) => send(scriptId, message),
     onMessage: (fn) => { if (typeof fn !== "function") throw new TypeError("onMessage needs a function"); if (disposed) return () => false; const entry = { scriptId, fn }; listeners.add(entry); return () => listeners.delete(entry); },
   });
-  globalThis.__ardiaWorld = Object.freeze({ doc, take, deliver, teardown, bridgeFor, alive: () => !disposed });
+  globalThis.__ardiaWorld = Object.freeze({ doc, native, reals, take, deliver, teardown, bridgeFor, alive: () => !disposed });
   return doc;
 })()`;
 }
 
-export function worldScript(script: WorldScript, token: string): string {
+export function worldScript(script: WorldScript, token: string, href: string): string {
   return `(() => {
   const host = globalThis.__ardiaWorld;
-  if (!host || host.doc !== ${literal(token)} || !host.alive()) return false;
+  if (!host || host.doc !== ${literal(token)} || !host.alive() || !${pageAt(href)}) return false;
   const ardia = Object.freeze({ bridge: host.bridgeFor(${literal(script.id)}) });
   try { (function (ardia) {
 ${script.code}

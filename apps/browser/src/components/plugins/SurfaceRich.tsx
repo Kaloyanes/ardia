@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, View, type ImageResizeMode } from "react-native";
 import type { PluginNode } from "../../lib/pluginProtocol";
 import { copyText } from "../../state/app/system";
-import { dropFilesOnPluginView, pickFilesForPluginView, pluginCanPickFiles, pluginImage } from "../../state/plugins/actions";
-import { ActivitySpinner, Badge, Box, Button, Divider, monoFace, Segmented, space, Text, useTheme } from "../ui";
+import { droppedFilePaths, dropFilesOnPluginView, pickFilesForPluginView, pluginCanPickFiles, pluginImage } from "../../state/plugins/actions";
+import { ActivitySpinner, Badge, Box, Button, Divider, FileDropArea, monoFace, Segmented, space, Text, useTheme, type DropUpdate } from "../ui";
 import { SurfaceIcon } from "./SurfaceBasics";
 import { SurfaceMarkdown } from "./SurfaceMarkdown";
 import { SURFACE } from "./tokens";
@@ -265,7 +265,7 @@ export function TagListNode({ node }: NodeProps) {
 }
 
 export function FileDropZoneNode({ node }: NodeProps) {
-  const { plugin, surfaceId, fire } = useSurface();
+  const { plugin, surfaceId, windowId, fire } = useSurface();
   const theme = useTheme();
   const p = node.props;
   const [busy, setBusy] = useState(false);
@@ -279,26 +279,24 @@ export function FileDropZoneNode({ node }: NodeProps) {
     setBusy(false);
     if (files?.length && isHandlerRef(p.onDrop)) fire(p.onDrop, [files]);
   };
+  const onDropUpdate = (e: DropUpdate) => {
+    if (e.phase === "enter" || e.phase === "move") return setOver(true);
+    setOver(false);
+    if (e.phase !== "drop") return;
+    const paths = droppedFilePaths(e.items);
+    if (paths.length) void hand(() => dropFilesOnPluginView(plugin, surfaceId, windowId, paths, options));
+  };
   const zone = { borderWidth: 1, borderStyle: "dashed", borderColor: over ? theme.accent : theme.divider, borderRadius: space.s, opacity: allowed ? 1 : 0.5 } as const;
   return (
-    <View
-      draggedTypes={allowed ? ["fileUrl"] : []}
-      onDragEnter={() => setOver(true)}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        setOver(false);
-        const paths = (e.nativeEvent.dataTransfer?.files ?? []).flatMap((f) => (typeof f?.uri === "string" && f.uri.startsWith("file://") ? [decodeURIComponent(f.uri.replace(/^file:\/\//, ""))] : []));
-        if (paths.length) void hand(() => dropFilesOnPluginView(plugin, surfaceId, paths, options));
-      }}
-    >
-      <Pressable onPress={() => void hand(() => pickFilesForPluginView(plugin, surfaceId, options))} disabled={!allowed}>
+    <FileDropArea accepts="files" enabled={allowed && !busy} onDropUpdate={onDropUpdate}>
+      <Pressable onPress={() => void hand(() => pickFilesForPluginView(plugin, surfaceId, windowId, options))} disabled={!allowed}>
         <Box gap="xs" pad="l" center style={zone}>
           {busy ? <ActivitySpinner style={SPINNER} /> : <SurfaceIcon name={str(p.icon) ?? "tray.and.arrow.down"} size={SURFACE.iconBox * 1.5} />}
           <Text weight="medium">{str(p.title) ?? "Choose or drop files"}</Text>
           {str(p.description) ? <Text size="small" tone="textTertiary">{str(p.description)}</Text> : null}
         </Box>
       </Pressable>
-    </View>
+    </FileDropArea>
   );
 }
 

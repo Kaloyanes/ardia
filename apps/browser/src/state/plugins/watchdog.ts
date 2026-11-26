@@ -157,7 +157,8 @@ export function refreshHealth(rows: PluginUsageRow[] = lastRows) {
     if (!m || (!m.main && !m.sidecar)) continue;
     const state = s.processes[name];
     const row = rows.find((r) => r.name === name && state?.state === "running" && r.run === state.run);
-    const sidecarRow = rows.find((r) => r.name === `${name}${SIDECAR_SUFFIX}`);
+    const sidecarRun = hooks?.sidecarRun(name) ?? null;
+    const sidecarRow = sidecarRun === null ? undefined : rows.find((r) => r.name === `${name}${SIDECAR_SUFFIX}` && r.run === sidecarRun);
     const paused = pausedFor.get(name) ?? null;
     const status: PluginHealth["status"] = paused ? "paused" : sleeping.has(name) ? "sleeping" : state?.state === "running" ? "running" : state?.state === "starting" || state?.state === "waiting" ? "starting" : state?.state === "crashed" || state?.state === "failed" ? "failed" : "stopped";
     const lastError = paused ? PAUSE_TITLES[paused] : state?.state === "crashed" || state?.state === "failed" ? state.reason : null;

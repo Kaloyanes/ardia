@@ -18,7 +18,7 @@ import { waitingCallsOf } from "./tools";
 import { forgetWatchdog, startWatchdog } from "./watchdog";
 import { watchPluginInputModes } from "./inputModes";
 import { heldByArdia, provideShortcutSources } from "../commands/commandCatalog";
-import { pluginShortcutSources } from "./pluginMenuBar";
+import { pluginShortcutSignature, pluginShortcutSources } from "./pluginMenuBar";
 
 let started = false;
 
@@ -29,7 +29,7 @@ export function startRuntimeV3() {
   startPageWorlds();
   watchTabLeases();
   watchPluginInputModes();
-  provideShortcutSources(() => pluginShortcutSources(heldByArdia));
+  provideShortcutSources(() => pluginShortcutSources(heldByArdia), () => pluginShortcutSignature());
   watchPluginNotifications((plugin, command) => {
     const windowId = lastFocusedEligibleWindow(useBrowser.getState());
     if (windowId) void runPluginCommand(plugin, command, windowId).catch(() => undefined);

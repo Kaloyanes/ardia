@@ -19,6 +19,11 @@ final class WebKitPluginWorldHandler: NSObject, WKScriptMessageHandler {
 
   static func document(of tab: WebKitTab) -> String { "wk-\(tab.browserId)-\(tab.documentSerial)" }
 
+  static func staleTeardown(_ document: String) -> String? {
+    guard !document.isEmpty, document.count <= 120, document.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }
+    return "(() => { const host = globalThis.__ardiaWorld; return !!host && host.native === \"\(document)\" && host.teardown(host.doc); })()"
+  }
+
   static func attach(view: WKWebView, world: String) -> WKContentWorld {
     let content = WKContentWorld.world(name: world)
     let controller = view.configuration.userContentController

@@ -337,8 +337,9 @@ final class WebKitContextMenu {
       return (id, title)
     }
     guard !items.isEmpty else { return }
+    let document = WebKitPluginWorldHandler.document(of: tab)
     separate()
-    for item in items { add(WebKitMenuAction.item(item.title) { tab.emit("command", ["command": item.id, "text": text]) }) }
+    for item in items { add(WebKitMenuAction.item(item.title) { tab.emit("command", ["command": item.id, "text": text, "document": document]) }) }
   }
 
   func build() -> NSMenu {

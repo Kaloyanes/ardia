@@ -13,7 +13,7 @@ import { historyOf } from "../history/history";
 import { mediaCommand, useMedia } from "../media/media";
 import { openSplitPane } from "../splits/actions";
 import { notePlugin } from "../telemetry/pluginCounts";
-import { callerProfile } from "./channelData";
+import { callerProfile, pluginWindow } from "./channelData";
 import { manifestInProfile } from "./profileScope";
 import { currentPlugins } from "./store";
 
@@ -143,16 +143,19 @@ export function mediaMethod(c: Caller, m: PluginManifest, method: string, params
   if (!hasLevel(m.permissions, "media", controls ? "control" : "read")) return failure("refused", `${method} needs media: ${controls ? "control" : "read"}.`);
   const s = useBrowser.getState();
   const sessions = useMedia.getState().sessions;
+  const asked = params.profile !== undefined ? profileFor(c, m, params) : null;
+  if (asked && !asked.ok) return asked.body;
+  const reachable = (tabId: string) => tabInScope(c, m, tabId) && (!asked || s.tabs[tabId]?.profileId === asked.id);
   if (!controls) {
     const rows = Object.entries(sessions).flatMap(([tabId, session]) => {
-      if (!tabInScope(c, m, tabId)) return [];
+      if (!reachable(tabId)) return [];
       return [{ tabId, title: session.title ?? "", ...(session.artist ? { artist: session.artist } : {}), ...(session.album ? { album: session.album } : {}), playing: session.playbackState === "playing", muted: s.tabs[tabId]?.muted === true, ...(typeof session.duration === "number" ? { duration: session.duration } : {}) }];
     });
     return { result: { sessions: rows } };
   }
   const tabId = params.tabId;
   const action = typeof params.action === "string" && Object.hasOwn(MEDIA_ACTIONS, params.action) ? (params.action as keyof typeof MEDIA_ACTIONS) : null;
-  if (typeof tabId !== "string" || !tabInScope(c, m, tabId) || !sessions[tabId]) return failure("bad_request", "tabId isn't a tab playing media.");
+  if (typeof tabId !== "string" || !reachable(tabId) || !sessions[tabId]) return failure("bad_request", "tabId isn't a tab playing media.");
   if (!action) return failure("bad_request", `action is one of ${Object.keys(MEDIA_ACTIONS).join(", ")}.`);
   notePlugin("plugin_media_controls");
   if (action === "mute" || action === "unmute") useBrowser.getState().setMuted([tabId], action === "mute");
@@ -168,10 +171,9 @@ const v3Intents = (m: PluginManifest): readonly string[] => (m.v3.permissions?.s
 export function intentMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Body {
   if (!v3Intents(m).includes(method)) return failure("refused", `${method} needs ${method} in permissions.state.intents.`);
   const s = useBrowser.getState();
-  const windowId = lastFocusedEligibleWindow(s);
-  if (!windowId) return failure("no_window", "No window to use.");
-  const windowProfile = s.windows[windowId]?.profileId;
-  if (m.scope === "profile" && (!windowProfile || !manifestInProfile(currentPlugins(), c.name, windowProfile))) return failure("refused", "This plugin isn't on in the front window's profile.");
+  const target = pluginWindow(c.name, m, params);
+  if (!target.ok) return target.body;
+  const windowId = target.windowId;
   const url = typeof params.url === "string" ? pluginWebUrl(params.url) : undefined;
   if (url && "problem" in url) return failure("bad_request", `url ${url.problem}.`);
   if (method === "peek.open") {

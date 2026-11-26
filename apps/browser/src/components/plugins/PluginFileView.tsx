@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { updateLive, updateTab } from "../../state/tabs/actions";
 import { registerPageNavigator } from "../../state/tabs/navigation";
+import { routePluginPage } from "../../state/plugins/actions";
 import { PluginPageView } from "../ui";
 import { usePluginApproval, usePluginFolderId, usePluginNetwork, usePluginPageRun } from "../../state/plugins/hooks";
 import { usePluginThemeCss } from "./pluginThemeCss";
@@ -51,7 +52,14 @@ export function PluginFileView({ plugin, url, context = "", themed = true, style
       context={context}
       themeCss={themed ? themeCss : undefined}
       onTitleChange={tabId ? (e) => e.nativeEvent.title && updateTab(tabId, { title: e.nativeEvent.title.slice(0, 300) }) : undefined}
-      onNavigationChange={tabId ? (e) => updateLive(tabId, { canGoBack: e.nativeEvent.canGoBack, canGoForward: e.nativeEvent.canGoForward }) : undefined}
+      onNavigationChange={
+        tabId
+          ? (e) => {
+              updateLive(tabId, { canGoBack: e.nativeEvent.canGoBack, canGoForward: e.nativeEvent.canGoForward });
+              routePluginPage(tabId, plugin, e.nativeEvent.url);
+            }
+          : undefined
+      }
       onMessage={
         onMessage
           ? (e) => {
