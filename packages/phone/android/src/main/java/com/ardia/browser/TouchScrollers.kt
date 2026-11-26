@@ -49,13 +49,23 @@ object TouchScrollers {
   if (window.__ardiaTouchScroller || typeof ardiaPage === "undefined") return;
   window.__ardiaTouchScroller = true;
   const scrolls = (overflow) => /(auto|scroll|overlay)/.test(overflow);
+  let watchShadowRoot = null;
+  const parentAcrossShadow = (node) => {
+    if (node.parentElement) return node.parentElement;
+    const rootNode = node.getRootNode();
+    if (!rootNode || rootNode === document || !rootNode.host) return null;
+    if (watchShadowRoot) watchShadowRoot(rootNode);
+    return rootNode.host;
+  };
   window.addEventListener("touchstart", (event) => {
     if (event.touches.length !== 1) return;
     let left = false;
     let right = false;
     let up = false;
     const root = document.scrollingElement;
-    for (let node = event.target; node && node.nodeType === 1 && node !== root; node = node.parentElement) {
+    const touched = event.composedPath()[0] || event.target;
+    const start = touched && touched.nodeType === 1 ? touched : touched && touched.parentElement;
+    for (let node = start; node && node.nodeType === 1 && node !== root; node = parentAcrossShadow(node)) {
       const room = node === document.documentElement || node === document.body ? 0 : node.scrollWidth - node.clientWidth;
       const sideways = room > 1 && !(left && right);
       const upward = !up && node.scrollTop > 1;
@@ -93,7 +103,7 @@ object TouchScrollers {
     const pixels = Math.round(top * (window.devicePixelRatio || 1));
     try { ardiaPage.postMessage("$INNER_SCROLL_PREFIX" + seen.key + ":" + pixels + ":" + (atEnd ? "1" : "0")); } catch (error) {}
   };
-  document.addEventListener("scroll", (event) => {
+  const innerScrolled = (event) => {
     const node = event.target;
     if (!node || node.nodeType !== 1 || node === document.scrollingElement) return;
     if (node.clientHeight < window.innerHeight * 0.5 || node.clientWidth < window.innerWidth * 0.8) return;
@@ -102,6 +112,13 @@ object TouchScrollers {
     if (framing) return;
     framing = true;
     requestAnimationFrame(reportInnerScroll);
-  }, { capture: true, passive: true });
+  };
+  document.addEventListener("scroll", innerScrolled, { capture: true, passive: true });
+  const watchedShadowRoots = new WeakSet();
+  watchShadowRoot = (shadowRoot) => {
+    if (watchedShadowRoots.has(shadowRoot)) return;
+    watchedShadowRoots.add(shadowRoot);
+    shadowRoot.addEventListener("scroll", innerScrolled, { capture: true, passive: true });
+  };
 })();"""
 }
