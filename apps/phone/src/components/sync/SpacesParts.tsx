@@ -6,7 +6,7 @@ import { openRemote, opensRemotely } from "../../state/sync/actions";
 import { remoteTitle } from "../../state/sync/spaces";
 import type { PinnedTile, SyncedProfile } from "../../state/sync/store";
 import { copyLink, shareUrl } from "../../state/browse/tabMenus";
-import { capsule, controlRadius, Favicon, font, iconRoles, isSymbolName, screenReaderActions, space, spacesLayout, Symbol, useTheme, ActionButton, slopToReach, Tappable, usePressStyle, type MenuItem } from "../ui";
+import { capsule, Favicon, font, iconRoles, isSymbolName, screenReaderActions, space, spacesLayout, Symbol, useTheme, ActionButton, slopToReach, Tappable, usePressStyle, type MenuItem } from "../ui";
 import type { Point } from "../../lib/menuPlace";
 import { actionWords, destinationWords } from "../../lib/sharedWords";
 
@@ -186,7 +186,7 @@ const styles = StyleSheet.create({
   tileFace: { alignSelf: "stretch", borderRadius: spacesLayout.tileFaceRadius, alignItems: "center", justifyContent: "center" },
   switcherRow: { alignItems: "center", paddingTop: space.xs },
   switcherContent: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.xs },
-  switcher: { flexGrow: 0, maxWidth: "100%", height: 44, borderRadius: controlRadius(44), borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth },
+  switcher: { flexGrow: 0, maxWidth: "100%", height: 44, borderRadius: capsule(44), borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth },
   switch: { width: spacesLayout.switchWidth, height: spacesLayout.switchHeight, alignItems: "center", justifyContent: "center" },
   switchUnselected: { opacity: spacesLayout.switchUnselectedOpacity },
   dot: { width: spacesLayout.dot, height: spacesLayout.dot, borderRadius: capsule(spacesLayout.dot) },

@@ -20,9 +20,9 @@ import { Symbol } from "./Symbol";
 import type { SymbolName } from "./symbolPaths";
 import { useTheme } from "./theme";
 import { drawnMenuInk as menuInk, drawnMenuLook as menuLook } from "./menuTokens";
-import { font, ink, smoothCorners } from "./tokens";
+import { font, ink, smoothCorners, startLayout } from "./tokens";
 
-export type MenuAction = { label: string; icon?: SymbolName; systemImage?: string; destructive?: boolean; checked?: boolean; disabled?: boolean; onPress: () => void };
+export type MenuAction = { label: string; icon?: SymbolName; systemImage?: string; destructive?: boolean; checked?: boolean; disabled?: boolean; dot?: boolean; onPress: () => void };
 
 export type MenuSubmenu = { label: string; icon?: SymbolName; systemImage?: string; disabled?: boolean; children: MenuItem[] };
 
@@ -72,6 +72,8 @@ const SCRIM_ACCESSIBILITY = Platform.OS === "android" ? ({ accessible: false, im
 const CHECK_SHIFT = CHECK_TRAILING ? 0 : menuLook.labelInsetChecked - menuLook.labelInset;
 
 type Props = { items: MenuItem[]; place?: ViewStyle; placer?: MenuPlacer; onDismiss: (chosen?: boolean) => void; dimmed?: boolean; origin?: string; frost?: string | null; shown?: boolean; privately?: boolean };
+
+const menuDot = { width: startLayout.pageDot, height: startLayout.pageDot, borderRadius: startLayout.pageDot / 2 } as const;
 
 export function Menu(props: Props) {
   return useDesign() === "material" ? <MaterialMenu {...props} /> : <ClassicMenu {...props} />;
@@ -219,6 +221,7 @@ function MaterialMenu({ items, place, placer, onDismiss, origin = "top", shown =
                     <Text numberOfLines={1} style={[materialType.labelLarge, materialStyles.menuLabel, { color }]}>
                       {entry.label}
                     </Text>
+                    {entry.dot ? <View testID="menuItemDot" style={[menuDot, { backgroundColor: scheme.primary }]} /> : null}
                     {entry.checked ? <Symbol name="checkmark" size={materialSize.icon} color={scheme.primary} /> : null}
                   </Pressable>
                 );
@@ -387,6 +390,7 @@ function ClassicMenu({ items, place, placer, onDismiss, dimmed = false, origin =
         ) : null}
         {icon ? <MenuIcon name={icon} color={item.destructive ? color : paint.icon} left={iconLeft} /> : null}
         {label(item.label, color)}
+        {item.dot ? <View testID="menuItemDot" style={[menuDot, { backgroundColor: theme.spaceAccent }]} /> : null}
         {!leading && item.icon ? <Symbol name={item.icon} size={menuLook.iconSize} color={color} /> : null}
       </Pressable>
     );
