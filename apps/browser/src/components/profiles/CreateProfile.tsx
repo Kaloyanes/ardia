@@ -22,7 +22,7 @@ export function showCreateProfileSheets() {
       request.resolve(id);
     };
     showSettingsSheet(<CreateProfileSheet windowId={null} preset={request.preset} onDone={done} />);
-    noteSettingsProfiles("createShown");
+    noteSettingsProfiles("createShown", request.consent);
   };
   show();
   return useCreateProfileRequest.subscribe((s, prev) => {
