@@ -11,6 +11,8 @@ import { ardiaHost, reportHostError } from "./host";
 import { updateMenuItem } from "@platform/updater";
 import { hiddenAppMenuCommands, runAppMenuChoice } from "./appMenuActions";
 import "./linkShareSurface";
+import { refreshShareServices } from "./linkShare";
+import { beginAppMenuOpen, mayPublishAppMenu } from "./appMenuOpen";
 
 export async function openAppMenu(windowId: string, button: HTMLElement) {
   const state = useBrowser.getState();
@@ -18,9 +20,12 @@ export async function openAppMenu(windowId: string, button: HTMLElement) {
     shortcut.id,
     "key" in shortcut ? { key: shortcut.key, modifiers: shortcut.modifiers } : { key: "", modifiers: [] },
   ]));
+  const current = beginAppMenuOpen(windowId);
   const focusOrder = [windowId, ...state.ui.focusOrder.filter((id) => id !== windowId)];
   const editTarget = currentEditTarget();
   const updates = ardiaHost ? await updateMenuItem(ardiaHost).catch(() => null) : null;
+  await refreshShareServices();
+  if (!mayPublishAppMenu(current, button)) return;
   const items = appMenuItems(menuState({ ...state, ui: { ...state.ui, focusOrder } }), shortcuts, hiddenAppMenuCommands(), { fullScreen: !!state.windows[windowId]?.fullScreen, edit: currentEditMenu(windowId, editTarget), updates });
   const { left, bottom } = button.getBoundingClientRect();
   const openedByPointer = !button.matches(":focus-visible");

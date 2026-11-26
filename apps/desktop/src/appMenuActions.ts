@@ -10,6 +10,7 @@ import { videoTourUrl } from "../../browser/src/state/onboarding/tour";
 import { showToast } from "../../browser/src/state/app/toasts";
 import { checkForUpdates, engineInfo, systemInfo } from "../../browser/src/platform/app";
 import { runMenuUpdate } from "@platform/updater";
+import { isMoreShareChoice, openSharingSettings } from "./hostShare";
 
 export type AppMenuChoice = NonNullable<ReturnType<typeof appMenuChoice>>;
 
@@ -35,6 +36,7 @@ export function runAppMenuChoice(windowId: string, choice: AppMenuChoice | null,
     return void (update ?? checkForUpdates()).catch(reportHostError);
   }
   if (choice.kind === "edit") return runEdit(windowId, choice.action, editTarget).catch(reportHostError);
+  if (choice.kind === "command" && isMoreShareChoice(choice.command, choice.arg)) return void openSharingSettings(ardiaHost).catch(reportHostError);
   if (choice.kind === "command") return emitCommand(appMenuCommandEvent(choice, windowId, consentEpoch()));
   if (choice.action === "close") return void closeWindow(windowId).catch(reportHostError);
   if (choice.action === "minimizeAll") return void minimizeAllWindows(useBrowser.getState().windowOrder);

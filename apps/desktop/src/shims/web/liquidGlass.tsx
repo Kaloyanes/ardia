@@ -1,7 +1,7 @@
 /* MIT License - Copyright (c) 2026 Bilal Abdullah Gürşen. Adapted from glass-layer.tsx of https://github.com/bilalgursen/liquid-glass; see third_party/liquid-glass/LICENSE. */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { drawAround, drawDom } from "../../../../../third_party/liquid-glass/dom-snapshot";
-import { DESIGN_HEIGHT, MIRROR, clamp, getGlassEngine, rgbCss, surfaceColorOf, type GlassEngine, type GlassLens, type GlassView, type Rgb, type Rgba } from "../../../../../third_party/liquid-glass/engine";
+import { DESIGN_HEIGHT, MIRROR, clamp, getGlassEngine, onGlassEngineChange, rgbCss, surfaceColorOf, type GlassEngine, type GlassLens, type GlassView, type Rgb, type Rgba } from "../../../../../third_party/liquid-glass/engine";
 
 export type LiquidGlassTheme = "light" | "dark";
 export type LiquidGlassStyle = "regular" | "clear";
@@ -66,25 +66,37 @@ const OWN_CONTROL_SLACK = 2;
 const layer: CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
 const canvasStyle: CSSProperties = { position: "absolute", pointerEvents: "none", maxWidth: "none", width: 0, height: 0 };
 
-const views = new Set<GlassView>();
+export type GlassMount = { invalidate: () => void; repaint: () => void; reattach: () => void; stop: () => void; view: GlassView };
+
+const mounted = new Set<GlassMount>();
 let watching = false;
 
-function repaintAll() {
-  for (const view of views) view.repaint = true;
-  getGlassEngine()?.wake();
+export function invalidateLiquidGlass() {
+  for (const glass of mounted) glass.invalidate();
+}
+
+function repaintLiquidGlass() {
+  for (const glass of mounted) glass.repaint();
 }
 
 function watchPage() {
   if (watching) return;
   watching = true;
   Object.assign(MIRROR, RIM_MIRROR);
-  document.addEventListener("transitionend", repaintAll, { passive: true, capture: true });
-  document.addEventListener("animationend", repaintAll, { passive: true, capture: true });
-  window.addEventListener("scroll", repaintAll, { passive: true, capture: true });
+  document.addEventListener("transitionend", invalidateLiquidGlass, { passive: true, capture: true });
+  document.addEventListener("animationend", invalidateLiquidGlass, { passive: true, capture: true });
+  window.addEventListener("scroll", repaintLiquidGlass, { passive: true, capture: true });
+  onGlassEngineChange((change) => {
+    if (change === "restored") for (const glass of mounted) glass.reattach();
+  });
 }
 
 function rgb(color: Rgba): Rgb {
   return [color[0], color[1], color[2]];
+}
+
+export function backdropKeyOf(backdrop: unknown, dark: boolean) {
+  return `${dark ? "dark" : "light"}|${JSON.stringify(backdrop ?? null)}`;
 }
 
 export function tintedGlass(base: Rgb, frost: number, tint: Rgba | null): { color: Rgb; frost: number } {
@@ -119,7 +131,10 @@ function fixedBehind(el: Element, own: Element) {
 
 type Look = { optics: GlassOptics; tint: string | undefined };
 
-function mountGlass(engine: GlassEngine, host: HTMLDivElement, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, look: { current: Look }, onReady: (ready: boolean) => void) {
+export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, look: { current: Look }, onReady: (ready: boolean) => void, acquire: () => GlassEngine | null = getGlassEngine): GlassMount | null {
+  const first = acquire();
+  if (!first) return null;
+  let engine: GlassEngine = first;
   let w = 0;
   let h = 0;
   let corner: number | null = null;
@@ -135,6 +150,10 @@ function mountGlass(engine: GlassEngine, host: HTMLDivElement, canvas: HTMLCanva
   const dirty = () => {
     view.dirty = true;
     engine.wake();
+  };
+  const invalidate = () => {
+    page.stale = true;
+    dirty();
   };
   const stale = () => {
     page.stale = true;
@@ -280,18 +299,31 @@ function mountGlass(engine: GlassEngine, host: HTMLDivElement, canvas: HTMLCanva
   const ro = new ResizeObserver(dirty);
   ro.observe(host);
   watchPage();
-  views.add(view);
   engine.add(view);
-  return {
-    dirty,
+  const glass: GlassMount = {
+    view,
+    invalidate,
+    repaint: () => {
+      view.repaint = true;
+      engine.wake();
+    },
+    reattach: () => {
+      const next = acquire();
+      if (!next || next === engine) return;
+      engine = next;
+      next.add(view);
+      invalidate();
+    },
     stop: () => {
-      views.delete(view);
+      mounted.delete(glass);
       engine.remove(view);
       io.disconnect();
       ro.disconnect();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     },
   };
+  mounted.add(glass);
+  return glass;
 }
 
 export type LiquidGlassLayerProps = {
@@ -302,33 +334,34 @@ export type LiquidGlassLayerProps = {
   tint?: string;
   opacity?: number;
   enabled: boolean;
+  backdropKey?: string;
   fallback: ReactNode;
   hostRef?: (node: HTMLDivElement | null) => void;
   hostProps?: Record<string, string>;
 };
 
-export function LiquidGlassLayer({ theme, glassStyle, cornerRadius, radius, tint, opacity, enabled, fallback, hostRef, hostProps }: LiquidGlassLayerProps) {
+export function LiquidGlassLayer({ theme, glassStyle, cornerRadius, radius, tint, opacity, enabled, backdropKey, fallback, hostRef, hostProps }: LiquidGlassLayerProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const [ready, setReady] = useState(false);
   const look = useRef<Look>({ optics: GLASS_OPTICS[theme][glassStyle], tint });
   look.current = { optics: GLASS_OPTICS[theme][glassStyle], tint };
-  const poke = useRef<(() => void) | null>(null);
+  const glass = useRef<GlassMount | null>(null);
   useLayoutEffect(() => {
     const node = host.current;
     const surface = canvas.current;
-    const ctx = surface?.getContext("2d");
-    const engine = enabled ? getGlassEngine() : null;
-    if (!node || !surface || !ctx || !engine) return;
-    const glass = mountGlass(engine, node, surface, ctx, look, setReady);
-    poke.current = glass.dirty;
+    const ctx = enabled ? surface?.getContext("2d") : null;
+    if (!node || !surface || !ctx) return;
+    const mount = mountGlass(node, surface, ctx, look, setReady);
+    if (!mount) return;
+    glass.current = mount;
     return () => {
-      glass.stop();
-      poke.current = null;
+      mount.stop();
+      glass.current = null;
       setReady(false);
     };
   }, [enabled]);
-  useEffect(() => poke.current?.(), [theme, glassStyle, cornerRadius, tint]);
+  useEffect(() => glass.current?.invalidate(), [theme, glassStyle, cornerRadius, tint, backdropKey]);
   const shown = enabled && ready;
   return (
     <div

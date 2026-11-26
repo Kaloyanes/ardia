@@ -62,7 +62,13 @@ class PageCommands;
 class PageEvents;
 class PipPresenter;
 class PopoverHost;
+class ScrollGestures;
 class SystemServices;
+
+namespace shared_folders {
+class Watcher;
+}
+
 class ShellBridge;
 class ShellHostView;
 
@@ -227,6 +233,9 @@ class ShellHostView : public views::View,
   std::optional<std::string> PopoverBootstrapJson(
       const content::WebContents* contents) const;
   PopoverHost* popovers() const { return popovers_.get(); }
+  std::unique_ptr<shared_folders::Watcher>& shared_folder_watcher() {
+    return shared_folder_watcher_;
+  }
   SystemServices* system() const { return system_.get(); }
   ExtensionViews* extension_views() const { return extension_views_.get(); }
   PipPresenter* pip() const { return pip_.get(); }
@@ -261,6 +270,7 @@ class ShellHostView : public views::View,
   friend class ExtensionViews;
   friend class PageBinding;
   friend class PipPresenter;
+  friend class ScrollGestures;
   friend class SystemServices;
 
   void LayoutOverlay();
@@ -370,6 +380,7 @@ class ShellHostView : public views::View,
   std::map<int, std::unique_ptr<PageBinding>> bindings_;
   std::unique_ptr<GlassRegions> glass_;
   std::unique_ptr<PopoverHost> popovers_;
+  std::unique_ptr<shared_folders::Watcher> shared_folder_watcher_;
   std::unique_ptr<SystemServices> system_;
   std::unique_ptr<ExtensionViews> extension_views_;
   std::unique_ptr<PipPresenter> pip_;
@@ -391,6 +402,7 @@ class ShellHostView : public views::View,
 
   std::unique_ptr<DialogSheets> dialogs_;
   std::unique_ptr<WindowEvents> window_events_;
+  std::unique_ptr<ScrollGestures> scroll_gestures_;
   window_policy::CloseBook close_;
   std::uint64_t quit_generation_ = 0;
   std::map<std::string, std::uint64_t> close_dialogs_;

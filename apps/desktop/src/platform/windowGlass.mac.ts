@@ -1,5 +1,5 @@
 import { ardiaHost, hostSupports, invokeHost, reportHostError } from "../host";
-import { animationMovesBackdrop, BACKDROP_METHOD, createMacBackdrops, measureBackdrop, type AnimationLike } from "./mac/macGlass.ts";
+import { animationMovesBackdrop, BACKDROP_METHOD, createMacBackdrops, measureBackdrop, windowBackdropMaterial, type AnimationLike } from "./mac/macGlass.ts";
 
 const MOTION_EVENTS = ["transitionrun", "transitionend", "transitioncancel", "animationstart", "animationend", "animationcancel", "scroll"] as const;
 
@@ -40,5 +40,5 @@ export function watchBehindWindowGlass(element: HTMLElement): () => void {
     watchMotion,
     animating: runningAnimations,
   });
-  return backdrops.add(element);
+  return backdrops.add(element, windowBackdropMaterial((method) => hostSupports(method)));
 }

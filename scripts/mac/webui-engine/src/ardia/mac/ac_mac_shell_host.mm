@@ -19,6 +19,9 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_popover.h"
+#include "ardia/mac/ac_mac_share.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/ac_mac_window.h"
 #include "ardia/mac/ac_mac_window_policy.h"
@@ -344,6 +347,9 @@ PageBinding::PageBinding(ShellHostView* owner,
 }
 
 PageBinding::~PageBinding() {
+  if (owner_) {
+    share::RetireBinding(owner_->window_id(), id_);
+  }
   commands_.reset();
   events_.reset();
   if (viewport && owner_) {
@@ -582,6 +588,8 @@ void ShellHostView::DetachBrowser() {
   }
   bindings_.clear();
   StopWatchingWindowDrag();
+  shared_folder_watcher_.reset();
+  share::Retire(window_id_);
   StopLifecycle();
   popovers_.reset();
   glass_.reset();
@@ -716,6 +724,9 @@ void ShellHostView::BindingGone(PageBinding* binding) {
   if (pip_) {
     pip_->CheckSource();
   }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
+  }
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<ShellHostView> host, int id) {
@@ -830,6 +841,9 @@ void ShellHostView::Restack() {
 }
 
 void ShellHostView::ReattachViewports() {
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
+  }
   std::set<content::WebContents*> taken;
   for (BrowserWindowInterface* member : Members()) {
     BrowserView* view = BrowserView::GetBrowserViewForBrowser(member);
@@ -933,6 +947,8 @@ void ShellHostView::RetireRenderer() {
   handler_ = nullptr;
   renderer_document_ = content::WeakDocumentPtr();
   ++renderer_generation_;
+  shared_folder_watcher_.reset();
+  share::Retire(window_id_);
   SetMenuKeysSuppressed(window_id_, false);
   if (!had_document) {
     return;
@@ -946,6 +962,9 @@ void ShellHostView::RetireRenderer() {
       binding->viewport->SetVisible(false);
       binding->viewport->SetWebContents(nullptr);
     }
+  }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
   }
   pass_.clear();
   unclaimed_listener_.reset();
@@ -1035,6 +1054,7 @@ void ShellHostView::ReplaceBinding(content::WebContents* old_contents,
     return;
   }
   base::DictValue delivery = binding->Envelope("pageLifecycle");
+  share::RetireBinding(window_id_, old_id);
   binding->Rebind(contents);
   binding->binding_generation = *generation;
   if (id != old_id) {
@@ -1140,6 +1160,7 @@ void ShellHostView::CreateTabIn(base::DictValue args,
   }
   if (plan == shell_policy::CreatePlan::kReclaim) {
     existing->commands()->CancelEvaluations();
+    share::RetireBinding(window_id_, existing->id());
     existing->claim = claim;
     existing->renderer_generation = renderer_generation_;
     ReattachViewports();
@@ -1331,11 +1352,15 @@ void ShellHostView::ReleaseTab(const base::DictValue& args, Done done) {
   }
   binding->claim.clear();
   binding->commands()->CancelEvaluations();
+  share::RetireBinding(window_id_, binding->id());
   binding->visible = false;
   binding->presented = false;
   if (binding->viewport) {
     binding->viewport->SetVisible(false);
     binding->viewport->SetWebContents(nullptr);
+  }
+  if (scroll_gestures_) {
+    scroll_gestures_->Revalidate();
   }
   UpdateGlassSurface();
   std::move(done).Run(true, base::Value());

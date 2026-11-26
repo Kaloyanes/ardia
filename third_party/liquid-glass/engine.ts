@@ -1610,7 +1610,7 @@ function createEngine(): GlassEngine | null {
   // Pointer light (LIGHT). `beam` is the pointer that lights: where it is, what it is over
   // and which pointer is held (`id`, -1 = none).
   // Each lit view keeps its own light: how bright (a spring), where on the glass, and why.
-  const beam = { x: 0, y: 0, over: null as EventTarget | null, id: -1 }
+  const beam = { x: 0, y: 0, over: null as EventTarget | null, id: -1, armed: false }
   type Lit = {
     glow: Spring
     /** The light's centre, relative to the lens centre (CSS px). */
@@ -1633,6 +1633,7 @@ function createEngine(): GlassEngine | null {
   }
   const lights = new Map<GlassView, Lit>()
   let relit = false
+  let cursorWanted = false
   const hostOf = (v: GlassView) => v.canvas.parentElement
   /** The pointer is on this glass: inside its body, and on its host (not on something lying over it). */
   const onBlob = (s: Lit) => !!s.blob && Math.abs(beam.x - (s.sx - s.bodyX + s.blob.x)) <= s.blob.hx && Math.abs(beam.y - (s.sy + s.blob.y)) <= s.blob.hy
@@ -1843,6 +1844,7 @@ function createEngine(): GlassEngine | null {
 
   /** The way the cursor light comes from for a lens (uLightDir, as an angle), and how much the rim leans to it (uLightMix). */
   const aimOf = (m: GlassLens) => {
+    if (m.cursorLight) cursorWanted = true
     const dx = pointer.x - m.screenX
     const dy = pointer.y - m.screenY
     const d = Math.hypot(dx, dy)
@@ -2020,7 +2022,9 @@ function createEngine(): GlassEngine | null {
     return { changed, regrouped }
   }
 
+  const failed = new WeakSet<GlassView>()
   const draw = (v: GlassView, refresh: boolean, repaint: boolean, read?: GlassLens | null) => {
+    if (failed.has(v)) return
     const m = read !== undefined ? read : v.lens(refresh)
     let on = shown.get(v)
     if (!on) shown.set(v, (on = { sent: [], box: '' }))
@@ -2259,7 +2263,7 @@ function createEngine(): GlassEngine | null {
       lit.blob = blob ? { x: blob.x, y: blob.y, hx: blob.hx, hy: blob.hy } : null
       // A held pointer lights the glass it is on, or comes onto (a lens arriving under it), until it lets go.
       // The light stays at the point of the glass it began at: it does not follow the pointer.
-      const press = lit.press || (beam.id !== -1 && under(v, lit) && innermost(v))
+      const press = lit.press || (beam.id !== -1 && beam.armed && under(v, lit) && innermost(v))
       if (press !== lit.press) {
         relit = true
         if (press) {
@@ -2294,6 +2298,7 @@ function createEngine(): GlassEngine | null {
       glCanvas.width = Math.max(glCanvas.width, devW)
       glCanvas.height = Math.max(glCanvas.height, devH)
     }
+    try {
     gl.viewport(0, 0, devW, devH)
     // What lies beneath, what rides on top and what surrounds the glass: the pictures taken on
     // this frame are uploaded, the others are the ones this view already has.
@@ -2338,6 +2343,12 @@ function createEngine(): GlassEngine | null {
     v.ctx.clearRect(0, 0, devW, devH)
     v.ctx.drawImage(glCanvas, 0, glCanvas.height - devH, devW, devH, 0, 0, devW, devH)
     v.drawn?.()
+    } catch {
+      failed.add(v)
+      on.sent.length = 0
+      v.ctx.clearRect(0, 0, v.canvas.width, v.canvas.height)
+      v.lost()
+    }
   }
 
   let raf = 0
@@ -2407,6 +2418,7 @@ function createEngine(): GlassEngine | null {
     // A draw found the pointer on (or off) some glass: its light starts on the next frame.
     if (relit) running = true
     relit = false
+    beam.armed = false
     // Pictures of the surroundings that waited while something moved or was lit (or were taken
     // then, having waited as long as they may) are taken once all is still, at once: the glass
     // that takes one is drawn again on the next frame.
@@ -2436,10 +2448,15 @@ function createEngine(): GlassEngine | null {
     wake()
   }
 
-  window.addEventListener(
+  const disposers: (() => void)[] = []
+  const listen = (target: EventTarget, type: string, handler: (event: any) => void, options?: AddEventListenerOptions | boolean) => {
+    target.addEventListener(type, handler, options)
+    disposers.push(() => target.removeEventListener(type, handler, options))
+  }
+  listen(window,
     'pointermove',
     (e) => {
-      if (e.pointerType !== 'mouse') return
+      if (e.pointerType !== 'mouse' || !cursorWanted) return
       pointer.x = e.clientX
       pointer.y = e.clientY
       pointer.active = true
@@ -2448,14 +2465,15 @@ function createEngine(): GlassEngine | null {
     },
     { passive: true },
   )
-  document.documentElement.addEventListener('pointerleave', () => {
+  listen(document.documentElement, 'pointerleave', () => {
+    if (!pointer.active) return
     pointer.active = false
     pointer.moved = true
     wake()
   })
   // Pull (PULL): a press holds the innermost glass under it that asks to be pulled, and it is
   // followed over the whole window until it lets go.
-  window.addEventListener(
+  listen(window,
     'pointerdown',
     (e) => {
       if (!PULL.on || e.button !== 0 || reduced.matches || !(e.target instanceof Node) || HANDED_ON.has(e)) return
@@ -2485,7 +2503,7 @@ function createEngine(): GlassEngine | null {
     },
     { passive: true, capture: true },
   )
-  window.addEventListener(
+  listen(window,
     'pointermove',
     (e) => {
       for (const p of pulls.values()) {
@@ -2504,15 +2522,15 @@ function createEngine(): GlassEngine | null {
       wake()
     }
   }
-  window.addEventListener('pointerup', unhold, { passive: true, capture: true })
-  window.addEventListener('pointercancel', unhold, { passive: true, capture: true })
+  listen(window, 'pointerup', unhold, { passive: true, capture: true })
+  listen(window, 'pointercancel', unhold, { passive: true, capture: true })
   // Pointer light (LIGHT): where the lighting pointer is, what it is over and whether it is held.
   // Which glass that lights is decided when each glass is drawn, so every change asks for a frame.
   const lightMoved = () => {
     pointer.moved = true
     wake()
   }
-  window.addEventListener(
+  listen(window,
     'pointermove',
     (e) => {
       // Only the held pointer counts (a lens may come under it): one that moves over the page without pressing asks for nothing.
@@ -2524,7 +2542,7 @@ function createEngine(): GlassEngine | null {
     },
     { passive: true, capture: true },
   )
-  window.addEventListener(
+  listen(window,
     'pointerdown',
     (e) => {
       if (!LIGHT.on || e.button !== 0 || HANDED_ON.has(e)) return
@@ -2532,6 +2550,7 @@ function createEngine(): GlassEngine | null {
       beam.y = e.clientY
       beam.over = e.target
       beam.id = e.pointerId
+      beam.armed = true
       lightMoved()
     },
     { passive: true, capture: true },
@@ -2542,11 +2561,11 @@ function createEngine(): GlassEngine | null {
     for (const s of lights.values()) s.press = false
     lightMoved()
   }
-  window.addEventListener('pointerup', lift, { passive: true, capture: true })
-  window.addEventListener('pointercancel', lift, { passive: true, capture: true })
+  listen(window, 'pointerup', lift, { passive: true, capture: true })
+  listen(window, 'pointercancel', lift, { passive: true, capture: true })
   // A button's flash (GLOW): a press lights the innermost button under it where it lands, and
   // holds it until that pointer lets go; Space or Enter lights the focused button's centre.
-  window.addEventListener(
+  listen(window,
     'pointerdown',
     (e) => {
       if (e.button !== 0 || HANDED_ON.has(e) || !(e.target instanceof Node)) return
@@ -2576,8 +2595,8 @@ function createEngine(): GlassEngine | null {
       wake()
     }
   }
-  window.addEventListener('pointerup', unflash, { passive: true, capture: true })
-  window.addEventListener('pointercancel', unflash, { passive: true, capture: true })
+  listen(window, 'pointerup', unflash, { passive: true, capture: true })
+  listen(window, 'pointercancel', unflash, { passive: true, capture: true })
   const flashKey = (e: KeyboardEvent) => {
     if (e.key !== ' ' && e.key !== 'Enter') return
     const down = e.type === 'keydown'
@@ -2612,9 +2631,9 @@ function createEngine(): GlassEngine | null {
     }
     wake()
   }
-  window.addEventListener('keydown', flashKey, true)
-  window.addEventListener('keyup', flashKey, true)
-  window.addEventListener(
+  listen(window, 'keydown', flashKey, true)
+  listen(window, 'keyup', flashKey, true)
+  listen(window,
     'focusout',
     () => {
       for (const f of flashes.values()) f.key = false
@@ -2638,9 +2657,9 @@ function createEngine(): GlassEngine | null {
     }
     wake()
   }
-  window.addEventListener('keydown', key, true)
-  window.addEventListener('keyup', key, true)
-  window.addEventListener(
+  listen(window, 'keydown', key, true)
+  listen(window, 'keyup', key, true)
+  listen(window,
     'focusout',
     () => {
       for (const s of lights.values()) s.key = false
@@ -2649,16 +2668,23 @@ function createEngine(): GlassEngine | null {
     true,
   )
   // Theme switches (class="dark", data-theme, color-scheme) re-read every colour.
-  new MutationObserver(invalidateAll).observe(document.documentElement, {
+  const themeWatch = new MutationObserver(invalidateAll)
+  disposers.push(() => themeWatch.disconnect())
+  themeWatch.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ['class', 'data-theme', 'style'],
   })
-  new MutationObserver(invalidateAll).observe(document.body, { attributes: true, attributeFilter: ['data-theme'], subtree: true })
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', invalidateAll)
+  const bodyThemeWatch = new MutationObserver(invalidateAll)
+  disposers.push(() => bodyThemeWatch.disconnect())
+  bodyThemeWatch.observe(document.body, { attributes: true, attributeFilter: ['data-theme'], subtree: true })
+  listen(window.matchMedia('(prefers-color-scheme: dark)'), 'change', invalidateAll)
   // A radial bend scales with the viewport.
-  window.addEventListener('resize', invalidateAll, { passive: true })
-  glCanvas.addEventListener('webglcontextlost', () => {
+  listen(window, 'resize', invalidateAll, { passive: true })
+  listen(glCanvas, 'webglcontextlost', (event: Event) => {
+    event.preventDefault()
     dead = true
+    if (raf) cancelAnimationFrame(raf)
+    raf = 0
     for (const v of views) {
       v.lost()
       v.ctx.clearRect(0, 0, v.canvas.width, v.canvas.height)
@@ -2671,10 +2697,13 @@ function createEngine(): GlassEngine | null {
       if (host && p.scaled) host.style.scale = ''
     }
     pulls.clear()
-    engine = undefined
+    if (engine === self) engine = undefined
+    for (const off of disposers.splice(0)) off()
+    glCanvas.addEventListener('webglcontextrestored', () => announceEngine('restored'), { once: true })
+    announceEngine('lost')
   })
 
-  return {
+  const self: GlassEngine = {
     add: (v) => {
       views.add(v)
       meltsChanged = true
@@ -2715,9 +2744,20 @@ function createEngine(): GlassEngine | null {
     wake,
     resolveColor,
   }
+  return self
 }
 
 let engine: GlassEngine | null | undefined
+
+export type GlassEngineChange = 'lost' | 'restored'
+const engineWatchers = new Set<(change: GlassEngineChange) => void>()
+export function onGlassEngineChange(watcher: (change: GlassEngineChange) => void) {
+  engineWatchers.add(watcher)
+  return () => void engineWatchers.delete(watcher)
+}
+function announceEngine(change: GlassEngineChange) {
+  for (const watcher of [...engineWatchers]) watcher(change)
+}
 
 /** The shared engine (created on first use, client only). `null` = no WebGL2: use the CSS look. */
 export function getGlassEngine(): GlassEngine | null {

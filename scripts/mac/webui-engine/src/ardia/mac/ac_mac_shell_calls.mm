@@ -19,7 +19,10 @@
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
 #include "ardia/mac/ac_mac_popover_policy.h"
+#include "ardia/mac/ac_mac_share.h"
+#include "ardia/mac/ac_mac_shared_folders.h"
 #include "ardia/mac/ac_mac_shell_policy.h"
+#include "ardia/mac/ac_mac_swipe.h"
 #include "ardia/mac/ac_mac_system.h"
 #include "ardia/mac/generated/ac_desktop_routes.h"
 #include "ardia/mac/generated/ac_desktop_window_commands.h"
@@ -74,6 +77,7 @@ constexpr std::string_view kCapabilities[] = {
     "shell.glassRegions",
     "shell.glassBehindWindow",
     "shell.backdropRegions",
+    "shell.backdropRegions.windowTreatment",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
@@ -85,6 +89,7 @@ constexpr std::string_view kCapabilities[] = {
     "ArdiaShell.quit",
     "ArdiaShell.startWindowMove",
     "ArdiaShell.captionDoubleClick",
+    "ArdiaShell.startDictation",
     ardia::desktop_commands::kEditCapability,
     "ArdiaShell.openWindow",
     "ArdiaShell.focusWindow",
@@ -289,11 +294,14 @@ std::string ShellHostView::BootstrapJson() const {
   SystemServices::AppendCapabilities(capabilities);
   ExtensionViews::AppendCapabilities(capabilities);
   PipPresenter::AppendCapabilities(capabilities);
+  ScrollGestures::AppendCapabilities(capabilities);
   if (popover::kPopoverRendererShipped) {
     for (std::string_view capability : kPopoverCapabilities) {
       capabilities.Append(capability);
     }
   }
+  share::AppendCapabilities(capabilities);
+  shared_folders::AppendCapabilities(capabilities);
   for (std::string_view capability : LifecycleCapabilities()) {
     capabilities.Append(capability);
   }
@@ -338,6 +346,10 @@ std::optional<std::string> BootstrapScript(const std::string& bootstrap_json,
     bootstrap->GetDict().Set("session", std::move(*session));
   }
   bootstrap->GetDict().Set("documents", ReadDocuments());
+  bootstrap->GetDict()
+      .EnsureDict("nativeModules")
+      ->EnsureDict("ArdiaSharedFolders")
+      ->Set("location", shared_folders::Location());
   std::optional<std::string> json = base::WriteJson(*bootstrap);
   std::optional<std::string> literal = json ? base::WriteJson(base::Value(*json))
                                             : std::nullopt;
@@ -363,6 +375,12 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "tab.create") {
     return CreateTab(args, std::move(done));
   }
+  if (share::Handles(method)) {
+    return share::Invoke(*this, method, values, std::move(done));
+  }
+  if (shared_folders::Handles(method)) {
+    return shared_folders::Invoke(*this, method, values, std::move(done));
+  }
   if (method == "tab.viewport") {
     return SetViewport(args, std::move(done));
   }
@@ -386,6 +404,9 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (pip_ && PipPresenter::Handles(method)) {
     return pip_->Invoke(method, args, std::move(done));
+  }
+  if (scroll_gestures_ && ScrollGestures::Handles(method)) {
+    return scroll_gestures_->Invoke(method, args, std::move(done));
   }
   if (method == "shell.inputRegions") {
     return SetInputRegions(args, std::move(done));
@@ -584,6 +605,16 @@ void ShellHostView::Invoke(const std::string& method,
             },
             std::move(done)));
     return;
+  }
+  if (method == "ArdiaShell.startDictation") {
+    if (BackgroundInstance()) {
+      Trace("dictation (background run, not started)");
+    } else {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp sendAction:@selector(startDictation:) to:nil from:nil];
+      });
+    }
+    return Reply(std::move(done), base::Value(true));
   }
   if (method == "ArdiaShell.focusWindow") {
     ShellHostView* target =

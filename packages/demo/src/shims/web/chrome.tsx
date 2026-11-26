@@ -4,7 +4,7 @@ import { useBrowser } from "../../../../../apps/browser/src/state/browser/store"
 import { useScopedTheme } from "../../../../../apps/browser/src/components/ui/theme";
 import { materialFill } from "./materials";
 import type { MiddleClickEvent } from "./MouseArea";
-import { LiquidGlassLayer } from "./liquidGlass";
+import { backdropKeyOf, LiquidGlassLayer } from "./liquidGlass";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;
@@ -225,6 +225,7 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   const g = GLASS[theme];
   const clear = glassStyle === "clear";
   const filter = clear ? glassFilter(1, (1 + g.slope) / 2, g.offset / 2) : glassFilter(g.saturate, g.slope, g.offset);
+  const backdropKey = backdropKeyOf(useScopedTheme()?.backdrop, theme === "dark");
   const host = useRef<HTMLDivElement | null>(null);
   const [scrolled, setScrolled] = useState<boolean | null>(null);
   useLayoutEffect(() => setScrolled(inScrollView(host.current)), []);
@@ -263,6 +264,7 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
         tint={tint}
         opacity={opacity === undefined ? undefined : Number(opacity)}
         enabled={scrolled === false}
+        backdropKey={backdropKey}
         fallback={fallback}
       />
       {children}

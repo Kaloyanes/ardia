@@ -110,6 +110,42 @@ that branch). It is a development tool and never runs in a release. Like Windows
     those menus.
 `shell.showContextMenu` pops an `NSMenu`;
   with `ARDIA_BACKGROUND=1` it is logged instead. The menu model and its validation are in `ac_mac_menu_model.h`.
+- **Share** (`ac_mac_share.mm`, rules in `ac_mac_share_policy.h`), as `packages/shell/ios/SharePicker.swift` does.
+  - `ArdiaApp.share` and `ArdiaApp.shareText` open `NSSharingServicePicker` beside their anchor (CSS pixels in the
+    shell, scaled by its zoom), or centred under the toolbar without one. They settle when the picker closes.
+  - `ArdiaApp.shareServices` lists the system's services (not Mail or the Reading List, as on the Mac app), so
+    `share: true` submenus show them and More…, which opens `ArdiaApp.openSharingSettings`.
+    `ArdiaApp.shareVia` performs one by title. Copy Link and Email Link stay in `apps/desktop` (`hostShare.ts`).
+  - The menu bar's File › Share lists the same services, then Copy Link, Email Link and More… (the `shareServices`
+    role, filled each time the submenu opens). The in-window app menu adds them once the host lists them.
+  - Each share has its own delegate, source window, file and completion. Picker callbacks are matched by sender,
+    and a shell reload or window close closes that window's pickers.
+  - Only http(s) links, images this instance issued to the same window, and directories (Share Folder…) are
+    shared. An image must be a regular file in this instance's own `<pid>-<nonce>` folder, issued while the page's
+    binding and shell generation were the ones that asked, and it counts against the 64-image cap until its file is
+    deleted. Each instance locks `.lock` with `flock` inside a hidden staging folder and only then renames it
+    into place; a later instance deletes only recognized folders whose lock it can take (holding it until the
+    delete finishes), or that have no lock and whose process is gone, never anything else. An image reserves its slot
+    before its bytes are copied; a write for a retired window or a released, closed or rebound tab, or before
+    the instance folder is claimed, is skipped, and the write's reply alone cleans it up. A removed image stops
+    being shareable at once but keeps its slot until the unlink is done: at most five tries (four retries,
+    500 ms doubling), then the slot is given back. A share whose service the user already
+    chose keeps its file through a window close until the service finishes. The Share… items use command
+    ids 54100–54109, outside Chromium's custom ranges. Every picker and service callback is matched by sender. File › Share always ends with More…, which opens System Settings › Sharing directly on any page, and the in-window menu waits up to 250 ms for a fresh service list; a newer click or a detached
+    button cancels an older open, and a services request that stalls for 5 s is replaced.
+  - Page context menus on bound pages get Share…, Share Link…, Share Image… and the rest, placed as ArdiaCore
+    places them, through a dev-only `RenderViewContextMenuObserver` hook in
+    `render_view_context_menu_base.cc`. Each menu owns its observer until its destructor runs. A choice goes to the shell as a page `command` event, so `shareFromPage`
+    cleans the link before it reaches the picker. A shared image is a temporary file the host deletes when the
+    share ends, or when the window's shell reloads or closes.
+  - With `ARDIA_BACKGROUND=1` the picker, services and settings are logged to `activation.log` and never shown.
+- **Shared folders** (`ac_mac_shared_folders.mm`, rules in `ac_mac_shared_folders_policy.h`) port
+  `SharedFolderDirectory.swift` call for call: `ArdiaSharedFolders.read`, `apply`, `resolve`, `discard`, `create`,
+  `watch` (FSEvents, one watcher per window, `onChange {paths}`) and `revealFolder`; Add Shared Folder… picks its
+  folder through the host's `ArdiaShell.pickFolder`. `location` comes in the bootstrap, worked out off the UI thread. Writes use `openat` with
+  `O_NOFOLLOW`, `renameatx_np(RENAME_EXCL)` and `NSFileCoordinator` with `SyncCoordination`'s 20-second deadline,
+  as the Mac app does. A shell reload or close drops the window's FSEvents watch, and the stream is torn down on
+  its own queue. Finder is never shown in background mode.
 - **Quit.** The menu's Quit item (⌘Q) is the `quit` command, so `apps/desktop` asks about quitting and active
   downloads (`ArdiaShell.downloadsInProgress`) first. `ArdiaShell.quit` then asks every live window to flush its
   session through the close protocol and exits once all have acknowledged, or after 10 s. A window that refuses
@@ -164,6 +200,33 @@ that branch). It is a development tool and never runs in a release. Like Windows
   Chrome's own window, placed on the display under the pointer and kept, at its 284×160 minimum, inside that
   display's work area. The in-window plane follows backing scale, display and colour changes. `webView.setAutoPictureInPicture` sets `g_ardia_auto_picture_in_picture_off`.
 
+- **Trackpad swipes** (`ac_mac_swipe`, rules in `ac_mac_swipe_policy.h`). A local `NSEvent` scroll-wheel monitor per
+  window, scoped to that window and removed with its host, reads AppKit's real `phase`, `momentumPhase` and
+  `hasPreciseScrollingDeltas`, so a live two-finger drag, its momentum and a mouse wheel click are told apart without
+  timers. Each gesture keeps the surface it began on.
+  - Over the shell it sends `ArdiaShell` `onScrollGesture {phase, momentum, dx, dy, x, y, t}` (`mayBegin`, `began`,
+    `changed`, `ended`, `cancelled`, `none` for momentum, `wheel` for a mouse click) and swallows nothing. The shell
+    advertises `shell.scrollGestures`, and `swipe.ts` then drives the profile pager from these phases alone: it ends
+    the drag on the event the fingers lift with, ignores the momentum of a swipe it tracked, and only holds a DOM
+    `wheel` off the shell's scrollers while a swipe or its momentum is its own.
+  - A gesture that moves to another surface before it starts, or whose window or app resigns, cancels the route it
+    left, so a pager held by `mayBegin` settles instead of staying held.
+  - Over a hosted page a back or forward swipe is sent as Linux's `onPageSwipe` with the tab's id and a gesture number,
+    timed by the same phases. It starts only with the system's swipe-between-pages setting on, after the page's first
+    non-momentum touchpad scroll update comes back unconsumed, and then only on horizontal intent. Acks are matched to
+    the gesture by the wheel timestamp Chromium carries from the `NSEvent`, converted with `EventTimeStampFromSeconds` and compared
+    to the microsecond, so a late ack from an earlier gesture is dropped. Every frame widget of the tab is watched as
+    frames come and go, so a wheel aimed at a non-scrolling cross-site iframe still opens the gesture, and a new
+    primary page cancels it. A page that
+    scrolls, or calls `preventDefault` on the wheel, keeps its gesture (carousels, maps, Figma), and so does a
+    vertical start (latched on the first deltas). A consumed update before the shell claims the swipe cancels it.
+    The gesture is bound to its tab's binding, generation, document and widget, and is cancelled as
+    soon as any of them changes or the tab stops being shown. `swipe.ts` routes it only to the swipe area whose
+    `pageTabId` is that tab.
+  - The host swallows a page swipe's horizontal motion only after the shell claims it with `shell.pageSwipeClaim
+    {gesture, tabId, claimed}`, which `swipe.ts` sends once it tracks the swipe (history in that direction, horizontal
+    intent) and withdraws when it lets go. The end always reaches the page. Chrome's own history swiper is turned off
+    for the shell and every hosted page (`HistorySwipingControl`).
 - **Page commands.** `tab.command` serves the shared `WebViewHandle` set with Linux's names, arguments and replies
   (`ac_mac_page_commands.mm`, checked by `ac_mac_page_policy.h`).
   - The commands: `find`, `stopFinding`, `print`, `runPageCommand` (`savePage`, `systemPrint`, `viewSource`),

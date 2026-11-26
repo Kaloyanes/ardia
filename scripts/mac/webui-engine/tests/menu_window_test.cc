@@ -25,6 +25,21 @@ TEST(default_menu_is_valid_and_has_standard_roles) {
     CHECK(item.role != menu::Role::kQuit);
   }
   CHECK(quit);
+  const menu::Item& help = root.children[5];
+  CHECK(help.role == menu::Role::kHelpMenu);
+  CHECK(help.children.size() == 1);
+  CHECK(help.children[0].title == "Show Onboarding");
+  CHECK(help.children[0].command == "showOnboarding");
+  const menu::Item& file = root.children[1];
+  CHECK(file.title == "File");
+  const menu::Item& share = file.children.back();
+  CHECK(share.title == "Share" && share.role == menu::Role::kShareServices);
+  CHECK(share.children.size() == 2);
+  CHECK(share.children[0].command == "share" && share.children[0].argument == "via:copy");
+  CHECK(share.children[1].command == "share" && share.children[1].argument == "via:email");
+  CHECK(menu::FillsShareServices(menu::Role::kShareServices, true));
+  CHECK(!menu::FillsShareServices(menu::Role::kShareServices, false));
+  CHECK(menu::ShareArgument(menu::kShareMoreService) == "via:ardia.more");
 }
 
 TEST(validation_finds_problems) {

@@ -62,6 +62,7 @@ function placeOf(position: string, freeX: number, freeY: number): [number, numbe
 // ── Sources: loading, and keeping the canvas readable ────────────────────────
 
 const verdicts = new WeakMap<Drawable, { key: string; ok: boolean }>()
+let canvasReads = 0
 
 /**
  * Is this source safe to draw? One image without CORS (or an SVG, in some browsers)
@@ -785,7 +786,7 @@ export function drawDom(ctx: CanvasRenderingContext2D, root: Element, options: D
       return
     }
     if (element instanceof HTMLCanvasElement) {
-      if (element.width && element.height && isClean(element)) ctx.drawImage(element, box.x, box.y, box.w, box.h)
+      if (element.width && element.height && isClean(element, `${++canvasReads}`)) ctx.drawImage(element, box.x, box.y, box.w, box.h)
       return
     }
     if (element instanceof HTMLImageElement) {
