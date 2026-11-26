@@ -13,6 +13,8 @@ export type GlassOptics = {
   clearBlurEdge: number;
   rim: number;
   rimWidth: number;
+  rimAngle: number;
+  rimLean: number;
   fresnel: number;
   inner: number;
   reflection: number;
@@ -26,19 +28,20 @@ export type GlassOptics = {
   shadowOpacity: number;
 };
 
-const CRISP: Omit<GlassOptics, "frost" | "blur" | "tintColor" | "borderAlpha" | "saturation" | "light"> = {
+const CRISP: Omit<GlassOptics, "frost" | "blur" | "tintColor" | "saturation" | "light" | "rim" | "fresnel"> = {
   bevel: 0.2,
   refraction: 0.5,
   dispersion: 0.05,
   clearBlur: 0.2,
   clearBlurEdge: 1.1,
-  rim: 1,
-  rimWidth: 0.55,
-  fresnel: 0.45,
-  inner: 0.35,
+  rimWidth: 0.85,
+  rimAngle: -0.62 * Math.PI,
+  rimLean: 1,
+  inner: 0.15,
   reflection: 0.3,
   caustic: 0,
-  mirror: 0.6,
+  mirror: 0.2,
+  borderAlpha: 0,
   borderColor: "rgb(255,255,255)",
   shadowOpacity: 0,
 };
@@ -47,12 +50,12 @@ export const RIM_MIRROR = { band: 0.25, depth: 0.12, soft: 0.4 };
 
 export const GLASS_OPTICS: Record<LiquidGlassTheme, Record<LiquidGlassStyle, GlassOptics>> = {
   light: {
-    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(255,255,255)", borderAlpha: 0.4, saturation: 1.05, light: 0.9 },
-    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", borderAlpha: 0.35, saturation: 1, light: 0.85 },
+    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(255,255,255)", saturation: 1.05, light: 0.9, rim: 2, fresnel: 5 },
+    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", saturation: 1, light: 0.85, rim: 2, fresnel: 5 },
   },
   dark: {
-    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(58,58,62)", borderAlpha: 0.22, saturation: 1.05, light: 0.7 },
-    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", borderAlpha: 0.2, rim: 0.85, saturation: 1, light: 0.65 },
+    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(58,58,62)", saturation: 1.05, light: 0.7, rim: 2.4, fresnel: 6 },
+    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", saturation: 1, light: 0.65, rim: 2.4, fresnel: 6 },
   },
 };
 

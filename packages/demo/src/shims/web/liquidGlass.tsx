@@ -8,6 +8,7 @@ const PAD_SIDE = 8;
 const PAD_TOP = 10;
 const PAGE_REFRESH_MS = 120;
 const OWN_CONTROL_SLACK = 2;
+const FADED_RIM_FLOOR = 0.25;
 const layer: CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
 const canvasStyle: CSSProperties = { position: "absolute", pointerEvents: "none", maxWidth: "none", width: 0, height: 0 };
 
@@ -70,6 +71,16 @@ function ownControl(host: HTMLElement): Element {
   return own;
 }
 
+function ownOpacity(host: HTMLElement, own: Element) {
+  let shown = 1;
+  for (let el: Element | null = host; el && el !== document.body; el = el.parentElement) {
+    const opacity = parseFloat(getComputedStyle(el).opacity);
+    if (Number.isFinite(opacity)) shown *= opacity;
+    if (el === own) break;
+  }
+  return clamp(shown, FADED_RIM_FLOOR, 1);
+}
+
 function fixedBehind(el: Element, own: Element) {
   if (el.contains(own)) return false;
   const style = getComputedStyle(el);
@@ -93,6 +104,7 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
   let border: Rgb | undefined;
   let borderAlpha = 0;
   let own: Element = host;
+  let faded = 1;
   let ready = false;
   const page = { canvas: document.createElement("canvas"), ctx: null as CanvasRenderingContext2D | null, key: "", at: 0, stale: true, fill: "" };
   const skip = (el: Element) => el === own || el === host || el.hasAttribute("data-glass-skip") || fixedBehind(el, own);
@@ -115,6 +127,7 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     const px = rounding.endsWith("%") ? (Math.min(w, h) * parseFloat(rounding)) / 100 : parseFloat(rounding) || 0;
     corner = px >= Math.min(w, h) / 2 - 0.5 ? null : px;
     own = ownControl(host);
+    faded = ownOpacity(host, own);
     surface = rgb(engine.resolveColor(surfaceColorOf(own.parentElement ?? host.parentElement)));
     const { optics, tint } = look.current;
     const tinted = tintedGlass(rgb(engine.resolveColor(optics.tintColor)), optics.frost, tint ? engine.resolveColor(tint) : null);
@@ -192,7 +205,7 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
       shadowSoftness: 34 * 0.6,
       shadowOffset: 22 * 0.5,
       strength,
-      tune: { rim: o.rim, rimWidth: o.rimWidth, fresnel: o.fresnel, inner: o.inner, reflection: o.reflection, caustic: o.caustic, mirror: o.mirror, saturation: o.saturation },
+      tune: { rim: o.rim / faded, rimWidth: o.rimWidth, fresnel: o.fresnel / faded, inner: o.inner, reflection: o.reflection, caustic: o.caustic, mirror: o.mirror, saturation: o.saturation },
       color,
       border,
       borderAlpha,
@@ -200,6 +213,7 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
       surface,
       edgeClear: 0.2,
       cursorLight: false,
+      rimLight: { angle: o.rimAngle, lean: o.rimLean },
       pointerLight: true,
       reflection: {
         height: h,
