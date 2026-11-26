@@ -224,10 +224,12 @@ export function consentTarget(name: string, official = false): PluginListing | u
   return listing;
 }
 
-export function requestPluginConsent(name: string, official = false): boolean {
+export function requestPluginConsent(name: string, official = false, claim?: (id: number) => void): boolean {
   const target = consentTarget(name, official);
   if (currentPlugins().consent || !target?.manifest || !target.hash) return false;
-  usePlugins.setState({ consent: { id: ++lastConsentId, name, hash: target.hash }, unsaved: null });
+  const id = ++lastConsentId;
+  claim?.(id);
+  usePlugins.setState({ consent: { id, name, hash: target.hash }, unsaved: null });
   return true;
 }
 

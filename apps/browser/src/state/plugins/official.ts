@@ -227,8 +227,7 @@ function askToInstall(name: string, options: InstallOptions): Promise<InstallRes
     const listing = candidateOf(currentPlugins(), name) ?? currentPlugins().listings[name];
     return Promise.resolve({ ok: false, reason: listing?.problems[0] ?? "It can't load." });
   }
-  if (!requestPluginConsent(name, true)) return Promise.resolve({ ok: false, reason: "Can't install it right now." });
-  options.onConsent?.(currentPlugins().consent!.id);
+  if (!requestPluginConsent(name, true, options.onConsent)) return Promise.resolve({ ok: false, reason: "Can't install it right now." });
   const done = waitForInstall(name);
   if (options.showSheet !== false) openSettings("plugins", null, name);
   return done.then((result) => (result.ok ? linked(name) : result));

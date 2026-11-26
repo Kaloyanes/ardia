@@ -240,6 +240,26 @@ test("an offline download leaves nothing installed and offers Try Again, which w
   assert.deepEqual([T().phase, T().installed], ["installed", ["cli"]]);
 });
 
+test("the consent is onboarding's from the moment it's published, so the first render already shows the sheet", async () => {
+  const { consentOwner } = await import("../plugins/consentSurface.ts");
+  await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
+  const owners = [];
+  const stop = usePlugins.subscribe((s, before) => {
+    if (s.consent && s.consent !== before.consent) owners.push(consentOwner(s.consent));
+  });
+  try {
+    const done = step.installPickedPlugins(offered());
+    await settle();
+    assert.deepEqual(owners, ["onboarding"]);
+    assert.ok(step.confirmPluginConsent(P().consent.id));
+    await done;
+    assert.deepEqual([T().phase, T().installed], ["installed", ["cli"]]);
+  } finally {
+    stop();
+    useOnboarding.setState({ windowId: null });
+  }
+});
+
 test("coming back while the cancelled download is still winding down and pressing Install again downloads afresh and asks", async () => {
   await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
   let release;
