@@ -7,7 +7,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { forBuild, launchVariables, mergeLaunchEnv, scratchInstance } from "./launchEnv.mjs";
 
-export { launchVariables, mergeLaunchEnv };
+import { isAlive } from "./pid.mjs";
+
+export { isAlive, launchVariables, mergeLaunchEnv };
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const here = fileURLToPath(import.meta.url);
@@ -83,7 +85,6 @@ async function killSpawned(pids) {
   for (const end = Date.now() + 5000; pids.some(isAlive) && Date.now() < end; await sleep(100));
   for (const pid of pids.filter(isAlive)) try { process.kill(pid, "SIGKILL"); } catch {}
 }
-export const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 export const binaryOf = (app) => join(app, "Contents/MacOS",
   execFileSync("plutil", ["-extract", "CFBundleExecutable", "raw", join(app, "Contents/Info.plist")]).toString().trim());
 export const appEnv = (app, env) => {

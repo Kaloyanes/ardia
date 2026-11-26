@@ -19,7 +19,7 @@ import { spaceTone } from "../../lib/profileLook";
 import { sfSymbol } from "../../lib/sfSymbols";
 import { syncBanner, type BannerIcon } from "../../state/sync/syncRules";
 import {
-  controlRadius,
+  capsule,
   FadingBackdrop,
   DEFAULT_PROFILE_COLOR,
   Favicon,
@@ -374,7 +374,7 @@ const styles = StyleSheet.create({
   centered: { textAlign: "center" },
   header: { flexDirection: "row", alignItems: "center", gap: space.s, paddingLeft: space.l + 4, paddingRight: space.s, paddingTop: space.m, paddingBottom: space.xs },
   headerButton: slotAround(spacesLayout.headerCircle),
-  headerCircle: { width: spacesLayout.headerCircle, height: spacesLayout.headerCircle, borderRadius: controlRadius(spacesLayout.headerCircle), borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
+  headerCircle: { width: spacesLayout.headerCircle, height: spacesLayout.headerCircle, borderRadius: capsule(spacesLayout.headerCircle), borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
   banner: { flexDirection: "row", alignItems: "center", gap: spacesLayout.bannerGap, marginHorizontal: space.l, marginBottom: space.xs, padding: spacesLayout.bannerPadding, borderRadius: spacesLayout.bannerRadius },
   row: { flexDirection: "row", alignItems: "center", gap: space.s, minHeight: 48, paddingRight: space.l },
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: spacesLayout.headerGap, paddingHorizontal: space.l, paddingTop: space.l, paddingBottom: spacesLayout.headerBottom },

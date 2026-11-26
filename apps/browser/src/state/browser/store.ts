@@ -1,5 +1,6 @@
 import { create, type StateCreator, type StoreApi, type UseBoundStore } from "zustand";
 import { withRetiredDefaults } from "../settings/retiredDefaults";
+import { withTabSwitcherModes } from "../settings/tabSwitcherUpgrade";
 import { setHeldReportsTransaction } from "../../platform/nativeEvents";
 import { createBookmarksSlice, ensureRoots, type BookmarksSlice } from "../bookmarks/bookmarks";
 import { changedIds } from "./changes";
@@ -20,6 +21,7 @@ import { createSplitsSlice, type SplitsSlice } from "../splits/splits";
 import { activated, apply } from "../tabs/tabs";
 import { createTabsSlice, type TabsSlice } from "../tabs/tabsSlice";
 import { bindLiveToBrowser, forgetAllLive } from "../tabs/tabLive";
+import { resetSuggestStores } from "../omnibox/suggestStore";
 import { settle, SettleDidNotConverge } from "./settle";
 import { transactional, type SubscribeTo } from "./transaction";
 import { actionsApart } from "./actionsApart";
@@ -126,11 +128,13 @@ const createdBrowser = create<BrowserState>()(actionsApart(transactions.middlewa
       ...(data.profileOrder ?? []).filter((id) => Object.hasOwn(profiles, id)),
       ...Object.keys(profiles).filter((id) => !data.profileOrder?.includes(id)),
     ];
-    const kept = withRetiredDefaults(data.settings, parseSettingsMeta(data.settingsMeta), { waitForSync: data.retiredDefaultsWaitForSync });
+    const retired = withRetiredDefaults(data.settings, parseSettingsMeta(data.settingsMeta), { waitForSync: data.retiredDefaultsWaitForSync });
+    const kept = withTabSwitcherModes(retired.settings, retired.settingsMeta);
     const settings = parseSettings(kept.settings);
     if (!Object.hasOwn(profiles, settings.defaultProfileId)) settings.defaultProfileId = profileOrder[0]!;
 
     notePinChoices(data.pinChoices ?? {});
+    resetSuggestStores();
     let bookmarks = s.bookmarks;
     for (const engine of engineProfiles({ profiles })) bookmarks = ensureRoots(bookmarks, engine)[0];
     const focused = data.focusedWindowId && Object.hasOwn(windows, data.focusedWindowId) ? data.focusedWindowId : (windowOrder.at(-1) ?? null);

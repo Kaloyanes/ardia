@@ -40,6 +40,7 @@ export const COMMANDS = {
   focusCommandBar: { title: "Open Command Bar", keys: ["⌘L", "⌃F5"], ...inWindow },
   closeTab: { title: "Close Tab", symbol: "xmark", keys: ["⌘W"], ...inWindow },
   closeAllTabs: { title: "Close All Tabs", symbol: "xmark.square", keys: ["⇧⌘K"], ...windowOffInLittleArdia },
+  closeDuplicateTabs: { title: "Close Duplicate Tabs", symbol: "square.on.square", ...windowOffInLittleArdia },
   print: { title: "Print…", symbol: "printer", keys: ["⌘P"], ...pageInLittleArdia },
   copyUrl: { title: "Copy URL", symbol: "link", keys: ["⇧⌘C"], ...pageInLittleArdia, onInternalPages: true },
   copyUrlAsMarkdown: { title: "Copy URL as Markdown", symbol: "link", keys: ["⌥⇧⌘C"], ...pageInLittleArdia, onInternalPages: true },
@@ -97,8 +98,8 @@ export const COMMANDS = {
   viewSource: { title: "View Source", keys: ["⌥⌘U"], ...pageInLittleArdia },
   back: { title: "Go Back", keys: ["⌘[", "⌘←"], scope: "window", littleArdia: "page" },
   forward: { title: "Go Forward", keys: ["⌘]", "⌘→"], scope: "window", littleArdia: "page" },
-  nextTab: { title: "Next Tab", keys: ["⇧⌘]", "⌘}", "⌃⇥", "⌃⇟", "⌥⌘↓"], ...windowOffInLittleArdia },
-  previousTab: { title: "Previous Tab", keys: ["⇧⌘[", "⌘{", "⌃⇧⇥", "⌃⇞", "⌥⌘↑"], ...windowOffInLittleArdia },
+  nextTab: { title: "Next Tab", keys: ["⇧⌘]", "⌘}", "⌃⇟", "⌥⌘↓"], ...windowOffInLittleArdia },
+  previousTab: { title: "Previous Tab", keys: ["⇧⌘[", "⌘{", "⌃⇞", "⌥⌘↑"], ...windowOffInLittleArdia },
   selectTab: {
     ...windowOffInLittleArdia,
     variants: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map((n) => [String(n), { title: `Select Tab ${n}`, keys: [`⌘${n}`] }])),
@@ -141,6 +142,14 @@ export const COMMANDS = {
   newGroupWithTabs: { title: "New Group with Tab", symbol: "folder.badge.plus", keys: ["⌃⌘N", "⌃⌘P"], ...windowOffInLittleArdia },
   cleanUpTabs: { title: "Clean Up Tabs", symbol: "sparkles", keys: ["⌥⌘K"], ...windowOffInLittleArdia },
   tidyPins: { title: "Tidy Pins", symbol: "sparkles" },
+  sortTabs: {
+    symbol: "arrow.up.arrow.down",
+    ...windowOffInLittleArdia,
+    variants: {
+      site: { title: "Sort Tabs by Site" },
+      title: { title: "Sort Tabs by Title" },
+    },
+  },
   searchTabs: { title: "Search Tabs…", symbol: "magnifyingglass", keys: ["⇧⌘A"], ...windowOffInLittleArdia },
   renameTab: { title: "Rename…", barTitle: "Rename Tab", symbol: "pencil", ...windowOffInLittleArdia },
   changeTabIcon: { title: "Change Icon…", ...windowOffInLittleArdia },
@@ -148,8 +157,8 @@ export const COMMANDS = {
   tabSwitcher: {
     ...windowOffInLittleArdia,
     variants: {
-      forward: { title: "Tab Switcher (forward)" },
-      backward: { title: "Tab Switcher (backward)" },
+      forward: { title: "Tab Switcher (forward)", keys: ["⌃⇥"] },
+      backward: { title: "Tab Switcher (backward)", keys: ["⌃⇧⇥"] },
     },
   },
   share: { title: "Share…", symbol: "square.and.arrow.up", keys: ["⌥⌘S"], ...pageInLittleArdia },

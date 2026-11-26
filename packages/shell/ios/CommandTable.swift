@@ -14,6 +14,7 @@ enum CommandTable {
     case focusCommandBar
     case closeTab
     case closeAllTabs
+    case closeDuplicateTabs
     case print
     case copyUrl
     case copyUrlAsMarkdown
@@ -93,6 +94,7 @@ enum CommandTable {
     case newGroupWithTabs
     case cleanUpTabs
     case tidyPins
+    case sortTabs
     case searchTabs
     case renameTab
     case changeTabIcon
@@ -137,6 +139,7 @@ enum CommandTable {
     "focusCommandBar": "Open Command Bar",
     "closeTab": "Close Tab",
     "closeAllTabs": "Close All Tabs",
+    "closeDuplicateTabs": "Close Duplicate Tabs",
     "print": "Print…",
     "copyUrl": "Copy URL",
     "copyUrlAsMarkdown": "Copy URL as Markdown",
@@ -223,6 +226,8 @@ enum CommandTable {
     "newGroupWithTabs": "New Group with Tab",
     "cleanUpTabs": "Clean Up Tabs",
     "tidyPins": "Tidy Pins",
+    "sortTabs:site": "Sort Tabs by Site",
+    "sortTabs:title": "Sort Tabs by Title",
     "searchTabs": "Search Tabs…",
     "renameTab": "Rename…",
     "changeTabIcon": "Change Icon…",
@@ -300,8 +305,8 @@ enum CommandTable {
     "viewSource": [("u", [.option, .command])],
     "back": [("[", [.command]), ("\u{F702}", [.command])],
     "forward": [("]", [.command]), ("\u{F703}", [.command])],
-    "nextTab": [("]", [.shift, .command]), ("}", [.command]), ("\u{9}", [.control]), ("\u{F72D}", [.control]), ("\u{F701}", [.option, .command])],
-    "previousTab": [("[", [.shift, .command]), ("{", [.command]), ("\u{9}", [.control, .shift]), ("\u{F72C}", [.control]), ("\u{F700}", [.option, .command])],
+    "nextTab": [("]", [.shift, .command]), ("}", [.command]), ("\u{F72D}", [.control]), ("\u{F701}", [.option, .command])],
+    "previousTab": [("[", [.shift, .command]), ("{", [.command]), ("\u{F72C}", [.control]), ("\u{F700}", [.option, .command])],
     "selectTab:1": [("1", [.command])],
     "selectTab:2": [("2", [.command])],
     "selectTab:3": [("3", [.command])],
@@ -328,6 +333,8 @@ enum CommandTable {
     "cleanUpTabs": [("k", [.option, .command])],
     "searchTabs": [("a", [.shift, .command])],
     "returnToPinnedUrl": [("\u{D}", [.command])],
+    "tabSwitcher:forward": [("\u{9}", [.control])],
+    "tabSwitcher:backward": [("\u{9}", [.control, .shift])],
     "share": [("s", [.option, .command])],
     "reportProblem": [("i", [.option, .shift, .command])],
     "openFile": [("o", [.command])],

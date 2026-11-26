@@ -69,7 +69,7 @@ case "waitwindow":
       print(String(format: "%.0f", nowMs()))
       exit(0)
     }
-    if kill(pid, 0) != 0 { exit(3) }
+    if pid <= 0 || (kill(pid, 0) != 0 && errno == ESRCH) { exit(3) }
     usleep(4000)
   }
   exit(2)
@@ -85,7 +85,7 @@ case "newwindow":
       print(String(format: "{\"at\":%.1f,\"id\":%d}", nowMs(), new["id"] as? Int ?? 0))
       exit(0)
     }
-    if kill(pid, 0) != 0 { exit(3) }
+    if pid <= 0 || (kill(pid, 0) != 0 && errno == ESRCH) { exit(3) }
     usleep(2000)
   }
   exit(2)

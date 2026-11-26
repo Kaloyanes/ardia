@@ -1323,7 +1323,7 @@ In order, as the next PRs:
    `setActiveProfile`, `openWindow`, `setMenuBookmarks`, `setMenuState`, `shellPainted`, `ArdiaTabs.unclaimedTabs`/
    `claimLaunchTab`, `tab.presentations`, `tab.command` `setMuted`/`evaluate`/`capturePicture`, and the `engine.call`s
    `documents.watch`, `profiles.loaded`, `engine.info`, `downloads.list`, `engine.memorySaver`, `engine.systemState`,
-   `tabs.strips`, `search.setEngineName`, `webView.*`, `webKit.setFraudWarnings`, `profiles.ctrlTabMru`), then Track 3's
+   `tabs.strips`, `search.setEngineName`, `webView.*`, `webKit.setFraudWarnings`), then Track 3's
    generated routes so the list stops being hand-kept.
 5. Windows wording (`--mode win`, `.win.ts`), Mica, the installer and the upgrade migration (Track 4's cutover), and a
    CI job that runs `run.ps1`'s checks plus the Linux acceptance tour over CDP.
