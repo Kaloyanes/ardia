@@ -274,6 +274,21 @@ struct PluginStore {
     } ?? false
   }
 
+  func removeCandidate(_ key: String, folderId: String) -> Bool {
+    guard let folder = pluginFolder(key), let sha = Self.sha(ofFolderId: folderId) else { return false }
+    return withLock(key) { () -> Bool in
+      guard PluginPrograms.isRealFolder(folder) else { return true }
+      let keep = Set([Self.activeName, Self.previousName].compactMap { PluginPrograms.linkTarget((folder as NSString).appendingPathComponent($0)) })
+      for entry in entries(key) where !keep.contains(entry) && shaOf(key, entry: entry) == sha {
+        PluginPrograms.discard((folder as NSString).appendingPathComponent(entry))
+        unlink((folder as NSString).appendingPathComponent(".\(entry).sha256"))
+        unlink((folder as NSString).appendingPathComponent(".\(entry)\(Self.officialSuffix)"))
+        unlink((folder as NSString).appendingPathComponent("\(entry)\(Self.archiveSuffix)"))
+      }
+      return true
+    } ?? false
+  }
+
   func sweep(_ key: String) {
     _ = withLock(key) { sweepLocked(key) }
   }

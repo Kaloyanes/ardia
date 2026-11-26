@@ -150,9 +150,9 @@ export async function rollbackPlugin(key: string): Promise<{ ok: boolean; reason
     const currentSha = shaOfFolderId(listing.folderId);
     if (!written && listing.manifest && currentSha) {
       const back = await rollbackStorePlugin(key, listing.manifest.version, currentSha).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
-      await rescanPlugins(consent);
+      const rescanned = await rescanPlugins(consent);
       if (back.ok) return { ok: false, reason: `Ardia couldn't save plugins-lock.json, so it stayed on ${listing.manifest.version}. Try again.` };
-      const running = currentPlugins().listings[key]?.manifest?.version ?? listing.previousVersion;
+      const running = (rescanned ? currentPlugins().listings[key]?.manifest?.version : undefined) ?? listing.previousVersion;
       if (running === listing.previousVersion) updateRecord(key, (r) => ({ ...r, approved: r.previous ?? r.approved, previous: r.approved ?? undefined }), consent);
       notePlugin("rollback_refusals", consent);
       return { ok: false, reason: `Ardia went back to ${running}, but couldn't save plugins-lock.json or switch forward again (${back.reason}); the lock still lists ${listing.manifest.version} until it's saved.` };

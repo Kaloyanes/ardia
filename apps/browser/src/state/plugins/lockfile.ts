@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { isSemver } from "@ardia/plugin-sdk/semver";
-import { documentSaved, readDocument, writeDocument } from "../../platform/documents";
+import { documentSaved, readDocument, syncDocument, writeDocument } from "../../platform/documents";
 import { isFields } from "../../lib/decode";
 import { isPluginId, keyOfId } from "../../lib/pluginIds";
 import { parseSaved, versionedJson } from "../../lib/savedDocument";
@@ -165,10 +165,12 @@ export function mutateLock(change: (now: LockState) => LockState | null, consent
       warnFor(consent, "[plugins] couldn't save plugins-lock.json", error);
       return false;
     }
-    const landed = await documentSaved(LOCK_DOC).then(
-      () => true,
-      () => false,
-    );
+    const landed = await documentSaved(LOCK_DOC)
+      .then(() => syncDocument(LOCK_DOC))
+      .then(
+        () => true,
+        () => false,
+      );
     if (landed) {
       committed = next;
       useLock.setState({ lock: next.lock });

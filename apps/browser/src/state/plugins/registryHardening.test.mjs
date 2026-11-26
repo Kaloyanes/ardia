@@ -22,7 +22,7 @@ const savedState = await import("./savedState.ts");
 const { resetCandidatesForTests } = await import("./candidates.ts");
 const { takePluginCounts } = await import("../telemetry/pluginCounts.ts");
 const { setConsentPeriod, consentToken } = await import("../telemetry/consentPeriod.ts");
-const { refreshCatalog, useCatalog, addRegistry, installFromFile, installFromDeepLink } = await import("./marketplace.ts");
+const { refreshCatalog, useCatalog, addRegistry, installFromFile, installFromDeepLink, setPluginChannel } = await import("./marketplace.ts");
 const { handlePluginInstallLinks, takePluginInstallLinks, resetInstallLinksForTests } = await import("./installLinks.ts");
 const { pluginMenuItems } = await import("./menus.ts");
 const { manifestInProfile, eventProfileId } = await import("./profileScope.ts");
@@ -866,5 +866,56 @@ describe("round 4: fault injection", () => {
     }
     assert.equal(P().consent, null);
     assert.deepEqual(host.activations, []);
+    assert.deepEqual(host.folders, [], "the dropped download is also removed from the store");
+  });
+
+  test("staging fails when lockfile fsync fails, so the candidate never reaches consent", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    await revocations.refreshRevocations();
+    shell.refusedSyncs.on = true;
+    let result;
+    try {
+      result = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+    } finally {
+      shell.refusedSyncs.on = false;
+    }
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /plugins-lock\.json/);
+    assert.equal(P().consent, null);
+    assert.deepEqual(host.folders, []);
+  });
+
+  test("a rollback whose lock write, switch forward, and rescan all fail still reports the rolled-back version", async () => {
+    await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+    client.resetRegistryCacheForTests();
+    await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+    host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "read" } });
+    await updater.checkPlugins(consentToken());
+    host.rollbackResults = [null, { ok: false, reason: "disk full" }];
+    shell.refusedLandings.add(LOCK_DOC);
+    host.listFails = true;
+    let result;
+    try {
+      result = await updater.rollbackPlugin("acme__a");
+    } finally {
+      shell.refusedLandings.delete(LOCK_DOC);
+      host.listFails = false;
+    }
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /went back to 1\.0\.0/);
+  });
+
+  test("a queued channel change behind a plugin removal does not recreate a partial lock entry", async () => {
+    await installed("@acme/a", "1.0.0");
+    let release;
+    shell.landingGates.set(LOCK_DOC, new Promise((r) => (release = r)));
+    const removing = lockfile.forgetLockKey("acme__a", null);
+    const channeling = setPluginChannel("acme__a", "beta");
+    release();
+    shell.landingGates.delete(LOCK_DOC);
+    await removing;
+    assert.equal(await channeling, false);
+    assert.equal(lockfile.currentLock()["@acme/a"], undefined);
   });
 });

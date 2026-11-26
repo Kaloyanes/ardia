@@ -1,5 +1,5 @@
 import { matchRevocations, strongestRevocation, validateRevocationList, type RegistryRevocationsPayload, type RevocationAction, type RevocationMatch } from "@ardia/plugin-sdk/registry";
-import { documentSaved, readDocument, writeDocument } from "../../platform/documents";
+import { documentSaved, readDocument, syncDocument, writeDocument } from "../../platform/documents";
 import { isFields } from "../../lib/decode";
 import { defaultRegistry, fetchRevocationList, verifyCachedEnvelope } from "./registryClient";
 import type { LockProvenance } from "./lockfile";
@@ -40,6 +40,7 @@ async function persist(): Promise<boolean> {
   try {
     writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq: savedSeq, envelope })}\n`);
     await documentSaved(CACHE_DOC);
+    await syncDocument(CACHE_DOC);
     persistedSeq = Math.max(persistedSeq, savedSeq);
     return true;
   } catch {

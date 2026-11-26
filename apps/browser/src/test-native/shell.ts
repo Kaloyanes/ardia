@@ -767,7 +767,21 @@ const plugins: Modules["ArdiaPlugins"] = {
   reply: (name, run, line) => void pluginHost.replies.push({ name, run, line }),
   event: (name, run, line) => void pluginHost.events.push({ name, run, line }),
   call: (name, run, line) => void pluginHost.events.push({ name, run, line }),
-  remove: async (name, source, folderId) => (await pluginHost.removeGate, pluginHost.removeFolderIds.push(folderId), pluginHost.removed.push(source === "local" ? name : `${source}:${name}`), (pluginHost.folders = pluginHost.folders.filter((f) => f.name !== name)), { ok: true }),
+  remove: async (name, source, folderId) => {
+    await pluginHost.removeGate;
+    pluginHost.removeFolderIds.push(folderId);
+    pluginHost.removed.push(source === "local" ? name : `${source}:${name}`);
+    if (source === "store" && folderId !== null) {
+      pluginHost.folders = pluginHost.folders.flatMap((f) => {
+        if (f.name !== name) return [f];
+        const candidates = (f.candidates ?? []).filter((c) => c.folderId !== folderId);
+        return f.status === "missing" && candidates.length === 0 ? [] : [{ ...f, candidates }];
+      });
+    } else {
+      pluginHost.folders = pluginHost.folders.filter((f) => f.name !== name);
+    }
+    return { ok: true };
+  },
   linkPrograms: async (spec) => {
     pluginHost.links.push({ ...spec, programs: spec.programs.map((p) => ({ ...p })) });
     if (pluginHost.linkResult) return pluginHost.linkResult;

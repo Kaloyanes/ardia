@@ -9,7 +9,7 @@ import { wantCandidate } from "./candidates";
 import { installPlugin, OFFLINE_REGISTRY } from "./installer";
 import type { InstallResult } from "./installWaiters";
 import { requestPluginConsent, rescanPlugins, updateRecord } from "./lifecycle";
-import { currentLock, stageLockEntries, updateLock, type Channel } from "./lockfile";
+import { currentLock, mutateLock, stageLockEntries, type Channel } from "./lockfile";
 import { customRegistries, defaultRegistry, fetchIndex, registryForId, type RegistryRef } from "./registryClient";
 import { revocationPreflight, revocationReason, stoppingRevocation } from "./revocations";
 import { dropCandidate } from "./candidates";
@@ -88,12 +88,18 @@ export function getPlugin(id: string, channel: Channel = "latest"): Promise<Inst
   return installPlugin({ id, channel }, { showSheet: false });
 }
 
-export function setPluginChannel(key: string, channel: Channel): Promise<boolean> {
+export async function setPluginChannel(key: string, channel: Channel): Promise<boolean> {
   const consent = consentToken();
-  const id = Object.values(currentLock()).find((e) => e.key === key)?.id;
-  if (!id) return Promise.resolve(false);
+  let found = false;
+  const saved = await mutateLock((now) => {
+    const entry = Object.values(now.lock).find((e) => e.key === key);
+    if (!entry) return null;
+    found = true;
+    return { lock: { ...now.lock, [entry.id]: { ...entry, channel } }, staged: now.staged };
+  }, consent);
+  if (!found) return false;
   notePlugin(channel === "beta" ? "channel_beta" : "channel_latest", consent);
-  return updateLock((now) => ({ ...now, [id]: { ...now[id]!, channel } }), consent);
+  return saved;
 }
 
 export function setPluginProfiles(key: string, profiles: "all" | string[]): boolean {

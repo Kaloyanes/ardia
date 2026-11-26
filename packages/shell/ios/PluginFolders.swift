@@ -189,7 +189,11 @@ struct PluginFolders {
     var info = stat()
     switch source {
     case "store":
-      if !store().remove(name) { return "Its downloaded copy couldn't be removed." }
+      if let folderId {
+        if !store().removeCandidate(name, folderId: folderId) { return "Its downloaded copy couldn't be removed." }
+      } else if !store().remove(name) {
+        return "Its downloaded copy couldn't be removed."
+      }
     case "dev":
       let file = (devLinks as NSString).appendingPathComponent("\(name).json")
       if lstat(file, &info) == 0, unlink(file) != 0 { return "Its dev link couldn't be removed (\(String(cString: strerror(errno))))." }

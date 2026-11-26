@@ -1,4 +1,4 @@
-import { cancelPluginArtifactFetch, fetchPluginArtifact, onPluginArtifactProgress, type PluginArtifactResult } from "../../platform/plugins";
+import { cancelPluginArtifactFetch, fetchPluginArtifact, onPluginArtifactProgress, removePluginFiles, type PluginArtifactResult } from "../../platform/plugins";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { PLATFORM_TERMS } from "../../lib/platformTerms";
 import { openSettings } from "../settings/settingsWindows";
@@ -141,11 +141,14 @@ export async function officialDownloadProblem(d: Downloaded): Promise<string | n
   return verified.ok ? null : `${refused}: ${verified.reason}`;
 }
 
-function dropDownloads(downloaded: readonly Downloaded[]) {
-  for (const d of downloaded) {
-    dropCandidate(d.plugin.key);
-    dropStagedLock(d.plugin.key);
-  }
+async function dropDownloads(downloaded: readonly Downloaded[]) {
+  await Promise.all(
+    downloaded.map(async (d) => {
+      dropCandidate(d.plugin.key);
+      await dropStagedLock(d.plugin.key);
+      await removePluginFiles(d.plugin.key, "store", d.folderId).catch(() => undefined);
+    }),
+  );
 }
 
 function candidateHash(key: string, folderId: string): string | null {
@@ -176,7 +179,7 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
   if (!got.ok) return got;
   for (const d of got.downloaded) wantCandidate(d.plugin.key, d.folderId);
   if (!(await rescanPlugins(consent))) {
-    dropDownloads(got.downloaded);
+    await dropDownloads(got.downloaded);
     return { ok: false, reason: "Ardia couldn't read its plugin store after the download, so nothing was installed. Try again." };
   }
   for (const d of got.downloaded) {
@@ -184,13 +187,13 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
     const unsigned = problem ? null : await officialDownloadProblem(d);
     if (problem || unsigned) {
       if (unsigned) notePlugin("registry_verify_failures", consent);
-      dropDownloads(got.downloaded);
+      await dropDownloads(got.downloaded);
       await rescanPlugins(consent);
       return { ok: false, reason: unsigned ?? `${d.plugin.id}: ${problem}` };
     }
   }
   if (!(await stagePlanLock(planned.plan, got.downloaded, request, consent))) {
-    dropDownloads(got.downloaded);
+    await dropDownloads(got.downloaded);
     await rescanPlugins(consent);
     return { ok: false, reason: "Ardia couldn't save what it downloaded to plugins-lock.json, so it wasn't installed. Try again." };
   }
@@ -244,7 +247,7 @@ export async function installPlugin(given: PlanRequest, options: InstallOptions 
   if (options.showSheet !== false) openSettings("plugins", null, root.name);
   const result = await done;
   if (!result.ok) {
-    dropDownloads(prepared.downloaded);
+    await dropDownloads(prepared.downloaded);
     return result;
   }
   if (!recordUnchangedInLock(prepared.plan, prepared.downloaded, request, consent)) return { ok: false, reason: "Ardia couldn't save its plugin settings. Try again." };
