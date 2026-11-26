@@ -10,7 +10,7 @@ export const withUpdateWords = (label: string, shown: boolean) => (shown ? `${la
 export function NoticeDot({ style }: { style?: StyleProp<ViewStyle> }) {
   const theme = useTheme();
   const { scheme } = useMaterialTheme();
-  const fill = useDesign() === "material" ? scheme.primary : theme.spaceAccent;
+  const fill = useDesign() === "material" ? scheme.primary : theme.spaceAccentInk;
   return <View testID="updateDot" pointerEvents="none" style={[styles.dot, { backgroundColor: fill }, style]} />;
 }
 
@@ -18,9 +18,12 @@ export function UpdateDot({ style }: { style?: StyleProp<ViewStyle> }) {
   return useUpdateDot() ? <NoticeDot style={style} /> : null;
 }
 
-export const updateDotCorner: ViewStyle = { position: "absolute", top: 2, right: 2 };
+const GLYPH_CORNER = 10;
 
-export const iconDotCorner: ViewStyle = { position: "absolute", top: 10, right: 10 };
+export const dotBesideGlyph = (side: number): ViewStyle => {
+  const inset = Math.max(0, side / 2 - GLYPH_CORNER - startLayout.pageDot / 2);
+  return { position: "absolute", top: inset, right: inset };
+};
 
 const styles = StyleSheet.create({
   dot: { width: startLayout.pageDot, height: startLayout.pageDot, borderRadius: startLayout.pageDot / 2 },

@@ -5,7 +5,7 @@ import { StyleSheet, View, type ViewInstance } from "react-native";
 import { noteDeckBarTop, watchDeckBar } from "../../state/toasts/store";
 import type { FrostVariant } from "@ardia/phone-native";
 import { browseLayout, capsule, LookGlass, PressInPlace, Symbol, tabsLayout, usesGlass, useTheme, type SymbolName } from "../ui";
-import { NoticeDot, updateDotCorner, withUpdateWords } from "../settings/UpdateDot";
+import { NoticeDot, dotBesideGlyph, withUpdateWords } from "../settings/UpdateDot";
 import { useUpdateDot } from "../../state/appUpdate/store";
 
 export type DeckBarFrost = { source: string; variant: FrostVariant; incognito?: boolean };
@@ -81,7 +81,7 @@ export function DeckBar({ leading, plusLabel, frost, onPlus, onPlusMenu, onSetti
               <Symbol name="gearshape" size={sideSize("gearshape")} color={theme.secondaryLabel} />
             </View>
           </Plate>
-          {updateDot ? <NoticeDot style={updateDotCorner} /> : null}
+          {updateDot ? <NoticeDot style={dotBesideGlyph(browseLayout.hitTarget)} /> : null}
         </PressInPlace>
       </View>
     </View>

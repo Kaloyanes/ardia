@@ -53,7 +53,7 @@ test.each(["redesigned", "original", "material"] as const)("the %s start page's 
   }
   const [dot] = dots(root);
   expect(dot).toBeDefined();
-  expect(StyleSheet.flatten(dot!.props.style)).toMatchObject({ width: 7, height: 7, borderRadius: 3.5 });
+  expect(StyleSheet.flatten(dot!.props.style)).toMatchObject({ width: 7, height: 7, borderRadius: 3.5, position: "absolute" });
   expect(dot!.props.pointerEvents).toBe("none");
   expect(labelled(root, /^Settings, update available$/).length).toBeGreaterThan(0);
   act(() => markUpdateSeen());

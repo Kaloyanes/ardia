@@ -3,7 +3,7 @@ import { haptics } from "../../state/app/haptics";
 import { barGlyphLayout, capsule, ChromeSurface, controlSize, PressInPlace, rolesFor, SystemGlyph, type SymbolName } from "../ui";
 import { PressedGlyph } from "../ui/PressInPlace";
 import { SF_SYMBOL_NAMES } from "../ui/sfSymbolNames";
-import { NoticeDot, updateDotCorner, withUpdateWords } from "../settings/UpdateDot";
+import { NoticeDot, dotBesideGlyph, withUpdateWords } from "../settings/UpdateDot";
 
 type StartBarLook = { dark: boolean; incognito: boolean };
 
@@ -17,7 +17,7 @@ export function StartCircleButton({ icon, label, testID, diameter = controlSize.
           <SystemGlyph testID={`${testID}Glyph`} systemName={SF_SYMBOL_NAMES[icon] ?? "circle"} pointSize={pointSize} weight={weight} name={icon} size={side} color={rolesFor(dark).label} />
         </PressedGlyph>
       </ChromeSurface>
-      {dot ? <NoticeDot style={updateDotCorner} /> : null}
+      {dot ? <NoticeDot style={dotBesideGlyph(diameter)} /> : null}
     </PressInPlace>
   );
 }

@@ -24,7 +24,7 @@ import { spaceMenuSymbol, SpaceTitle } from "../search/StartSpaces";
 import { DUO } from "./duoLayout";
 import { DuoAddressField, useTabPrivate } from "./DuoToolbar";
 import { CLOSE_TAB } from "../tabs/tabCard";
-import { iconDotCorner, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
+import { dotBesideGlyph, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
 import { useUpdateDot } from "../../state/appUpdate/store";
 
 export type DuoSidebarVariant = "overlay" | "panel";
@@ -129,7 +129,7 @@ function MoreMenu({ dark, hasTabs, syncEnabled, onCloseAll }: { dark: boolean; h
       {({ onPress }) => (
         <Tappable testID="duoSidebarMore" kind="icon" label={withUpdateWords(actionWords.more, updateDot)} onPress={onPress ?? noop} style={styles.headerButton}>
           <Symbol name={iconRoles.more} size={DUO.sidebarMoreGlyph} color={rolesFor(dark).foregroundPrimary} />
-          {updateDot ? <NoticeDot style={iconDotCorner} /> : null}
+          {updateDot ? <NoticeDot style={dotBesideGlyph(DUO.hitTarget)} /> : null}
         </Tappable>
       )}
     </MenuTrigger>

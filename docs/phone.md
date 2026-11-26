@@ -3185,7 +3185,7 @@ zeros, nightly 1 to 998) and orders them by versionCode.
   then Confirm in Android’s installer.), Allow Ardia to install apps (Open settings), and one short line with Try
   again for a download that didn't finish, didn't match the release, couldn't be checked or prepared, or an install
   that failed; Couldn’t start the download offers Copy link to the release page. A found update puts a quiet accent dot
-  (7 pt, `scheme.primary` in Material, the space accent otherwise, no text) on the Settings gear wherever it shows:
+  (7 pt, `scheme.primary` in Material, the space's accent ink otherwise, since its plain accent is the start page's own tint; no text), placed on the button face just off the gear's top-right corner, on the Settings gear wherever it shows:
   the start page in each design, the deck bar, the Material deck's ··· and its Settings item, and the Duo sidebar's
   ··· and Settings item; inside Settings on General and on About Ardia. Screen readers hear "update available" after
   the label. The dot shows while an update is found (available, downloading, ready) and clears once About is opened

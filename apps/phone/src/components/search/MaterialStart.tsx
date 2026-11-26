@@ -16,7 +16,7 @@ import { StartMark } from "./StartSpaces";
 import { reducedMotionMs } from "../ui/motion";
 import type { MaterialScheme } from "../../lib/material/schemes";
 import { actionWords, destinationWords } from "../../lib/sharedWords";
-import { iconDotCorner, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
+import { dotBesideGlyph, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
 import { useUpdateDot } from "../../state/appUpdate/store";
 
 export const materialStartMs = (reduceMotion: boolean, searching: boolean) =>
@@ -108,7 +108,7 @@ function StartIconButton({ icon, label, scheme, dot = false, onPress }: { icon: 
   return (
     <View>
       {button}
-      <NoticeDot style={iconDotCorner} />
+      <NoticeDot style={dotBesideGlyph(materialSize.touchTarget)} />
     </View>
   );
 }

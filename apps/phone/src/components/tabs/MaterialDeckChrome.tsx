@@ -18,7 +18,7 @@ import { useKeyboardHeight } from "../search/useKeyboardHeight";
 import { useSearchTabs } from "./DeckBottomBar";
 import { deckMoreMenuItems, useDeckSpaces } from "./DeckHeader";
 import { MATERIAL_DECK, useDeckScheme } from "./MaterialDeckLayout";
-import { iconDotCorner, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
+import { dotBesideGlyph, NoticeDot, withUpdateWords } from "../settings/UpdateDot";
 import { useUpdateDot } from "../../state/appUpdate/store";
 
 export { MaterialBarIconButton as MaterialIconButton } from "../ui/MaterialBottomBar";
@@ -103,7 +103,7 @@ export function MaterialDeckTopBar({ safeTop, safeSide, incognito, privateCount,
         {({ onPress }) => (
           <View>
             <MaterialIconButton testID="materialDeckMore" icon="ellipsis" label={withUpdateWords(actionWords.more, updateDot)} scheme={scheme} turned onPress={onPress ?? noop} />
-            {updateDot ? <NoticeDot style={iconDotCorner} /> : null}
+            {updateDot ? <NoticeDot style={dotBesideGlyph(materialSize.touchTarget)} /> : null}
           </View>
         )}
       </MenuTrigger>
