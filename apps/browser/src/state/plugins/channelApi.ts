@@ -21,8 +21,11 @@ import { UI_METHODS, uiMethod } from "./channelUi";
 import { programsStatus, relinkOwnPrograms } from "./programs";
 import { subscribeState } from "./stateEvents";
 import { runIntent } from "./stateIntents";
+import { answerV3Method } from "./channelV3";
+import { noteReadyServices } from "./services";
+import { syncSidecar } from "./sidecarPipe";
 
-const CHANNEL_PROTOCOL = 2;
+const CHANNEL_PROTOCOL = 3;
 const LEGACY_CHANNEL_PROTOCOL = 1;
 const MAX_OPEN_URLS = 10;
 const TAB_APPLY_OPS = ["open", "tab.close", "tab.activate"] as const;
@@ -50,7 +53,8 @@ async function toolsCall(name: string, m: PluginManifest, params: Record<string,
   const { plugin, tool, input } = params;
   if (typeof plugin !== "string" || typeof tool !== "string") return failure("bad_request", "tools.call needs a plugin and a tool.");
   const callee = activeManifest(currentPlugins(), plugin);
-  const missing = callee ? missingPermissions(m.permissions, callee.permissions) : [];
+  const depends = !!callee && (Object.hasOwn(m.dependencies, callee.id) || Object.hasOwn(m.optionalDependencies, callee.id));
+  const missing = callee && !depends ? missingPermissions(m.permissions, callee.permissions) : [];
   if (missing.length) return failure("refused", `${plugin} has permissions this plugin doesn't (${missing.join(", ")}), so it can't call its tools.`);
   const outcome = await callTool(plugin, tool, input, { kind: "plugin", plugin: name });
   return outcome.ok ? { result: outcome.result } : failure(outcome.code, outcome.message);
@@ -109,8 +113,12 @@ export function answerMethod(c: ChannelCaller, m: PluginManifest, method: string
       return { result: { app: "Ardia", version: systemInfo().appVersion, protocol: m.main ? CHANNEL_PROTOCOL : LEGACY_CHANNEL_PROTOCOL, plugin: c.name, values: valuesFor(c.name) } };
     case "values":
       return { result: valuesFor(c.name) };
-    case "ready":
-      return markPluginReady(c.name, c.run) ? { result: { ok: true } } : failure("refused", "This run of the plugin has ended.");
+    case "ready": {
+      if (!markPluginReady(c.name, c.run)) return failure("refused", "This run of the plugin has ended.");
+      noteReadyServices(c, m, params.services);
+      syncSidecar(c.name);
+      return { result: { ok: true } };
+    }
     case "windows":
       return m.permissions.tabs ? { result: minimizedWindows(m.permissions.fullUrls) } : failure("refused", "windows needs the tabs permission.");
     case "run":
@@ -146,5 +154,5 @@ export function answerMethod(c: ChannelCaller, m: PluginManifest, method: string
   if (method.startsWith("storage.") && ["storage.get", "storage.set", "storage.delete", "storage.keys"].includes(method)) return storageMethod(c, m, method, params);
   if (["secrets.get", "secrets.set", "secrets.delete"].includes(method)) return secretsMethod(c, m, method, params);
   if ((UI_METHODS as readonly string[]).includes(method)) return uiMethod(c, m, method, params);
-  return null;
+  return answerV3Method(c, m, method, params);
 }

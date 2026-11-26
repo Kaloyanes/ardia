@@ -99,6 +99,8 @@ export function dispatchPluginSurfaceEvent(plugin: string, surfaceId: string, wi
 
 const mountedSurfaces = (plugin: string) => [...mounted.values()].filter((m) => m.plugin === plugin);
 
+export const mountedCountOf = (plugin: string) => mountedSurfaces(plugin).length;
+
 export const isMountedSurface = (plugin: string, surfaceId: string) => mounted.has(surfaceKey(plugin, surfaceId));
 
 export const mountedEntry = (plugin: string, surfaceId: string): { viewId: string; windowId: string; kind: SurfaceKind; context: Record<string, unknown> } | null => mounted.get(surfaceKey(plugin, surfaceId)) ?? null;

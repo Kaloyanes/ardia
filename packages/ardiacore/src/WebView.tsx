@@ -61,6 +61,9 @@ export function webViewHandle(native: { readonly current: WebViewNativeHandle | 
         throw new ArdiaError("ERR_BAD_REPLY", "the page's result isn't JSON");
       }
     },
+    runPluginWorld: (world, source) => call(false, (n) => n.runPluginWorld(world, source)),
+    postPluginWorld: (world, expression) => call(undefined, (n) => n.postPluginWorld(world, expression)),
+    removePluginWorld: (world, teardown) => call(undefined, (n) => n.removePluginWorld(world, teardown)),
     navigationEntries: async () => (await call([], (n) => n.navigationEntries())).map((e) => ({ ...e, url: toAppUrl(e.url) })),
     capturePicture: (scale) => call(null, (n) => n.capturePicture(scale)),
     downloadImage: (url, maxPixels) => call(null, (n) => n.downloadImage(url, maxPixels)),

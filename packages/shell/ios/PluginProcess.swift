@@ -38,7 +38,10 @@ final class PluginProcess: PluginRun {
     let launch: Int
     var runtime = "process"
     var entry: String?
+    var sidecar = false
 
+    static let sidecarSuffix = "/sidecar"
+    var runKey: String { sidecar ? name + Self.sidecarSuffix : name }
     var isScript: Bool { runtime == "js" }
     var sandboxNetwork: Bool { isScript ? false : network }
   }
@@ -197,7 +200,7 @@ final class PluginProcess: PluginRun {
       return .failure(.refused("it couldn't start (\(errnoText(result)))"))
     }
     let limit = UInt64(max(64, spec.memoryMB)) << 20
-    let process = PluginProcess(name: spec.name, run: run, pid: pid, queue: queue, memoryLimit: limit, log: log, approved: spec.approved, hasPage: spec.hasPage, launch: spec.launch)
+    let process = PluginProcess(name: spec.runKey, run: run, pid: pid, queue: queue, memoryLimit: limit, log: log, approved: spec.approved, hasPage: spec.hasPage, launch: spec.launch)
     process.watch(channel: pair[0], onLine: onLine, onExit: onExit)
     return .success(process)
   }

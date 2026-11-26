@@ -13,6 +13,7 @@ import { fullControlLine } from "./consent";
 import { ownValue } from "../../lib/decode";
 import { useLock } from "./lockfile";
 import { shownNames } from "./profileScope";
+import { pluginPageMenuItems } from "./menus";
 
 export const usePluginOrder = () => usePlugins((s) => s.order);
 export { useCatalog } from "./marketplace";
@@ -85,3 +86,13 @@ export function useConsentBundle(bundle: readonly { name: string; hash: string }
   const key = usePlugins((s) => JSON.stringify((bundle ?? []).map((b) => (consentListing(s, b.name, b.hash)?.hash === b.hash ? b.name : null))));
   return useMemo(() => (JSON.parse(key) as (string | null)[]).filter((n): n is string => n !== null), [key]);
 }
+export { usePluginHealth } from "./watchdog";
+export { useSitePluginScripts, usePluginsTouchPages } from "./siteScriptBlocks";
+
+export function usePluginPageMenuItems<T extends { id: string; title: string }>(tabId: string, base: T[]): (T | ReturnType<typeof pluginPageMenuItems>[number])[] {
+  const url = useBrowser((s) => s.tabs[tabId]?.url ?? "");
+  const plugins = usePlugins(useShallow((s) => ({ listings: s.listings, records: s.records, order: s.order })));
+  return useMemo(() => (url ? [...base, ...pluginPageMenuItems(tabId, plugins)] : base), [tabId, url, plugins, base]);
+}
+
+export { runPluginPageMenu } from "./menus";

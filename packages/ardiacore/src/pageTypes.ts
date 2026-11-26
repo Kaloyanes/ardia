@@ -71,10 +71,11 @@ export type PageShare = {
   text?: string;
   fileUrl?: string;
 };
-export type PageMenuItem = { id: PageMenuCommand; title: string };
+export type PageMenuItem = { id: PageMenuCommand | PluginMenuCommand; title: string };
 export type PageMenuCommand = "translatePage" | "showOriginal";
+export type PluginMenuCommand = `plugin-menu:${string}`;
 export type PageCommand = {
-  command: "search" | "ask" | "copyLinkToHighlight" | "escape" | "share" | "hideElement" | PageMenuCommand;
+  command: "search" | "ask" | "copyLinkToHighlight" | "escape" | "share" | "hideElement" | PageMenuCommand | PluginMenuCommand;
   text: string;
   point?: [number, number];
   modifiers?: { metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; middle?: boolean };
@@ -281,6 +282,9 @@ export type WebViewHandle = {
   showDevTools(panel?: string): Promise<void>;
   executeJavaScript(code: string): Promise<void>;
   evaluate<T = unknown>(code: string): Promise<T | null>;
+  runPluginWorld(world: string, source: string): Promise<boolean>;
+  postPluginWorld(world: string, expression: string): Promise<void>;
+  removePluginWorld(world: string, teardown: string): Promise<void>;
   navigationEntries(): Promise<NavigationEntry[]>;
   capturePicture(scale: number): Promise<{ data: string; frame: [number, number, number, number] } | null>;
   downloadFavicon(url: string): Promise<FaviconImage | null>;
@@ -331,6 +335,9 @@ export type WebViewNativeHandle = Omit<
   requestPictureInPicture(clickAt: number, control: number): Promise<boolean>;
   takeControlPress(clickAt: number, control: number): Promise<boolean>;
   evaluate(code: string): Promise<string | null>;
+  runPluginWorld(world: string, source: string): Promise<boolean>;
+  postPluginWorld(world: string, expression: string): Promise<void>;
+  removePluginWorld(world: string, teardown: string): Promise<void>;
   loadUrl(url: string, userInitiated?: boolean): Promise<void>;
   resolvePasswordPrompt(answer: string, username: string | null, password: string | null): Promise<void>;
   discard(unload: boolean): Promise<DiscardOutcome>;

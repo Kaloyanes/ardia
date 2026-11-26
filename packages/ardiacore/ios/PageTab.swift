@@ -70,4 +70,8 @@ protocol PageTab: NSView {
   func resolveUnresponsive(terminate: Bool)
   func discard(unload: Bool) -> String
   func sleepIfHidden(for seconds: Double) -> [NSNumber]
+
+  func runPluginWorld(_ world: String, source: String, completion: @escaping (Bool) -> Void)
+  func postPluginWorld(_ world: String, expression: String)
+  func removePluginWorld(_ world: String, teardown: String)
 }

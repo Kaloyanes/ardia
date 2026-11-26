@@ -7,6 +7,9 @@ import { currentPlugins, type PluginsStore } from "./store";
 import { manifestInProfile, windowProfileId } from "./profileScope";
 import { activeNames } from "./store";
 import { runPluginCommand, type CommandContext } from "./commands";
+import { urlParts } from "../../lib/urlParts";
+import { useBrowser } from "../browser/store";
+import { isIncognitoProfile } from "../browser/model";
 
 const PLUGIN_MENU_PREFIX = "plugin-menu:";
 const SUBMENU_AFTER = 2;
@@ -50,4 +53,30 @@ export async function runPluginMenuChoice(choice: string, windowId: string, cont
   if (!entry || !command || !whenHolds(entry.when, context.when) || !whenHolds(command.when, context.when)) return false;
   notePlugin("plugin_menu_runs", consent);
   return runPluginCommand(parsed.plugin, parsed.command, windowId, { from: "menu", slot: parsed.slot, ...context.data }, context.when, consent);
+}
+
+const PAGE_MENU_LIMIT = 8;
+
+function pageMenuContext(tabId: string): { windowId: string; context: PluginMenuContext } | null {
+  const s = useBrowser.getState();
+  const tab = s.tabs[tabId];
+  if (!tab || isIncognitoProfile(tab.profileId) || !/^https?:/i.test(tab.url)) return null;
+  const parts = urlParts(tab.url);
+  return { windowId: tab.windowId, context: { when: { urlHost: parts?.host ?? "", urlScheme: parts?.scheme ?? "" }, data: { tabId, windowId: tab.windowId } } };
+}
+
+export function pluginPageMenuItems(tabId: string, s: Pick<PluginsStore, "listings" | "records" | "order"> = currentPlugins()): { id: `plugin-menu:${string}`; title: string }[] {
+  const found = pageMenuContext(tabId);
+  if (!found) return [];
+  type Entry = { id: string; title: string; children?: MenuItem[] };
+  const flat = (items: MenuItem[]): Entry[] => items.flatMap((item) => ("separator" in item ? [] : (item as Entry).children ? flat((item as Entry).children!) : [item as Entry]));
+  return flat(pluginMenuItems("page", found.context, s))
+    .slice(0, PAGE_MENU_LIMIT)
+    .flatMap((item) => (isPluginMenuChoice(item.id) && item.title ? [{ id: item.id as `plugin-menu:${string}`, title: item.title }] : []));
+}
+
+export function runPluginPageMenu(tabId: string, choice: string, consent?: ConsentToken | null): Promise<boolean> {
+  const found = pageMenuContext(tabId);
+  if (!found || !choice.startsWith(`${PLUGIN_MENU_PREFIX}page/`)) return Promise.resolve(false);
+  return runPluginMenuChoice(choice, found.windowId, found.context, consent);
 }

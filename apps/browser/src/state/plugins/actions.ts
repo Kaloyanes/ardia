@@ -15,6 +15,11 @@ export { installPlugin, cancelInstall, FETCH_REASONS, OFFLINE_REGISTRY } from ".
 export { addRegistry, removeRegistry, getPlugin, installFromFile, installFromDeepLink, refreshCatalog, setPluginChannel, setPluginProfiles, filterCatalog, catalogCategories, CATEGORIES_ALL, type CatalogEntry } from "./marketplace";
 export { reviewUpdate, rollbackPlugin, checkPlugins } from "./updater";
 export { ensurePluginActivated } from "./activation";
+export { pluginImageSource, pickFilesForPluginView, pluginCanPickFiles } from "./surfaceMedia";
+export { grantTabLease, revokeTabLease } from "./pageApis";
+export { resumePlugin } from "./watchdog";
+export { runPluginInput } from "./inputModes";
+export { setPluginScriptsBlocked } from "./siteScriptBlocks";
 export { runPluginAction, pluginBarActions } from "./commands";
 export { runPluginToolbarItem, type PluginToolbarEntry } from "./toolbar";
 export { setPluginSecretRow, pluginSecretRowIsSet } from "./secretRows";

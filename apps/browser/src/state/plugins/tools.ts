@@ -16,11 +16,12 @@ const SOCKET_CALLER_ON_WIRE = "cli";
 
 const wireCaller = (caller: ToolCaller) => (caller.kind === "socket" ? { kind: SOCKET_CALLER_ON_WIRE } : caller);
 export type ToolOutcome = { ok: true; result: unknown } | { ok: false; code: "refused" | "failed" | "bad_request"; message: string };
-type PluginCall =
+export type PluginCall =
   | { kind: "tool"; tool: string; input: unknown }
   | { kind: "command"; command: string; context: Record<string, unknown> }
   | { kind: "omnibox"; provider: string; query: string }
-  | { kind: "decide"; event: string; data: Record<string, unknown> };
+  | { kind: "decide"; event: string; data: Record<string, unknown> }
+  | { kind: "service"; iface: string; method: string; input: unknown };
 
 type Pending = { id: string; plugin: string; run: number; caller: string | null; isTool: boolean; consent: ConsentToken | null; settle: (outcome: ToolOutcome) => void; timer: ReturnType<typeof setTimeout>; detach: () => void };
 
@@ -62,10 +63,12 @@ function lineOf(id: string, call: PluginCall, given: ToolCaller, deadline: numbe
   if (call.kind === "tool") return JSON.stringify({ call: id, tool: call.tool, input: call.input === undefined ? {} : call.input, caller, deadline, ...profile });
   if (call.kind === "command") return JSON.stringify({ call: id, kind: call.kind, name: call.command, context: call.context, caller, deadline, ...profile });
   if (call.kind === "omnibox") return JSON.stringify({ call: id, kind: call.kind, name: call.provider, input: call.query, caller, deadline, ...profile });
+  if (call.kind === "service") return JSON.stringify({ call: id, kind: call.kind, name: call.iface, method: call.method, input: call.input ?? null, caller, deadline, ...profile });
   return JSON.stringify({ call: id, kind: call.kind, name: call.event, input: call.data, caller, deadline, ...profile });
 }
 
-const labelOf = (call: PluginCall) => (call.kind === "tool" ? call.tool : call.kind === "command" ? call.command : call.kind === "omnibox" ? `omnibox ${call.provider}` : call.event);
+const labelOf = (call: PluginCall) =>
+  call.kind === "tool" ? call.tool : call.kind === "command" ? call.command : call.kind === "omnibox" ? `omnibox ${call.provider}` : call.kind === "service" ? `${call.iface}.${call.method}` : call.event;
 
 function send(plugin: string, run: number, call: PluginCall, caller: ToolCaller, timeoutMs: number, consent: ConsentToken | null, signal: AbortSignal | undefined, profileId: string | null): Promise<ToolOutcome> {
   if (signal?.aborted) return Promise.resolve(CANCELLED);
@@ -131,13 +134,14 @@ function whileCallerRuns(caller: string | null, ready: Promise<number | ToolOutc
 
 export type CallOptions = { activate?: boolean; consent?: ConsentToken | null; signal?: AbortSignal; profile?: string | null };
 
-export const callReaches = (plugin: string, call: PluginCall, profileId: string | null) => call.kind === "tool" && profileId === null ? true : !!manifestInProfile(currentPlugins(), plugin, profileId);
+export const callReaches = (plugin: string, call: PluginCall, profileId: string | null) => (call.kind === "tool" || call.kind === "service") && profileId === null ? true : !!manifestInProfile(currentPlugins(), plugin, profileId);
 
 export async function invokePluginCall(plugin: string, call: PluginCall, caller: ToolCaller, timeoutMs: number, options: CallOptions = {}): Promise<ToolOutcome> {
   const profileId = options.profile !== undefined ? options.profile : callProfile(plugin, call);
   if (!callReaches(plugin, call, profileId)) return failed("refused", `${plugin} isn't on in that profile.`);
   const consent = options.consent !== undefined ? options.consent : consentToken();
-  const trigger = call.kind === "tool" ? `onTool:${call.tool}` : call.kind === "command" ? `onCommand:${call.command}` : call.kind === "omnibox" ? `onOmnibox:${call.provider}` : `onEvent:${call.event}`;
+  const trigger =
+    call.kind === "tool" ? `onTool:${call.tool}` : call.kind === "command" ? `onCommand:${call.command}` : call.kind === "omnibox" ? `onOmnibox:${call.provider}` : call.kind === "service" ? `onService:${call.iface}` : `onEvent:${call.event}`;
   const callerName = caller.kind === "plugin" ? caller.plugin : null;
   const callerRun = callerName === null ? null : runningRun(callerName);
   const run = await whileCallerRuns(callerName, readyRunFor(plugin, trigger, options.activate !== false));
@@ -200,3 +204,5 @@ export function sendSurfaceMessage(plugin: string, message: SurfaceMessage): boo
 }
 
 export const waitingCalls = () => pending.size;
+
+export const waitingCallsOf = (plugin: string) => [...pending.values()].filter((p) => p.plugin === plugin).length;

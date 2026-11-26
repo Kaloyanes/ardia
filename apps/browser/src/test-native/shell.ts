@@ -735,6 +735,19 @@ export const pluginHost = {
   listGate: null as null | Promise<void>,
   listFails: false,
   nextRun: 0,
+  streams: [] as { name: string; run: number; stream: string; url: string; method: string; allowedHosts: string[] }[],
+  streamResult: null as null | { ok: true; status: number; statusText: string; url: string; headers: Record<string, string> } | { ok: false; reason: string },
+  streamCancels: [] as { name: string; run: number; stream: string }[],
+  sockets: [] as { name: string; run: number; socket: string; url: string; protocols: string[]; allowedHosts: string[] }[],
+  socketResult: null as null | { ok: true; open: boolean; protocol: string } | { ok: false; reason: string },
+  socketSends: [] as { name: string; run: number; socket: string; data: string; binary: boolean }[],
+  socketCloses: [] as { name: string; run: number; socket: string; code: number; reason: string }[],
+  netCloses: [] as { name: string; run: number }[],
+  usage: [] as { name: string; run: number; memoryBytes: number; cpuMs: number; streams: number; sockets: number }[],
+  authSpecs: [] as { plugin: string; scope: string; pluginName: string; authorizeUrl: string; clientId: string; scopes: string[] }[],
+  authResult: { ok: false, reason: "no sign-in in tests" } as { ok: true; code: string; verifier: string; redirectUri: string } | { ok: false; reason: string; cancelled?: boolean },
+  pickResult: { ok: false, reason: "you didn't pick a file", cancelled: true } as { ok: true; files: { name: string; size: number; mimeType: string; data: string; encoding: "base64" | "utf8" }[] } | { ok: false; reason: string; cancelled?: boolean },
+  saves: [] as { name: string; data: string; encoding: "base64" | "utf8" }[],
 };
 const withSource = <T extends { source?: "local" | "store" | "dev" }>(f: T) => ({ ...f, source: f.source ?? "local" });
 const pluginEvents = nativeEvents();
@@ -863,6 +876,22 @@ const plugins: Modules["ArdiaPlugins"] = {
     const text = pluginHost.files[`${name}/${path}`];
     return text === undefined ? { ok: false, reason: "the file wasn't found" } : { ok: true, text };
   },
+  fetchStream: async (spec) => {
+    pluginHost.streams.push({ name: spec.name, run: spec.run, stream: spec.stream, url: spec.url, method: spec.method, allowedHosts: [...spec.allowedHosts] });
+    return pluginHost.streamResult ?? { ok: true, status: 200, statusText: "OK", url: spec.url, headers: {} };
+  },
+  cancelStream: (name, run, stream) => void pluginHost.streamCancels.push({ name, run, stream }),
+  wsConnect: async (spec) => {
+    pluginHost.sockets.push({ name: spec.name, run: spec.run, socket: spec.socket, url: spec.url, protocols: [...spec.protocols], allowedHosts: [...spec.allowedHosts] });
+    return pluginHost.socketResult ?? { ok: true, open: true, protocol: "" };
+  },
+  wsSend: async (name, run, socket, data, binary) => (pluginHost.socketSends.push({ name, run, socket, data, binary }), { ok: true }),
+  wsClose: (name, run, socket, code, reason) => void pluginHost.socketCloses.push({ name, run, socket, code, reason }),
+  closeNet: (name, run) => void pluginHost.netCloses.push({ name, run }),
+  usage: async () => pluginHost.usage.map((row) => ({ ...row })),
+  authSignIn: async (spec) => (pluginHost.authSpecs.push({ plugin: spec.plugin, scope: spec.scope, pluginName: spec.pluginName, authorizeUrl: spec.authorizeUrl, clientId: spec.clientId, scopes: [...spec.scopes] }), pluginHost.authResult),
+  pickFiles: async () => pluginHost.pickResult,
+  saveFile: async (spec) => (pluginHost.saves.push({ name: spec.name, data: spec.data, encoding: spec.encoding }), { ok: true, saved: true, name: spec.name }),
   addListener: pluginEvents.addListener,
 };
 

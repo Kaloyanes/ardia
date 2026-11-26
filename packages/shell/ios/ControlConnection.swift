@@ -72,6 +72,8 @@ final class ControlConnection {
     if !writeArmed { flush() }
   }
 
+  var pendingBytes: Int { output.bytes }
+
   func event(_ data: Data) {
     guard !closed, !finishingLine, !draining else { return }
     enqueue(output.addEvent(data))

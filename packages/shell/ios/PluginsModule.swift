@@ -118,6 +118,26 @@ public class PluginsModule: Module, PluginsNative {
 
     Self.devSnapshotPageFunction
 
+    Self.fetchStreamFunction
+
+    Self.cancelStreamFunction
+
+    Self.wsConnectFunction
+
+    Self.wsSendFunction
+
+    Self.wsCloseFunction
+
+    Self.closeNetFunction
+
+    Self.usageFunction
+
+    Self.authSignInFunction
+
+    Self.pickFilesFunction
+
+    Self.saveFileFunction
+
     View(PluginPageView.self) {
       Events("onLoaded", "onTitleChange", "onNavigationChange", "onMessage")
       Prop("plugin") { (view: PluginPageView, value: String) in view.plugin = value }
@@ -159,6 +179,7 @@ public class PluginsModule: Module, PluginsNative {
     var process = PluginProcess.Spec(name: name, run: run, memoryMB: memoryMB, network: network, folderId: folderId, approved: approved, hasPage: hasPage, launch: launch)
     process.runtime = runtime
     process.entry = entry
+    process.sidecar = spec["sidecar"] as? Bool ?? false
     PluginHost.shared.start(process) { reply in promise.resolve(reply) }
   }
 

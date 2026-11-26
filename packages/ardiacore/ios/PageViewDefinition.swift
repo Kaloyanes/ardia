@@ -63,6 +63,11 @@ enum PageViewDefinition {
       AsyncFunction("downloadImage") { (view: V, url: String, maxPixels: Int, promise: Promise) in
         view.page.downloadImage(url, maxPixels: maxPixels) { promise.resolve($0) }
       }.runOnQueue(.main)
+      AsyncFunction("runPluginWorld") { (view: V, world: String, source: String, promise: Promise) in
+        view.page.runPluginWorld(world, source: source) { promise.resolve($0) }
+      }.runOnQueue(.main)
+      AsyncFunction("postPluginWorld") { (view: V, world: String, expression: String) in view.page.postPluginWorld(world, expression: expression) }.runOnQueue(.main)
+      AsyncFunction("removePluginWorld") { (view: V, world: String, teardown: String) in view.page.removePluginWorld(world, teardown: teardown) }.runOnQueue(.main)
 
       AsyncFunction("mediaCommand") { (view: V, action: String, seconds: Double?) in
         view.page.mediaCommand(action, seconds: seconds ?? 0)

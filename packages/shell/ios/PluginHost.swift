@@ -48,8 +48,8 @@ final class PluginHost {
 
   func start(_ spec: PluginProcess.Spec, done: @escaping ([String: Any]) -> Void) {
     queue.async { [self] in
-      lifecycle.enqueue(spec.name, .start, cancelled: { done(["ok": false, "reason": "a later stop or removal replaced this start"]) }) { [self] complete in
-        runs.stopAll(spec.name, graceMs: 0) { [self] in
+      lifecycle.enqueue(spec.runKey, .start, cancelled: { done(["ok": false, "reason": "a later stop or removal replaced this start"]) }) { [self] complete in
+        runs.stopAll(spec.runKey, graceMs: 0) { [self] in
           let attached = attachment
           PluginProcess.prepareCertificates(for: spec, deliverOn: queue) { [self] certificates in
             if attachment == attached {
@@ -75,6 +75,7 @@ final class PluginHost {
       onExit: { [weak self] process, status, signal, overMemory in
         guard let self else { return }
         self.runs.exited(process)
+        PluginNetChannels.shared.closeAll(process.name, run: process.run)
         self.sink?.send(
           "onExit",
           ["name": process.name, "run": process.run, "status": status.map { Int($0) } ?? NSNull(), "signal": signal.map { Int($0) } ?? NSNull(), "overMemory": overMemory])
@@ -162,6 +163,29 @@ final class PluginHost {
     }
   }
 
+  func deliver(_ name: String, run: Int, _ line: String, then: @escaping (_ backlog: Int?) -> Void) {
+    let data = Self.framed(line)
+    queue.async { [self] in
+      guard let process = runs.current[name], process.run == run, !process.exited, let connection = process.connection, !connection.closed else { return then(nil) }
+      connection.send(data)
+      then(connection.closed ? nil : connection.pendingBytes)
+    }
+  }
+
+  func runningProcesses(_ answer: @escaping ([(name: String, run: Int, pid: pid_t)]) -> Void) {
+    queue.async { [self] in
+      let running = runs.current.values.filter { !$0.exited }.map { (name: $0.name, run: $0.run, pid: $0.pid) }
+      DispatchQueue.global(qos: .utility).async { answer(running) }
+    }
+  }
+
+  func backlog(_ name: String, run: Int, then: @escaping (_ backlog: Int?) -> Void) {
+    queue.async { [self] in
+      guard let process = runs.current[name], process.run == run, !process.exited, let connection = process.connection, !connection.closed else { return then(nil) }
+      then(connection.pendingBytes)
+    }
+  }
+
   func event(_ name: String, run: Int, _ line: String) {
     let data = Self.framed(line)
     queue.async { [self] in
@@ -173,6 +197,7 @@ final class PluginHost {
   func remove(_ name: String, source: String, folderId: String?, done: @escaping (String?) -> Void) {
     queue.async { [self] in
       lifecycle.enqueue(name, .remove) { [self] complete in
+        runs.stopAll(name + PluginProcess.Spec.sidecarSuffix, graceMs: 1000) {}
         runs.stopAll(name, graceMs: 1000) {
           let problem = PluginFolders.current().map { $0.remove(name, source: source, folderId: folderId) } ?? "Ardia has no data folder."
           DispatchQueue.main.async { done(problem) }
