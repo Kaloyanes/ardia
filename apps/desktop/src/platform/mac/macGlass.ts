@@ -22,6 +22,31 @@ type BackdropDeps = {
   additive?: (element: Element) => boolean;
 };
 
+export type MeasuredBackdrop = { region: BackdropRegion; additive: boolean };
+
+export function settleBackdrops(measured: readonly MeasuredBackdrop[]): BackdropRegion[] {
+  const kept: MeasuredBackdrop[] = [];
+  const byKey = new Map<string, number>();
+  for (const entry of measured) {
+    const { region } = entry;
+    if (region.theme && !(region.theme.opacity > 0)) continue;
+    const key = JSON.stringify(region.theme ? { ...region, theme: { ...region.theme, opacity: 0 } } : region);
+    const at = byKey.get(key);
+    if (at === undefined) {
+      byKey.set(key, kept.length);
+      kept.push(entry);
+      continue;
+    }
+    const earlier = kept[at]!;
+    if (!region.theme || !earlier.region.theme) continue;
+    kept[at] = {
+      region: { ...earlier.region, theme: { ...earlier.region.theme, opacity: +Math.min(1, earlier.region.theme.opacity + region.theme.opacity).toFixed(4) } },
+      additive: earlier.additive || entry.additive,
+    };
+  }
+  return settleCrossFades(kept.map((entry) => entry.region), kept.map((entry) => entry.additive));
+}
+
 export function settleCrossFades(regions: BackdropRegion[], additive: readonly boolean[]): BackdropRegion[] {
   const stacks = new Map<string, number[]>();
   regions.forEach((region, index) => {
@@ -77,21 +102,14 @@ export function createMacBackdrops(deps: BackdropDeps) {
   let stopMotion: (() => void) | null = null;
 
   const measured = () => {
-    const seen = new Set<string>();
-    const additive: boolean[] = [];
-    const measuredRegions = [...layers].flatMap(([element, { material, theme }]): BackdropRegion[] => {
+    const regions = settleBackdrops([...layers].flatMap(([element, { material, theme }]): MeasuredBackdrop[] => {
       const rect = deps.measure(element);
       if (!rect) return [];
       const painted = theme?.(rect) ?? null;
       const opacity = painted && deps.opacity ? Math.min(1, Math.max(0, deps.opacity(element))) : 1;
       const region: BackdropRegion = painted ? { rect, material, theme: { ...painted, opacity: +(painted.opacity * opacity).toFixed(4) } } : { rect, material };
-      const key = JSON.stringify(region);
-      if (seen.has(key)) return [];
-      seen.add(key);
-      additive.push(!!painted && !!deps.additive?.(element));
-      return [region];
-    });
-    const regions = settleCrossFades(measuredRegions, additive);
+      return [{ region, additive: !!painted && !!deps.additive?.(element) }];
+    }));
     return { regions, text: JSON.stringify(regions) };
   };
 

@@ -130,6 +130,37 @@ TEST(glass_names_and_ids) {
   CHECK(ardia_mac::glass::Lay({control}, {}, {0, 0, 100, 100}, 1).placements.size() == 1);
 }
 
+TEST(native_backdrop_theme) {
+  namespace theme = ardia_mac::backdrop_theme;
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      if (const auto color = theme::ColorFrom({a, b, a, b, a})) {
+        for (double channel : {color->red, color->green, color->blue, color->alpha}) CHECK(channel >= 0 && channel <= 1);
+        CHECK(std::isfinite(a) && std::isfinite(b));
+      }
+      const int pixels = theme::GrainImagePixels(a, b, a);
+      CHECK(pixels >= 1 && pixels <= theme::kMaxGrainImagePixels);
+    }
+    if (const auto point = theme::GradientPoint(a)) CHECK(std::isfinite(*point) && std::abs(*point) <= theme::kMaxGradientReach);
+    const double radius = theme::ThemeRadius(a);
+    CHECK(radius >= 0 && radius <= theme::kMaxThemeRadius);
+    const double points = theme::GrainPoints(a);
+    CHECK(points > 0 && points <= theme::kMaxGrainPoints);
+    CHECK(theme::Unit(a) >= 0 && theme::Unit(a) <= 1);
+    if (std::isfinite(a) && a >= 0 && a < 1e6) {
+      const auto count = static_cast<std::size_t>(a);
+      if (theme::LayerCountFits(count)) CHECK(count <= theme::kMaxLayers);
+      if (theme::StopCountFits(count)) CHECK(count >= 1 && count <= theme::kMaxStops);
+    }
+  }
+  for (const std::string& text : Load().strings) {
+    const auto index = theme::BackdropIndex(text, 64);
+    if (index) CHECK(*index < 64 && text == theme::BackdropId(*index));
+  }
+  CHECK(theme::ColorFrom({1, 0.5, 0, 1, 1}).has_value());
+  CHECK(theme::BackdropIndex("backdrop:3", 64) == std::optional<std::size_t>(3));
+}
+
 TEST(glass_geometry) {
   for (double a : Load().numbers) {
     for (double b : Load().numbers) {

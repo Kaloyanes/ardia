@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { themedBackdropTheme, treatmentBackdropTheme, WINDOW_BACKDROP_CAPABILITY } from "./backdropTheme.ts";
 import { baseLine, baseStops, GRAIN_POINTS, FILM_GRAIN_POINTS, overlayLine, swatchColors } from "./shims/web/gl/themeSwatch.ts";
-import { createMacBackdrops, settleCrossFades } from "./platform/mac/macGlass.ts";
+import { createMacBackdrops, settleBackdrops, settleCrossFades } from "./platform/mac/macGlass.ts";
 
 const PURPLE = [0.45, 0.3, 0.5, 1, 0.6, 0.45, 0.3, 1, 0.2, 0.3, 0.6, 0.8];
 
@@ -113,4 +113,26 @@ test("a profile cross-fade keeps the bottom theme opaque so no vibrancy shows th
   assert.equal(settleCrossFades([{ rect, material: "liquid", theme: theme(0.3) }, { rect: { ...rect, x: 10 }, material: "liquid", theme: theme(0.3) }], [true, true])[0].theme.opacity, 0.3, "different rects are separate stacks");
   assert.equal(settleCrossFades([{ rect, material: "liquid", theme: theme(0.8) }, { rect, material: "liquid", theme: theme(0.7) }], [true, true])[0].theme.opacity, 1);
   assert.deepEqual(settleCrossFades([{ rect, material: "liquid" }], [false]), [{ rect, material: "liquid" }]);
+});
+
+test("with three or more profiles the hidden ones drop out before the bottom of the cross-fade is pinned", () => {
+  const rect = { x: 0, y: 0, width: 300, height: 800 };
+  const theme = (opacity, hue) => ({ layers: [{ kind: "fill", color: [hue, 0, 0, 1, 0], opacity: 1 }], opacity });
+  const entry = (opacity, hue) => ({ region: { rect, material: "windowTreatment", theme: theme(opacity, hue) }, additive: true });
+  const settled = settleBackdrops([entry(0, 0.1), entry(0.5, 0.2), entry(0.5, 0.3)]);
+  assert.equal(settled.length, 2, "the inactive first profile is not drawn");
+  assert.equal(settled[0].theme.layers[0].color[0], 0.2, "the outgoing profile, not the inactive one, sits at the bottom");
+  assert.equal(settled[0].theme.opacity, 1);
+  assert.equal(settled[1].theme.opacity, 0.5);
+  assert.deepEqual(settleBackdrops([entry(0, 0.1), entry(0, 0.2)]), []);
+});
+
+test("two identical half-opaque themes add up instead of collapsing to one half-opaque layer", () => {
+  const rect = { x: 0, y: 0, width: 300, height: 800 };
+  const same = () => ({ region: { rect, material: "windowTreatment", theme: { layers: [{ kind: "fill", color: [0.4, 0.2, 0.5, 1, 0], opacity: 1 }], opacity: 0.5 } }, additive: true });
+  const settled = settleBackdrops([same(), same()]);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].theme.opacity, 1);
+  const plain = { region: { rect, material: "liquid" }, additive: false };
+  assert.deepEqual(settleBackdrops([plain, plain]), [{ rect, material: "liquid" }]);
 });

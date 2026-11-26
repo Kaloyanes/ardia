@@ -12,7 +12,6 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_not_drawn.h"
@@ -330,35 +329,31 @@ namespace theme = backdrop_theme;
 std::optional<theme::Color> ThemeColorOf(const base::Value* value) {
   const base::ListValue* list = value ? value->GetIfList() : nullptr;
   if (!list || list->size() != 5) return std::nullopt;
-  double parts[5];
+  std::array<double, 5> parts{};
   for (std::size_t index = 0; index < 5; ++index) {
     const base::Value& part = (*list)[index];
     if (!part.is_int() && !part.is_double()) return std::nullopt;
     parts[index] = part.GetDouble();
-    if (!theme::Finite(parts[index])) return std::nullopt;
   }
-  return theme::Color{theme::Unit(parts[0]), theme::Unit(parts[1]), theme::Unit(parts[2]), theme::Unit(parts[3]),
-                      parts[4] == 1};
+  return theme::ColorFrom(parts);
 }
 
 std::optional<double> PointPart(const base::ListValue* point, std::size_t index) {
   if (!point || point->size() != 2) return std::nullopt;
   const base::Value& value = (*point)[index];
   if (!value.is_int() && !value.is_double()) return std::nullopt;
-  const double part = value.GetDouble();
-  return theme::Finite(part) && std::abs(part) <= 64 ? std::optional<double>(part) : std::nullopt;
+  return theme::GradientPoint(value.GetDouble());
 }
 
 std::optional<theme::Theme> ThemeOf(const base::DictValue* dict) {
   const base::ListValue* layers = dict ? dict->FindList("layers") : nullptr;
-  if (!layers || layers->size() > theme::kMaxLayers) return std::nullopt;
+  if (!layers || !theme::LayerCountFits(layers->size())) return std::nullopt;
   theme::Theme parsed;
   parsed.opacity = theme::Unit(Number(dict, "opacity").value_or(1));
   if (const base::DictValue* radii = dict->FindDict("radii")) {
     const char* const keys[] = {"upperLeft", "upperRight", "lowerRight", "lowerLeft"};
     for (std::size_t index = 0; index < 4; ++index) {
-      const double radius = Number(radii, keys[index]).value_or(0);
-      parsed.radii[index] = theme::Finite(radius) ? std::clamp(radius, 0.0, 512.0) : 0;
+      parsed.radii[index] = theme::ThemeRadius(Number(radii, keys[index]).value_or(0));
     }
   }
   for (const base::Value& entry : *layers) {
@@ -377,7 +372,7 @@ std::optional<theme::Theme> ThemeOf(const base::DictValue* dict) {
       const base::ListValue* end = layer->FindList("end");
       const base::ListValue* stops = layer->FindList("stops");
       const auto sx = PointPart(start, 0), sy = PointPart(start, 1), ex = PointPart(end, 0), ey = PointPart(end, 1);
-      if (!sx || !sy || !ex || !ey || !stops || stops->empty() || stops->size() > theme::kMaxStops) return std::nullopt;
+      if (!sx || !sy || !ex || !ey || !stops || !theme::StopCountFits(stops->size())) return std::nullopt;
       out.kind = theme::Kind::kGradient;
       out.start_x = *sx;
       out.start_y = *sy;
@@ -394,8 +389,7 @@ std::optional<theme::Theme> ThemeOf(const base::DictValue* dict) {
       if (!texture || !theme::KnownTexture(*texture)) return std::nullopt;
       out.kind = theme::Kind::kGrain;
       out.texture = *texture;
-      const double points = Number(layer, "points").value_or(theme::kGrainSide);
-      out.points = theme::Finite(points) && points > 0 ? std::min(points, theme::kMaxGrainPoints) : theme::kGrainSide;
+      out.points = theme::GrainPoints(Number(layer, "points").value_or(theme::kGrainSide));
     } else {
       return std::nullopt;
     }
@@ -638,7 +632,7 @@ base::Value GlassRegions::ApplyBackdrops(const base::DictValue& args, double she
       continue;
     }
     glass::Region region;
-    region.id = "backdrop:" + std::to_string(index);
+    region.id = backdrop_theme::BackdropId(backdrops.size());
     region.rect = *rect;
     region.layer = glass::Layer::kBehind;
     region.source = glass::Source::kBackdrop;
@@ -850,15 +844,14 @@ void GlassRegions::LayOutThemes(const glass::Layout& layout) {
   std::vector<std::pair<const backdrop_theme::Theme*, const glass::Placement*>> shown_themes;
   for (const glass::Placement& placement : layout.placements) {
     if (placement.source != glass::Source::kBackdrop || placement.plane != glass::Plane::kBehindWindow ||
-        placement.slice != 0 || !placement.id.starts_with("backdrop:")) {
+        placement.slice != 0) {
       continue;
     }
-    std::size_t index = 0;
-    if (!base::StringToSizeT(std::string_view(placement.id).substr(9), &index) || index >= themes_.size() ||
-        !themes_[index]) {
+    const std::optional<std::size_t> index = backdrop_theme::BackdropIndex(placement.id, themes_.size());
+    if (!index || !themes_[*index]) {
       continue;
     }
-    shown_themes.emplace_back(&*themes_[index], &placement);
+    shown_themes.emplace_back(&*themes_[*index], &placement);
   }
   [CATransaction begin];
   [CATransaction setDisableActions:YES];

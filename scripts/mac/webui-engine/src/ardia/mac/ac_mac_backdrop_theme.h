@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,6 +61,36 @@ inline bool Finite(double value) {
 
 inline double Unit(double value) {
   return Finite(value) ? std::clamp(value, 0.0, 1.0) : 0;
+}
+
+inline constexpr double kMaxGradientReach = 64;
+inline constexpr double kMaxThemeRadius = 512;
+
+inline std::optional<Color> ColorFrom(const std::array<double, 5>& parts) {
+  for (double part : parts) {
+    if (!Finite(part)) return std::nullopt;
+  }
+  return Color{Unit(parts[0]), Unit(parts[1]), Unit(parts[2]), Unit(parts[3]), parts[4] == 1};
+}
+
+inline std::optional<double> GradientPoint(double value) {
+  return Finite(value) && std::abs(value) <= kMaxGradientReach ? std::optional<double>(value) : std::nullopt;
+}
+
+inline double ThemeRadius(double value) {
+  return Finite(value) ? std::clamp(value, 0.0, kMaxThemeRadius) : 0;
+}
+
+inline double GrainPoints(double value) {
+  return Finite(value) && value > 0 ? std::min(value, kMaxGrainPoints) : kGrainSide;
+}
+
+inline bool LayerCountFits(std::size_t layers) {
+  return layers <= kMaxLayers;
+}
+
+inline bool StopCountFits(std::size_t stops) {
+  return stops > 0 && stops <= kMaxStops;
 }
 
 inline bool KnownTexture(std::string_view texture) {
@@ -151,6 +182,24 @@ inline std::array<std::uint8_t, kGrainSide * kGrainSide> TextureGrainAlpha(std::
 
 inline std::array<std::uint8_t, kGrainSide * kGrainSide> GrainAlpha(std::string_view texture) {
   return texture == "film" ? FilmGrainAlpha() : TextureGrainAlpha(texture);
+}
+
+inline constexpr std::string_view kBackdropIdPrefix = "backdrop:";
+
+inline std::string BackdropId(std::size_t accepted) {
+  return std::string(kBackdropIdPrefix) + std::to_string(accepted);
+}
+
+inline std::optional<std::size_t> BackdropIndex(std::string_view id, std::size_t accepted) {
+  if (!id.starts_with(kBackdropIdPrefix)) return std::nullopt;
+  const std::string_view digits = id.substr(kBackdropIdPrefix.size());
+  if (digits.empty() || digits.size() > 6 || (digits.size() > 1 && digits.front() == '0')) return std::nullopt;
+  std::size_t index = 0;
+  for (char c : digits) {
+    if (c < '0' || c > '9') return std::nullopt;
+    index = index * 10 + static_cast<std::size_t>(c - '0');
+  }
+  return index < accepted ? std::optional<std::size_t>(index) : std::nullopt;
 }
 
 inline constexpr int kMaxGrainImagePixels = 4096;
