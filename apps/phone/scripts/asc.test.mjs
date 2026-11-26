@@ -247,13 +247,15 @@ function fakeAppStore() {
     }
     if (version && versionMatch[2] === "/appStoreReviewDetail") return reply(state.review ? { id: "review", type: "appStoreReviewDetails", attributes: state.review } : null);
     if (path.startsWith("/v1/appStoreVersionLocalizations/") && path.endsWith("/appScreenshotSets")) {
-      const sets = state.screenshots.map((count, at) => ({
+      const shots = state.screenshots.map((set) => (Array.isArray(set) ? set : Array(set).fill("COMPLETE")));
+      const sets = shots.map((states, at) => ({
         id: `set-${at}`,
         type: "appScreenshotSets",
         attributes: { screenshotDisplayType: "APP_IPHONE_67" },
-        relationships: { appScreenshots: { data: Array.from({ length: count }, (_, shot) => ({ type: "appScreenshots", id: `shot-${at}-${shot}` })) } },
+        relationships: { appScreenshots: { data: states.map((_, shot) => ({ type: "appScreenshots", id: `shot-${at}-${shot}` })) } },
       }));
-      return reply(sets);
+      const included = shots.flatMap((states, at) => states.map((delivery, shot) => ({ id: `shot-${at}-${shot}`, type: "appScreenshots", attributes: { assetDeliveryState: { state: delivery } } })));
+      return reply(sets, 200, included);
     }
     if (method === "POST" && path === "/v1/appStoreVersionLocalizations") return reply({ id: id(), type: "appStoreVersionLocalizations", attributes: body.data.attributes }, 201);
     if (method === "PATCH" && path.startsWith("/v1/appStoreVersionLocalizations/")) return reply({ id: path.split("/").at(-1), attributes: body.data.attributes });
@@ -273,11 +275,13 @@ function fakeAppStore() {
         submission.items.map((item, at) => ({
           id: `item-${submission.id}-${at}`,
           type: "reviewSubmissionItems",
+          attributes: { state: submission.itemStates?.[item] ?? "READY_FOR_REVIEW" },
           relationships: { appStoreVersion: { data: item.startsWith("event:") ? null : { type: "appStoreVersions", id: item } } },
         })),
       );
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
+    if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) return reply({ id: path.split("/").at(-1), type: "reviewSubmissionItems", attributes: { state: "READY_FOR_REVIEW" } });
     if (method === "POST" && path === "/v1/reviewSubmissionItems") {
       const target = state.submissions.find((row) => row.id === body.data.relationships.reviewSubmission.data.id);
       target.items.push(body.data.relationships.appStoreVersion.data.id);
@@ -638,4 +642,21 @@ test("app-store reads notes only from inside --notes-root, whatever a symlink or
   const inside = appStore(ready101(), ["--notes", join(root, "notes.txt"), "--notes-root", root]);
   assert.equal(inside.code, 0, inside.err);
   assert.equal(inside.writes.find((write) => write.path === "/v1/appStoreVersionLocalizations/loc").body.data.attributes.whatsNew, "Faster tabs.");
+});
+
+test("app-store marks this version's rejected item resolved before resubmitting, and leaves other items alone", () => {
+  const run = appStore(ready101({ submissions: [{ id: "s1", state: "UNRESOLVED_ISSUES", items: ["v101"], itemStates: { v101: "REJECTED" } }] }));
+  assert.equal(run.code, 0, run.err);
+  assert.deepEqual(run.steps, ["PATCH /v1/reviewSubmissionItems/item-s1-0", "PATCH /v1/reviewSubmissions/s1"]);
+  assert.deepEqual(run.writes[0].body, { data: { type: "reviewSubmissionItems", id: "item-s1-0", attributes: { resolved: true } } });
+  const clean = appStore(ready101({ submissions: [{ id: "s1", state: "READY_FOR_REVIEW", items: ["v101"] }] }));
+  assert.deepEqual(clean.steps, ["PATCH /v1/reviewSubmissions/s1"]);
+});
+
+test("app-store counts only screenshots whose upload has finished", () => {
+  const pending = appStore(ready101({ screenshots: [["UPLOAD_COMPLETE", "FAILED"]] }));
+  assert.equal(pending.code, 1);
+  assert.match(pending.err, /- en-US screenshots \(2 not finished uploading\)/);
+  const one = appStore(ready101({ screenshots: [["FAILED", "COMPLETE"]] }));
+  assert.equal(one.code, 0, one.err);
 });

@@ -670,7 +670,7 @@ async function listSubmissionItems(submissionId) {
     include: "appStoreVersion",
     limit: "50",
   });
-  return rows.map((row) => ({ id: row.id, versionId: row.relationships?.appStoreVersion?.data?.id ?? null }));
+  return rows.map((row) => ({ id: row.id, state: row.attributes?.state ?? "?", versionId: row.relationships?.appStoreVersion?.data?.id ?? null }));
 }
 
 async function openReviewSubmissions(appId) {
@@ -878,13 +878,19 @@ async function listingGaps(localization, locale) {
     ["supportUrl", "support URL"],
   ];
   for (const [field, label] of fields) if (!localization.attributes[field]?.trim()) gaps.push(`${locale} ${label}`);
-  const { rows: sets } = await get(`/v1/appStoreVersionLocalizations/${localization.id}/appScreenshotSets`, {
+  const { rows: sets, included } = await get(`/v1/appStoreVersionLocalizations/${localization.id}/appScreenshotSets`, {
     "fields[appScreenshotSets]": "screenshotDisplayType,appScreenshots",
     include: "appScreenshots",
+    "fields[appScreenshots]": "assetDeliveryState",
     limit: "50",
   });
-  const screenshots = sets.reduce((count, set) => count + (set.relationships?.appScreenshots?.data?.length ?? 0), 0);
-  if (screenshots === 0) gaps.push(`${locale} screenshots${sets.length > 0 ? ` (${sets.length} empty screenshot sets)` : ""}`);
+  const delivery = new Map(included.filter((row) => row.type === "appScreenshots").map((row) => [row.id, row.attributes?.assetDeliveryState?.state]));
+  const linked = sets.flatMap((set) => set.relationships?.appScreenshots?.data ?? []);
+  const finished = linked.filter((link) => delivery.get(link.id) === "COMPLETE").length;
+  if (finished === 0) {
+    const detail = linked.length > 0 ? ` (${linked.length} not finished uploading)` : sets.length > 0 ? ` (${sets.length} empty screenshot sets)` : "";
+    gaps.push(`${locale} screenshots${detail}`);
+  }
   return gaps;
 }
 
@@ -1023,6 +1029,10 @@ async function appStore(args) {
   if (strays.length > 0 || items.length === 0) {
     const listed = strays.map((item) => (item.versionId ? `version ${versionNames.get(item.versionId) ?? item.versionId}` : `item ${item.id}`)).join(", ");
     refuse(`review submission ${submission.id} now holds ${listed || "nothing"} besides version ${versionString}; nothing was submitted`);
+  }
+  for (const item of items.filter((row) => row.state === "REJECTED")) {
+    await patch(`/v1/reviewSubmissionItems/${item.id}`, { data: { type: "reviewSubmissionItems", id: item.id, attributes: { resolved: true } } });
+    console.log(`the rejected review item for version ${versionString} marked resolved`);
   }
   const sent = await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { submitted: true } } });
   console.log(

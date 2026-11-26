@@ -4648,7 +4648,8 @@ In order:
 - **What's New** comes from `notes`, at most 4,000 characters; without it the text is "Bug fixes and improvements."
   and the run says so. The App Store shows no What's New on an app's first version, so the run leaves it out then.
 - **The checks** list everything missing at once and stop before the submission: the primary locale's description,
-  keywords, support URL and at least one screenshot (an empty screenshot set counts as none), and App Review
+  keywords, support URL and at least one screenshot whose upload has finished (an empty set, or one still uploading
+  or failed, counts as none), and App Review
   Information's contact name, phone, email and notes, and a demo account's name and password when one is required.
   Notes that don't say how to try Continue with ChatGPT (Browse for Me) only print a warning. Fill the gaps in App
   Store Connect and run it again; the run never makes contact details up.
@@ -4656,7 +4657,8 @@ In order:
   with unresolved issues that holds only this version; otherwise it opens one. Just before that it reads the
   version and the submissions again and stops if either changed while it ran, and after adding the version it
   checks the submission holds only this version before submitting it, so two runs at once don't submit each
-  other's work.
+  other's work. A rejected item for this version, left from the last review, is marked resolved before the
+  submission goes back.
 
 Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
 it, the owner presses Release in App Store Connect. Google Play is not set up.
