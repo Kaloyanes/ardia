@@ -207,7 +207,7 @@ test("the window backdrop asks for the Mac app's vibrancy treatment, never Liqui
   assert.equal(windowBackdropMaterial((method) => method === WINDOW_TREATMENT_CAPABILITY), "windowTreatment");
   assert.equal(windowBackdropMaterial(() => false), "liquid", "an older engine keeps the glass it knows");
   const source = (await import("node:fs")).readFileSync(new URL("../windowGlass.mac.ts", import.meta.url), "utf8");
-  assert.match(source, /return backdrops\.add\(element, windowBackdropMaterial\(\(method\) => hostSupports\(method\)\)\);/);
+  assert.match(source, /return backdrops\.add\(element, windowBackdropMaterial\(\(method\) => hostSupports\(method\)\), theme\);/);
   const { sent, rects, backdrops, runFrames } = harness();
   const window = {};
   rects.set(window, { x: 0, y: 0, width: 1280, height: 800 });

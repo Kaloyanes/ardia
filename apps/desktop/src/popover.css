@@ -5,6 +5,16 @@ html.ardia-popover-surface #root {
   color-scheme: light dark;
 }
 
+html.ardia-popover-surface,
+html.ardia-popover-surface body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Inter, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
 .ardia-popover-list {
   display: flex;
   flex-direction: column;

@@ -51,6 +51,7 @@ type Gesture = {
   times: number[];
   deltas: number[];
   time: number;
+  startedAt: number;
 };
 
 const targets = new Set<SwipeTarget>();
@@ -67,8 +68,10 @@ let ownedMomentum = { armed: false, flowing: false, endedAt: 0, armedAt: 0 };
 let pageGesture: { tabId: string; gesture: number | null; claimed: boolean } | null = null;
 let gestureHost: ArdiaHost | undefined;
 
+const SEED_FRAME = 1 / 60;
+
 function blank(): Gesture {
-  return { state: "idle", target: null, hit: null, dx: 0, dy: 0, direction: 0, available: false, times: [], deltas: [], time: 0 };
+  return { state: "idle", target: null, hit: null, dx: 0, dy: 0, direction: 0, available: false, times: [], deltas: [], time: 0, startedAt: Number.NaN };
 }
 
 export function addSwipeTarget(target: SwipeTarget) {
@@ -129,6 +132,12 @@ function emit(phase: "began" | "changed" | "ended" | "cancelled", velocity: numb
   const distance = gesture.dx * gesture.direction;
   const native = hasNativePager(target) ? target.pager() : null;
   if (native) {
+    if (phase === "began" && distance !== 0) {
+      const seededAt = Number.isFinite(gesture.startedAt) && gesture.startedAt < gesture.time ? Math.max(gesture.startedAt, gesture.time - SEED_FRAME) : gesture.time - SEED_FRAME;
+      native.pager.input(native.area, "began", 0, gesture.direction, seededAt);
+      native.pager.input(native.area, "changed", distance, gesture.direction, gesture.time);
+      return;
+    }
     native.pager.input(native.area, phase as PagerInput, distance, gesture.direction, gesture.time);
     return;
   }
@@ -210,6 +219,7 @@ export function begin(x: number, y: number, hit: Element | null, timestamp: numb
   gesture.state = "pending";
   gesture.target = target;
   gesture.hit = hit;
+  gesture.startedAt = timestamp;
 }
 
 export function prepare(x: number, y: number, hit: Element | null, timestamp: number, tabId?: string) {

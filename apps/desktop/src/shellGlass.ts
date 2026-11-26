@@ -1,7 +1,7 @@
 import { createContext, useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from "react";
 import { parseColor } from "../../browser/src/lib/color";
 import { hostSupports, invokeHost, reportHostError, type ArdiaHost } from "./host.ts";
-import { createGlassRegions, GLASS_BEHIND_WINDOW, GLASS_METHOD, GLASS_MODULE, type GlassApplied, type GlassGeometry, type GlassLook, type GlassRegistry } from "./glassRegions.ts";
+import { createGlassRegions, GLASS_BEHIND_WINDOW, GLASS_METHOD, GLASS_MODULE, type GlassApplied, type GlassGeometry, type GlassHole, type GlassLook, type GlassRegistry } from "./glassRegions.ts";
 import { intersection, type Rect } from "./inputRegions.ts";
 
 export const GlassOptIn = createContext(false);
@@ -135,7 +135,7 @@ function animating(element: Element) {
   });
 }
 
-export function startShellGlass(host: ArdiaHost) {
+export function startShellGlass(host: ArdiaHost, holes?: (holes: readonly GlassHole[]) => void) {
   const supported = hostSupports(GLASS_METHOD, host);
   const mutations = new MutationObserver(() => registry?.refresh());
   const glass = createGlassRegions(
@@ -151,6 +151,7 @@ export function startShellGlass(host: ArdiaHost) {
       clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
       report: reportHostError,
       availability: announceAvailability,
+      holes,
       activity: (on) => {
         if (on) mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class"] });
         else mutations.disconnect();
@@ -176,13 +177,16 @@ export function startShellGlass(host: ArdiaHost) {
   const motion = (event: Event) => {
     if (event.target instanceof Element) glass.motion(event.target);
   };
+  const scrolled = (event: Event) => glass.motion(event.target instanceof Element ? event.target : document.documentElement, true);
   for (const type of MOTION_EVENTS) document.addEventListener(type, motion, true);
+  document.addEventListener("scroll", scrolled, { capture: true, passive: true });
   return {
     glass,
     stop() {
       unsubscribe();
       mutations.disconnect();
       for (const type of MOTION_EVENTS) document.removeEventListener(type, motion, true);
+      document.removeEventListener("scroll", scrolled, { capture: true });
       if (registry === glass) {
         registry = null;
         announceAvailability();

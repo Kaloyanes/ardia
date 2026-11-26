@@ -12,7 +12,8 @@ export const MIN_PAGE_WIDTH = 1;
 export const MAX_RELEASE_VELOCITY = 40;
 export const MAX_SETTLE_SECONDS = 2;
 export const FIRST_FRAME_LEAD = 1 / 60;
-export const OWN_TRAVEL = 0.25;
+export const REVERSE_NUDGE = 0.07;
+export const MID_TRANSITION = 0.1;
 
 export type PagerInput = "prepare" | "abandon" | "began" | "changed" | "ended" | "cancelled";
 export type PagerPhase = "idle" | "tracking" | "holding" | "settling";
@@ -401,18 +402,21 @@ export class PagerSpring {
     if (!cancelled) {
       const flick = Math.abs(v * this.drag.width) >= FLICK_VELOCITY;
       const x = this.positionValue;
-      const aim = flick ? (v > 0 ? Math.floor(x) + 1 : Math.ceil(x) - 1) : this.slowAim(x, home);
+      const from = Math.abs(x - home) <= MID_TRANSITION ? home : x;
+      const aim = flick ? (v > 0 ? Math.floor(from) + 1 : Math.ceil(from) - 1) : this.slowAim(x, home);
       const lo = Math.max(0, home - 1);
       const hi = Math.max(lo, Math.min(this.countValue - 1, home + 1));
       target = clampToIndex(aim, lo, hi);
-      if (target !== home && !this.ownProgress(x, home)) target = home;
+      if (target !== home && this.reverseNudge(x, home, target)) target = home;
     }
     this.settle(target, this.towards(target, v));
   }
 
-  private ownProgress(x: number, home: number) {
-    const interrupted = this.drag.interrupted || Math.abs(this.drag.start - home) >= 0.5;
-    return !interrupted || Math.abs(x - this.drag.start) >= OWN_TRAVEL;
+  private reverseNudge(x: number, home: number, target: number) {
+    const from = this.drag.start - home;
+    if (!this.drag.interrupted || Math.abs(from) <= MID_TRANSITION) return false;
+    const reversing = (target - home > 0) === (from > 0);
+    return reversing && Math.abs(x - this.drag.start) < REVERSE_NUDGE;
   }
 
   private slowAim(x: number, home: number) {

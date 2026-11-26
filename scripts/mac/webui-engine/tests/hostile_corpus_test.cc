@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/mac/ac_mac_backdrop_theme.h"
 #include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
@@ -104,6 +105,9 @@ TEST(corpus_is_loaded) {
 
 TEST(glass_names_and_ids) {
   for (const std::string& text : Load().strings) {
+    if (ardia_mac::backdrop_theme::KnownTexture(text)) {
+      CHECK(text == "film" || text == "grain" || text == "sand" || text == "denim" || text == "tweed");
+    }
     if (ardia_mac::glass::ValidId(text)) {
       CHECK(!text.empty() && text.size() <= ardia_mac::glass::kMaxIdLength && Charset(text, "-_:."));
     }
@@ -124,6 +128,37 @@ TEST(glass_names_and_ids) {
   control.id = "control";
   control.rect = {0, 0, 10, 10};
   CHECK(ardia_mac::glass::Lay({control}, {}, {0, 0, 100, 100}, 1).placements.size() == 1);
+}
+
+TEST(native_backdrop_theme) {
+  namespace theme = ardia_mac::backdrop_theme;
+  for (double a : Load().numbers) {
+    for (double b : Load().numbers) {
+      if (const auto color = theme::ColorFrom({a, b, a, b, a})) {
+        for (double channel : {color->red, color->green, color->blue, color->alpha}) CHECK(channel >= 0 && channel <= 1);
+        CHECK(std::isfinite(a) && std::isfinite(b));
+      }
+      const int pixels = theme::GrainImagePixels(a, b, a);
+      CHECK(pixels >= 1 && pixels <= theme::kMaxGrainImagePixels);
+    }
+    if (const auto point = theme::GradientPoint(a)) CHECK(std::isfinite(*point) && std::abs(*point) <= theme::kMaxGradientReach);
+    const double radius = theme::ThemeRadius(a);
+    CHECK(radius >= 0 && radius <= theme::kMaxThemeRadius);
+    const double points = theme::GrainPoints(a);
+    CHECK(points > 0 && points <= theme::kMaxGrainPoints);
+    CHECK(theme::Unit(a) >= 0 && theme::Unit(a) <= 1);
+    if (std::isfinite(a) && a >= 0 && a < 1e6) {
+      const auto count = static_cast<std::size_t>(a);
+      if (theme::LayerCountFits(count)) CHECK(count <= theme::kMaxLayers);
+      if (theme::StopCountFits(count)) CHECK(count >= 1 && count <= theme::kMaxStops);
+    }
+  }
+  for (const std::string& text : Load().strings) {
+    const auto index = theme::BackdropIndex(text, 64);
+    if (index) CHECK(*index < 64 && text == theme::BackdropId(*index));
+  }
+  CHECK(theme::ColorFrom({1, 0.5, 0, 1, 1}).has_value());
+  CHECK(theme::BackdropIndex("backdrop:3", 64) == std::optional<std::size_t>(3));
 }
 
 TEST(glass_geometry) {
@@ -283,7 +318,12 @@ TEST(bridge_documents) {
       CHECK(text.size() <= 200 && text.front() != '.' && Charset(text, "._-"));
       CHECK(!ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "session.json"));
     }
+    if (ardia_mac::shell_policy::ReservedLiveDocument(text)) {
+      CHECK(ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.json") ||
+            ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.canonical.json"));
+    }
   }
+  CHECK(ardia_mac::shell_policy::ReservedLiveDocument("LIVE.CANONICAL.JSON"));
   CHECK(ardia_mac::shell_policy::ValidDocumentName("notes.json"));
   for (const std::string& text : Load().strings) {
     if (const auto id = ardia_mac::shell_policy::ParseAdoptId(text)) {
@@ -305,7 +345,7 @@ TEST(launch_environment) {
     ArdiaLaunchStorage storage;
     const char* argv[] = {"Ardia"};
     const char* out[1 + kArdiaLaunchExtraArgs + 1] = {};
-    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), &storage, out);
+    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), text.c_str(), &storage, out);
     CHECK(count >= 1 && count <= 1 + kArdiaLaunchExtraArgs);
     for (int index = 1; index < count; ++index) {
       const std::string_view arg = out[index];

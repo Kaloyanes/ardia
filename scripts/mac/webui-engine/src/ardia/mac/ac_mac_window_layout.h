@@ -79,6 +79,26 @@ inline TitlebarMetrics TitlebarFor(const Lights& lights, Size button) {
                          std::max(1.0, std::round(lights.center.y * 2))};
 }
 
+struct TitlebarLayout {
+  double container_y = 0;
+  double container_height = 0;
+  double button_y = 0;
+  double button_x[3] = {0, 0, 0};
+};
+
+inline TitlebarLayout TitlebarLayoutFor(const TitlebarMetrics& metrics, Size button, double measured_spacing,
+                                        double frame_height) {
+  const double width = button.width > 0 ? button.width : kButtonSide;
+  const double height = button.height > 0 ? button.height : kButtonSide;
+  const double spacing = std::isfinite(measured_spacing) && measured_spacing > width ? measured_spacing : width + kTrafficLightSpacing;
+  TitlebarLayout layout;
+  layout.container_height = std::max(height, metrics.height);
+  layout.container_y = std::isfinite(frame_height) ? frame_height - layout.container_height : 0;
+  layout.button_y = std::round((layout.container_height - height) / 2);
+  for (int index = 0; index < 3; ++index) layout.button_x[index] = metrics.min_x_inset + index * spacing;
+  return layout;
+}
+
 enum class CaptionAction { kZoom, kMinimize, kNone };
 
 inline CaptionAction CaptionActionFor(std::optional<std::string_view> action,

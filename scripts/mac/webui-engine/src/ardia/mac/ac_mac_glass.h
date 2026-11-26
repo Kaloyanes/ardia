@@ -2,8 +2,10 @@
 #define ARDIA_MAC_AC_MAC_GLASS_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "ardia/mac/ac_mac_backdrop_theme.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -45,6 +47,7 @@ class GlassRegions {
   struct Views;
 
   glass::Layout Relayout();
+  void LayOutThemes(const glass::Layout& layout);
   bool MountUnderShell(const glass::Placement& placement, const glass::Rect& page);
   void EmitPresented(glass::PresentedGate::Ticket ticket);
 
@@ -53,6 +56,7 @@ class GlassRegions {
   std::unique_ptr<Views> views_;
   std::vector<glass::Region> regions_;
   std::vector<glass::Region> backdrops_;
+  std::vector<std::optional<backdrop_theme::Theme>> themes_;
   std::vector<glass::Placement> placed_;
   std::vector<GlassPage> pages_;
   glass::Rect shell_;

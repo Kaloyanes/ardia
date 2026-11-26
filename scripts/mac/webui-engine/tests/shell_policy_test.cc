@@ -271,6 +271,15 @@ TEST(a_departure_is_saved_only_once_the_window_really_closes) {
   CHECK(policy::DepartureStepFor(true, false, false) == DepartureStep::kDiscard);
 }
 
+TEST(live_documents_are_reserved_in_any_case) {
+  for (const char* name : {"live.json", "LIVE.JSON", "Live.Json", "live.canonical.json", "LIVE.Canonical.JSON"}) {
+    CHECK(policy::ReservedLiveDocument(name));
+  }
+  for (const char* name : {"", "live", "live.json.bak", "notes.json", "xlive.json", "live.canonical.json "}) {
+    CHECK(!policy::ReservedLiveDocument(name));
+  }
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

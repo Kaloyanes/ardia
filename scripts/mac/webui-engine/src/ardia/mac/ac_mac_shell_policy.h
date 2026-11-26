@@ -35,6 +35,10 @@ inline bool ValidDocumentName(std::string_view name) {
   return charset && !EqualsIgnoringAsciiCase(name, kSessionFile);
 }
 
+inline bool ReservedLiveDocument(std::string_view name) {
+  return EqualsIgnoringAsciiCase(name, "live.json") || EqualsIgnoringAsciiCase(name, "live.canonical.json");
+}
+
 inline constexpr std::size_t kMergeableSessionBytes = 8 * 1024 * 1024;
 inline constexpr std::string_view kSetAsideSessionPrefix = "session-backup-oversized-";
 

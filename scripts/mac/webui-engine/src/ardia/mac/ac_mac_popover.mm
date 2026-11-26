@@ -137,6 +137,10 @@ NSView* MakeBackground() {
 
 void Embed(NSView* background, NSView* content) {
   content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  content.wantsLayer = YES;
+  content.layer.cornerRadius = kPanelRadius;
+  content.layer.cornerCurve = kCACornerCurveContinuous;
+  content.layer.masksToBounds = YES;
   if ([background respondsToSelector:NSSelectorFromString(@"setContentView:")]) {
     [background setValue:content forKey:@"contentView"];
     return;
@@ -337,6 +341,9 @@ std::optional<std::string> PopoverHost::Place(Panel& panel,
   const popover::Rect cocoa = popover::FlipVertical(panel.frame, PrimaryHeight());
   [panel.panel setFrame:NSMakeRect(cocoa.x, cocoa.y, cocoa.width, cocoa.height)
                 display:!background_];
+  if (panel.panel.hasShadow) {
+    [panel.panel invalidateShadow];
+  }
   return std::nullopt;
 }
 
@@ -446,7 +453,7 @@ std::optional<std::string> PopoverHost::Open(const base::DictValue& args,
   window.releasedWhenClosed = NO;
   window.opaque = NO;
   window.backgroundColor = NSColor.clearColor;
-  window.hasShadow = YES;
+  window.hasShadow = !LiquidGlassAvailable();
   window.animationBehavior = NSWindowAnimationBehaviorNone;
   window.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary |
                               NSWindowCollectionBehaviorTransient |

@@ -143,6 +143,13 @@ export type GlassLens = {
   /** Rim light leans towards the cursor. */
   cursorLight: boolean
   /**
+   * A still key light for the rim while no cursor light leans it: the way it comes from (an angle,
+   * as the cursor light's) and how far the rim turns to it (0 = the studio rim, 1 = all of it).
+   * Lit from the top left, the rim catches the light along that corner and bounces it back along
+   * the bottom right, as Apple's Liquid Glass does. Nothing follows the pointer.
+   */
+  rimLight?: { angle: number; lean: number }
+  /**
    * Light let into the glass at one point (a press): centre relative to the body's centre and
    * reach, in CSS px, and how strong (0 = none; see GLOW). It brightens all the glass near it alike, a melted blob
    * included, unless `blob` says how much of it the blob takes (0–1; 0 keeps the light to the body). `halo` lets it
@@ -1892,6 +1899,7 @@ function createEngine(): GlassEngine | null {
     // 8-bit screen), and stays put while it is off: a cursor moving far away, or over glass
     // without cursor light, leaves the frame as it is.
     const mix = m.cursorLight ? pointer.mix : 0
+    if (mix <= 0 && m.rimLight) return { aim: m.rimLight.angle, mix: clamp(m.rimLight.lean) / 0.4 }
     const aim = mix > 0 && d > 0.5 ? (Math.round(Math.atan2(dy, dx) * (360 / Math.PI)) * Math.PI) / 360 : -Math.PI / 2
     return { aim, mix }
   }
