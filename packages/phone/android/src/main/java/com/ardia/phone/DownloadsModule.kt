@@ -85,11 +85,11 @@ class DownloadsModule : Module() {
 
         AsyncFunction("verifyAppUpdate") { id: String, sha256: String, fileName: String -> AppUpdateHandoff.verify(context, id, sha256, fileName) }
 
-        AsyncFunction("installVerifiedUpdate") { fileName: String, sha256: String -> AppUpdateHandoff.installVerified(context, fileName, sha256) }
+        AsyncFunction("installVerifiedUpdate") { fileName: String, sha256: String, downloadId: String -> AppUpdateHandoff.installVerified(context, fileName, sha256, downloadId) }
 
         Function("updateNotificationsShown") { AppUpdateHandoff.notificationsShown(context) }
 
-        Function("takeInstallRequest") { AppUpdateHandoff.takeInstallRequest(appContext.currentActivity) }
+        Function("takeInstallRequest") { AppUpdateHandoff.takeInstallRequest(context, appContext.currentActivity) }
 
         Function("takeInstallStatus") { AppUpdateInstaller.takeUnreported() }
 
@@ -105,7 +105,7 @@ class DownloadsModule : Module() {
 
         AsyncFunction("installDownloadedFile") { uri: String -> AppUpdateHandoff.installDownloadedFile(context, uri) }
 
-        OnNewIntent { intent -> AppUpdateHandoff.noteInstallRequest(intent) }
+        OnNewIntent { intent -> appContext.reactContext?.let { AppUpdateHandoff.noteInstallRequest(it, intent) } }
 
         AsyncFunction("files") { -> DownloadedFiles.list(context) }
 

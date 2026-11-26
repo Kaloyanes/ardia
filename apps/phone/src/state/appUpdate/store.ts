@@ -15,7 +15,9 @@ import {
   downloadOutlivedBy,
   downloadRecordText,
   installOutcomeOf,
+  installSessionOf,
   installStatusOf,
+  parseCommittedInstall,
   updateInstallFailedMessage,
   parseDownloadRecord,
   updateCopyFailedMessage,
@@ -58,6 +60,7 @@ export const UPDATE_NEXT_CHECK_KEY = "app_update_next_check_at";
 export const UPDATE_OFFERED_KEY = "app_update_offered_versions";
 export const UPDATE_UNPUBLISHED_KEY = "app_update_unpublished";
 export const UPDATE_DOWNLOAD_KEY = "app_update_download";
+export const UPDATE_COMMITTED_KEY = "app_update_committed";
 
 const OFFER_TOAST_MS = 6_000;
 const LAUNCH_QUIET_MS = 8_000;
@@ -215,7 +218,7 @@ async function startDownload(offer: OfferedRelease) {
   readyPrompted = null;
   readyWaiting = null;
   verified = null;
-  installingId = null;
+  installing = null;
   const result = await handOff(request.url, request.title);
   if (result.handoff === "downloading") {
     writeStored(UPDATE_DOWNLOAD_KEY, downloadRecordText(offer, result.id));
@@ -303,7 +306,7 @@ async function askForInstallPermission(offer: OfferedRelease) {
   awaitingPermissionReturn = await downloads.openInstallPermission().catch(() => false);
 }
 
-let installingId: string | null = null;
+let installing: { id: string; session: string } | null = null;
 
 async function installUpdate(offer: OfferedRelease, id: string) {
   const request = updateDownloadRequest(offer);
@@ -314,7 +317,8 @@ async function installUpdate(offer: OfferedRelease, id: string) {
   }
   const sha256 = await verifyDownloaded(offer, id);
   if (!sha256 || !isCurrent(id)) return;
-  const outcome = installOutcomeOf(await downloads.installVerifiedUpdate(request.fileName, sha256).catch(() => "failed"));
+  const answer = await downloads.installVerifiedUpdate(request.fileName, sha256, id).catch(() => "failed");
+  const outcome = installOutcomeOf(answer);
   if (!isCurrent(id)) return;
   if (outcome === "refused") {
     await refuse(offer, id);
@@ -329,8 +333,10 @@ async function installUpdate(offer: OfferedRelease, id: string) {
     setHandoff(offer.version, "ready");
     return;
   }
-  if (outcome === "installing") {
-    installingId = id;
+  const session = installSessionOf(answer);
+  if (outcome === "installing" && session) {
+    installing = { id, session };
+    writeStored(UPDATE_COMMITTED_KEY, JSON.stringify({ version: offer.version, session }));
     countUsage("app_update_installs_started");
     setHandoff(offer.version, "installing");
     return;
@@ -347,11 +353,12 @@ function installStatus(event: unknown) {
     return;
   }
   const { offer } = useAppUpdate.getState();
-  const record = storedDownload();
-  if (!offer || !record || record.id !== installingId) return;
+  const current = installing;
+  if (!offer || !current || current.session !== status.session || current.id !== status.download || !isCurrent(current.id)) return;
   if (status.status === "confirming") return;
-  installingId = null;
+  installing = null;
   if (status.status === "success") return;
+  writeStored(UPDATE_COMMITTED_KEY, "");
   setHandoff(offer.version, "ready");
   if (status.status === "aborted") {
     countUsage("app_update_installs_cancelled");
@@ -396,7 +403,8 @@ async function restoreDownload() {
   const version = installedVersion();
   if (!record || !version) return;
   if (downloadOutlivedBy(record, version)) {
-    countUsage("app_update_installs_completed");
+    if (parseCommittedInstall(readStored(UPDATE_COMMITTED_KEY))?.version === version.text) countUsage("app_update_installs_completed");
+    writeStored(UPDATE_COMMITTED_KEY, "");
     await downloads.discardAppUpdate(record.id).catch(() => false);
     if (isCurrent(record.id)) forgetDownload();
     return;
@@ -477,25 +485,23 @@ export async function installDownloadedPackage(uri: string) {
 
 let watchingDownloads = false;
 
-function takeInstallRequest(): string | null {
+function takeInstallRequest(): boolean {
   try {
-    const fileName = downloads.takeInstallRequest();
-    return typeof fileName === "string" ? fileName : null;
+    return downloads.takeInstallRequest();
   } catch {
-    return null;
+    return false;
   }
 }
 
-function holdReadyPromptFor(fileName: string | null) {
+function holdReadyPromptFor(requested: boolean) {
   const record = storedDownload();
-  if (fileName && record && updateDownloadRequest(record.offer)?.fileName === fileName) readyPrompted = record.id;
+  if (requested && record) readyPrompted = record.id;
 }
 
-async function installRequested(fileName: string | null) {
+async function installRequested(requested: boolean) {
   const { offer } = useAppUpdate.getState();
   const record = storedDownload();
-  if (!fileName || !offer || !record || record.version !== offer.version) return;
-  if (updateDownloadRequest(offer)?.fileName !== fileName) return;
+  if (!requested || !offer || !record || record.version !== offer.version) return;
   await installUpdate(offer, record.id);
 }
 

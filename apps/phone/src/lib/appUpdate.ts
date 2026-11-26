@@ -329,19 +329,34 @@ export function downloadProgressOf(value: unknown): DownloadProgress {
 export type InstallOutcome = "installing" | "needs_permission" | "gone" | "refused" | "failed";
 
 export function installOutcomeOf(value: unknown): InstallOutcome {
-  if (value === "committed") return "installing";
-  if (value === "needs_permission" || value === "gone" || value === "refused") return value;
-  if (value === "mismatch") return "refused";
+  const result = isRecord(value) ? value.result : value;
+  if (result === "committed") return "installing";
+  if (result === "needs_permission" || result === "gone" || result === "refused") return result;
+  if (result === "mismatch") return "refused";
   return "failed";
 }
 
-export type InstallStatus = { kind: "update" | "file"; status: "confirming" | "success" | "aborted" | "failure" };
+const SESSION_ID = /^[0-9]{1,10}$/;
+
+export const installSessionOf = (value: unknown): string | null => (isRecord(value) && value.result === "committed" && typeof value.session === "string" && SESSION_ID.test(value.session) ? value.session : null);
+
+export type InstallStatus = { kind: "update" | "file"; status: "confirming" | "success" | "aborted" | "failure"; session: string; download: string };
 
 export function installStatusOf(value: unknown): InstallStatus | null {
   if (!isRecord(value)) return null;
   const kind = value.kind === "update" || value.kind === "file" ? value.kind : null;
   const status = value.status === "confirming" || value.status === "success" || value.status === "aborted" || value.status === "failure" ? value.status : null;
-  return kind && status ? { kind, status } : null;
+  const session = typeof value.session === "string" && SESSION_ID.test(value.session) ? value.session : null;
+  const download = typeof value.download === "string" && /^[0-9]{1,19}$/.test(value.download) ? value.download : null;
+  return kind && status && session && download ? { kind, status, session, download } : null;
+}
+
+export type CommittedInstall = { version: string; session: string };
+
+export function parseCommittedInstall(text: string | null | undefined): CommittedInstall | null {
+  const body = readGitHubJson(text);
+  if (!isRecord(body) || typeof body.session !== "string" || !SESSION_ID.test(body.session) || parseAndroidVersion(body.version) === null) return null;
+  return { version: body.version as string, session: body.session };
 }
 
 export type VerifyOutcome = "verified" | "refused" | "gone" | "copy_failed" | "failed";

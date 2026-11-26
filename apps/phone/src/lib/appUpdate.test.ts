@@ -39,6 +39,8 @@ import {
   downloadOutlivedBy,
   verifyOutcomeOf,
   installStatusOf,
+  installSessionOf,
+  parseCommittedInstall,
   parseReleaseChecksum,
   updateRowAction,
   updateOfferWanted,
@@ -353,9 +355,14 @@ test("native answers about the download and the install map onto a few known sta
   assert.equal(installOutcomeOf("committed"), "installing");
   assert.equal(installOutcomeOf("launched"), "failed");
   assert.equal(installOutcomeOf("mismatch"), "refused");
-  assert.deepEqual(installStatusOf({ kind: "update", status: "aborted" }), { kind: "update", status: "aborted" });
-  assert.deepEqual(installStatusOf({ kind: "file", status: "failure" }), { kind: "file", status: "failure" });
-  for (const value of [null, {}, { kind: "update" }, { kind: "other", status: "success" }, { kind: "update", status: "installed" }]) assert.equal(installStatusOf(value), null, JSON.stringify(value));
+  assert.deepEqual(installStatusOf({ kind: "update", status: "aborted", session: "7", download: "41" }), { kind: "update", status: "aborted", session: "7", download: "41" });
+  assert.deepEqual(installStatusOf({ kind: "file", status: "failure", session: "8", download: "0" }), { kind: "file", status: "failure", session: "8", download: "0" });
+  for (const value of [null, {}, { kind: "update", status: "aborted" }, { kind: "update", status: "aborted", session: "7" }, { kind: "update", status: "aborted", session: 7, download: "41" }, { kind: "other", status: "success", session: "7", download: "41" }, { kind: "update", status: "installed", session: "7", download: "41" }]) assert.equal(installStatusOf(value), null, JSON.stringify(value));
+  assert.equal(installOutcomeOf({ result: "committed", session: "7" }), "installing");
+  assert.equal(installSessionOf({ result: "committed", session: "7" }), "7");
+  for (const value of [{ result: "committed" }, { result: "committed", session: 7 }, { result: "failed", session: "7" }, "committed"]) assert.equal(installSessionOf(value), null, JSON.stringify(value));
+  assert.deepEqual(parseCommittedInstall('{"version":"1.0.4","session":"9"}'), { version: "1.0.4", session: "9" });
+  for (const text of ["", "{}", '{"version":"1.0.04","session":"9"}', '{"version":"1.0.4","session":9}']) assert.equal(parseCommittedInstall(text), null, text);
   assert.equal(verifyOutcomeOf("verified"), "verified");
   assert.equal(verifyOutcomeOf("mismatch"), "refused");
   assert.equal(verifyOutcomeOf("copy_failed"), "copy_failed");
@@ -368,7 +375,11 @@ test("native answers about the download and the install map onto a few known sta
     assert.equal(installOutcomeOf(value), "failed", id);
     assert.equal(verifyOutcomeOf(value), "failed", id);
     assert.equal(installStatusOf(value), null, id);
-    assert.equal(installStatusOf({ kind: "update", status: value }), null, id);
+    assert.equal(installStatusOf({ kind: "update", status: value, session: "7", download: "41" }), null, id);
+    const digits = typeof value === "string" && /^[0-9]{1,10}$/.test(value);
+    if (!digits) assert.equal(installStatusOf({ kind: "update", status: "aborted", session: value, download: "41" }), null, id);
+    if (!digits) assert.equal(installStatusOf({ kind: "update", status: "aborted", session: "7", download: value }), null, id);
+    assert.equal(installSessionOf({ result: "committed", session: value }), typeof value === "string" && /^[0-9]{1,10}$/.test(value) ? value : null, id);
   }
   const kept = downloadRecordText({ ...offerOf("1.0.4"), sha256: SHA }, "41");
   assert.deepEqual(parseDownloadRecord(kept), { version: "1.0.4", id: "41", offer: { ...offerOf("1.0.4"), sha256: SHA } });

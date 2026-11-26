@@ -23,6 +23,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.UUID
 
 internal object AppUpdateHandoff {
     const val APK_MIME = "application/vnd.android.package-archive"
@@ -31,6 +32,8 @@ internal object AppUpdateHandoff {
     private const val CHANNEL = "app_updates"
     private const val NOTIFICATION_ID = 4378
     private const val EXTRA_INSTALL_REQUEST = "com.ardia.phone.INSTALL_UPDATE"
+    private const val TOKEN_PREFS = "ardia_app_update_install"
+    private const val TOKEN_KEY = "token"
     private val RELEASE_APK = Regex("^https://github\\.com/ardia-browser/ardia/releases/download/android-v((?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})\\.(?:0|[1-9][0-9]{0,8})(?:-nightly\\.(?:0|[1-9][0-9]{0,8}))?)/Ardia-([0-9A-Za-z.-]{1,40})\\.apk$")
     private val APK_FILE = Regex("^Ardia-[0-9A-Za-z.-]{1,40}\\.apk$")
     private val SHA256 = Regex("^[0-9a-f]{64}$")
@@ -83,14 +86,15 @@ internal object AppUpdateHandoff {
         return result
     }
 
-    fun installVerified(context: Context, fileName: String, sha256: String): String {
-        val copy = verifiedFile(context, fileName) ?: return "gone"
+    fun installVerified(context: Context, fileName: String, sha256: String, downloadId: String): Map<String, Any?> {
+        val copy = verifiedFile(context, fileName) ?: return mapOf("result" to "gone")
         clearReadyNotification(context)
-        return AppUpdateInstaller.installFile(context, copy, sha256)
+        return AppUpdateInstaller.installFile(context, copy, sha256, downloadId)
     }
 
     fun discard(context: Context, id: String): Boolean {
         clearReadyNotification(context)
+        AppUpdateInstaller.abandonTracked(context, AppUpdateInstaller.KIND_UPDATE)
         File(context.cacheDir, UPDATES_DIR).listFiles()?.forEach { it.delete() }
         val number = id.toLongOrNull()?.takeIf { it > 0 } ?: return false
         return runCatching { (context.getSystemService(DownloadManager::class.java)?.remove(number) ?: 0) > 0 }.getOrDefault(false)
@@ -138,7 +142,7 @@ internal object AppUpdateHandoff {
         if (verifiedFile(context, fileName) == null || !notificationsShown(context)) return false
         val notifications = NotificationManagerCompat.from(context)
         val open = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return false
-        open.putExtra(EXTRA_INSTALL_REQUEST, fileName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        open.putExtra(EXTRA_INSTALL_REQUEST, issueInstallToken(context)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val tap = PendingIntent.getActivity(context, NOTIFICATION_ID, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -150,17 +154,28 @@ internal object AppUpdateHandoff {
         return runCatching { notifications.notify(NOTIFICATION_ID, notification) }.isSuccess
     }
 
-    @Volatile private var installRequest: String? = null
+    @Volatile private var installRequested = false
 
-    fun noteInstallRequest(intent: Intent?) {
-        val fileName = intent?.getStringExtra(EXTRA_INSTALL_REQUEST) ?: return
-        intent.removeExtra(EXTRA_INSTALL_REQUEST)
-        if (APK_FILE.matches(fileName)) installRequest = fileName
+    private fun tokens(context: Context) = context.getSharedPreferences(TOKEN_PREFS, Context.MODE_PRIVATE)
+
+    fun issueInstallToken(context: Context): String {
+        val token = UUID.randomUUID().toString()
+        tokens(context).edit().putString(TOKEN_KEY, token).commit()
+        return token
     }
 
-    fun takeInstallRequest(activity: Activity?): String? {
-        noteInstallRequest(activity?.intent)
-        return installRequest.also { installRequest = null }
+    fun noteInstallRequest(context: Context, intent: Intent?) {
+        val token = intent?.getStringExtra(EXTRA_INSTALL_REQUEST) ?: return
+        intent.removeExtra(EXTRA_INSTALL_REQUEST)
+        val issued = tokens(context).getString(TOKEN_KEY, null) ?: return
+        if (token != issued) return
+        tokens(context).edit().remove(TOKEN_KEY).commit()
+        installRequested = true
+    }
+
+    fun takeInstallRequest(context: Context, activity: Activity?): Boolean {
+        noteInstallRequest(context, activity?.intent)
+        return installRequested.also { installRequested = false }
     }
 
     fun clearReadyNotification(context: Context) {
@@ -185,12 +200,12 @@ internal object AppUpdateHandoff {
         return startFrom(context, activity, intent)
     }
 
-    fun installDownloadedFile(context: Context, uri: String): String {
+    fun installDownloadedFile(context: Context, uri: String): Map<String, Any?> {
         val parsed = Uri.parse(uri)
-        if (parsed.scheme != "content") return "failed"
-        if (!canInstallPackages(context)) return "needs_permission"
+        if (parsed.scheme != "content") return mapOf("result" to "failed")
+        if (!canInstallPackages(context)) return mapOf("result" to "needs_permission")
         val length = runCatching { context.contentResolver.openAssetFileDescriptor(parsed, "r")?.use { it.length } }.getOrNull() ?: -1L
-        val input = runCatching { context.contentResolver.openInputStream(parsed) }.getOrNull() ?: return "failed"
+        val input = runCatching { context.contentResolver.openInputStream(parsed) }.getOrNull() ?: return mapOf("result" to "failed")
         return AppUpdateInstaller.installStream(context, input, length)
     }
 
