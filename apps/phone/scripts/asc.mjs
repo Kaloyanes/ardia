@@ -63,6 +63,10 @@ const EDITABLE_VERSION_STATES = new Set(["PREPARE_FOR_SUBMISSION", "READY_FOR_RE
 const SHIPPED_VERSION_STATES = new Set(["READY_FOR_SALE", "READY_FOR_DISTRIBUTION", "PREORDER_READY_FOR_SALE", "REPLACED_WITH_NEW_VERSION", "REMOVED_FROM_SALE", "DEVELOPER_REMOVED_FROM_SALE"]);
 const SUBMITTED_REVIEW_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW"]);
 const REOPENABLE_REVIEW_STATES = new Set(["READY_FOR_REVIEW", "UNRESOLVED_ISSUES"]);
+const DEVICE_FAMILIES = new Map([
+  ["1", { name: "iPhone", displayTypePrefix: "APP_IPHONE_" }],
+  ["2", { name: "iPad", displayTypePrefix: "APP_IPAD_" }],
+]);
 
 function base64url(input) {
   return Buffer.from(input).toString("base64url");
@@ -738,15 +742,29 @@ function planSubmission(submissions, versionId, versionNames) {
   return reuse ? { act: "use", submission: reuse } : { act: "create" };
 }
 
+function contents(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function projectPath(iosDir) {
+  return join(iosDir, "Ardia.xcodeproj", "project.pbxproj");
+}
+
+function targetedFamilies(iosDir) {
+  const project = contents(projectPath(iosDir)) ?? "";
+  const releases = project.match(/\/\* Release \*\/ = \{[\s\S]*?\n\t\t\};/g) ?? [];
+  const bundle = new RegExp(`PRODUCT_BUNDLE_IDENTIFIER = "?${BUNDLE_PREFIX.replaceAll(".", "\\.")}"?;`);
+  const value = releases.find((block) => bundle.test(block))?.match(/TARGETED_DEVICE_FAMILY = "?([\d,]+)"?;/)?.[1];
+  const families = (value ?? "").split(",").map((code) => DEVICE_FAMILIES.get(code.trim())).filter(Boolean);
+  return families.length > 0 ? families : null;
+}
+
 function preflightGaps(iosDir, defaultBrowser) {
   const shown = (path) => relative(process.cwd(), path) || path;
-  const contents = (path) => {
-    try {
-      return readFileSync(path, "utf8");
-    } catch {
-      return null;
-    }
-  };
   const gaps = [];
   const infoPath = join(iosDir, "Ardia", "Info.plist");
   const info = contents(infoPath);
@@ -756,6 +774,9 @@ function preflightGaps(iosDir, defaultBrowser) {
   }
   const privacyPath = join(iosDir, "PrivacyInfo.xcprivacy");
   if (!/<plist/.test(contents(privacyPath) ?? "")) gaps.push(`${shown(privacyPath)} is missing: App Review refuses an app without its privacy manifest`);
+  if (!targetedFamilies(iosDir)) {
+    gaps.push(`${shown(projectPath(iosDir))} gives ${BUNDLE_PREFIX}'s Release build no TARGETED_DEVICE_FAMILY, so the screenshots it needs are unknown`);
+  }
   if (defaultBrowser) {
     const entitlementsPath = join(iosDir, "Config", "Ardia-DefaultBrowser.entitlements");
     if (!/<key>com\.apple\.developer\.web-browser<\/key>\s*<true\/>/.test(contents(entitlementsPath) ?? "")) {
@@ -767,13 +788,29 @@ function preflightGaps(iosDir, defaultBrowser) {
 
 function requirePreflight(args) {
   const defaultBrowser = !args.includes("--no-default-browser");
-  const gaps = preflightGaps(option(args, "--ios-dir") ?? IOS_DIR, defaultBrowser);
+  const iosDir = option(args, "--ios-dir") ?? IOS_DIR;
+  const gaps = preflightGaps(iosDir, defaultBrowser);
   if (gaps.length > 0) refuse(`the iPhone app isn't ready for App Review:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
-  console.log(`preflight passed: export compliance answered, privacy manifest present${defaultBrowser ? ", default browser entitlement present" : ""}`);
+  const families = targetedFamilies(iosDir);
+  console.log(
+    `preflight passed: export compliance answered, privacy manifest present${defaultBrowser ? ", default browser entitlement present" : ""}, ` +
+      `for ${families.map((family) => family.name).join(" and ")}`,
+  );
+  return families;
 }
 
 async function preflight(args) {
   requirePreflight(args);
+}
+
+async function encryptionDeclarationState(buildId) {
+  try {
+    const { rows } = await get(`/v1/builds/${buildId}/appEncryptionDeclaration`, { "fields[appEncryptionDeclarations]": "appEncryptionDeclarationState" });
+    return rows[0]?.attributes?.appEncryptionDeclarationState ?? null;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 async function processedBuild(appId, number, wanted, timeout) {
@@ -806,7 +843,16 @@ async function processedBuild(appId, number, wanted, timeout) {
       if (row.attributes.usesNonExemptEncryption == null) {
         refuse(`${subject} has no export compliance answer; set ITSAppUsesNonExemptEncryption and upload a new build`);
       }
-      if (row.attributes.usesNonExemptEncryption) console.log(`${subject} declares non-exempt encryption, so App Review needs an approved encryption declaration`);
+      if (row.attributes.usesNonExemptEncryption) {
+        const declaration = await encryptionDeclarationState(row.id);
+        if (declaration !== "APPROVED") {
+          refuse(
+            `${subject} declares non-exempt encryption and ${declaration ? `its encryption declaration is ${declaration}` : "has no encryption declaration"}; ` +
+              "App Review needs an approved one (docs/phone.md › Export compliance)",
+          );
+        }
+        console.log(`${subject} declares non-exempt encryption under an approved encryption declaration`);
+      }
       const version = versionOf(row);
       if (version === "?") refuse(`App Store Connect gives ${subject} no version`);
       return { id: row.id, number, version };
@@ -869,7 +915,7 @@ function reviewDetailGaps(detail) {
   return gaps;
 }
 
-async function listingGaps(localization, locale) {
+async function listingGaps(localization, locale, families) {
   if (!localization) return [`the ${locale} App Store listing`];
   const gaps = [];
   const fields = [
@@ -885,13 +931,32 @@ async function listingGaps(localization, locale) {
     limit: "50",
   });
   const delivery = new Map(included.filter((row) => row.type === "appScreenshots").map((row) => [row.id, row.attributes?.assetDeliveryState?.state]));
-  const linked = sets.flatMap((set) => set.relationships?.appScreenshots?.data ?? []);
-  const finished = linked.filter((link) => delivery.get(link.id) === "COMPLETE").length;
-  if (finished === 0) {
-    const detail = linked.length > 0 ? ` (${linked.length} not finished uploading)` : sets.length > 0 ? ` (${sets.length} empty screenshot sets)` : "";
-    gaps.push(`${locale} screenshots${detail}`);
+  for (const family of families) {
+    const mine = sets.filter((set) => set.attributes?.screenshotDisplayType?.startsWith(family.displayTypePrefix));
+    const linked = mine.flatMap((set) => set.relationships?.appScreenshots?.data ?? []);
+    const finished = linked.filter((link) => delivery.get(link.id) === "COMPLETE").length;
+    if (finished === 0) {
+      const detail = linked.length > 0 ? ` (${linked.length} not finished uploading)` : mine.length > 0 ? ` (${mine.length} empty screenshot sets)` : "";
+      gaps.push(`${locale} ${family.name} screenshots${detail}`);
+    }
   }
   return gaps;
+}
+
+async function requireVersionUnchanged(appId, expected) {
+  const now = (await listAppStoreVersions(appId)).find((row) => row.id === expected.id);
+  const drift = now
+    ? [
+        ["version", now.version, expected.version, now.version],
+        ["state", now.state, expected.state, now.state],
+        ["build", now.buildId, expected.buildId, now.build ?? "none"],
+        ["release", now.releaseType, expected.releaseType, now.releaseType],
+      ]
+        .filter(([, actual, wanted]) => actual !== wanted)
+        .map(([name, , , shown]) => `${name} is now ${shown}`)
+    : ["it is gone"];
+  if (drift.length > 0) refuse(`version ${expected.version} changed while this ran (${drift.join(", ")}); nothing was submitted, run this again`);
+  return now;
 }
 
 async function appStore(args) {
@@ -905,7 +970,7 @@ async function appStore(args) {
     console.error("asc: --timeout takes seconds");
     process.exit(64);
   }
-  requirePreflight(args);
+  const families = requirePreflight(args);
   const whatsNew = whatsNewText(option(args, "--notes"), option(args, "--notes-root"));
   const app = await requireApp();
   const build = await processedBuild(app.id, number, option(args, "--version"), timeout);
@@ -982,16 +1047,14 @@ async function appStore(args) {
   }
 
   const detail = await reviewDetail(version.id);
-  const gaps = [...(await listingGaps(primary, locale)), ...reviewDetailGaps(detail)];
+  const gaps = [...(await listingGaps(primary, locale, families)), ...reviewDetailGaps(detail)];
   if (gaps.length > 0) {
     refuse(`fill these in App Store Connect before version ${versionString} goes to App Review, then run this again:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
   }
   if (!/chatgpt/i.test(detail.notes)) console.log("warning: the App Review notes don't say how to try Continue with ChatGPT, so App Review may ask");
 
-  const now = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
-  if (!now || !EDITABLE_VERSION_STATES.has(now.state) || now.buildId !== build.id) {
-    refuse(`version ${versionString} changed while this ran (${now ? `${now.state} with build ${now.build ?? "none"}` : "gone"}); nothing was submitted, run this again`);
-  }
+  const expected = { id: version.id, version: versionString, state: version.state, buildId: build.id, build: number, releaseType: "MANUAL" };
+  await requireVersionUnchanged(app.id, expected);
   const again = await openReviewSubmissions(app.id);
   if (submissionsFingerprint(again) !== submissionsFingerprint(submissions)) refuse("the review submissions changed while this ran; nothing was submitted, run this again");
   const pick = planSubmission(again, version.id, versionNames);
@@ -1024,20 +1087,25 @@ async function appStore(args) {
     });
     console.log(`version ${versionString} added to it`);
   }
-  const items = await listSubmissionItems(submission.id);
-  const strays = items.filter((item) => item.versionId !== version.id);
-  if (strays.length > 0 || items.length === 0) {
-    const listed = strays.map((item) => (item.versionId ? `version ${versionNames.get(item.versionId) ?? item.versionId}` : `item ${item.id}`)).join(", ");
-    refuse(`review submission ${submission.id} now holds ${listed || "nothing"} besides version ${versionString}; nothing was submitted`);
-  }
-  for (const item of items.filter((row) => row.state === "REJECTED")) {
+  const onlyThisVersion = async () => {
+    const items = await listSubmissionItems(submission.id);
+    const strays = items.filter((item) => item.versionId !== version.id);
+    if (strays.length > 0 || items.length === 0) {
+      const listed = strays.map((item) => (item.versionId ? `version ${versionNames.get(item.versionId) ?? item.versionId}` : `item ${item.id}`)).join(", ");
+      refuse(`review submission ${submission.id} now holds ${listed || "nothing"} besides version ${versionString}; nothing was submitted`);
+    }
+    return items;
+  };
+  for (const item of (await onlyThisVersion()).filter((row) => row.state === "REJECTED")) {
     await patch(`/v1/reviewSubmissionItems/${item.id}`, { data: { type: "reviewSubmissionItems", id: item.id, attributes: { resolved: true } } });
     console.log(`the rejected review item for version ${versionString} marked resolved`);
   }
+  const held = await requireVersionUnchanged(app.id, expected);
+  await onlyThisVersion();
   const sent = await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { submitted: true } } });
   console.log(
     `version ${versionString} (${number}) submitted for App Review: ${sent?.attributes?.state ?? "WAITING_FOR_REVIEW"}. ` +
-      "The release is manual: press Release in App Store Connect once it is approved.",
+      `The release is ${held.releaseType}: press Release in App Store Connect once it is approved.`,
   );
 }
 

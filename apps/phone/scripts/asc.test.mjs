@@ -178,6 +178,7 @@ function fakeAppStore() {
   const log = (entry) => appendFileSync(process.env.ASC_FAKE_LOG, `${JSON.stringify(entry)}\n`);
   let made = 0;
   let submissionReads = 0;
+  let versionReads = 0;
   const tokens = new Set();
   if (state.clock) {
     let now = Date.now();
@@ -224,12 +225,19 @@ function fakeAppStore() {
       );
     }
     if (path === "/v1/apps/app/appStoreVersions") {
+      versionReads++;
+      if (state.mutate && versionReads === state.mutate.after + 1) Object.assign(state.versions.find((row) => row.id === state.mutate.id), state.mutate.changes);
       return reply(state.versions.map(versionRow), 200, state.builds.map((build) => ({ id: build.id, type: "builds", attributes: { version: build.number } })));
     }
     if (method === "POST" && path === "/v1/appStoreVersions") {
       const version = { id: id(), version: body.data.attributes.versionString, state: "PREPARE_FOR_SUBMISSION", releaseType: body.data.attributes.releaseType };
       state.versions.push(version);
       return reply(versionRow(version), 201);
+    }
+    const declarationMatch = path.match(/^\/v1\/builds\/([^/]+)\/appEncryptionDeclaration$/);
+    if (declarationMatch) {
+      const declared = state.builds.find((row) => row.id === declarationMatch[1])?.declaration;
+      return reply(declared ? { id: "declaration", type: "appEncryptionDeclarations", attributes: { appEncryptionDeclarationState: declared } } : null);
     }
     const versionMatch = path.match(/^\/v1\/appStoreVersions\/([^/]+)(.*)$/);
     const version = versionMatch && state.versions.find((row) => row.id === versionMatch[1]);
@@ -247,11 +255,16 @@ function fakeAppStore() {
     }
     if (version && versionMatch[2] === "/appStoreReviewDetail") return reply(state.review ? { id: "review", type: "appStoreReviewDetails", attributes: state.review } : null);
     if (path.startsWith("/v1/appStoreVersionLocalizations/") && path.endsWith("/appScreenshotSets")) {
-      const shots = state.screenshots.map((set) => (Array.isArray(set) ? set : Array(set).fill("COMPLETE")));
+      const asSet = (set) => (typeof set === "object" && !Array.isArray(set) ? set : { type: "APP_IPHONE_67", shots: set });
+      const types = state.screenshots.map((set) => asSet(set).type);
+      const shots = state.screenshots.map((set) => {
+        const listed = asSet(set).shots;
+        return Array.isArray(listed) ? listed : Array(listed).fill("COMPLETE");
+      });
       const sets = shots.map((states, at) => ({
         id: `set-${at}`,
         type: "appScreenshotSets",
-        attributes: { screenshotDisplayType: "APP_IPHONE_67" },
+        attributes: { screenshotDisplayType: types[at] },
         relationships: { appScreenshots: { data: states.map((_, shot) => ({ type: "appScreenshots", id: `shot-${at}-${shot}` })) } },
       }));
       const included = shots.flatMap((states, at) => states.map((delivery, shot) => ({ id: `shot-${at}-${shot}`, type: "appScreenshots", attributes: { assetDeliveryState: { state: delivery } } })));
@@ -281,6 +294,9 @@ function fakeAppStore() {
       );
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
+    if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) {
+      if (state.raceAfterResolve) state.submissions.find((row) => row.items.length > 0 && path.includes(`item-${row.id}-`)).items.push(state.raceAfterResolve);
+    }
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) return reply({ id: path.split("/").at(-1), type: "reviewSubmissionItems", attributes: { state: "READY_FOR_REVIEW" } });
     if (method === "POST" && path === "/v1/reviewSubmissionItems") {
       const target = state.submissions.find((row) => row.id === body.data.relationships.reviewSubmission.data.id);
@@ -304,7 +320,7 @@ function appStoreState(changes = {}) {
     versions: [],
     localizations: {},
     review: reviewReady,
-    screenshots: [3],
+    screenshots: [3, { type: "APP_IPAD_PRO_3GEN_129", shots: 3 }],
     submissions: [],
     ...changes,
   };
@@ -449,7 +465,7 @@ test("app-store lists what App Review still needs and submits nothing", () => {
     }),
   );
   assert.equal(run.code, 1);
-  for (const gap of ["en-US keywords", "en-US support URL", "en-US screenshots", "App Review contact first name", "App Review contact phone", "demo account name and password"]) {
+  for (const gap of ["en-US keywords", "en-US support URL", "en-US iPhone screenshots", "en-US iPad screenshots", "App Review contact first name", "App Review contact phone", "demo account name and password"]) {
     assert.match(run.err, new RegExp(`- [^\\n]*${gap}`));
   }
   assert.doesNotMatch(run.err, /contact email|ChatGPT/);
@@ -471,9 +487,12 @@ test("preflight refuses a missing export compliance answer, privacy manifest or 
   assert.match(bare.err, /ITSAppUsesNonExemptEncryption/);
   assert.match(bare.err, /PrivacyInfo\.xcprivacy is missing/);
   assert.match(bare.err, /com\.apple\.developer\.web-browser/);
+  assert.match(bare.err, /TARGETED_DEVICE_FAMILY/);
   assert.deepEqual(bare.writes, []);
   writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
   writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
+  mkdirSync(join(ios, "Ardia.xcodeproj"));
+  writeFileSync(join(ios, "Ardia.xcodeproj", "project.pbxproj"), readFileSync(join(fakeIosDir('"1,2"'), "Ardia.xcodeproj", "project.pbxproj")));
   const unsigned = spawnSync(process.execPath, [script, "preflight", "--no-default-browser", "--ios-dir", ios], { encoding: "utf8", env: { ...process.env, ASC_KEY: "", ASC_KEY_ID: "", ASC_ISSUER: "" } });
   assert.equal(unsigned.status, 0, unsigned.stderr);
   assert.match(unsigned.stdout, /preflight passed/);
@@ -618,9 +637,9 @@ test("app-store renames only a lone PREPARE_FOR_SUBMISSION draft and lists any o
 });
 
 test("app-store counts screenshots inside their sets, and only warns when the notes don't mention ChatGPT", () => {
-  const empty = appStore(ready101({ screenshots: [0, 0] }));
+  const empty = appStore(ready101({ screenshots: [0, 0, { type: "APP_IPAD_PRO_3GEN_129", shots: 1 }] }));
   assert.equal(empty.code, 1);
-  assert.match(empty.err, /- en-US screenshots \(2 empty screenshot sets\)/);
+  assert.match(empty.err, /- en-US iPhone screenshots \(2 empty screenshot sets\)/);
   const quiet = appStore(ready101({ review: { ...reviewReady, notes: "Sign in with any account." } }));
   assert.equal(quiet.code, 0, quiet.err);
   assert.match(quiet.out + quiet.err, /warning: [^\n]*Continue with ChatGPT/);
@@ -654,9 +673,82 @@ test("app-store marks this version's rejected item resolved before resubmitting,
 });
 
 test("app-store counts only screenshots whose upload has finished", () => {
-  const pending = appStore(ready101({ screenshots: [["UPLOAD_COMPLETE", "FAILED"]] }));
+  const ipad = { type: "APP_IPAD_PRO_3GEN_129", shots: 1 };
+  const pending = appStore(ready101({ screenshots: [["UPLOAD_COMPLETE", "FAILED"], ipad] }));
   assert.equal(pending.code, 1);
-  assert.match(pending.err, /- en-US screenshots \(2 not finished uploading\)/);
-  const one = appStore(ready101({ screenshots: [["FAILED", "COMPLETE"]] }));
+  assert.match(pending.err, /- en-US iPhone screenshots \(2 not finished uploading\)/);
+  const one = appStore(ready101({ screenshots: [["FAILED", "COMPLETE"], ipad] }));
   assert.equal(one.code, 0, one.err);
+});
+
+function fakeIosDir(family) {
+  const ios = mkdtempSync(join(tmpdir(), "asc-ios-"));
+  mkdirSync(join(ios, "Ardia"));
+  mkdirSync(join(ios, "Config"));
+  mkdirSync(join(ios, "Ardia.xcodeproj"));
+  const plist = (body) => `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n${body}\n</dict>\n</plist>\n`;
+  writeFileSync(join(ios, "Ardia", "Info.plist"), plist("\t<key>ITSAppUsesNonExemptEncryption</key>\n\t<false/>"));
+  writeFileSync(join(ios, "PrivacyInfo.xcprivacy"), plist(""));
+  writeFileSync(join(ios, "Config", "Ardia-DefaultBrowser.entitlements"), plist("\t<key>com.apple.developer.web-browser</key>\n\t<true/>"));
+  const config = (id, name, bundle, value) =>
+    `\t\t${id} /* ${name} */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = ${bundle};\n\t\t\t\tTARGETED_DEVICE_FAMILY = ${value};\n\t\t\t};\n\t\t\tname = ${name};\n\t\t};\n`;
+  writeFileSync(
+    join(ios, "Ardia.xcodeproj", "project.pbxproj"),
+    config("AAA", "Release", "com.ardia.browser.ios.share", '"1,2"') + (family === null ? "" : config("BBB", "Release", "com.ardia.browser.ios", family)) + config("CCC", "Debug", "com.ardia.browser.ios", '"1,2"'),
+  );
+  return ios;
+}
+
+test("app-store stops without submitting when the version's release type, build, version string or state changes before the submit", () => {
+  const changes = [{ releaseType: "AFTER_APPROVAL" }, { build: "b9" }, { version: "1.0.9" }, { state: "DEVELOPER_REJECTED" }];
+  for (const after of [1, 2]) {
+    for (const change of changes) {
+      const run = appStore(ready101({ mutate: { after, id: "v101", changes: change } }));
+      assert.equal(run.code, 1, `${JSON.stringify(change)} after ${after}: ${run.out}`);
+      assert.match(run.err, /changed while this ran/);
+      assert.ok(!run.steps.some((step) => step.startsWith("PATCH /v1/reviewSubmissions/")), `${JSON.stringify(change)} after ${after} submitted`);
+    }
+  }
+  const run = appStore(ready101());
+  assert.equal(run.code, 0, run.err);
+  assert.match(run.out, /The release is MANUAL/);
+});
+
+test("app-store reads the submission's items again after resolving a rejected item, right before submitting", () => {
+  const run = appStore(ready101({ submissions: [{ id: "s1", state: "UNRESOLVED_ISSUES", items: ["v101"], itemStates: { v101: "REJECTED" } }], raceAfterResolve: "event:launch" }));
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /item-s1-1/);
+  assert.ok(!run.steps.includes("PATCH /v1/reviewSubmissions/s1"), run.steps.join("\n"));
+});
+
+test("app-store wants a finished screenshot for each device family the app targets", () => {
+  const iphoneOnly = { screenshots: [3] };
+  const both = appStore(ready101(iphoneOnly), [], fakeIosDir('"1,2"'));
+  assert.equal(both.code, 1);
+  assert.match(both.err, /- en-US iPad screenshots/);
+  assert.doesNotMatch(both.err, /iPhone screenshots/);
+  const repo = appStore(ready101(iphoneOnly));
+  assert.equal(repo.code, 1);
+  assert.match(repo.err, /- en-US iPad screenshots/);
+  const phone = appStore(ready101(iphoneOnly), [], fakeIosDir("1"));
+  assert.equal(phone.code, 0, phone.err);
+  const tablet = appStore(ready101({ screenshots: [{ type: "APP_IPAD_PRO_3GEN_129", shots: 2 }] }), [], fakeIosDir("2"));
+  assert.equal(tablet.code, 0, tablet.err);
+  const unknown = appStore(ready101(), [], fakeIosDir(null));
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.err, /TARGETED_DEVICE_FAMILY/);
+  assert.deepEqual(unknown.writes, []);
+});
+
+test("app-store refuses a build that declares non-exempt encryption without an approved encryption declaration", () => {
+  const build = (declaration) => ({ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: [], encryption: true, declaration }] });
+  for (const declaration of [null, "IN_REVIEW", "REJECTED"]) {
+    const run = appStore(ready101(build(declaration)));
+    assert.equal(run.code, 1, `${declaration}: ${run.out}`);
+    assert.match(run.err, /non-exempt encryption/);
+    assert.match(run.err, new RegExp(declaration ? `declaration is ${declaration}` : "no encryption declaration"));
+    assert.deepEqual(run.writes, []);
+  }
+  const approved = appStore(ready101(build("APPROVED")));
+  assert.equal(approved.code, 0, approved.err);
 });

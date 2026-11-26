@@ -4628,13 +4628,16 @@ In order:
 - **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
   `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
   `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in
-  `Config/Ardia-DefaultBrowser.entitlements`. Each missing one is named and nothing is sent.
+  `Config/Ardia-DefaultBrowser.entitlements`, and the Release `TARGETED_DEVICE_FAMILY` of `com.ardia.browser.ios` in
+  `Ardia.xcodeproj` (`"1,2"`: iPhone and iPad), which decides the screenshots the listing needs. Each missing one is
+  named and nothing is sent.
 - **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
   outside is refused before a request.
 - **The build** is picked by its number and its version. Build numbers repeat across versions, so the workflow passes
   the TestFlight pin (`1.0.1` for now, or `version` when given); without `--version` the CLI refuses a number that
-  two versions share and lists them. The build must be `VALID`, not expired, and carry an export compliance answer;
-  the workflow waits up to 20 minutes for one still processing (`--timeout`).
+  two versions share and lists them. The build must be `VALID`, not expired, and carry an export compliance answer.
+  A build that declares non-exempt encryption is refused unless its encryption declaration is `APPROVED`, which
+  can't happen while Info.plist says false. The workflow waits up to 20 minutes for one still processing (`--timeout`).
 - **Reads before writes.** Before it writes anything, it reads the App Store versions and every open review
   submission with its items. It writes nothing when this version is already in a submission that is waiting for
   review or in review, whatever the version's own state says, and stops, listing them, when a submission is in
@@ -4648,17 +4651,18 @@ In order:
 - **What's New** comes from `notes`, at most 4,000 characters; without it the text is "Bug fixes and improvements."
   and the run says so. The App Store shows no What's New on an app's first version, so the run leaves it out then.
 - **The checks** list everything missing at once and stop before the submission: the primary locale's description,
-  keywords, support URL and at least one screenshot whose upload has finished (an empty set, or one still uploading
-  or failed, counts as none), and App Review
+  keywords, support URL and, for each device family the app targets (iPhone and iPad), at least one screenshot whose
+  upload has finished (an empty set, or one still uploading or failed, counts as none), and App Review
   Information's contact name, phone, email and notes, and a demo account's name and password when one is required.
   Notes that don't say how to try Continue with ChatGPT (Browse for Me) only print a warning. Fill the gaps in App
   Store Connect and run it again; the run never makes contact details up.
 - **The submission** reuses an open review submission that is ready and holds nothing or only this version, or one
   with unresolved issues that holds only this version; otherwise it opens one. Just before that it reads the
-  version and the submissions again and stops if either changed while it ran, and after adding the version it
-  checks the submission holds only this version before submitting it, so two runs at once don't submit each
-  other's work. A rejected item for this version, left from the last review, is marked resolved before the
-  submission goes back.
+  version and the submissions again and stops if either changed while it ran. A rejected item for this version,
+  left from the last review, is marked resolved. Then, right before submitting, it reads the version once more (its
+  version string, state, build and release type must be what the run set) and the submission's items (only this
+  version), and stops without submitting on any change, so a release type switched mid-run or an App Event added
+  meanwhile never goes to App Review. The summary prints the release type Apple holds.
 
 Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
 it, the owner presses Release in App Store Connect. Google Play is not set up.
