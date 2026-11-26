@@ -39,7 +39,8 @@ import { whenIdle } from "../../lib/whenIdle";
 import { downloads } from "../../platform/downloads";
 import { pages } from "../../platform/pages";
 import { fetchGitHubJson, fetchReleaseChecksum } from "../../platform/releases";
-import { copyText, openExternal } from "../../platform/system";
+import { cleanUrl } from "@ardia/core/src/cleanUrl.ts";
+import { copyLink, openExternal } from "../../platform/system";
 import { readPreference, writePreference } from "../store/browserDatabase";
 import { browserDatabase } from "../store/database";
 import { useOnboarding } from "../onboarding/store";
@@ -115,7 +116,7 @@ async function runCheck(version: ReleaseVersion, automatic: boolean) {
     const now = Date.now();
     if (result.unpublished.length > 0) writeStored(UPDATE_UNPUBLISHED_KEY, JSON.stringify(rememberUnpublished(known, result.unpublished, now)));
     const next = nextCheckAt(result, now);
-    if (next !== null) writeStored(UPDATE_NEXT_CHECK_KEY, String(next));
+    writeStored(UPDATE_NEXT_CHECK_KEY, next === null ? "" : String(next));
     if (result.kind === "available") {
       const same = useAppUpdate.getState().offer?.version === result.offer.version;
       useAppUpdate.setState({ status: "available", offer: result.offer, handoff: same ? useAppUpdate.getState().handoff : null });
@@ -150,6 +151,7 @@ function checkIfDue() {
 let started = false;
 
 export function startUpdateChecks() {
+  watchUpdateDownloads();
   if (started || !appUpdatesOffered()) return;
   started = true;
   whenIdle(checkIfDue, LAUNCH_QUIET_MS, LAUNCH_IDLE_TIMEOUT_MS);
@@ -159,11 +161,10 @@ export function startUpdateChecks() {
   useOnboarding.subscribe((now, before) => {
     if (before.showing && !now.showing) offerInFront();
   });
-  watchUpdateDownloads();
 }
 
 function showUnavailable(version: ReleaseVersion) {
-  showToast(updateUnavailableMessage(), "warning", TOAST_LONG_DURATION_MS, { label: actionWords.copyLink, run: () => void copyText(releasePageUrl(version)).catch(() => undefined) });
+  showToast(updateUnavailableMessage(), "warning", TOAST_LONG_DURATION_MS, { label: actionWords.copyLink, run: () => void copyLink(cleanUrl(releasePageUrl(version))).catch(() => undefined) });
 }
 
 const setHandoff = (version: string, handoff: UpdateHandoff | null) => {
@@ -279,6 +280,7 @@ export async function refreshDownload(installWhenReady: boolean) {
   }
   if (progress === "failed") {
     await downloads.discardAppUpdate(record.id).catch(() => false);
+    if (storedDownload()?.id !== record.id) return;
     forgetDownload();
     setHandoff(offer.version, "failed");
     return;

@@ -343,8 +343,8 @@ test("the download action hands off only this repo's exact APK and checksum addr
   expect(handedOff).toHaveBeenCalledTimes(1);
 });
 
-test("an APK Ardia downloaded opens through the same installer path, asking for the permission first when it's missing", async () => {
-  if (!releaseBuild) return;
+test("an APK Ardia downloaded opens through the same installer path, asking for the permission first when it's missing, on every Android build", async () => {
+  if (Platform.OS !== "android") return;
   installedFile.mockResolvedValueOnce("needs_permission");
   await act(async () => installDownloadedPackage("content://media/external/downloads/7"));
   await settle();
@@ -394,4 +394,28 @@ test("the offer waits for onboarding to finish instead of covering it", async ()
   act(() => useOnboarding.setState({ showing: false }));
   await settle();
   expect(useToasts.getState().toast?.message).toBe("Ardia 1.0.6 is available");
+});
+
+test("an unanswered check clears an older deadline, so the next launch tries again", async () => {
+  if (!releaseBuild) return;
+  fetched.mockResolvedValue({ kind: "unreachable" });
+  const root = renderSurface(<AboutPage />);
+  await pressRow(root, /^Check for updates/);
+  expect(textOf(root)).toContain("Couldn’t check. Try again later.");
+  expect(readPreference(browserDatabase(), UPDATE_NEXT_CHECK_KEY)).toBe("");
+  unmount(root);
+});
+
+test("cleaning up a failed download never clears a newer download that replaced it meanwhile", async () => {
+  if (!releaseBuild) return;
+  const root = await offeredAbout();
+  await pressRow(root, /^Download Ardia 1\.0\.4/);
+  statusOf.mockResolvedValue("failed");
+  discarded.mockImplementation(async () => {
+    writePreference(browserDatabase(), UPDATE_DOWNLOAD_KEY, JSON.stringify({ version: "1.0.4", id: "42" }));
+    return true;
+  });
+  await foreground();
+  expect(JSON.parse(readPreference(browserDatabase(), UPDATE_DOWNLOAD_KEY) ?? "null")).toEqual({ version: "1.0.4", id: "42" });
+  unmount(root);
 });
