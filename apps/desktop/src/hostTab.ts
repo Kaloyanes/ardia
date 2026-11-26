@@ -51,6 +51,8 @@ export class HostTab {
   nextViewport: TabViewport | undefined;
   viewportSend: Promise<TabViewport | null> | undefined;
   releaseScheduled = false;
+  // The host was sent tab.close for this key: its page and binding are gone, though the view stays mounted until React unmounts it.
+  closed = false;
   page: HostPageReceiver | undefined;
 
   creating: { url: string; at: number } | null;
@@ -143,7 +145,7 @@ export class HostTab {
   }
 
   presentation(visible: boolean): Promise<void> {
-    return queueTabPresentation(this, visible, () => claims.get(this.host)?.get(this.key) === this);
+    return queueTabPresentation(this, visible, () => this.ownsPage());
   }
 
   viewport(viewport: TabViewport): Promise<TabViewport | null> {
@@ -152,7 +154,7 @@ export class HostTab {
       this.viewportSend = undefined;
       const latest = this.nextViewport;
       this.nextViewport = undefined;
-      if (!latest || this.disposed || !this.identity || claims.get(this.host)?.get(this.key) !== this) return null;
+      if (!latest || this.disposed || !this.identity || !this.ownsPage()) return null;
       const host = this.host;
       const effective: TabViewport = latest.contentRect && !hostSupports(VIEWPORT_CLIP_CAPABILITY, host)
         ? { rect: latest.rect, visible: latest.visible, ...(latest.radii ? { radii: latest.radii } : {}) }
@@ -177,8 +179,12 @@ export class HostTab {
     return viewport.visible ? viewport : undefined;
   }
 
+  ownsPage() {
+    return !this.closed && claims.get(this.host)?.get(this.key) === this;
+  }
+
   presentsNow() {
-    return !this.disposed && !!this.identity && !this.viewportSend && claims.get(this.host)?.get(this.key) === this;
+    return !this.disposed && !!this.identity && !this.viewportSend && this.ownsPage();
   }
 
   detach() {
@@ -188,6 +194,10 @@ export class HostTab {
     void enqueueTab(this.host, this.key, async () => {
       const owners = claims.get(this.host);
       if (!this.identity || owners?.get(this.key) !== this) return;
+      if (this.closed) {
+        owners.delete(this.key);
+        return;
+      }
       await invokeHost("tab.release", { id: this.identity.browserId, claim: this.claim }, this.host);
       if (owners.get(this.key) === this) owners.delete(this.key);
     }).catch((error) => {
@@ -202,6 +212,12 @@ export class HostTab {
     this.unsubscribe();
     this.detach();
   }
+}
+
+// tab.close destroys the key's page on the host. Its owner can no longer be shown, sized or released there.
+export function noteHostTabClosed(host: ArdiaHost, key: string) {
+  const owner = claims.get(host)?.get(key);
+  if (owner) owner.closed = true;
 }
 
 export function showInPlaceOf(from: HostTab, to: HostTab, accepted?: (shown: TabViewport) => void): boolean {
