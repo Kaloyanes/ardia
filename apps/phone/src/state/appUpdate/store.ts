@@ -31,6 +31,7 @@ import { fetchGitHubJson } from "../../platform/releases";
 import { copyText, openExternal } from "../../platform/system";
 import { readPreference, writePreference } from "../store/browserDatabase";
 import { browserDatabase } from "../store/database";
+import { useOnboarding } from "../onboarding/store";
 import { countUsage } from "../telemetry/telemetry";
 import { showToast, TOAST_LONG_DURATION_MS } from "../toasts/store";
 
@@ -78,9 +79,11 @@ function writeStored(key: string, value: string) {
 
 const inFront = () => AppState.currentState === "active";
 
+const offerable = () => inFront() && !useOnboarding.getState().showing;
+
 function offerInFront() {
   const { status, offer } = useAppUpdate.getState();
-  if (status !== "available" || !inFront()) return;
+  if (status !== "available" || !offerable()) return;
   const offered = parseOfferedVersions(readStored(UPDATE_OFFERED_KEY));
   if (!updateOfferWanted(offer, offered)) return;
   showToast(updateOfferMessage(offer), "download", OFFER_TOAST_MS, { label: "Download", run: openUpdate });
@@ -139,6 +142,9 @@ export function startUpdateChecks() {
   whenIdle(checkIfDue, LAUNCH_QUIET_MS, LAUNCH_IDLE_TIMEOUT_MS);
   AppState.addEventListener("change", (next) => {
     if (next === "active") checkIfDue();
+  });
+  useOnboarding.subscribe((now, before) => {
+    if (before.showing && !now.showing) offerInFront();
   });
 }
 

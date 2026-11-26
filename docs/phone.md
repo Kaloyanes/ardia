@@ -3179,8 +3179,9 @@ zeros, nightly 1 to 998) and orders them by versionCode.
   false, `published_at` is a real UTC time, and an asset in state `uploaded` named `Ardia-<version>.apk` has exactly the
   URL `https://github.com/ardia-browser/ardia/releases/download/android-v<v>/Ardia-<v>.apk`. Rate limits, errors and
   malformed answers read as couldn’t check (boundary row `phone-update:findUpdate`).
-- **The offer.** Once per version, a toast (Ardia <version> is available, Download), shown only in the front: a check
-  that finishes in the background holds it until Ardia is back. The versions already offered are a set of the last 20
+- **The offer.** Once per version, a toast (Ardia <version> is available, Download), shown only in the front and never over
+  onboarding: a check that finishes in the background or during onboarding holds it until Ardia is back or
+  onboarding ends. The versions already offered are a set of the last 20
   (`app_update_offered_versions`), so an older offer in between never brings a dismissed one back, and a check from
   Settings shows the row without spending the toast.
 - **The download.** Ardia never installs anything and has no `REQUEST_INSTALL_PACKAGES`, so Ardia itself can't open

@@ -8,6 +8,7 @@ import { openExternal } from "../platform/system";
 import { openUpdate, startUpdateChecks, UPDATE_OFFERED_KEY, useAppUpdate } from "../state/appUpdate/store";
 import { readPreference, writePreference } from "../state/store/browserDatabase";
 import { browserDatabase } from "../state/store/database";
+import { useOnboarding } from "../state/onboarding/store";
 import { useToasts } from "../state/toasts/store";
 import { renderSurface, textOf, unmount, withTabs } from "../../test/render/harness";
 
@@ -177,4 +178,18 @@ test("the launch offer shows only in the front: a check that lands in the backgr
   await act(async () => stateListeners.forEach((listener) => listener("active")));
   await settle();
   expect(useToasts.getState().toast).toBeNull();
+});
+
+test("the offer waits for onboarding to finish instead of covering it", async () => {
+  if (!releaseBuild) return;
+  fetched.mockImplementation(publishedAnswers("1.0.6"));
+  startUpdateChecks();
+  act(() => useOnboarding.setState({ showing: true }));
+  await act(async () => stateListeners.forEach((listener) => listener("active")));
+  await settle();
+  expect(useAppUpdate.getState().status).toBe("available");
+  expect(useToasts.getState().toast).toBeNull();
+  act(() => useOnboarding.setState({ showing: false }));
+  await settle();
+  expect(useToasts.getState().toast?.message).toBe("Ardia 1.0.6 is available");
 });
