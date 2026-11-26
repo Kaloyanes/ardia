@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AFTERIMAGE_MS, GLASS_MAX_REGIONS, STABLE_FRAMES, createGlassRegions } from "./glassRegions.ts";
+import { AFTERIMAGE_MS, GLASS_MAX_REGIONS, STABLE_FRAMES, createGlassRegions, offPagePieces } from "./glassRegions.ts";
 
 const RADII = { upperLeft: 10, upperRight: 10, lowerRight: 10, lowerLeft: 10 };
 const PAGE = { x: 0, y: 0, width: 1000, height: 800 };
@@ -15,6 +15,7 @@ function node(geometry, parent = null) {
 }
 
 function harness({ available = true, send = true, behindWindow = false } = {}) {
+  const holes = [];
   const sent = [];
   const replies = [];
   const frames = [];
@@ -47,6 +48,7 @@ function harness({ available = true, send = true, behindWindow = false } = {}) {
       clearTimeout: (handle) => timers.delete(handle),
       report: (error) => errors.push(error),
       availability: (value) => availability.push(value),
+      holes: (next) => holes.push(next),
     },
     available,
     { behindWindow },
@@ -63,7 +65,7 @@ function harness({ available = true, send = true, behindWindow = false } = {}) {
     resolve({ generation: update.generation, available: true, accepted: ids ?? update.regions.map((region) => region.id) });
     await settle();
   };
-  return { glass, sent, replies, frames, tick, settle, accept, timers, ghosts, errors, running, availability };
+  return { glass, sent, replies, frames, tick, settle, accept, timers, ghosts, errors, running, availability, holes };
 }
 
 const menu = (x = 100) => ({ rect: { x, y: 100, width: 240, height: 160 }, radii: RADII, opacity: 1 });
@@ -448,4 +450,61 @@ test("a panel without a look sends only its geometry", () => {
   h.glass.add(node(menu()));
   h.tick(STABLE_FRAMES + 1);
   assert.deepEqual(Object.keys(h.sent[0].regions[0]).sort(), ["blur", "id", "opacity", "radii", "rect"]);
+});
+
+test("native behind-window glass publishes holes only while it is presented and off every page", async () => {
+  const h = harness({ behindWindow: true });
+  const pill = node(menu(1200));
+  const remove = h.glass.add(pill);
+  h.tick(STABLE_FRAMES + 2);
+  await h.accept();
+  assert.deepEqual(h.holes.at(-1) ?? [], []);
+  h.glass.presented(h.sent.at(-1).generation);
+  assert.equal(pill.attributes.glass, "on");
+  assert.deepEqual(h.holes.at(-1), [{ slot: pill, rect: menu(1200).rect, radii: RADII }]);
+  h.glass.setPages([{ x: 1100, y: 0, width: 600, height: 800 }]);
+  assert.deepEqual(h.holes.at(-1), []);
+  h.glass.setPages([]);
+  assert.equal(h.holes.at(-1).length, 1);
+  const count = h.holes.length;
+  h.glass.setPages([]);
+  assert.equal(h.holes.length, count, "unchanged holes are not republished");
+  remove();
+  assert.deepEqual(h.holes.at(-1), []);
+});
+
+test("a pill that straddles a page edge keeps the hole for the slice AppKit mounts behind the window", () => {
+  const rect = { x: 200, y: 100, width: 100, height: 40 };
+  const pieces = offPagePieces(rect, RADII, [{ x: 250, y: 0, width: 800, height: 800 }]);
+  assert.deepEqual(pieces, [{ rect: { x: 200, y: 100, width: 50, height: 40 }, radii: { upperLeft: 10, upperRight: 0, lowerRight: 0, lowerLeft: 10 } }]);
+  assert.deepEqual(offPagePieces(rect, RADII, []), [{ rect, radii: RADII }]);
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 0, y: 0, width: 1000, height: 800 }]), []);
+});
+
+test("a scrolling glass region leaves AppKit until it settles, then comes back", async () => {
+  const h = harness({ behindWindow: true });
+  const scroller = node(null);
+  const pill = node(menu(1200), scroller);
+  h.glass.add(pill);
+  h.tick(STABLE_FRAMES + 2);
+  await h.accept();
+  h.glass.presented(h.sent.at(-1).generation);
+  assert.equal(h.sent.at(-1).regions.length, 1);
+  h.glass.motion(scroller, true);
+  pill.geometry = menu(1210);
+  h.tick(1);
+  assert.equal(pill.attributes.glass, "off");
+  assert.equal(h.sent.at(-1).regions.length, 0, "the moving region was still submitted to AppKit");
+  await h.accept();
+  h.tick(STABLE_FRAMES + 2);
+  assert.equal(h.sent.at(-1).regions.length, 1, "the settled region never came back");
+  assert.equal(h.sent.at(-1).regions[0].rect.x, 1210);
+});
+
+test("a slice too narrow for its rounded corner cuts no hole, so no hole can spill past the native outline", () => {
+  const rect = { x: 200, y: 100, width: 100, height: 40 };
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 206, y: 0, width: 800, height: 800 }]), []);
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 220, y: 0, width: 800, height: 800 }]).map((piece) => piece.rect.width), [20]);
+  const square = { upperLeft: 0, upperRight: 0, lowerRight: 0, lowerLeft: 0 };
+  assert.deepEqual(offPagePieces(rect, square, [{ x: 203, y: 0, width: 800, height: 800 }]).map((piece) => piece.rect.width), [3]);
 });

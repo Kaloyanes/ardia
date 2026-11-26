@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ardia/linux/ac_linux_search_engines.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_link_gesture.h"
@@ -73,12 +74,31 @@ constexpr std::string_view kPopoverCapabilities[] = {
     "shell.popover.beyondWindow",
 };
 
+constexpr std::string_view kInvokedEngineCalls[] = {
+    "engine.info",
+    "tabs.strips",
+    "search.setEngineName",
+};
+
+constexpr std::string_view kInertEngineCalls[] = {
+    "engine.memorySaver",
+    "engine.systemState",
+    "webKit.setFraudWarnings",
+    "webView.setSelectionPopover",
+};
+
+template <std::size_t N>
+bool ListedCall(const std::string_view (&names)[N], std::string_view name) {
+  return std::ranges::find(names, name) != std::end(names);
+}
+
 constexpr std::string_view kCapabilities[] = {
     "shell.inputRegions",
     "shell.glassRegions",
     "shell.glassBehindWindow",
     "shell.backdropRegions",
     "shell.backdropRegions.windowTreatment",
+    "shell.windowBackdrop",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
@@ -105,7 +125,6 @@ base::FilePath DocumentDirectory() {
   return DataDirectory();
 }
 
-constexpr size_t kBootstrapDocumentLimit = 1024 * 1024;
 constexpr size_t kBootstrapBudget = 8 * 1024 * 1024;
 
 bool ValidDocumentName(const std::string& name) {
@@ -183,10 +202,10 @@ base::DictValue ReadDocuments() {
     std::string text;
     const std::string name = path.BaseName().value();
     if (ValidDocumentName(name) && name.ends_with(".json") &&
-        !name.starts_with("session-backup") &&
-        files.GetInfo().GetSize() <= static_cast<int64_t>(kBootstrapDocumentLimit) &&
+        !name.starts_with("session-backup") && !DocumentSession::Reserved(name) &&
+        files.GetInfo().GetSize() <= static_cast<int64_t>(kDocumentLimit) &&
         static_cast<size_t>(files.GetInfo().GetSize()) <= budget &&
-        base::ReadFileToStringWithMaxSize(path, &text, kBootstrapDocumentLimit)) {
+        base::ReadFileToStringWithMaxSize(path, &text, kDocumentLimit)) {
       budget -= text.size();
       documents.Set(name, std::move(text));
     }
@@ -500,6 +519,10 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.writeDocument" ||
       method == "ArdiaShell.saveDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name) || !values || values->size() != 2 ||
         !(*values)[1].is_string() ||
         (*values)[1].GetString().size() > kDocumentLimit) {
@@ -528,6 +551,10 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.removeDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name)) {
       return std::move(done).Run(
           false, Failure("ERR_DOCUMENT_NAME", "Invalid document name"));
@@ -648,6 +675,22 @@ void ShellHostView::Invoke(const std::string& method,
     return std::move(done).Run(
         false, Failure("ERR_UNAVAILABLE", "The Mac WebUI spike sends nothing"));
   }
+  if (method == "tabs.strips") {
+    return Reply(std::move(done), base::Value(base::DictValue()
+                                                  .Set("rev", 0)
+                                                  .Set("cmd", base::Value())
+                                                  .Set("strips", base::ListValue())));
+  }
+  if (method == "search.setEngineName") {
+    const auto text = [values](std::size_t index) {
+      return values && values->size() > index && (*values)[index].is_string() ? (*values)[index].GetString()
+                                                                               : std::string();
+    };
+    if (const std::optional<std::string> error = ardiacore::SetLinuxDefaultSearchEngine(text(0), text(1), text(2))) {
+      return std::move(done).Run(false, Failure("ERR_ENGINE", *error));
+    }
+    return Reply(std::move(done), base::Value());
+  }
   if (method == "engine.info") {
     return Reply(std::move(done),
                  base::Value(base::DictValue()
@@ -675,6 +718,36 @@ void ShellHostView::EngineCall(const std::string& name,
         true, base::Value(base::WriteJson(base::DictValue().Set(
                                               "profiles", std::move(loaded)))
                               .value_or("{}")));
+  }
+  if (ListedCall(kInvokedEngineCalls, name)) {
+    std::optional<base::Value> parsed =
+        args && args->is_string() ? base::JSONReader::Read(args->GetString(), base::JSON_PARSE_RFC, 8) : std::nullopt;
+    base::ListValue values;
+    if (name == "search.setEngineName" && parsed && parsed->is_dict()) {
+      for (const char* key : {"name", "keyword", "url"}) {
+        const std::string* field = parsed->GetDict().FindString(key);
+        values.Append(field ? *field : std::string());
+      }
+    }
+    return Invoke(name, base::DictValue().Set("args", std::move(values)),
+                  base::BindOnce(
+                      [](Done done, bool ok, base::Value result) {
+                        if (!ok) {
+                          return std::move(done).Run(false, std::move(result));
+                        }
+                        std::move(done).Run(true, base::Value(base::WriteJson(result).value_or("null")));
+                      },
+                      std::move(done)));
+  }
+  if (ListedCall(kInertEngineCalls, name)) {
+    NoteUnhandled("engine.call " + name + " (answered null)");
+    return std::move(done).Run(true, base::Value("null"));
+  }
+  if (DocumentSession::Handles(name)) {
+    if (!documents_) {
+      return std::move(done).Run(false, Failure("ERR_DOCUMENT_AUTH", "Document access denied"));
+    }
+    return documents_->Call(name, args, renderer_generation_, std::move(done));
   }
   if (SystemServices::HandlesEngineCall(name) || ExtensionViews::HandlesEngineCall(name)) {
     return WithProfile(profile, base::BindOnce(&ServiceCall, GetWeakPtr(), name,

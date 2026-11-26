@@ -23,7 +23,14 @@ if (is_official_build) {
 
   source_set("session") {
     sources = [
+      "shared/ac_linux_document_reducer.cc",
+      "shared/ac_linux_document_schema.cc",
+      "shared/ac_linux_document_service.cc",
+      "shared/ac_linux_documents.cc",
       "shared/ac_linux_session.cc",
+      "shared/ardia/linux/ac_linux_document_reducer.h",
+      "shared/ardia/linux/ac_linux_document_service.h",
+      "shared/ardia/linux/ac_linux_documents.h",
       "shared/ardia/linux/ac_linux_session.h",
     ]
     public_configs = [ ":session_include" ]
@@ -48,6 +55,9 @@ if (is_official_build) {
       "ac_mac_dialog.h",
       "ac_mac_dialog.mm",
       "ac_mac_dialog_policy.h",
+      "ac_mac_backdrop_theme.h",
+      "ac_mac_documents.h",
+      "ac_mac_documents.mm",
       "ac_mac_extension_view.h",
       "ac_mac_extension_view.mm",
       "ac_mac_extension_view_policy.h",
@@ -104,6 +114,9 @@ if (is_official_build) {
       "ac_mac_window_layout.h",
       "ac_mac_window_policy.h",
       "generated/ac_desktop_favicon_policy.h",
+      "shared/ac_linux_search_engines.cc",
+      "shared/ardia/desktop/ac_desktop_search_engine_policy.h",
+      "shared/ardia/linux/ac_linux_search_engines.h",
       "generated/ac_desktop_routes.h",
       "generated/ac_desktop_window_commands.h",
       "generated/ac_linux_page_operations.h",
@@ -138,6 +151,7 @@ if (is_official_build) {
       "//components/policy/core/common",
       "//components/prefs",
       "//components/renderer_context_menu",
+      "//components/search_engines",
       "//components/security_state/content",
       "//components/security_state/core",
       "//components/sessions",

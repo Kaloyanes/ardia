@@ -320,7 +320,9 @@ html.embed body {
 }
 
 .ardia-shell-above,
-.ardia-shell-above body {
+.ardia-shell-above body,
+.ardia-utility-glass,
+.ardia-utility-glass body {
   background: transparent;
 }
 

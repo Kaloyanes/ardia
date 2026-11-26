@@ -556,3 +556,57 @@ test("a reverse flick after mayBegin held the settle still needs its own travel"
   long.input("ended", 200, 1, WIDTH, 1.01);
   assert.equal(long.selected, 0, "a long reverse flick from a held settle goes back");
 });
+
+test("a light, quick one-delta trackpad flick from rest switches to the next profile with no distance wall", (t) => {
+  const { fake, pager } = pagerTarget(t, ["a", "b", "c"]);
+  fake.set(700);
+  native({ phase: "began", dx: 0 }, 700);
+  native({ phase: "changed", dx: -15 }, 700.012);
+  native({ phase: "ended", dx: 0 }, 700.014);
+  assert.ok(pager.snapshot().position < 0.1, "the flick barely moved the pager");
+  assert.equal(pager.snapshot().selected, 1, "the quick flick computed no velocity and snapped back");
+  fake.pump();
+  assert.equal(pager.snapshot().position, 1);
+});
+
+test("a forward swipe during a settle tail switches on at once with no 120 px wall", () => {
+  const { spring, at } = interruptedAt(0.96);
+  assert.ok(at >= 0.96 && at < 1, `interrupted at ${at}`);
+  spring.input("began", 0, -1, WIDTH, 1);
+  spring.input("changed", 4, -1, WIDTH, 1);
+  spring.input("changed", 12, -1, WIDTH, 1.01);
+  spring.input("ended", 12, -1, WIDTH, 1.01);
+  assert.equal(spring.selected, 2, "a forward flick in the settle tail was held back");
+  const mid = interruptedAt(0.62).spring;
+  mid.input("began", 0, -1, WIDTH, 1);
+  mid.input("changed", 4, -1, WIDTH, 1);
+  mid.input("changed", 12, -1, WIDTH, 1.01);
+  mid.input("ended", 12, -1, WIDTH, 1.01);
+  assert.equal(mid.selected, 1, "a forward flick mid-settle completes the switch it is already making");
+});
+
+test("mid-settle, an accidental 10 px reverse bump stays put while a deliberate quick reverse flick goes back", () => {
+  const bump = interruptedAt(0.447).spring;
+  bump.input("began", 0, 1, WIDTH, 1);
+  bump.input("changed", 4, 1, WIDTH, 1);
+  bump.input("changed", 10, 1, WIDTH, 1.01);
+  bump.input("ended", 10, 1, WIDTH, 1.01);
+  assert.equal(bump.selected, 1, "a 10 px bump undid the switch");
+  const flick = interruptedAt(0.447).spring;
+  flick.input("began", 0, 1, WIDTH, 1);
+  flick.input("changed", 20, 1, WIDTH, 1);
+  flick.input("changed", 40, 1, WIDTH, 1.01);
+  flick.input("ended", 40, 1, WIDTH, 1.01);
+  assert.equal(flick.selected, 0, "a deliberate 40 px reverse flick did not go back");
+});
+
+test("mayBegin, then a began that already carries the flick, then a still lift switches profiles", (t) => {
+  const { fake, pager } = pagerTarget(t, ["a", "b", "c"]);
+  fake.set(800);
+  native({ phase: "mayBegin" }, 800);
+  native({ phase: "began", dx: -15 }, 800.4);
+  native({ phase: "ended", dx: 0 }, 800.402);
+  assert.equal(pager.snapshot().selected, 1, "a began-carried flick computed no velocity and snapped back");
+  fake.pump();
+  assert.equal(pager.snapshot().position, 1);
+});

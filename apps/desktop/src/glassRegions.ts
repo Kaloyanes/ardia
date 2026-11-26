@@ -1,5 +1,5 @@
 import type { CornerRadii } from "./hostExtensionView.ts";
-import { intersection, type Rect } from "./inputRegions.ts";
+import { intersection, subtract, type Rect } from "./inputRegions.ts";
 
 export const GLASS_METHOD = "shell.glassRegions";
 export const GLASS_BEHIND_WINDOW = "shell.glassBehindWindow";
@@ -16,6 +16,7 @@ type GlassRegion = { id: string; rect: Rect; radii: CornerRadii; blur: number; o
 export type GlassOptions = { behindWindow?: boolean };
 type GlassUpdate = { generation: number; regions: GlassRegion[] };
 export type GlassApplied = { generation: number; available: boolean; accepted: string[] };
+export type GlassHole = { slot: Element; rect: Rect; radii: CornerRadii };
 
 type GlassDeps = {
   send: ((update: GlassUpdate) => Promise<GlassApplied>) | null;
@@ -30,6 +31,7 @@ type GlassDeps = {
   report?: (error: unknown) => void;
   activity?: (active: boolean) => void;
   availability?: (available: boolean) => void;
+  holes?: (holes: readonly GlassHole[]) => void;
 };
 
 type Applied = { generation: number; key: string; accepted: boolean };
@@ -46,6 +48,7 @@ type Entry = {
   pending: { generation: number; key: string } | null;
   applied: Applied | null;
   translucent: boolean;
+  held: boolean;
   stop: () => void;
 };
 
@@ -66,6 +69,30 @@ const lookOf = (look: GlassLook): GlassLook => ({
   ...(look.appearance ? { appearance: look.appearance } : {}),
 });
 
+export function offPagePieces(rect: Rect, radii: CornerRadii, pages: readonly Rect[]): { rect: Rect; radii: CornerRadii }[] {
+  let pieces: Rect[] = [rect];
+  for (const page of pages) pieces = pieces.flatMap((piece) => subtract(piece, page));
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.01;
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  return pieces.flatMap((piece) => {
+    const pieceRight = piece.x + piece.width;
+    const pieceBottom = piece.y + piece.height;
+    const corner = (x: number, y: number, cornerX: number, cornerY: number, radius: number) => (near(x, cornerX) && near(y, cornerY) ? radius : 0);
+    const kept = {
+      rect: piece,
+      radii: {
+        upperLeft: corner(piece.x, piece.y, rect.x, rect.y, radii.upperLeft),
+        upperRight: corner(pieceRight, piece.y, right, rect.y, radii.upperRight),
+        lowerRight: corner(pieceRight, pieceBottom, right, bottom, radii.lowerRight),
+        lowerLeft: corner(piece.x, pieceBottom, rect.x, bottom, radii.lowerLeft),
+      },
+    };
+    const corners = [kept.radii.upperLeft, kept.radii.upperRight, kept.radii.lowerRight, kept.radii.lowerLeft];
+    return corners.some((radius) => radius > piece.width / 2 + 0.01 || radius > piece.height / 2 + 0.01) ? [] : [kept];
+  });
+}
+
 export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean, options: GlassOptions = {}) {
   const entries = new Map<Element, Entry>();
   const afterimages = new Set<Afterimage>();
@@ -79,6 +106,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
   let queued: GlassUpdate | null = null;
   let sentKey = "";
   let active = false;
+  let holesKey = "";
 
   const syncActivity = () => {
     const now = available && entries.size > 0;
@@ -117,6 +145,21 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
       setTranslucent(element, entry, ready);
     }
     for (const image of [...afterimages]) if (presented >= image.generation) dropAfterimage(image);
+    publishHoles();
+  };
+
+  const publishHoles = () => {
+    if (!deps.holes) return;
+    const holes: GlassHole[] = [];
+    for (const [element, entry] of entries) {
+      const geometry = entry.geometry;
+      if (!entry.translucent || !geometry) continue;
+      for (const piece of offPagePieces(geometry.rect, geometry.radii, pages)) holes.push({ slot: element, ...piece });
+    }
+    const key = JSON.stringify(holes.map((hole) => [entries.get(hole.slot)!.id, hole.rect, hole.radii]));
+    if (key === holesKey) return;
+    holesKey = key;
+    deps.holes(holes);
   };
 
   const dropAfterimage = (image: Afterimage) => {
@@ -193,6 +236,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
         entry.stable = 0;
         setTranslucent(element, entry, false);
       } else if (entry.stable < STABLE_FRAMES) entry.stable += 1;
+      if (entry.held && entry.stable >= STABLE_FRAMES && !entry.moving) entry.held = false;
       if (entry.stable < STABLE_FRAMES || entry.moving) unsettled = true;
     }
     evaluate();
@@ -201,7 +245,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
     const regions: GlassRegion[] = [];
     const included: Entry[] = [];
     for (const [element, entry] of entries) {
-      if (!eligible(element, entry) || regions.length >= GLASS_MAX_REGIONS) continue;
+      if (!eligible(element, entry) || entry.held || regions.length >= GLASS_MAX_REGIONS) continue;
       const { rect, radii, opacity } = entry.geometry!;
       regions.push({ id: entry.id, rect, radii, blur: entry.blur, opacity, ...entry.look });
       included.push(entry);
@@ -237,7 +281,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
 
   return {
     add(element: Element, blur = GLASS_BLUR, look: GlassLook = {}) {
-      const entry: Entry = { id: `g${++nextId}`, blur, look: lookOf(look), geometry: null, key: "", stable: 0, moving: false, pending: null, applied: null, translucent: false, stop: () => {} };
+      const entry: Entry = { id: `g${++nextId}`, blur, look: lookOf(look), geometry: null, key: "", stable: 0, moving: false, pending: null, applied: null, translucent: false, held: false, stop: () => {} };
       entries.set(element, entry);
       deps.apply(element, false);
       entry.stop = deps.watch(element, nextFrame);
@@ -248,6 +292,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
         entry.stop();
         leaveBehind(element, entry);
         entries.delete(element);
+        publishHoles();
         nextFrame();
         syncActivity();
       };
@@ -262,13 +307,15 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
     },
     setPages(rects: readonly Rect[]) {
       pages = rects;
+      publishHoles();
       nextFrame();
     },
-    motion(target: Element) {
+    motion(target: Element, scrolling = false) {
       let moved = false;
       for (const [element, entry] of entries) {
         if (!target.contains(element)) continue;
         entry.stable = 0;
+        if (scrolling) entry.held = true;
         setTranslucent(element, entry, false);
         moved = true;
       }

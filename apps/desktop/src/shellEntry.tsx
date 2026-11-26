@@ -65,7 +65,7 @@ import { MenuHost } from "./menus";
 import { startPopoverEscape } from "./popoverEscape";
 import { startEditTargets } from "./editTargets";
 import { startNotificationResponses } from "../../browser/src/state/app/notificationResponses";
-import { inputRegions, startShellAbove } from "./shellAbove";
+import { inputRegions, startShellAbove, startUtilityShellGlass } from "./shellAbove";
 import { InWindowPlayer } from "./InWindowPlayer";
 import { startUpdates } from "@platform/updater";
 import { noticeLaunch } from "@platform/launchNotice";
@@ -175,6 +175,7 @@ async function start() {
     startLinuxSync({ host: ardiaHost, candidate: false });
     followExtensionChanges(ardiaHost, settingsShowsExtensions, refreshExtensionsAfterChange);
     startUtilityMenuBar(ardiaHost, windowId);
+    startUtilityShellGlass(ardiaHost);
     await startUtility(ardiaHost);
   } else {
     if (useBrowser.getState().windows[windowId]?.kind === "main") useBrowser.setState(adoptParkedPins(useBrowser.getState(), windowId, profileId));
