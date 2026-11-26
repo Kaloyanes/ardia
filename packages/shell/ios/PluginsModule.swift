@@ -188,7 +188,7 @@ public class PluginsModule: Module, PluginsNative {
       if let problem { return promise.resolve(["ok": false, "reason": problem]) }
       if official { return promise.resolve(["ok": true]) }
       PluginPageView.removeData(name) { error in
-        if let error { return promise.resolve(["ok": false, "reason": "Its files are removed, but its page data couldn't be deleted (\(error.localizedDescription)); removing it again finishes that."]) }
+        if let error { return promise.resolve(["ok": false, "reason": "Its files are removed, but its page data couldn't be deleted (\(error.localizedDescription)); `ardia plugins remove \(name)` finishes that."]) }
         promise.resolve(["ok": true])
       }
     }

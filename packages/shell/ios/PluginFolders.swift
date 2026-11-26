@@ -199,12 +199,12 @@ struct PluginFolders {
     }
     let data = (dataRoot() as NSString).appendingPathComponent(name)
     let kept = Self.presence(data)
-    if let problem = kept.problem { return "Its folder is gone, but its data couldn't be read (\(problem)); removing it again finishes that." }
+    if let problem = kept.problem { return "Its folder is gone, but its data couldn't be read (\(problem)); `ardia plugins remove \(name)` finishes that." }
     guard kept.there else { return nil }
     do {
       try FileManager.default.removeItem(atPath: data)
     } catch {
-      return "Its folder is gone, but its data couldn't be deleted (\(error.localizedDescription)); removing it again finishes that."
+      return "Its folder is gone, but its data couldn't be deleted (\(error.localizedDescription)); `ardia plugins remove \(name)` finishes that."
     }
     return nil
   }
