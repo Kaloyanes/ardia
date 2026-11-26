@@ -1,63 +1,8 @@
 /* MIT License - Copyright (c) 2026 Bilal Abdullah Gürşen. Adapted from glass-layer.tsx of https://github.com/bilalgursen/liquid-glass; see third_party/liquid-glass/LICENSE. */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { drawAround, drawDom } from "../../../../../third_party/liquid-glass/dom-snapshot";
-import { DESIGN_HEIGHT, MIRROR, clamp, getGlassEngine, onGlassEngineChange, rgbCss, surfaceColorOf, type GlassEngine, type GlassLens, type GlassView, type Rgb, type Rgba } from "../../../../../third_party/liquid-glass/engine";
-
-export type LiquidGlassTheme = "light" | "dark";
-export type LiquidGlassStyle = "regular" | "clear";
-
-export type GlassOptics = {
-  bevel: number;
-  refraction: number;
-  dispersion: number;
-  frost: number;
-  blur: number;
-  clearBlur: number;
-  clearBlurEdge: number;
-  rim: number;
-  rimWidth: number;
-  fresnel: number;
-  inner: number;
-  reflection: number;
-  caustic: number;
-  mirror: number;
-  saturation: number;
-  light: number;
-  borderAlpha: number;
-  borderColor: string;
-  tintColor: string;
-  shadowOpacity: number;
-};
-
-const CRISP: Omit<GlassOptics, "frost" | "blur" | "tintColor" | "borderAlpha" | "saturation" | "light"> = {
-  bevel: 0.2,
-  refraction: 0.5,
-  dispersion: 0.05,
-  clearBlur: 0.2,
-  clearBlurEdge: 1.1,
-  rim: 1,
-  rimWidth: 0.55,
-  fresnel: 0.45,
-  inner: 0.35,
-  reflection: 0.3,
-  caustic: 0,
-  mirror: 0.6,
-  borderColor: "rgb(255,255,255)",
-  shadowOpacity: 0,
-};
-
-const RIM_MIRROR = { band: 0.25, depth: 0.12, soft: 0.4 };
-
-export const GLASS_OPTICS: Record<LiquidGlassTheme, Record<LiquidGlassStyle, GlassOptics>> = {
-  light: {
-    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(255,255,255)", borderAlpha: 0.4, saturation: 1.05, light: 0.9 },
-    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", borderAlpha: 0.35, saturation: 1, light: 0.85 },
-  },
-  dark: {
-    regular: { ...CRISP, frost: 0.14, blur: 2, tintColor: "rgb(58,58,62)", borderAlpha: 0.22, saturation: 1.05, light: 0.7 },
-    clear: { ...CRISP, frost: 0.06, blur: 0, tintColor: "rgb(255,255,255)", borderAlpha: 0.2, rim: 0.85, saturation: 1, light: 0.65 },
-  },
-};
+import { DESIGN_HEIGHT, MIRROR, clamp, getGlassEngine, onGlassEngineChange, rgbCss, surfaceColorOf, type GlassEngine, type GlassLens, type GlassView, type Rgb } from "../../../../../third_party/liquid-glass/engine";
+import { GLASS_OPTICS, RIM_MIRROR, rgb, tintedGlass, type GlassOptics, type LiquidGlassStyle, type LiquidGlassTheme } from "./liquidGlassOptics";
 
 const PAD_SIDE = 8;
 const PAD_TOP = 10;
@@ -66,10 +11,12 @@ const OWN_CONTROL_SLACK = 2;
 const layer: CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
 const canvasStyle: CSSProperties = { position: "absolute", pointerEvents: "none", maxWidth: "none", width: 0, height: 0 };
 
-export type GlassMount = { invalidate: () => void; repaint: () => void; reattach: () => void; stop: () => void; view: GlassView };
+export type GlassMount = { invalidate: () => void; repaint: () => void; suspend: () => void; reattach: () => void; stop: () => void; view: GlassView };
 
 const mounted = new Set<GlassMount>();
-let watching = false;
+const PAGE_EVENTS = { capture: true, passive: true } as const;
+let pageWatched = false;
+let stopEngineWatch: (() => void) | null = null;
 
 export function invalidateLiquidGlass() {
   for (const glass of mounted) glass.invalidate();
@@ -79,33 +26,35 @@ function repaintLiquidGlass() {
   for (const glass of mounted) glass.repaint();
 }
 
-function watchPage() {
-  if (watching) return;
-  watching = true;
-  Object.assign(MIRROR, RIM_MIRROR);
-  document.addEventListener("transitionend", invalidateLiquidGlass, { passive: true, capture: true });
-  document.addEventListener("animationend", invalidateLiquidGlass, { passive: true, capture: true });
-  window.addEventListener("scroll", repaintLiquidGlass, { passive: true, capture: true });
-  onGlassEngineChange((change) => {
-    if (change === "restored") for (const glass of mounted) glass.reattach();
-  });
+function watchPage(on: boolean) {
+  if (pageWatched === on) return;
+  pageWatched = on;
+  const toggle = on ? "addEventListener" : "removeEventListener";
+  document[toggle]("transitionend", invalidateLiquidGlass, PAGE_EVENTS);
+  document[toggle]("animationend", invalidateLiquidGlass, PAGE_EVENTS);
+  window[toggle]("scroll", repaintLiquidGlass, PAGE_EVENTS);
 }
 
-function rgb(color: Rgba): Rgb {
-  return [color[0], color[1], color[2]];
+function engineChanged(change: "lost" | "restored") {
+  watchPage(change === "restored" && mounted.size > 0);
+  for (const glass of mounted) {
+    if (change === "lost") glass.suspend();
+    else glass.reattach();
+  }
 }
 
-export function backdropKeyOf(backdrop: unknown, dark: boolean) {
-  return `${dark ? "dark" : "light"}|${JSON.stringify(backdrop ?? null)}`;
-}
-
-export function tintedGlass(base: Rgb, frost: number, tint: Rgba | null): { color: Rgb; frost: number } {
-  if (!tint || tint[3] <= 0) return { color: base, frost };
-  const alpha = clamp(tint[3]);
-  const cover = 1 - (1 - frost) * (1 - alpha);
-  if (cover <= 0) return { color: base, frost };
-  const share = alpha / cover;
-  return { color: [0, 1, 2].map((i) => base[i]! * (1 - share) + tint[i]! * share) as Rgb, frost: cover };
+function track(glass: GlassMount, on: boolean) {
+  if (on) mounted.add(glass);
+  else mounted.delete(glass);
+  if (mounted.size && !stopEngineWatch) {
+    Object.assign(MIRROR, RIM_MIRROR);
+    stopEngineWatch = onGlassEngineChange(engineChanged);
+    watchPage(true);
+  } else if (!mounted.size && stopEngineWatch) {
+    stopEngineWatch();
+    stopEngineWatch = null;
+    watchPage(false);
+  }
 }
 
 function ownControl(host: HTMLElement): Element {
@@ -295,10 +244,20 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     view.visible = entries.some((entry) => entry.isIntersecting);
     dirty();
   });
-  io.observe(host);
   const ro = new ResizeObserver(dirty);
-  ro.observe(host);
-  watchPage();
+  let trailing = 0;
+  const observe = (on: boolean) => {
+    if (on) {
+      io.observe(host);
+      ro.observe(host);
+      return;
+    }
+    io.disconnect();
+    ro.disconnect();
+    if (trailing) window.clearTimeout(trailing);
+    trailing = 0;
+  };
+  observe(true);
   engine.add(view);
   const glass: GlassMount = {
     view,
@@ -306,23 +265,28 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     repaint: () => {
       view.repaint = true;
       engine.wake();
+      trailing ||= window.setTimeout(() => {
+        trailing = 0;
+        invalidate();
+      }, PAGE_REFRESH_MS);
     },
+    suspend: () => observe(false),
     reattach: () => {
       const next = acquire();
       if (!next || next === engine) return;
       engine = next;
+      observe(true);
       next.add(view);
       invalidate();
     },
     stop: () => {
-      mounted.delete(glass);
+      track(glass, false);
       engine.remove(view);
-      io.disconnect();
-      ro.disconnect();
+      observe(false);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     },
   };
-  mounted.add(glass);
+  track(glass, true);
   return glass;
 }
 

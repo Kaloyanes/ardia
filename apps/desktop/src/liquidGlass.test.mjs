@@ -45,6 +45,9 @@ globalThis.HTMLVideoElement = class HTMLVideoElement extends globalThis.HTMLElem
 
 const glContexts = [];
 const uploadFailures = { left: 0 };
+const glErrors = [];
+const lit = [];
+let shownLight = 0;
 let snapshotWalks = 0;
 let colourReads = 0;
 
@@ -56,6 +59,8 @@ function fakeGl(canvas) {
           uploadFailures.left--;
           throw new DOMException("tainted", "SecurityError");
         }
+      }, getError: () => glErrors.shift() ?? constants.NO_ERROR, getUniformLocation: (_, name) => ({ name }), uniform4f: (location, a, b, c, d) => {
+        if (location?.name === "uLight") shownLight = d;
       }, isContextLost: () => false, getProgramParameter: () => true, getShaderParameter: () => true, getExtension: () => null, getAttribLocation: () => 0, checkFramebufferStatus: () => constants.FRAMEBUFFER_COMPLETE },
     {
       get(target, key) {
@@ -70,7 +75,9 @@ function fakeGl(canvas) {
 }
 function fake2d(canvas) {
   return new Proxy(
-    { canvas, getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }), getImageData: () => ({ data: new Uint8ClampedArray([128, 64, 32, 255]) }), measureText: () => ({ width: 1, fontBoundingBoxAscent: 1, fontBoundingBoxDescent: 1 }) },
+    { canvas, drawImage: (source) => {
+        if (source?.gl) lit.push({ canvas, light: shownLight });
+      }, getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }), getImageData: () => ({ data: new Uint8ClampedArray([128, 64, 32, 255]) }), measureText: () => ({ width: 1, fontBoundingBoxAscent: 1, fontBoundingBoxDescent: 1 }) },
     { get: (target, key) => (key in target ? target[key] : () => {}), set: () => true },
   );
 }
@@ -144,7 +151,7 @@ const documentElement = tracked(new FakeElement("html", { left: 0, top: 0, width
 documentElement.appendChild(body);
 documentElement.lang = "en";
 documentElement.className = "";
-globalThis.document = {
+globalThis.document = Object.assign(tracked(new FakeTarget()), {
   body,
   documentElement,
   createElement: (tag) => {
@@ -154,9 +161,13 @@ globalThis.document = {
     return canvas;
   },
   createRange: () => ({ selectNodeContents() {}, getClientRects: () => [] }),
-  addEventListener: () => {},
-};
+});
 const media = [];
+const timers = [];
+const runTimers = () => {
+  const due = timers.splice(0);
+  for (const run of due) run?.();
+};
 const window = tracked(new FakeTarget());
 Object.assign(window, {
   devicePixelRatio: 1,
@@ -164,8 +175,8 @@ Object.assign(window, {
   innerHeight: 600,
   scrollX: 0,
   scrollY: 0,
-  setTimeout: (run, ms) => setTimeout(run, ms).unref(),
-  clearTimeout: (timer) => clearTimeout(timer),
+  setTimeout: (run) => timers.push(run),
+  clearTimeout: (id) => (timers[id - 1] = null),
   matchMedia: () => {
     const query = tracked(new FakeTarget());
     query.matches = false;
@@ -224,26 +235,36 @@ globalThis.IntersectionObserver = class {
     intersections.push(this);
   }
   observe() {
+    watched.intersection++;
     this.callback([{ isIntersecting: true }]);
   }
-  disconnect() {}
+  disconnect() {
+    watched.intersection = Math.max(0, watched.intersection - 1);
+  }
 };
+const watched = { intersection: 0, resize: 0 };
 globalThis.ResizeObserver = class {
-  observe() {}
-  disconnect() {}
+  observe() {
+    watched.resize++;
+  }
+  disconnect() {
+    watched.resize = Math.max(0, watched.resize - 1);
+  }
 };
 globalThis.Path2D = class {};
 globalThis.DOMMatrix = class {};
 globalThis.location = { href: "chrome://ardia/", origin: "chrome://ardia" };
 
 const { getGlassEngine } = await import("../../../third_party/liquid-glass/engine.ts");
-const { mountGlass, invalidateLiquidGlass, backdropKeyOf, GLASS_OPTICS } = await import("./shims/web/liquidGlass.tsx");
+const { mountGlass, invalidateLiquidGlass } = await import("./shims/web/liquidGlass.tsx");
+const { backdropKeyOf, GLASS_OPTICS } = await import("./shims/web/liquidGlassOptics.ts");
 const { glassAppearanceSupported, nativeLiquidGlass, webLiquidGlassAllowed } = await import("./liquidGlassSupport.ts");
 
-function mountTile() {
-  const outer = new FakeElement("div", { left: 20, top: 40, width: 60, height: 40 });
-  const frame = new FakeElement("div", { left: 20, top: 40, width: 60, height: 40 });
-  const host = new FakeElement("div", { left: 20, top: 40, width: 60, height: 40 });
+function mountTile(left = 20) {
+  const box = () => ({ left, top: 40, width: 60, height: 40 });
+  const outer = new FakeElement("div", box());
+  const frame = new FakeElement("div", box());
+  const host = new FakeElement("div", box());
   const canvas = new FakeCanvas();
   body.appendChild(outer);
   outer.appendChild(frame);
@@ -252,44 +273,55 @@ function mountTile() {
   const ready = [];
   const look = { current: { optics: GLASS_OPTICS.light.clear, tint: undefined } };
   const glass = mountGlass(host, canvas, canvas.getContext("2d"), look, (value) => ready.push(value));
-  return { glass, ready };
+  return { glass, ready, canvas };
 }
+
+const pageListeners = () => window.listenerCount + document.listenerCount + documentElement.listenerCount + media.reduce((sum, query) => sum + query.listenerCount, 0);
+const settle = () => new Promise((done) => queueMicrotask(done));
 
 const tahoe = { bootstrap: { nativeModules: { ArdiaGlassEffect: { isLiquidGlass: true } } } };
 const preTahoe = { bootstrap: { glassPanels: true, nativeModules: { ArdiaGlassEffect: { isLiquidGlass: false } } } };
 const linux = { bootstrap: { glassPanels: true } };
 const windows = { bootstrap: { glassPanels: false } };
 
+const popover = { bootstrap: { windowKind: "popover", surface: "popover" } };
+
 test("macOS 26 hands glass to NSGlassEffectView: WebGL is off however its native registry answers, and nothing is probed", () => {
   const probes = [];
   const probe = () => (probes.push(1), true);
   for (const host of [tahoe, { bootstrap: { ...tahoe.bootstrap, utility: {} } }, { bootstrap: { ...tahoe.bootstrap, glassPanels: false } }]) {
     assert.equal(nativeLiquidGlass(host), true);
-    assert.equal(webLiquidGlassAllowed(host), false, "no WebGL glass on Tahoe, in a utility window, while the native reply is held or after it says unavailable");
-    assert.equal(glassAppearanceSupported(host, probe), true);
+    assert.equal(webLiquidGlassAllowed(host, true), false, "no WebGL glass on Tahoe, in a utility window, while the native reply is held or after it says unavailable");
+    assert.equal(glassAppearanceSupported(host, probe, true), true);
   }
-  assert.equal(probes.length, 0, "Tahoe never creates a WebGL2 context to ask");
-  const before = canvases.length;
+  for (const host of [popover, { bootstrap: {} }, undefined]) {
+    assert.equal(webLiquidGlassAllowed(host, true), false, "a Mac window that does not say it is pre-Tahoe never opens the WebGL gate");
+    assert.equal(glassAppearanceSupported(host, probe, true), false);
+  }
+  assert.equal(probes.length, 0, "Tahoe, or a Mac window that does not say, never creates a WebGL2 context to ask");
   assert.equal(glContexts.length, 0, "importing the glass creates no WebGL2 context");
-  assert.equal(before, 0, "importing the glass creates no canvas");
+  assert.equal(canvases.length, 0, "importing the glass creates no canvas");
   const chrome = readFileSync(new URL("./shims/web/chrome.tsx", import.meta.url), "utf8");
-  assert.match(chrome, /enabled=\{scrolled === false && webLiquidGlassAllowed\(ardiaHost\)\}/, "GlassEffect gates WebGL on the synchronous Tahoe flag alone");
+  assert.match(chrome, /enabled=\{scrolled === false && webLiquidGlassAllowed\(ardiaHost\)\}/, "GlassEffect gates WebGL on the synchronous bootstrap flag alone");
   assert.match(chrome, /tahoe && !scrolled && nativeGlassFor\(shellOverPages\(\)\)/, "only Tahoe registers GlassEffect with the native registry");
+  assert.match(readFileSync(new URL("./platform/nativeGlass.mac.ts", import.meta.url), "utf8"), /NATIVE_GLASS_PLATFORM = true/);
   const layer = readFileSync(new URL("./shims/web/liquidGlass.tsx", import.meta.url), "utf8");
   assert.match(layer, /const ctx = enabled \? surface\?\.getContext\("2d"\) : null;/, "a disabled layer never touches a canvas or the engine");
   assert.match(layer, /\{enabled \? <canvas /, "a disabled layer renders no canvas");
 });
 
 test("Linux, Windows and pre-Tahoe Macs offer Liquid Glass when WebGL2 works, and keep it off without it", () => {
-  for (const host of [preTahoe, linux, windows]) {
+  for (const [host, mac] of [[preTahoe, true], [linux, false], [windows, false]]) {
     assert.equal(nativeLiquidGlass(host), false);
-    assert.equal(webLiquidGlassAllowed(host), true);
-    assert.equal(glassAppearanceSupported(host, () => true), true);
-    assert.equal(glassAppearanceSupported(host, () => false), false);
+    assert.equal(webLiquidGlassAllowed(host, mac), true);
+    assert.equal(glassAppearanceSupported(host, () => true, mac), true);
+    assert.equal(glassAppearanceSupported(host, () => false, mac), false);
   }
 });
 
-test("a mounted surface draws through WebGL and comes back after repeated context loss without piling up listeners", () => {
+test("a mounted surface comes back after repeated context loss, holds no page listener while lost and none once every surface is gone", async () => {
+  await settle();
+  assert.equal(pageListeners(), 0, "nothing listens before the first surface");
   const { glass, ready } = mountTile();
   assert.ok(glass);
   runFrames();
@@ -301,6 +333,9 @@ test("a mounted surface draws through WebGL and comes back after repeated contex
     const allowed = gl.dispatchEvent({ type: "webglcontextlost" });
     assert.equal(allowed, false, "context loss is prevented so the browser may restore it");
     assert.equal(ready.at(-1), false, "a lost context hands the surface back to CSS");
+    assert.equal(pageListeners(), 0, `round ${round}: no window or document listener while the context is lost`);
+    assert.equal(observers.mutation, 0, `round ${round}: no theme observer while the context is lost`);
+    assert.deepEqual(watched, { intersection: 0, resize: 0 }, `round ${round}: the surface observes nothing while the context is lost`);
     gl.dispatchEvent({ type: "webglcontextrestored" });
     runFrames();
     assert.equal(ready.at(-1), true, `round ${round}: the surface is drawn with WebGL again`);
@@ -308,6 +343,10 @@ test("a mounted surface draws through WebGL and comes back after repeated contex
     assert.equal(observers.mutation, watching, `round ${round}: observers stay at ${watching}`);
   }
   glass.stop();
+  await settle();
+  assert.equal(pageListeners(), 0, "no window or document listener once every surface is gone");
+  assert.equal(observers.mutation, 0, "no observer once every surface is gone");
+  assert.deepEqual(watched, { intersection: 0, resize: 0 });
 });
 
 test("moving an unpressed mouse over the page asks for no frame", () => {
@@ -346,4 +385,49 @@ test("one surface whose upload fails falls back to CSS alone and the shared fram
   assert.deepEqual(states, [false, true], "the failing surface is back on CSS and the other is still WebGL");
   first.glass.stop();
   second.glass.stop();
+});
+
+test("a scroll inside the 120 ms picture cache still retakes the picture once the cache window ends", () => {
+  const { glass } = mountTile();
+  runFrames();
+  runTimers();
+  runFrames();
+  const walks = snapshotWalks;
+  window.dispatchEvent({ type: "scroll" });
+  runFrames();
+  assert.equal(snapshotWalks, walks, "a scroll right after a picture reuses it");
+  runTimers();
+  runFrames();
+  assert.ok(snapshotWalks > walks, "the trailing invalidation takes a fresh picture of what scrolled in");
+  glass.stop();
+  runTimers();
+});
+
+test("a texture the GPU cannot allocate (GL_OUT_OF_MEMORY) leaves that surface on CSS instead of calling it drawn", () => {
+  glErrors.push(constants.OUT_OF_MEMORY);
+  const failing = mountTile();
+  runFrames();
+  assert.equal(failing.ready.includes(true), false, "the surface never claimed a WebGL frame");
+  const next = mountTile(100);
+  runFrames();
+  assert.equal(next.ready.at(-1), true, "the engine keeps drawing other surfaces");
+  failing.glass.stop();
+  next.glass.stop();
+});
+
+test("a press lights only the surface it began on, even when the pointer moves onto another before the next frame", () => {
+  const pressed = mountTile(20);
+  const other = mountTile(100);
+  runFrames();
+  lit.length = 0;
+  window.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 7, pointerType: "mouse", clientX: 50, clientY: 60, target: body });
+  window.dispatchEvent({ type: "pointermove", pointerId: 7, pointerType: "mouse", clientX: 130, clientY: 60, target: body });
+  runFrames(10);
+  const lights = (canvas) => lit.filter((entry) => entry.canvas === canvas && entry.light > 0).length;
+  assert.ok(lights(pressed.canvas) > 0, "the pressed surface takes the light");
+  assert.equal(lights(other.canvas), 0, "the surface the held pointer moved onto stays unlit");
+  window.dispatchEvent({ type: "pointerup", pointerId: 7, pointerType: "mouse", target: body });
+  runFrames();
+  pressed.glass.stop();
+  other.glass.stop();
 });

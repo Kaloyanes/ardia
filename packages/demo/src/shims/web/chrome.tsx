@@ -4,7 +4,8 @@ import { useBrowser } from "../../../../../apps/browser/src/state/browser/store"
 import { useScopedTheme } from "../../../../../apps/browser/src/components/ui/theme";
 import { materialFill } from "./materials";
 import type { MiddleClickEvent } from "./MouseArea";
-import { backdropKeyOf, LiquidGlassLayer } from "./liquidGlass";
+import { LiquidGlassLayer } from "./liquidGlass";
+import { backdropKeyOf } from "./liquidGlassOptics";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
 type Style = ViewStyle & Record<string, unknown>;

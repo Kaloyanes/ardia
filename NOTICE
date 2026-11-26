@@ -32,9 +32,10 @@ Ardia builds on and ships third-party software under its own licenses, including
   packages/phone/ios/ArdiaKit/Sources/ArdiaDesign/LiquidGlassShader.swift on iPhone)
 - liquid-glass by Bilal Abdullah Gürşen (MIT, see third_party/liquid-glass/LICENSE), https://github.com/bilalgursen/liquid-glass:
   its shared WebGL2 glass engine and DOM snapshot, vendored from commit 6b3913ff171ad592a4d8c8b8a9d72fb64647c305 with a
-  leading `// @ts-nocheck` and Ardia's patches (listeners released and views reattached across WebGL context loss, no
-  cursor-light frames unless a lens asks for it, a press lights only the glass it began on, a failed upload falls back
-  one view, canvases rechecked before each copy) (third_party/liquid-glass/engine.ts and dom-snapshot.ts), draw the web Liquid Glass
+  leading `// @ts-nocheck` and Ardia's patches (listeners released on WebGL context loss and once no glass is left, views
+  reattached on restore, no cursor-light frames unless a lens asks for it, a press latched on pointerdown to the one glass
+  it began on, a failed or out-of-memory texture upload falls back one view, canvases rechecked before each copy)
+  (third_party/liquid-glass/engine.ts and dom-snapshot.ts), draw the web Liquid Glass
   of ardia.dev's demo and of the Linux, Windows and pre-Tahoe Mac app; its glass-layer.tsx mount is adapted in
   packages/demo/src/shims/web/liquidGlass.tsx and apps/desktop/src/shims/web/liquidGlass.tsx
 - React Native and React Native macOS (MIT)

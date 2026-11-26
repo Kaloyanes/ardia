@@ -1,3 +1,4 @@
+import { NATIVE_GLASS_PLATFORM } from "@platform/nativeGlass";
 import type { ArdiaHost } from "./host";
 
 type CanvasMaker = () => Pick<HTMLCanvasElement, "getContext">;
@@ -22,7 +23,8 @@ export function webLiquidGlassSupported() {
   return webLiquidGlass;
 }
 
-export const glassAppearanceSupported = (host: Pick<ArdiaHost, "bootstrap"> | null | undefined, webSupported: () => boolean = webLiquidGlassSupported) =>
-  nativeLiquidGlass(host) || webSupported();
+export const webLiquidGlassAllowed = (host: Pick<ArdiaHost, "bootstrap"> | null | undefined, nativePlatform = NATIVE_GLASS_PLATFORM) =>
+  nativePlatform ? host?.bootstrap.nativeModules?.ArdiaGlassEffect?.isLiquidGlass === false : !nativeLiquidGlass(host);
 
-export const webLiquidGlassAllowed = (host: Pick<ArdiaHost, "bootstrap"> | null | undefined) => !nativeLiquidGlass(host);
+export const glassAppearanceSupported = (host: Pick<ArdiaHost, "bootstrap"> | null | undefined, webSupported: () => boolean = webLiquidGlassSupported, nativePlatform = NATIVE_GLASS_PLATFORM) =>
+  nativeLiquidGlass(host) || (webLiquidGlassAllowed(host, nativePlatform) && webSupported());

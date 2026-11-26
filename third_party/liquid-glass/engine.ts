@@ -1399,7 +1399,18 @@ function createEngine(): GlassEngine | null {
       gl.texStorage2D(gl.TEXTURE_2D, mipmapped ? Math.floor(Math.log2(Math.max(w, h))) + 1 : 1, gl.RGBA8, w, h)
       to.w = w
       to.h = h
-    } else gl.bindTexture(gl.TEXTURE_2D, to.tex)
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, from)
+      if (mipmapped) gl.generateMipmap(gl.TEXTURE_2D)
+      const error = gl.getError()
+      if (error !== gl.NO_ERROR) {
+        gl.deleteTexture(to.tex)
+        to.tex = null
+        to.w = to.h = 0
+        throw new Error(`liquid-glass: texture allocation failed (${error})`)
+      }
+      return
+    }
+    gl.bindTexture(gl.TEXTURE_2D, to.tex)
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, from)
     if (mipmapped) gl.generateMipmap(gl.TEXTURE_2D)
   }
@@ -1610,7 +1621,7 @@ function createEngine(): GlassEngine | null {
   // Pointer light (LIGHT). `beam` is the pointer that lights: where it is, what it is over
   // and which pointer is held (`id`, -1 = none).
   // Each lit view keeps its own light: how bright (a spring), where on the glass, and why.
-  const beam = { x: 0, y: 0, over: null as EventTarget | null, id: -1, armed: false }
+  const beam = { x: 0, y: 0, over: null as EventTarget | null, id: -1, target: null as GlassView | null, targetX: 0, targetY: 0 }
   type Lit = {
     glow: Spring
     /** The light's centre, relative to the lens centre (CSS px). */
@@ -1651,6 +1662,21 @@ function createEngine(): GlassEngine | null {
       if (other !== v && !s.free && other.visible && host && inner && inner !== host && host.contains(inner) && under(other, s)) return false
     }
     return true
+  }
+  const latchPress = () => {
+    let chosen: GlassView | null = null
+    let chosenLit: Lit | null = null
+    for (const [v, s] of lights) {
+      if (!v.visible || !under(v, s) || !innermost(v)) continue
+      const host = hostOf(v)
+      const chosenHost = chosen ? hostOf(chosen) : null
+      if (chosenHost && host && !(chosenHost.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING)) continue
+      chosen = v
+      chosenLit = s
+    }
+    beam.target = chosen
+    beam.targetX = chosenLit ? beam.x - (chosenLit.sx - chosenLit.bodyX) : 0
+    beam.targetY = chosenLit ? beam.y - chosenLit.sy : 0
   }
   /** Advances a view's light; true while it still changes. */
   const stepLight = (v: GlassView, dt: number, still: boolean) => {
@@ -2263,13 +2289,13 @@ function createEngine(): GlassEngine | null {
       lit.blob = blob ? { x: blob.x, y: blob.y, hx: blob.hx, hy: blob.hy } : null
       // A held pointer lights the glass it is on, or comes onto (a lens arriving under it), until it lets go.
       // The light stays at the point of the glass it began at: it does not follow the pointer.
-      const press = lit.press || (beam.id !== -1 && beam.armed && under(v, lit) && innermost(v))
+      const press = lit.press || (beam.id !== -1 && beam.target === v)
       if (press !== lit.press) {
         relit = true
         if (press) {
-          lit.x = beam.x - m.screenX
-          lit.y = beam.y - m.screenY
-          lit.onBlob = onBlob(lit) && (Math.abs(beam.x - lit.sx) > lit.hx || Math.abs(beam.y - lit.sy) > lit.hy)
+          lit.x = beam.targetX
+          lit.y = beam.targetY
+          lit.onBlob = false
         }
       }
       lit.press = press
@@ -2418,7 +2444,6 @@ function createEngine(): GlassEngine | null {
     // A draw found the pointer on (or off) some glass: its light starts on the next frame.
     if (relit) running = true
     relit = false
-    beam.armed = false
     // Pictures of the surroundings that waited while something moved or was lit (or were taken
     // then, having waited as long as they may) are taken once all is still, at once: the glass
     // that takes one is drawn again on the next frame.
@@ -2550,7 +2575,7 @@ function createEngine(): GlassEngine | null {
       beam.y = e.clientY
       beam.over = e.target
       beam.id = e.pointerId
-      beam.armed = true
+      latchPress()
       lightMoved()
     },
     { passive: true, capture: true },
@@ -2558,6 +2583,7 @@ function createEngine(): GlassEngine | null {
   const lift = (e: PointerEvent) => {
     if (e.pointerId !== beam.id) return
     beam.id = -1
+    beam.target = null
     for (const s of lights.values()) s.press = false
     lightMoved()
   }
@@ -2680,11 +2706,24 @@ function createEngine(): GlassEngine | null {
   listen(window.matchMedia('(prefers-color-scheme: dark)'), 'change', invalidateAll)
   // A radial bend scales with the viewport.
   listen(window, 'resize', invalidateAll, { passive: true })
-  listen(glCanvas, 'webglcontextlost', (event: Event) => {
-    event.preventDefault()
+  const retire = () => {
     dead = true
     if (raf) cancelAnimationFrame(raf)
     raf = 0
+    if (engine === self) engine = undefined
+    for (const off of disposers.splice(0)) off()
+  }
+  let idleCheck = false
+  const releaseWhenIdle = () => {
+    if (idleCheck) return
+    idleCheck = true
+    queueMicrotask(() => {
+      idleCheck = false
+      if (!views.size && !dead) retire()
+    })
+  }
+  listen(glCanvas, 'webglcontextlost', (event: Event) => {
+    event.preventDefault()
     for (const v of views) {
       v.lost()
       v.ctx.clearRect(0, 0, v.canvas.width, v.canvas.height)
@@ -2697,8 +2736,7 @@ function createEngine(): GlassEngine | null {
       if (host && p.scaled) host.style.scale = ''
     }
     pulls.clear()
-    if (engine === self) engine = undefined
-    for (const off of disposers.splice(0)) off()
+    retire()
     glCanvas.addEventListener('webglcontextrestored', () => announceEngine('restored'), { once: true })
     announceEngine('lost')
   })
@@ -2711,6 +2749,7 @@ function createEngine(): GlassEngine | null {
     },
     remove: (v) => {
       views.delete(v)
+      if (!views.size) releaseWhenIdle()
       lights.delete(v)
       flashes.delete(v)
       // The glass that melted into it lets go.

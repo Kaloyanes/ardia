@@ -13,7 +13,8 @@ import { watchOutsidePresses } from "../../outsidePress";
 import { OutsidePressIgnoreContext } from "../../outsidePressScope";
 import { markWindowDrag, WINDOW_DRAG_ROUTES, watchWindowDrag, type WindowDragHost } from "../../windowDrag";
 import type { MiddleClickEvent } from "./MouseArea";
-import { backdropKeyOf, LiquidGlassLayer } from "./liquidGlass";
+import { LiquidGlassLayer } from "./liquidGlass";
+import { backdropKeyOf } from "./liquidGlassOptics";
 import { nativeLiquidGlass, webLiquidGlassAllowed } from "../../liquidGlassSupport";
 import { edgeGain, fallbackRadius, highlightMask, maskStyle, peakGain, shapeMask, type RimCurve, type RimProfile, type ShadeProfile } from "./glassRim";
 
