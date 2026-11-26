@@ -228,7 +228,7 @@ function ClassicDivider({ inset = settingsLayout.rowInset }: { inset?: number })
 
 type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: boolean };
 
-function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, dot = false, onPress }: RowBase & { value?: string; detail?: string; chevron?: boolean; dot?: boolean; onPress: () => void }) {
+function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, dot = false, valueActs = false, onPress }: RowBase & { value?: string; detail?: string; chevron?: boolean; dot?: boolean; valueActs?: boolean; onPress: () => void }) {
   const theme = useTheme();
   return (
     <View>
@@ -240,7 +240,7 @@ function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divid
         <Label title={title} icon={icon} tint={tint} detail={detail} />
         {dot ? <NoticeDot /> : null}
         {value ? (
-          <Text style={[font.body, styles.value, { color: theme.secondaryLabel }]} numberOfLines={1}>
+          <Text style={[font.body, styles.value, { color: valueActs ? theme.formAccent : theme.secondaryLabel }]} numberOfLines={1}>
             {value}
           </Text>
         ) : null}

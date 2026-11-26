@@ -117,13 +117,13 @@ export function MaterialIconTile({ icon, side = AVATAR }: { icon: SymbolName; ti
   );
 }
 
-function ItemText({ title, supporting, color }: { title: string; supporting?: string | null; color?: string }) {
+function ItemText({ title, supporting, color, supportingActs = false }: { title: string; supporting?: string | null; color?: string; supportingActs?: boolean }) {
   const { scheme } = useMaterialTheme();
   return (
     <View style={styles.fill}>
       <Text style={[materialType.bodyLarge, { color: color ?? scheme.onSurface }]}>{title}</Text>
       {supporting ? (
-        <Text numberOfLines={2} style={[materialType.bodyMedium, { color: scheme.onSurfaceVariant }]}>
+        <Text numberOfLines={2} style={[materialType.bodyMedium, { color: supportingActs ? scheme.primary : scheme.onSurfaceVariant }]}>
           {supporting}
         </Text>
       ) : null}
@@ -167,13 +167,13 @@ type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: bool
 
 const rowStyle = (supporting: unknown) => [styles.row, supporting ? styles.rowTwoLine : null];
 
-export function MaterialNavRow({ title, icon, value, detail, dot = false, onPress }: RowBase & { value?: string; detail?: string; dot?: boolean; onPress: () => void }) {
+export function MaterialNavRow({ title, icon, value, detail, dot = false, valueActs = false, onPress }: RowBase & { value?: string; detail?: string; dot?: boolean; valueActs?: boolean; onPress: () => void }) {
   const ripple = useMaterialRipple();
   const supporting = value ?? detail;
   return (
     <Pressable testID={`materialSettingsRow:${title}`} accessibilityRole="button" accessibilityLabel={withUpdateWords(detail ? `${title}, ${detail}` : title, dot)} accessibilityValue={value ? { text: value } : undefined} android_ripple={ripple} onPress={onPress} style={rowStyle(supporting)}>
       <MaterialSettingsLeading icon={icon} />
-      <ItemText title={title} supporting={supporting} />
+      <ItemText title={title} supporting={supporting} supportingActs={valueActs && value !== undefined} />
       {dot ? <NoticeDot /> : null}
     </Pressable>
   );

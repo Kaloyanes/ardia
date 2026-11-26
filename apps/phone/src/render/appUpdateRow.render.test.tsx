@@ -648,6 +648,22 @@ test("round 4 P2: a download that finished while Ardia was gone is checked when 
   unmount(root);
 });
 
+test("a download that finishes while Android's notification prompt is still open posts its notification once the prompt is answered", async () => {
+  if (!releaseBuild) return;
+  notified.mockResolvedValue(false);
+  const root = await offeredAbout();
+  await pressRow(root, AVAILABLE);
+  await completeDownload();
+  expect(notified).toHaveBeenCalledTimes(1);
+  notified.mockResolvedValue(true);
+  await foreground();
+  expect(notified).toHaveBeenCalledTimes(2);
+  await foreground();
+  expect(notified).toHaveBeenCalledTimes(2);
+  expect(textOf(root)).toContain(READY_TITLE);
+  unmount(root);
+});
+
 test("round 4 P2: with notifications or the App updates channel off, the row still holds Install and nothing else pops up", async () => {
   if (!releaseBuild) return;
   notified.mockResolvedValue(false);

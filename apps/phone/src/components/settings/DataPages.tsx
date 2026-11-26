@@ -91,7 +91,7 @@ function UpdateGroup() {
   }, [handoff]);
   return (
     <Group>
-      <NavRow title={row.title} icon="arrowDownCircle" detail={row.detail} value={row.actionLabel} chevron={false} onPress={() => void openUpdate()} />
+      <NavRow title={row.title} icon="arrowDownCircle" detail={row.detail} value={row.actionLabel} valueActs chevron={false} onPress={() => void openUpdate()} />
     </Group>
   );
 }

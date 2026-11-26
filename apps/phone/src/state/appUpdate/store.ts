@@ -410,7 +410,10 @@ export async function refreshDownload(completed: boolean) {
   if (handoff === "needs_permission" && !downloads.canInstallPackages()) return;
   if (handoff !== "unchecked" && handoff !== "unprepared" && handoff !== "install_failed") setHandoff(offer.version, "ready");
   const firstLook = !autoVerified.has(record.id) && verified?.id !== record.id;
-  if (!completed && !firstLook) return;
+  if (!completed && !firstLook) {
+    if (verified?.id === record.id && useAppUpdate.getState().handoff === "ready") await notifyReady(offer, record.id);
+    return;
+  }
   autoVerified.add(record.id);
   if (await verifyDownloaded(offer, record.id)) await notifyReady(offer, record.id);
 }
