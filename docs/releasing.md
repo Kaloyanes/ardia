@@ -105,6 +105,11 @@ phones a build that isn't a release says Dev.
   If the iPhone job fails after the desktop release publishes, rerun the failed job or dispatch iOS Release on the
   same commit. For a direct install on the owner's iPhone, use a local Xcode development build or the `device` IPA
   over USB or Xcode's paired wireless connection. See [iPhone release and direct installs](phone.md#testflight-the-workflow-its-certificate-and-its-testers).
+  The App Store is a separate run on the owner's word, once a TestFlight build has processed:
+  `gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>`. It finds or
+  makes the App Store version for the build's version, attaches the build, sets What's New, checks the listing and
+  the App Review contact and notes, and submits for App Review. The release stays manual: the owner presses Release
+  in App Store Connect once Apple approves it ([The App Store](phone.md#the-app-store)).
 - **Android.** The Expo app's release version is its versionName, and its versionCode is major × 100,000,000 + minor ×
   1,000,000 + patch × 1,000 plus the nightly number, or 999 for a stable (0.2.47-nightly.2 is 2047002, 0.2.47 is
   2047999; `apps/phone/scripts/android-version.ts`). A build without one is Dev. It ships as an APK on GitHub Releases

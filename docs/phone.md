@@ -4558,8 +4558,8 @@ This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflo
   `sha256` in `VoiceDownload` (`packages/phone/ios/TalkToMe.swift`) with what `build-voice` printed. Phones that had
   the old voice download the new one the next time Talk to Me is on.
 - **The workflow** (`.github/workflows/ios-release.yml`). What each mode touches in App Store Connect:
-  - `mode=status` only reads: the app record, App IDs, devices, certificates, profiles, builds, build uploads and
-    tester groups.
+  - `mode=status` only reads: the app record, App IDs, devices, certificates, profiles, builds, App Store versions
+    and review submissions, build uploads and tester groups.
   - `mode=dry-run` reads the next build number, archives and signs with the stored development certificate
     (automatic signing, so Xcode may refresh its own managed profiles, as main's SwiftUI release always did), runs
     the checks and stops. It sends nothing. Until 2026-11-16 it also ran the app-store export, which opened an
@@ -4585,6 +4585,7 @@ This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflo
   Review and prints the link, which stays the same for every build. Only one build of a version can wait in review.
   `mode=expire -f build=<number>` ends testing of an older build for good (never the newest), and `mode=add-tester -f
   email=<address>` invites someone to Public Testers.
+- **The App Store.** See "The App Store" below.
 - **The default browser grant.** iOS lists an app as a browser only when it is signed with
   `com.apple.developer.web-browser`, which Apple grants per App ID on request
   (https://developer.apple.com/contact/request/default-browser-entitlement/). It is granted and on by default
@@ -4595,6 +4596,43 @@ This was `docs/ios.md`'s, for main's SwiftUI app; since the clean-up the workflo
   CryptoKit; everything else is Apple's own (HTTPS, CryptoKit hashes). `ITSAppUsesNonExemptEncryption` is still false,
   which assumed Apple's encryption only: the owner decides whether the Rust core changes that answer before the next
   TestFlight upload.
+
+#### The App Store
+
+A stable iPhone release goes to App Review from a TestFlight build that has processed, only on the owner's word.
+`mode=status` lists the App Store versions with their state, release type and build, and the newest review
+submissions, beside the TestFlight builds.
+
+```sh
+gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>
+```
+
+`node apps/phone/scripts/asc.mjs app-store --build <number> [--notes <file>]` does the same from a Mac with
+`ASC_KEY`, `ASC_KEY_ID` and `ASC_ISSUER`. In order:
+- **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
+  `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
+  `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in
+  `Config/Ardia-DefaultBrowser.entitlements`. Each missing one is named and nothing is sent.
+- **The build** must be `VALID`, not expired, and carry an export compliance answer. The workflow waits up to 20
+  minutes for one still processing (`--timeout`). The App Store version is the build's own version, the TestFlight
+  pin (`1.0.1` for now); `--version` only checks it.
+- **The version.** It refuses while another version is waiting for review, in review or pending release, and when the
+  build's version is already on sale (a new App Store release needs a new version, which is the owner's call). A
+  version already in review with this build is reported and left alone. Otherwise it takes the version's draft, or
+  renames the one draft Apple allows to the build's version, or makes it, then attaches the build (in place of an
+  older one) and sets the release to manual.
+- **What's New** comes from `notes`, at most 4,000 characters; without it the text is "Bug fixes and improvements."
+  and the run says so. The App Store shows no What's New on an app's first version, so the run leaves it out then.
+- **The checks** list everything missing at once and stop before the submission: the primary locale's description,
+  keywords, support URL and screenshots, and App Review Information's contact name, phone, email and notes. The
+  notes must say how to try Continue with ChatGPT (Browse for Me), and a demo account needs its name and password.
+  Fill them in App Store Connect and run it again; the run never makes contact details up.
+- **The submission** goes through a review submission: it reuses an open one (ready, or rejected with unresolved
+  issues) or opens one, adds the version unless it is already in it, and submits it. One in review without this
+  version, or one being cancelled or completed, stops the run.
+
+Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
+it, the owner presses Release in App Store Connect. Google Play is not set up.
 
 #### Launch arguments on iPhone
 
