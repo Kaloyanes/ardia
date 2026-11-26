@@ -69,7 +69,7 @@ export function startShellAbove(host: ArdiaHost, root: HTMLElement = document.bo
   const inMovingStage = (element: Element) => !!element.closest?.(MOVING_STAGE);
   const painter = createPageHoles(root, () => host.bootstrap.shellZoom ?? 1, currentWindowCorners, inMovingStage);
   const stopCorners = onWindowCornersChanged(() => painter.windowChanged());
-  const glass = startShellGlass(host);
+  const glass = startShellGlass(host, (next) => painter.glassChanged(next));
   const registry = createInputRegions({
     ...domRegionDeps(host),
     pageFrozen: inMovingStage,
@@ -98,6 +98,24 @@ export function startShellAbove(host: ArdiaHost, root: HTMLElement = document.bo
     glass.stop();
     stopCorners();
     if (regions === registry) regions = null;
+    if (holes === painter) holes = null;
+  };
+}
+
+export function startUtilityShellGlass(host: ArdiaHost, root: HTMLElement = document.body) {
+  const painter = createPageHoles(root, () => host.bootstrap.shellZoom ?? 1, currentWindowCorners);
+  const stopCorners = onWindowCornersChanged(() => painter.windowChanged());
+  const glass = startShellGlass(host, (next) => painter.glassChanged(next));
+  holes = painter;
+  const resized = () => {
+    glass.glass.refresh();
+    painter.windowChanged();
+  };
+  window.addEventListener("resize", resized);
+  return () => {
+    window.removeEventListener("resize", resized);
+    glass.stop();
+    stopCorners();
     if (holes === painter) holes = null;
   };
 }

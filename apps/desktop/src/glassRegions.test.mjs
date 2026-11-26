@@ -15,6 +15,7 @@ function node(geometry, parent = null) {
 }
 
 function harness({ available = true, send = true, behindWindow = false } = {}) {
+  const holes = [];
   const sent = [];
   const replies = [];
   const frames = [];
@@ -47,6 +48,7 @@ function harness({ available = true, send = true, behindWindow = false } = {}) {
       clearTimeout: (handle) => timers.delete(handle),
       report: (error) => errors.push(error),
       availability: (value) => availability.push(value),
+      holes: (next) => holes.push(next),
     },
     available,
     { behindWindow },
@@ -63,7 +65,7 @@ function harness({ available = true, send = true, behindWindow = false } = {}) {
     resolve({ generation: update.generation, available: true, accepted: ids ?? update.regions.map((region) => region.id) });
     await settle();
   };
-  return { glass, sent, replies, frames, tick, settle, accept, timers, ghosts, errors, running, availability };
+  return { glass, sent, replies, frames, tick, settle, accept, timers, ghosts, errors, running, availability, holes };
 }
 
 const menu = (x = 100) => ({ rect: { x, y: 100, width: 240, height: 160 }, radii: RADII, opacity: 1 });
@@ -448,4 +450,25 @@ test("a panel without a look sends only its geometry", () => {
   h.glass.add(node(menu()));
   h.tick(STABLE_FRAMES + 1);
   assert.deepEqual(Object.keys(h.sent[0].regions[0]).sort(), ["blur", "id", "opacity", "radii", "rect"]);
+});
+
+test("native behind-window glass publishes holes only while it is presented and off every page", async () => {
+  const h = harness({ behindWindow: true });
+  const pill = node(menu(1200));
+  const remove = h.glass.add(pill);
+  h.tick(STABLE_FRAMES + 2);
+  await h.accept();
+  assert.deepEqual(h.holes.at(-1) ?? [], []);
+  h.glass.presented(h.sent.at(-1).generation);
+  assert.equal(pill.attributes.glass, "on");
+  assert.deepEqual(h.holes.at(-1), [{ slot: pill, rect: menu(1200).rect, radii: RADII }]);
+  h.glass.setPages([{ x: 1100, y: 0, width: 600, height: 800 }]);
+  assert.deepEqual(h.holes.at(-1), []);
+  h.glass.setPages([]);
+  assert.equal(h.holes.at(-1).length, 1);
+  const count = h.holes.length;
+  h.glass.setPages([]);
+  assert.equal(h.holes.length, count, "unchanged holes are not republished");
+  remove();
+  assert.deepEqual(h.holes.at(-1), []);
 });

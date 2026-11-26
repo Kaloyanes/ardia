@@ -107,7 +107,7 @@ export const NewTabRow = memo(function NewTabRow({ windowId, shift = null, clip 
       </ContextMenuArea>
       <View {...movedButtons} ref={movedButtonsRef} style={[{ position: "absolute", right: TAB_ROW.trailing, flexDirection: "row", alignItems: "center" }, movedButtons.style as object]}>
         <HoverSlot hovered={hovered && cleaned > 0 && hintFits} width={0} hover={
-            <Text size="caption" tone="textTertiary" style={HINT}>
+            <Text lines={1} size="caption" tone="textTertiary" style={HINT}>
               {hint}
             </Text>
           }

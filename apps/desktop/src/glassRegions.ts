@@ -16,6 +16,7 @@ type GlassRegion = { id: string; rect: Rect; radii: CornerRadii; blur: number; o
 export type GlassOptions = { behindWindow?: boolean };
 type GlassUpdate = { generation: number; regions: GlassRegion[] };
 export type GlassApplied = { generation: number; available: boolean; accepted: string[] };
+export type GlassHole = { slot: Element; rect: Rect; radii: CornerRadii };
 
 type GlassDeps = {
   send: ((update: GlassUpdate) => Promise<GlassApplied>) | null;
@@ -30,6 +31,7 @@ type GlassDeps = {
   report?: (error: unknown) => void;
   activity?: (active: boolean) => void;
   availability?: (available: boolean) => void;
+  holes?: (holes: readonly GlassHole[]) => void;
 };
 
 type Applied = { generation: number; key: string; accepted: boolean };
@@ -79,6 +81,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
   let queued: GlassUpdate | null = null;
   let sentKey = "";
   let active = false;
+  let holesKey = "";
 
   const syncActivity = () => {
     const now = available && entries.size > 0;
@@ -117,6 +120,21 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
       setTranslucent(element, entry, ready);
     }
     for (const image of [...afterimages]) if (presented >= image.generation) dropAfterimage(image);
+    publishHoles();
+  };
+
+  const publishHoles = () => {
+    if (!deps.holes) return;
+    const holes: GlassHole[] = [];
+    for (const [element, entry] of entries) {
+      const geometry = entry.geometry;
+      if (!entry.translucent || !geometry || pages.some((page) => intersection(geometry.rect, page))) continue;
+      holes.push({ slot: element, rect: geometry.rect, radii: geometry.radii });
+    }
+    const key = JSON.stringify(holes.map((hole) => [entries.get(hole.slot)!.id, hole.rect, hole.radii]));
+    if (key === holesKey) return;
+    holesKey = key;
+    deps.holes(holes);
   };
 
   const dropAfterimage = (image: Afterimage) => {
@@ -248,6 +266,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
         entry.stop();
         leaveBehind(element, entry);
         entries.delete(element);
+        publishHoles();
         nextFrame();
         syncActivity();
       };
@@ -262,6 +281,7 @@ export function createGlassRegions(deps: GlassDeps, initiallyAvailable: boolean,
     },
     setPages(rects: readonly Rect[]) {
       pages = rects;
+      publishHoles();
       nextFrame();
     },
     motion(target: Element) {

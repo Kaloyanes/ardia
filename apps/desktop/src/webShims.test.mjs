@@ -324,7 +324,7 @@ test("web glass keeps the plain backdrop-filter fallback the demo draws, under W
   assert.equal(layersOf(shown).length, 4);
   assert.deepEqual(layersOf(shown), layersOf(web), "the desktop fallback draws the demo's backdrop, tint and brightened edge");
   for (const body of [shown, web]) assert.doesNotMatch(body, /boxShadow|rgba\(255, ?255, ?255|data-ardia-glass-rim|data-ardia-glass-ring/, "no painted white rim or ring");
-  assert.match(shown, /useGlassLook\(frame, \{ material: clear \? "clear" : "regular", tint: glassTint\(tint\), group: group \?\? undefined, appearance: theme \}, tahoe && !scrolled && nativeGlassFor\(shellOverPages\(\)\)\);/, "native Liquid Glass still takes over on macOS 26, and only there");
+  assert.match(shown, /useGlassLook\(frame, \{ material: clear \? "clear" : "regular", tint: glassTint\(tint\), group: group \?\? undefined, appearance: theme \}, tahoe && nativeGlassBehindWindow\(\)\);/, "native Liquid Glass takes over on macOS 26, and only there, scrolled pinned tiles and utility windows included");
   assert.match(shown, /const tahoe = nativeLiquidGlass\(ardiaHost\);/, "the handoff reads the synchronous Tahoe bootstrap flag");
   assert.match(shown, /<View ref=\{frame\} pointerEvents="none" style=\{glassLayer\}>\n\s+<LiquidGlassLayer\n\s+hostRef=\{\(node\) => void \(host\.current = node\)\}\n\s+hostProps=\{GLASS_LAYERS\}/, "the glass layer the native handoff hides holds both the WebGL canvas and the CSS fallback");
   assert.match(desktop("./shims/web/chrome.tsx"), /const GLASS_LAYERS = \{ "data-ardia-glass-layers": "" \};/);

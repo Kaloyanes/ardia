@@ -305,7 +305,7 @@ TEST(launch_environment) {
     ArdiaLaunchStorage storage;
     const char* argv[] = {"Ardia"};
     const char* out[1 + kArdiaLaunchExtraArgs + 1] = {};
-    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), &storage, out);
+    const int count = ArdiaBuildLaunchArgs(1, argv, text.c_str(), text.c_str(), text.c_str(), &storage, out);
     CHECK(count >= 1 && count <= 1 + kArdiaLaunchExtraArgs);
     for (int index = 1; index < count; ++index) {
       const std::string_view arg = out[index];

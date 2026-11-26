@@ -592,6 +592,30 @@ TEST(new_windows_honor_focus_behind_and_maximized_and_background_shows_nothing) 
   CHECK(window::PresentationForOpen(true, true, true, true) == window::OpenPresentation{});
 }
 
+TEST(settings_lights_sit_centered_inside_a_tall_titlebar) {
+  const auto lights = window::LightsFrom(25, 26, false, {760, 640});
+  CHECK(lights && lights->center == (window::Point{25, 26}));
+  const window::TitlebarMetrics metrics = window::TitlebarFor(*lights, {14, 14});
+  CHECK(metrics == (window::TitlebarMetrics{18, 52}));
+  const window::TitlebarLayout layout = window::TitlebarLayoutFor(metrics, {14, 14}, 20, 640);
+  CHECK(layout.container_height == 52);
+  CHECK(layout.container_y == 588);
+  CHECK(layout.button_y == 19);
+  CHECK(layout.container_y + layout.button_y + 14 <= 640);
+  CHECK(layout.container_y + layout.button_y + 7 == 640 - 26);
+  CHECK(layout.button_x[0] == 18 && layout.button_x[1] == 38 && layout.button_x[2] == 58);
+}
+
+TEST(titlebar_layout_survives_unmeasured_buttons) {
+  const window::TitlebarLayout layout = window::TitlebarLayoutFor({18, 40}, {0, 0}, 0, 800);
+  CHECK(layout.container_height == 40 && layout.container_y == 760 && layout.button_y == 13);
+  CHECK(layout.button_x[1] - layout.button_x[0] == window::kButtonSide + window::kTrafficLightSpacing);
+  const window::TitlebarLayout tiny = window::TitlebarLayoutFor({18, 1}, {14, 14}, 20, 800);
+  CHECK(tiny.container_height == 14 && tiny.button_y == 0);
+  const window::TitlebarLayout broken = window::TitlebarLayoutFor({18, 40}, {14, 14}, std::nan(""), std::nan(""));
+  CHECK(broken.container_y == 0 && broken.button_x[1] == 38);
+}
+
 int main(int argc, char** argv) {
   return ardia_mac_test::RunAll(argc, argv);
 }

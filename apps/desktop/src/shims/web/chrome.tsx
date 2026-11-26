@@ -297,7 +297,7 @@ export function GlassEffect({ cornerRadius = 0, tint, glassStyle = "regular", da
   }, []);
   const tahoe = nativeLiquidGlass(ardiaHost);
   const backdropKey = backdropKeyOf(useScopedTheme()?.backdrop, theme === "dark");
-  useGlassLook(frame, { material: clear ? "clear" : "regular", tint: glassTint(tint), group: group ?? undefined, appearance: theme }, tahoe && !scrolled && nativeGlassFor(shellOverPages()));
+  useGlassLook(frame, { material: clear ? "clear" : "regular", tint: glassTint(tint), group: group ?? undefined, appearance: theme }, tahoe && nativeGlassBehindWindow());
   const { outer, glassLayer } = glassFrameStyles(style, cornerRadius);
   if (scrolled) {
     const radiusStyle: React.CSSProperties = { borderRadius: fallbackRadius(cornerRadius) };

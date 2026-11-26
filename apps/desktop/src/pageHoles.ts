@@ -211,6 +211,8 @@ export function pagesPaintedThrough(painter: Element, pages: readonly PageArea[]
 export function createPageHoles(root: HTMLElement, zoom: () => number = () => 1, frame: () => CornerRadii = () => SQUARE_WINDOW, moving: (element: Element) => boolean = () => false) {
   const layers = new Set<HTMLElement>();
   const hosts = new Map<HTMLElement, string>();
+  let pageAreas: readonly PageArea[] = [];
+  let glassAreas: readonly PageArea[] = [];
   let pages: readonly PageArea[] = [];
   let floating: FloatingHole | null = null;
   let floatingHosts: readonly HTMLElement[] = [];
@@ -286,7 +288,14 @@ export function createPageHoles(root: HTMLElement, zoom: () => number = () => 1,
 
   return {
     pagesChanged(next: readonly PageArea[]) {
-      pages = next;
+      pageAreas = next;
+      pages = [...pageAreas, ...glassAreas];
+      for (const layer of layers) paintLayer(layer);
+      syncHosts();
+    },
+    glassChanged(next: readonly { slot: Element; rect: Rect; radii: CornerRadii }[]) {
+      glassAreas = next.map(({ slot, rect, radii }) => ({ slot, rect, radii }));
+      pages = [...pageAreas, ...glassAreas];
       for (const layer of layers) paintLayer(layer);
       syncHosts();
     },

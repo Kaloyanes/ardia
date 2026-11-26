@@ -243,12 +243,16 @@ test("production graph uses current Linux adapters and one canonical shared stat
 test("production graph selects canonical Live persistence and one shared Live store", { timeout: 120000 }, async () => {
   const { graph, ids, chunks } = await productionGraph();
   const store = `${browser}state/live/store.ts`;
-  const binding = `${desktop}livePersistence.ts`;
+  const seam = `${desktop}livePersistence.ts`;
+  const binding = `${desktop}platform/livePersistence.desktop.ts`;
+  const macBinding = `${desktop}platform/livePersistence.mac.ts`;
   const defaultBinding = `${browser}platform/livePersistence.ts`;
   assert.deepEqual(only(ids, store), [store]);
   assert.deepEqual(only(ids, binding), [binding]);
   assert.equal(graph.has(defaultBinding), false);
-  assert.ok(graph.get(store).importedIds.includes(binding));
+  assert.equal(graph.has(macBinding), false);
+  assert.ok(graph.get(store).importedIds.includes(seam));
+  assert.ok(graph.get(seam).importedIds.includes(binding));
   for (const id of [store, binding]) assert.equal(chunks.filter((chunk) => id in chunk.modules).length, 1, id);
   assert.equal(chunks.some((chunk) => defaultBinding in chunk.modules), false);
 });
@@ -417,6 +421,8 @@ test("the mac build shares every desktop adapter, takes the Mac's own terms, and
   assert.deepEqual(ids.filter(linuxOnly), [], "no Linux-only module reaches the mac bundle");
   assert.deepEqual(ids.filter(winOnly), [], "no Windows-only module, .win or .windows, reaches the mac bundle");
   assert.ok(graph.has(`${browser}lib/captionChrome.ts`), "the desktop chrome takes its caption sizes from the shared module, not the Windows twin");
+  assert.ok(graph.has(`${desktop}platform/livePersistence.mac.ts`), "the Mac keeps Live folders in the shell's own documents");
+  assert.ok(!graph.has(`${desktop}platform/livePersistence.desktop.ts`), "the Mac never calls the documents.* engine routes it does not serve");
   assert.deepEqual(ids.filter(reactNativeNative), [], "React Native and Expo's native modules stay out of the mac WebUI bundle");
   const seams = [
     ["shellEntry.tsx", "platform/buttonLayout.mac.ts"],

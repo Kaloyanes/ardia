@@ -756,3 +756,29 @@ test("painters moving with a Peek stage drop the frozen page's hole, while paint
     globalThis.MutationObserver = saved.MutationObserver;
   }
 });
+
+test("native behind-window glass cuts its own rounded hole through the backdrop and tint layers", () => {
+  const saved = { ResizeObserver: globalThis.ResizeObserver, MutationObserver: globalThis.MutationObserver };
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  try {
+    const viewport = { width: 900, height: 700 };
+    const root = { ownerDocument: { defaultView: { visualViewport: viewport } }, closest: () => null };
+    const layer = { style: { clipPath: "" }, offsetWidth: 900, offsetHeight: 700, closest: () => null, getBoundingClientRect: () => ({ x: 0, y: 0, width: 900, height: 700 }) };
+    const pillRadii = { upperLeft: 9, upperRight: 9, lowerRight: 9, lowerLeft: 9 };
+    const pill = { slot: { parentElement: root }, rect: { x: 12, y: 60, width: 52, height: 52 }, radii: pillRadii };
+    const page = { slot: { parentElement: root }, rect: { x: 240, y: 0, width: 660, height: 700 } };
+    const painter = createPageHoles(root);
+    painter.addLayer(layer);
+    assert.equal(layer.style.clipPath, "");
+    painter.glassChanged([pill]);
+    assert.equal(layer.style.clipPath, holeClipPath({ width: 900, height: 700 }, [{ ...pill.rect, radii: pillRadii }]));
+    painter.pagesChanged([page]);
+    assert.equal(layer.style.clipPath, holeClipPath({ width: 900, height: 700 }, localHoles({ x: 0, y: 0, width: 900, height: 700 }, { x: 1, y: 1 }, holesOf([page, pill], viewport))));
+    painter.glassChanged([]);
+    assert.equal(layer.style.clipPath, holeClipPath({ width: 900, height: 700 }, localHoles({ x: 0, y: 0, width: 900, height: 700 }, { x: 1, y: 1 }, holesOf([page], viewport))));
+  } finally {
+    globalThis.ResizeObserver = saved.ResizeObserver;
+    globalThis.MutationObserver = saved.MutationObserver;
+  }
+});

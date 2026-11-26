@@ -10,7 +10,7 @@ import { backdropFragment, haloFragment, powerUpFragment } from "./web/gl/source
 import { webgl2Supported } from "./web/gl/surface";
 import { backdropUniforms, HALO, haloUniforms, POWER_UP, powerUpPalette, powerUpUniforms } from "./web/gl/uniforms";
 import { BackdropFallback, HaloFallback, PowerUpFallback } from "./web/gl/fallbacks";
-import { Vibrancy } from "./web/gl/Vibrancy";
+import { FilmGrain, Vibrancy } from "./web/gl/Vibrancy";
 import { mountMeadow, type MeadowScene } from "./web/gl/meadow";
 import { baseLine, baseStops, GRAIN_POINTS, GRAIN_SIDE, grainAlpha, overlayLine, overlayStops, padLayers, stopCss, swatchColors, type SwatchLine, type SwatchStop } from "./web/gl/themeSwatch";
 import { usePageHoleLayer } from "../shellAbove";
@@ -74,6 +74,7 @@ export function WindowBackdrop({
         {themed ? <ThemedVibrancy colors={themeColors!} opacity={themeOpacity ?? 1} underlayAlpha={themeBaseAlpha ?? 0} grain={themeGrain} texture={themeTexture} angle={themeAngle} dark={dark} /> : null}
         {treatment ? <div data-ardia-glass-base="" style={{ ...UNDERLAY_FILL, background: treatment.base }} /> : null}
         {treatment ? <div data-ardia-glass-tint="" style={{ ...UNDERLAY_FILL, background: treatment.gradient, opacity: treatment.gradientOpacity }} /> : null}
+        {treatment ? <FilmGrain grainOpacity={grainOpacity} grainScale={grainScale} /> : null}
       </View>
     );
   }
@@ -82,7 +83,7 @@ export function WindowBackdrop({
       {themed ? (
         <ThemedVibrancy colors={themeColors!} opacity={themeOpacity ?? 1} underlayAlpha={themeBaseAlpha ?? 0} grain={themeGrain} texture={themeTexture} angle={themeAngle} dark={dark} />
       ) : vibrancy ? (
-        <Vibrancy dark={dark} tintColor={tintColor} tintAlpha={tintAlpha} tintLightness={tintLightness} />
+        <Vibrancy dark={dark} tintColor={tintColor} tintAlpha={tintAlpha} tintLightness={tintLightness} grainOpacity={grainOpacity} grainScale={grainScale} />
       ) : webgl2Supported() ? (
         <GLView fragment={backdropFragment} uniformsAt={uniformsAt} version={key} />
       ) : (

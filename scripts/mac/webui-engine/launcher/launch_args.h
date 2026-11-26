@@ -7,7 +7,10 @@
 
 enum { kArdiaLaunchExtraArgs = 5, kArdiaLaunchPathLimit = 4096 };
 
+#define ARDIA_LAUNCH_DEFAULT_DATA_SUFFIX "/Library/Application Support/Ardia WebUI Dev"
+
 typedef struct {
+  char data[kArdiaLaunchPathLimit];
   char user_data[kArdiaLaunchPathLimit + 32];
   char ardia_data[kArdiaLaunchPathLimit + 32];
 } ArdiaLaunchStorage;
@@ -26,9 +29,28 @@ static inline int ArdiaBackgroundValue(const char* value) {
   return value && (strcmp(value, "1") == 0 || strcmp(value, "true") == 0);
 }
 
+static inline int ArdiaUsablePath(const char* path) {
+  return path && *path && strlen(path) < kArdiaLaunchPathLimit;
+}
+
+static inline const char* ArdiaResolveDataDir(const char* data, const char* home, ArdiaLaunchStorage* storage) {
+  if (ArdiaUsablePath(data)) {
+    return data;
+  }
+  if (!ArdiaUsablePath(home) || home[0] != '/') {
+    return NULL;
+  }
+  const int written = snprintf(storage->data, sizeof(storage->data), "%s%s", home, ARDIA_LAUNCH_DEFAULT_DATA_SUFFIX);
+  if (written <= 0 || (size_t)written >= sizeof(storage->data)) {
+    return NULL;
+  }
+  return storage->data;
+}
+
 static inline int ArdiaBuildLaunchArgs(int argc,
                                        const char* const argv[],
                                        const char* data,
+                                       const char* home,
                                        const char* background,
                                        ArdiaLaunchStorage* storage,
                                        const char** out) {
@@ -39,16 +61,18 @@ static inline int ArdiaBuildLaunchArgs(int argc,
   if (ArdiaHasSwitch(argc, argv, "--type=")) {
     return count;
   }
-  if (data && *data && strlen(data) < kArdiaLaunchPathLimit &&
-      !ArdiaHasSwitch(argc, argv, "--user-data-dir=")) {
-    snprintf(storage->user_data, sizeof(storage->user_data), "--user-data-dir=%s/Chromium", data);
-    snprintf(storage->ardia_data, sizeof(storage->ardia_data), "--ardia-data-dir=%s", data);
-    out[count++] = storage->user_data;
-    out[count++] = storage->ardia_data;
-    out[count++] = "--use-mock-keychain";
-    if (!ArdiaHasSwitch(argc, argv, "--ardia-shell=")) {
-      out[count++] = "--ardia-shell=webui";
+  if (!ArdiaHasSwitch(argc, argv, "--user-data-dir=")) {
+    const char* resolved = ArdiaResolveDataDir(data, home, storage);
+    if (resolved) {
+      snprintf(storage->user_data, sizeof(storage->user_data), "--user-data-dir=%s/Chromium", resolved);
+      snprintf(storage->ardia_data, sizeof(storage->ardia_data), "--ardia-data-dir=%s", resolved);
+      out[count++] = storage->user_data;
+      out[count++] = storage->ardia_data;
+      out[count++] = "--use-mock-keychain";
     }
+  }
+  if (!ArdiaHasSwitch(argc, argv, "--ardia-shell=")) {
+    out[count++] = "--ardia-shell=webui";
   }
   if (ArdiaBackgroundValue(background) && !ArdiaHasSwitch(argc, argv, "--ardia-background")) {
     out[count++] = "--ardia-background";
