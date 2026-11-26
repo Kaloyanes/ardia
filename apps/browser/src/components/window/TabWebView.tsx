@@ -360,7 +360,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         else if (command === "copyLinkToHighlight") void copyLinkToSelection(tabId);
         else if (command === "escape") escapePressed(tabId, "page");
         else if (command === "hideElement" && point) void startHidingElement(tabId, point);
-        else runPageMenuCommand(tabId, command);
+        else runPageMenuCommand(tabId, command, text);
       }}
       onSelection={(selection) => setPageSelection(tabId, selection)}
       onScroll={(state) => noteScroll(tabId, state)}

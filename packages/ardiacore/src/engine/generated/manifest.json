@@ -1517,8 +1517,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "d3489129333296187a43bb4c3d66004f1458a0f5fa15315ae6d0a2573b6bce0a",
-        "swift": "78fdebf7380e369c45e0fc98319c8a7ccbe1792adf085ddd1698d7b51d754749"
+        "types": "2ade452f0eb97a3860e7fed31ec1bf67d249e51ae40071b84f41cbed601544ca",
+        "swift": "1c19ab63037a155a95db08f44ab29e8853aca8fa4c156a87a86a3dfe1050a1bd"
       },
       "modules": {
         "ArdiaShell": {
@@ -4203,9 +4203,76 @@
               "desktop": "custom",
               "windows": "absent"
             },
-            "saveFile": {
+            "openDroppedFiles": {
               "args": [
                 "spec"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "readFileChunk": {
+              "args": [
+                "name",
+                "run",
+                "handle",
+                "offset",
+                "length"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "saveBegin": {
+              "args": [
+                "spec"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "saveChunk": {
+              "args": [
+                "name",
+                "run",
+                "handle",
+                "data"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "finishFile": {
+              "args": [
+                "name",
+                "run",
+                "handle",
+                "commit"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "loadImage": {
+              "args": [
+                "spec"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
+            "readPluginAsset": {
+              "args": [
+                "name",
+                "folderId",
+                "approved",
+                "path"
               ],
               "async": true,
               "mac": "custom",

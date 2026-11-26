@@ -2,7 +2,8 @@ import type { PluginManifest } from "../../lib/pluginManifest";
 import type { Body } from "../automation/controlSocket";
 import { bookmarksMethod, historyMethod, intentMethod, mediaMethod, profilesMethod } from "./browserApis";
 import { cancelStream, closeSocket, connectSocket, fetchStream, sendSocket } from "./netChannels";
-import { clipboardMethod, filesMethod, notifyMethod, signIn } from "./osApis";
+import { clipboardMethod, notifyMethod, signIn } from "./osApis";
+import { filesMethod } from "./fileApis";
 import { pageMethod } from "./pageApis";
 import { servicesMethod } from "./services";
 import { sidecarMethod } from "./sidecarPipe";
@@ -55,6 +56,11 @@ export const V3_METHODS = [
   "clipboard.writeText",
   "fs.pickFiles",
   "fs.saveFile",
+  "fs.readChunk",
+  "fs.closeFile",
+  "fs.saveBegin",
+  "fs.saveChunk",
+  "fs.saveCommit",
   "ui.notify",
 ] as const;
 

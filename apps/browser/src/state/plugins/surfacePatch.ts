@@ -4,10 +4,9 @@ import type { PluginNode } from "../../lib/pluginProtocol";
 import { failure } from "../automation/automationMethods";
 import type { Body } from "../automation/controlSocket";
 import { notePlugin } from "../telemetry/pluginCounts";
-import { setPluginSurfaceTree, surfaceKey, usePluginSurfaces } from "./surfaces";
+import { setPluginSurfaceTree, surfaceKey, surfaceRevs as revs, usePluginSurfaces } from "./surfaces";
 
 const MAX_OPS = 2000;
-const revs = new Map<string, number>();
 
 export function noteSurfaceRev(plugin: string, surfaceId: string, rev: unknown) {
   const key = surfaceKey(plugin, surfaceId);

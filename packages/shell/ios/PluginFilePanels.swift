@@ -1,12 +1,13 @@
 import AppKit
 import ArdiaCore
+import Darwin
 import Foundation
 import UniformTypeIdentifiers
 
 enum PluginFilePanels {
   static let maxFiles = 16
-  static let maxFileBytes = 8 << 20
-  static let maxTotalBytes = 32 << 20
+  static let maxFileBytes = 64 << 20
+  static let inlineBytes = 256 * 1024
   static let maxTypes = 32
 
   static func unavailable() -> [String: Any]? {
@@ -31,8 +32,14 @@ enum PluginFilePanels {
 
   static func anchorWindow() -> NSWindow? { NSApp.keyWindow ?? NSApp.mainWindow }
 
+  static func owner(_ spec: [String: Any]) -> (name: String, run: Int)? {
+    guard let name = spec["name"] as? String, let run = (spec["run"] as? NSNumber)?.intValue else { return nil }
+    return (name, run)
+  }
+
   static func pick(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
     if let refusal = unavailable() { return reply(refusal) }
+    guard let owner = owner(spec) else { return reply(["ok": false, "reason": "pickFiles needs the plugin's run"]) }
     let panel = NSOpenPanel()
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
@@ -41,29 +48,47 @@ enum PluginFilePanels {
     if let title = spec["title"] as? String { panel.message = String(title.prefix(120)) }
     let types = contentTypes(spec["types"] as? [String] ?? [])
     if !types.isEmpty { panel.allowedContentTypes = types }
+    let maxBytes = min(maxFileBytes, (spec["maxBytes"] as? NSNumber)?.intValue ?? maxFileBytes)
     let finish: (NSApplication.ModalResponse) -> Void = { response in
       guard response == .OK else { return reply(["ok": false, "cancelled": true, "reason": "you didn't pick a file"]) }
-      DispatchQueue.global(qos: .userInitiated).async { reply(read(Array(panel.urls.prefix(maxFiles)))) }
+      let paths = panel.urls.prefix(maxFiles).map(\.path)
+      DispatchQueue.global(qos: .userInitiated).async { reply(open(paths, owner: owner, maxBytes: maxBytes)) }
     }
     if let window = anchorWindow() { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
   }
 
-  static func read(_ urls: [URL]) -> [String: Any] {
+  static func dropped(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+    guard let owner = owner(spec), let paths = spec["paths"] as? [String], !paths.isEmpty else { return reply(["ok": false, "reason": "openDropped needs the plugin's run and paths"]) }
+    let maxBytes = min(maxFileBytes, (spec["maxBytes"] as? NSNumber)?.intValue ?? maxFileBytes)
+    DispatchQueue.global(qos: .userInitiated).async { reply(open(Array(paths.prefix(maxFiles)), owner: owner, maxBytes: maxBytes)) }
+  }
+
+  static func open(_ paths: [String], owner: (name: String, run: Int), maxBytes: Int) -> [String: Any] {
     var files: [[String: Any]] = []
-    var total = 0
-    for url in urls {
-      guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])).flatMap({ $0.isRegularFile == true ? $0.fileSize : nil }) else {
-        return ["ok": false, "reason": "\(url.lastPathComponent) isn't a file Ardia can read"]
+    for path in paths {
+      let url = URL(fileURLWithPath: path)
+      switch PluginBoundedFile.openRegular(path) {
+      case .failure(let refusal): return ["ok": false, "reason": "\(url.lastPathComponent): \(refusal.reason)"]
+      case .success(let opened):
+        guard opened.size <= maxBytes else {
+          Darwin.close(opened.fd)
+          return ["ok": false, "reason": "\(url.lastPathComponent) is over \(maxBytes >> 20 > 0 ? "\(maxBytes >> 20) MB" : "\(maxBytes) bytes")"]
+        }
+        var row: [String: Any] = ["name": url.lastPathComponent, "size": opened.size, "mimeType": mimeType(url)]
+        if opened.size <= inlineBytes {
+          defer { Darwin.close(opened.fd) }
+          guard let data = PluginBoundedFile.readWhole(opened.fd, max: inlineBytes) else { return ["ok": false, "reason": "\(url.lastPathComponent) couldn't be read"] }
+          let text = isText(url) ? String(data: data, encoding: .utf8) : nil
+          row["data"] = text ?? data.base64EncodedString()
+          row["encoding"] = text == nil ? "base64" : "utf8"
+        } else {
+          guard let handle = PluginFileHandles.shared.addRead(owner.name, owner.run, fd: opened.fd, size: opened.size) else { return ["ok": false, "reason": "the plugin has too many files open"] }
+          row["data"] = ""
+          row["encoding"] = "base64"
+          row["handle"] = handle
+        }
+        files.append(row)
       }
-      guard size <= maxFileBytes else { return ["ok": false, "reason": "\(url.lastPathComponent) is over \(maxFileBytes >> 20) MB"] }
-      total += size
-      guard total <= maxTotalBytes else { return ["ok": false, "reason": "the files are over \(maxTotalBytes >> 20) MB together"] }
-      guard let data = try? Data(contentsOf: url, options: [.uncached]) else { return ["ok": false, "reason": "\(url.lastPathComponent) couldn't be read"] }
-      let text = isText(url) ? String(data: data, encoding: .utf8) : nil
-      files.append([
-        "name": url.lastPathComponent, "size": data.count, "mimeType": mimeType(url),
-        "data": text ?? data.base64EncodedString(), "encoding": text == nil ? "base64" : "utf8",
-      ])
     }
     return ["ok": true, "files": files]
   }
@@ -74,25 +99,19 @@ enum PluginFilePanels {
     return trimmed.isEmpty ? "Untitled" : trimmed
   }
 
-  static func save(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+  static func saveBegin(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
     if let refusal = unavailable() { return reply(refusal) }
-    guard let name = spec["name"] as? String, let text = spec["data"] as? String else { return reply(["ok": false, "reason": "saveFile needs a name and data"]) }
-    let encoding = spec["encoding"] as? String ?? "utf8"
-    guard let data = encoding == "base64" ? Data(base64Encoded: text) : Data(text.utf8) else { return reply(["ok": false, "reason": "data isn't base64"]) }
-    guard data.count <= maxFileBytes else { return reply(["ok": false, "reason": "the file is over \(maxFileBytes >> 20) MB"]) }
+    guard let owner = owner(spec), let name = spec["fileName"] as? String else { return reply(["ok": false, "reason": "saveBegin needs the plugin's run and a name"]) }
     let panel = NSSavePanel()
     panel.nameFieldStringValue = safeName(name)
     panel.canCreateDirectories = true
     let finish: (NSApplication.ModalResponse) -> Void = { response in
       guard response == .OK, let url = panel.url else { return reply(["ok": true, "saved": false]) }
-      DispatchQueue.global(qos: .userInitiated).async {
-        do {
-          try data.write(to: url, options: [.atomic])
-          reply(["ok": true, "saved": true, "name": url.lastPathComponent])
-        } catch {
-          reply(["ok": false, "reason": "the file couldn't be saved"])
-        }
-      }
+      let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).part").path
+      let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+      guard fd >= 0 else { return reply(["ok": false, "reason": "the file couldn't be created there"]) }
+      guard let handle = PluginFileHandles.shared.addWrite(owner.name, owner.run, fd: fd, temporary: temporary, destination: url) else { return reply(["ok": false, "reason": "the plugin has too many files open"]) }
+      reply(["ok": true, "saved": true, "handle": handle, "name": url.lastPathComponent])
     }
     if let window = anchorWindow() { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
   }

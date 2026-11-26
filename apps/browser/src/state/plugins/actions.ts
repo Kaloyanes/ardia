@@ -2,6 +2,7 @@ import { pluginsFolder, revealPluginLog, revealPluginsFolder } from "../../platf
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { turnOffPlugin } from "./lifecycle";
 import { consentNow } from "../telemetry/choice";
+import { resumePlugin as resumeWatchedPlugin } from "./watchdog";
 
 export { dismissPluginConsent, enablePlugin, removePlugin, requestPluginConsent, setPluginValue, turnOnApprovedPlugin } from "./lifecycle";
 export { UNSAVED } from "./store";
@@ -15,9 +16,10 @@ export { installPlugin, cancelInstall, FETCH_REASONS, OFFLINE_REGISTRY } from ".
 export { addRegistry, removeRegistry, getPlugin, installFromFile, installFromDeepLink, refreshCatalog, setPluginChannel, setPluginProfiles, filterCatalog, catalogCategories, CATEGORIES_ALL, type CatalogEntry } from "./marketplace";
 export { reviewUpdate, rollbackPlugin, checkPlugins } from "./updater";
 export { ensurePluginActivated } from "./activation";
-export { pluginImageSource, pickFilesForPluginView, pluginCanPickFiles } from "./surfaceMedia";
+export { pluginImage, pickFilesForPluginView, dropFilesOnPluginView, pluginCanPickFiles } from "./surfaceMedia";
 export { grantTabLease, revokeTabLease } from "./pageApis";
-export { resumePlugin } from "./watchdog";
+export const resumePlugin = (name: string) => resumeWatchedPlugin(name, consentNow());
+
 export { runPluginInput } from "./inputModes";
 export { setPluginScriptsBlocked } from "./siteScriptBlocks";
 export { runPluginAction, pluginBarActions } from "./commands";

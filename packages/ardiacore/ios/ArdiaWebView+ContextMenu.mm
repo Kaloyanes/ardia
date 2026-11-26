@@ -355,11 +355,17 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)tab:(ArdiaCoreTab *)tab
                            contextMenuItemsForSelection:(NSString *)text {
-  return @[ @{
+  NSMutableArray *items = [NSMutableArray arrayWithObject:@{
     @"id" : @"search",
     @"title" : [NSString stringWithFormat:@"Search %@ for “%@”", gSearchEngineName, SelectionLabel(text)],
     @"replaces" : @"search",
-  } ];
+  }];
+  for (NSDictionary *item in self.pageMenuItems) {
+    NSString *itemId = Field<NSString>(item, @"id");
+    NSString *title = Field<NSString>(item, @"title");
+    if (itemId.length && title.length && [Field<NSString>(item, @"slot") isEqualToString:@"selection"]) [items addObject:@{@"id" : itemId, @"title" : title}];
+  }
+  return items;
 }
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)tab:(ArdiaCoreTab *)tab contextMenuItemsForPage:(NSString *)url {
@@ -367,7 +373,8 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
   for (NSDictionary *item in self.pageMenuItems) {
     NSString *itemId = Field<NSString>(item, @"id");
     NSString *title = Field<NSString>(item, @"title");
-    if (itemId.length && title.length && ![itemId isEqualToString:@"search"]) [items addObject:@{@"id" : itemId, @"title" : title}];
+    NSString *slot = Field<NSString>(item, @"slot");
+    if (itemId.length && title.length && ![itemId isEqualToString:@"search"] && (!slot.length || [slot isEqualToString:@"page"])) [items addObject:@{@"id" : itemId, @"title" : title}];
   }
   return items;
 }
@@ -382,7 +389,8 @@ NSDictionary *FindMenuItem(NSArray *items, NSString *label) {
   }
   for (NSDictionary *item in self.pageMenuItems)
     if ([Field<NSString>(item, @"id") isEqualToString:itemId]) {
-      [self emit:@"command" payload:@{@"command" : itemId, @"text" : @""}];
+      const BOOL selected = [Field<NSString>(item, @"slot") isEqualToString:@"selection"];
+      [self emit:@"command" payload:@{@"command" : itemId, @"text" : selected ? (selection ?: @"") : @""}];
       return;
     }
 }

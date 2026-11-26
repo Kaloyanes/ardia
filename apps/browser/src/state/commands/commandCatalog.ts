@@ -301,6 +301,17 @@ export function staticShortcutSources(): ShortcutSource[] {
 
 const STATIC_SOURCES = staticShortcutSources();
 
+const keyText = (s: { key: string; modifiers: readonly string[] }) => `${[...s.modifiers].sort().join("+")}+${s.key.toLowerCase()}`;
+const STATIC_KEYS = new Set(STATIC_SOURCES.flatMap((source) => source.keys.map(keyText)));
+
+export const heldByArdia = (shortcut: { key: string; modifiers: readonly string[] }) => STATIC_KEYS.has(keyText(shortcut));
+
+let extraSources: () => ShortcutSource[] = () => [];
+
+export function provideShortcutSources(provider: () => ShortcutSource[]) {
+  extraSources = provider;
+}
+
 export function shortcutSources(profileIds: readonly string[], overriddenIds: readonly string[]): ShortcutSource[] {
   const perItem = overriddenIds.filter((id) => OVERRIDABLE_PER_ITEM_COMMANDS.some((command) => id.startsWith(`${command}:`)));
   return [
@@ -309,6 +320,7 @@ export function shortcutSources(profileIds: readonly string[], overriddenIds: re
       source(`switchProfile:${id}`, i < PROFILE_SHORTCUT_COUNT ? [profileSwitchKey(i + 1)] : []),
       source(`newLittleArdia:${id}`),
     ]),
-    ...perItem.map((id) => source(id)),
+    ...extraSources(),
+    ...perItem.filter((id) => !extraSources().some((extra) => extra.id === id)).map((id) => source(id)),
   ];
 }

@@ -136,7 +136,7 @@ function runtimeContributes(c: ManifestV3["contributes"]): Fields {
   if (!c) return {};
   const out: Fields = {};
   for (const key of RUNTIME_CONTRIBUTES) if (c[key] !== undefined) out[key] = c[key];
-  if (c.commands) out.commands = c.commands.map(({ inputMode: _inputMode, ...rest }) => rest);
+  if (c.commands) out.commands = c.commands.map(({ inputMode: _inputMode, shortcut: _shortcut, ...rest }) => rest);
   if (c.menus) out.menus = Object.fromEntries(MENU_SLOTS.flatMap((slot) => (c.menus?.[slot] ? [[slot, c.menus[slot]]] : [])));
   return out;
 }

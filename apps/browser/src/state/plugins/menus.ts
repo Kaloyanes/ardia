@@ -65,18 +65,24 @@ function pageMenuContext(tabId: string): { windowId: string; context: PluginMenu
   return { windowId: tab.windowId, context: { when: { urlHost: parts?.host ?? "", urlScheme: parts?.scheme ?? "" }, data: { tabId, windowId: tab.windowId } } };
 }
 
-export function pluginPageMenuItems(tabId: string, s: Pick<PluginsStore, "listings" | "records" | "order"> = currentPlugins()): { id: `plugin-menu:${string}`; title: string }[] {
+export type PluginPageMenuItem = { id: `plugin-menu:${string}`; title: string; slot: "page" | "selection" };
+
+export function pluginPageMenuItems(tabId: string, s: Pick<PluginsStore, "listings" | "records" | "order"> = currentPlugins()): PluginPageMenuItem[] {
   const found = pageMenuContext(tabId);
   if (!found) return [];
   type Entry = { id: string; title: string; children?: MenuItem[] };
   const flat = (items: MenuItem[]): Entry[] => items.flatMap((item) => ("separator" in item ? [] : (item as Entry).children ? flat((item as Entry).children!) : [item as Entry]));
-  return flat(pluginMenuItems("page", found.context, s))
-    .slice(0, PAGE_MENU_LIMIT)
-    .flatMap((item) => (isPluginMenuChoice(item.id) && item.title ? [{ id: item.id as `plugin-menu:${string}`, title: item.title }] : []));
+  return (["page", "selection"] as const).flatMap((slot) =>
+    flat(pluginMenuItems(slot, found.context, s))
+      .slice(0, PAGE_MENU_LIMIT)
+      .flatMap((item) => (isPluginMenuChoice(item.id) && item.title ? [{ id: item.id as `plugin-menu:${string}`, title: item.title, slot }] : [])),
+  );
 }
 
-export function runPluginPageMenu(tabId: string, choice: string, consent?: ConsentToken | null): Promise<boolean> {
+export function runPluginPageMenu(tabId: string, choice: string, text: string, consent?: ConsentToken | null): Promise<boolean> {
   const found = pageMenuContext(tabId);
-  if (!found || !choice.startsWith(`${PLUGIN_MENU_PREFIX}page/`)) return Promise.resolve(false);
-  return runPluginMenuChoice(choice, found.windowId, found.context, consent);
+  if (!found) return Promise.resolve(false);
+  if (choice.startsWith(`${PLUGIN_MENU_PREFIX}page/`)) return runPluginMenuChoice(choice, found.windowId, found.context, consent);
+  if (!choice.startsWith(`${PLUGIN_MENU_PREFIX}selection/`) || !text.trim()) return Promise.resolve(false);
+  return runPluginMenuChoice(choice, found.windowId, { when: found.context.when, data: { ...found.context.data, selection: text.slice(0, 20_000) } }, consent);
 }

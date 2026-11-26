@@ -16,7 +16,7 @@ import { acceptsRun } from "./process";
 import { markPluginReady } from "./activation";
 import { isPagePath, openPluginPage } from "./pages";
 import { valuesFor } from "./values";
-import { netFetch, readActivePage, secretsMethod, storageMethod } from "./channelData";
+import { callerProfile, netFetch, readActivePage, secretsMethod, storageMethod } from "./channelData";
 import { UI_METHODS, uiMethod } from "./channelUi";
 import { programsStatus, relinkOwnPrograms } from "./programs";
 import { subscribeState } from "./stateEvents";
@@ -56,7 +56,9 @@ async function toolsCall(name: string, m: PluginManifest, params: Record<string,
   const depends = !!callee && (Object.hasOwn(m.dependencies, callee.id) || Object.hasOwn(m.optionalDependencies, callee.id));
   const missing = callee && !depends ? missingPermissions(m.permissions, callee.permissions) : [];
   if (missing.length) return failure("refused", `${plugin} has permissions this plugin doesn't (${missing.join(", ")}), so it can't call its tools.`);
-  const outcome = await callTool(plugin, tool, input, { kind: "plugin", plugin: name });
+  const profile = callerProfile(name, m, params);
+  if (!profile.ok) return failure("refused", profile.message);
+  const outcome = await callTool(plugin, tool, input, { kind: "plugin", plugin: name }, undefined, callee?.scope === "profile" ? profile.profileId : null);
   return outcome.ok ? { result: outcome.result } : failure(outcome.code, outcome.message);
 }
 

@@ -119,7 +119,7 @@ export const webView = defineDomain({
   },
   events: {
     pluginWorld: {
-      payload: "{ tabId: string; world: string; json: string; epoch?: string }",
+      payload: "{ tabId: string; world: string; document: string; json: string; epoch?: string }",
       desktop: "absent",
       mac: "custom",
       windows: "absent",

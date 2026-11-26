@@ -63,7 +63,7 @@ export function PluginPage({ tabId, name }: { tabId: string; name: string }) {
   }
   return (
     <View style={StyleSheet.absoluteFill}>
-      <PluginFileView plugin={name} url={url} context={context} />
+      <PluginFileView plugin={name} url={url} context={context} tabId={tabId} />
     </View>
   );
 }

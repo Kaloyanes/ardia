@@ -2525,10 +2525,11 @@
   {
    "id": "plugin-method:fs.pickFiles",
    "source": "plugin",
-   "guard": "files: picker and a recent gesture; native panels hand over only the files you pick, 8 MB each, 32 MB in all",
+   "guard": "files: picker and a recent gesture; native panels open only what you pick, once, O_NOFOLLOW and regular, read from that descriptor up to its cap; big files come back as run-scoped handles read in bounded chunks",
    "checks": [
-    "apps/browser/src/state/plugins/osApis.ts#filesMethod",
-    "packages/shell/ios/PluginFilePanels.swift#read"
+    "apps/browser/src/state/plugins/fileApis.ts#filesMethod",
+    "packages/shell/ios/PluginFilePanels.swift#open",
+    "packages/shell/ios/PluginCore/PluginBoundedFile.swift#openRegular"
    ],
    "detected": false
   },

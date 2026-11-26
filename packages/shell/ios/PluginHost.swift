@@ -8,6 +8,7 @@ final class PluginHost {
   typealias Sink = (_ name: String, _ body: [String: Any]) -> Void
 
   private let queue = DispatchQueue(label: "ardia.plugins", qos: .userInitiated)
+  private static let queueKey = DispatchSpecificKey<Bool>()
   private var sink: (owner: ObjectIdentifier, send: Sink)?
   private var attachment = 0
   private let runs = PluginRuns<PluginProcess>()
@@ -15,6 +16,15 @@ final class PluginHost {
   private let outbox = PluginPageOutbox()
   private var nextRun = 0
   private var quitObserver: NSObjectProtocol?
+
+  private init() {
+    queue.setSpecific(key: Self.queueKey, value: true)
+  }
+
+  func isLive(_ name: String, run: Int) -> Bool {
+    let check = { [self] in runs.current[name].map { $0.run == run && !$0.exited && $0.connection?.closed == false } ?? false }
+    return DispatchQueue.getSpecific(key: Self.queueKey) == true ? check() : queue.sync(execute: check)
+  }
 
   func attach(_ owner: AnyObject, send: @escaping Sink) {
     let id = ObjectIdentifier(owner)

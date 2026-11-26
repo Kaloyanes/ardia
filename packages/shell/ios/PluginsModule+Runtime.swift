@@ -32,5 +32,26 @@ extension PluginsModule {
 
   static func pickFiles(_ spec: [String: Any], _ promise: Promise) { PluginFilePanels.pick(spec) { promise.resolve($0) } }
 
-  static func saveFile(_ spec: [String: Any], _ promise: Promise) { PluginFilePanels.save(spec) { promise.resolve($0) } }
+  static func openDroppedFiles(_ spec: [String: Any], _ promise: Promise) { PluginFilePanels.dropped(spec) { promise.resolve($0) } }
+
+  static func readFileChunk(_ name: String, _ run: Int, _ handle: String, _ offset: Int, _ length: Int) -> [String: Any] {
+    PluginFileHandles.shared.readChunk(name, run, handle, offset: offset, length: length)
+  }
+
+  static func saveBegin(_ spec: [String: Any], _ promise: Promise) { PluginFilePanels.saveBegin(spec) { promise.resolve($0) } }
+
+  static func saveChunk(_ name: String, _ run: Int, _ handle: String, _ data: String) -> [String: Any] {
+    guard let bytes = Data(base64Encoded: data) else { return ["ok": false, "reason": "data isn't base64"] }
+    return PluginFileHandles.shared.writeChunk(name, run, handle, data: bytes)
+  }
+
+  static func finishFile(_ name: String, _ run: Int, _ handle: String, _ commit: Bool) -> [String: Any] {
+    PluginFileHandles.shared.finish(name, run, handle, commit: commit)
+  }
+
+  static func loadImage(_ spec: [String: Any], _ promise: Promise) { PluginImageLoader.load(spec) { promise.resolve($0) } }
+
+  static func readPluginAsset(_ name: String, _ folderId: String, _ approved: String, _ path: String) -> [String: Any] {
+    PluginImageLoader.asset(name, folderId: folderId, approved: approved, path: path)
+  }
 }

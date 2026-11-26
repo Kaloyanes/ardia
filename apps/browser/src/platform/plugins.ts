@@ -33,6 +33,10 @@ import {
   type PluginPickedFile,
   type PluginSaveSpec,
   type PluginSaveResult,
+  type PluginDropSpec,
+  type PluginChunkResult,
+  type PluginImageSpec,
+  type PluginImageResult,
 } from "@ardia/shell";
 
 export type {
@@ -69,6 +73,10 @@ export type {
   PluginPickedFile,
   PluginSaveSpec,
   PluginSaveResult,
+  PluginDropSpec,
+  PluginChunkResult,
+  PluginImageSpec,
+  PluginImageResult,
 };
 
 let bound: ReturnType<typeof nativeModule<"ArdiaPlugins">> | null = null;
@@ -114,4 +122,10 @@ export const closePluginNet = (name: string, run: number) => Plugins().closeNet(
 export const pluginUsage = () => Plugins().usage();
 export const pluginSignIn = (spec: PluginAuthSpec) => Plugins().authSignIn(spec);
 export const pickPluginFiles = (spec: PluginPickSpec) => Plugins().pickFiles(spec);
-export const savePluginFile = (spec: PluginSaveSpec) => Plugins().saveFile(spec);
+export const openDroppedPluginFiles = (spec: PluginDropSpec) => Plugins().openDroppedFiles(spec);
+export const readPluginFileChunk = (name: string, run: number, handle: string, offset: number, length: number) => Plugins().readFileChunk(name, run, handle, offset, length);
+export const beginPluginSave = (spec: PluginSaveSpec) => Plugins().saveBegin(spec);
+export const savePluginChunk = (name: string, run: number, handle: string, data: string) => Plugins().saveChunk(name, run, handle, data);
+export const finishPluginFile = (name: string, run: number, handle: string, commit: boolean) => Plugins().finishFile(name, run, handle, commit);
+export const loadPluginImage = (spec: PluginImageSpec) => Plugins().loadImage(spec);
+export const readPluginAssetImage = (name: string, folderId: string, approved: string, path: string) => Plugins().readPluginAsset(name, folderId, approved, path);

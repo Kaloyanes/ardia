@@ -5,6 +5,7 @@ import Network
 final class PluginWebSocket {
   struct Events {
     let send: (_ event: String, _ data: [String: Any], _ ready: @escaping (Bool) -> Void) -> Void
+    let fits: (_ event: String, _ data: [String: Any]) -> Bool
     let closed: () -> Void
   }
 
@@ -14,21 +15,28 @@ final class PluginWebSocket {
   static let connectTimeout: TimeInterval = 20
 
   private let url: URL
-  private let loopback: String?
+  private let httpURL: URL
+  private let allowedHosts: [String]
   private let allowLoopback: Bool
   private let protocols: [String]
   private let headers: [(String, String)]
   private let events: Events
   private let queue = DispatchQueue(label: "ardia.plugins.socket", qos: .userInitiated)
+  private let key = PluginWebSocketCodec.key()
   private var connection: NWConnection?
+  private var addresses: [String] = []
   private var openReply: (([String: Any]) -> Void)?
+  private var head = Data()
+  private var parser = PluginWebSocketParser(maxPayload: PluginWebSocket.maxMessage)
+  private var upgraded = false
   private var queued = 0
   private var finished = false
   private var keepAlive: PluginWebSocket?
 
-  private init(url: URL, loopback: String?, allowLoopback: Bool, protocols: [String], headers: [(String, String)], events: Events) {
+  private init(url: URL, httpURL: URL, allowedHosts: [String], allowLoopback: Bool, protocols: [String], headers: [(String, String)], events: Events) {
     self.url = url
-    self.loopback = loopback
+    self.httpURL = httpURL
+    self.allowedHosts = allowedHosts
     self.allowLoopback = allowLoopback
     self.protocols = protocols
     self.headers = headers
@@ -42,6 +50,7 @@ final class PluginWebSocket {
     case "ws": parts.scheme = "http"
     default: return nil
     }
+    parts.fragment = nil
     return parts.url
   }
 
@@ -59,137 +68,190 @@ final class PluginWebSocket {
     case .failure(let refusal): return .failure(refusal)
     case .success(let checked):
       let headers = checked.filter { !$0.key.hasPrefix("sec-websocket") && $0.key != "origin" && $0.key != "cookie" }.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
-      return .success(PluginWebSocket(url: url, loopback: PluginFetchPolicy.loopbackAddress(for: http, allowedHosts: allowedHosts), allowLoopback: allowLoopback, protocols: protocols, headers: headers, events: events))
+      guard PluginWebSocketCodec.handshake(url: http, key: "probe", protocols: protocols, headers: headers) != nil else { return .failure(FolderRefusal(reason: "the socket's address or headers can't be sent")) }
+      return .success(PluginWebSocket(url: url, httpURL: http, allowedHosts: allowedHosts, allowLoopback: allowLoopback, protocols: protocols, headers: headers, events: events))
     }
   }
 
   func open(reply: @escaping ([String: Any]) -> Void) {
     queue.async { [self] in
+      guard !finished else { return reply(PluginHostFetch.failed("the socket was closed before it opened")) }
       keepAlive = self
       openReply = reply
-      let ws = NWProtocolWebSocket.Options()
-      ws.autoReplyPing = true
-      ws.maximumMessageSize = Self.maxMessage
-      if !protocols.isEmpty { ws.setSubprotocols(protocols) }
-      if !headers.isEmpty { ws.setAdditionalHeaders(headers) }
-      let tcp = NWProtocolTCP.Options()
-      tcp.connectionTimeout = Int(Self.connectTimeout)
-      let secure = url.scheme?.lowercased() == "wss"
-      let tls: NWProtocolTLS.Options? = secure ? NWProtocolTLS.Options() : nil
-      if let tls { sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12) }
-      let parameters = NWParameters(tls: tls, tcp: tcp)
-      parameters.preferNoProxies = true
-      parameters.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-      let made = NWConnection(to: .url(url), using: parameters)
-      connection = made
-      made.stateUpdateHandler = { [weak self, weak made] state in
-        guard let self, let made, self.connection === made else { return }
-        switch state {
-        case .ready: self.ready(made)
-        case .waiting(let error), .failed(let error): self.fail(PluginHostFetch.describe(error))
-        case .cancelled: self.finish(code: 1006, reason: "", clean: false)
-        default: break
-        }
-      }
-      made.start(queue: queue)
       queue.asyncAfter(deadline: .now() + Self.connectTimeout) { [weak self] in
         guard let self, self.openReply != nil else { return }
         self.fail("it timed out after \(Int(Self.connectTimeout)) s")
       }
+      let target = httpURL
+      let allowLoopback = allowLoopback
+      let allowedHosts = allowedHosts
+      DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let vetted = PluginHostFetch.vettedAddresses(for: target, allowLoopback: allowLoopback, allowedHosts: allowedHosts)
+        self?.queue.async { self?.vetted(vetted) }
+      }
     }
   }
 
-  static func address(_ endpoint: NWEndpoint?) -> String? {
-    guard case .hostPort(let host, _)? = endpoint else { return nil }
-    switch host {
-    case .ipv4(let v4): return "\(v4)"
-    case .ipv6(let v6): return "\(v6)".split(separator: "%").first.map(String.init)
-    default: return nil
+  private func vetted(_ result: Result<[String], FolderRefusal>) {
+    guard !finished, openReply != nil else { return }
+    switch result {
+    case .failure(let refusal): fail(refusal.reason)
+    case .success(let found):
+      addresses = found
+      connectNext()
     }
   }
 
-  private func ready(_ made: NWConnection) {
-    let remote = Self.address(made.currentPath?.remoteEndpoint)
-    if let loopback {
-      guard let remote, PluginFetchPolicy.normalizedHost(remote) == loopback else { return fail("the socket didn't reach the local app it was allowed") }
-    } else {
-      guard let remote, !PluginFetchPolicy.isBlockedAddress(remote, allowLoopback: allowLoopback) else { return fail("the host points at a private, loopback or link-local address") }
+  private func connectNext() {
+    guard !finished, openReply != nil else { return }
+    guard !addresses.isEmpty else { return fail("the server couldn't be reached") }
+    let address = addresses.removeFirst()
+    guard let endpoint = PluginHostFetch.endpoint(address, port: PluginHttpCodec.port(of: httpURL)) else { return connectNext() }
+    let made = NWConnection(to: endpoint, using: PluginHostFetch.parameters(for: httpURL, timeout: Self.connectTimeout))
+    connection = made
+    made.stateUpdateHandler = { [weak self, weak made] state in
+      guard let self, let made, self.connection === made else { return }
+      switch state {
+      case .ready: self.sendHandshake(on: made)
+      case .waiting, .failed:
+        if self.upgraded { return self.fail("the connection dropped") }
+        made.stateUpdateHandler = nil
+        made.cancel()
+        self.connectNext()
+      default: break
+      }
     }
-    guard let reply = openReply else { return }
-    openReply = nil
-    reply(["ok": true, "open": true, "protocol": ""])
-    receive()
+    made.start(queue: queue)
+  }
+
+  private func sendHandshake(on made: NWConnection) {
+    guard let bytes = PluginWebSocketCodec.handshake(url: httpURL, key: key, protocols: protocols, headers: headers) else { return fail("the socket's request couldn't be made") }
+    made.send(content: bytes, completion: .contentProcessed { [weak self] error in
+      guard let self else { return }
+      if let error { return self.fail(PluginHostFetch.describe(error)) }
+      self.receive()
+    })
   }
 
   private func receive() {
     guard !finished, let made = connection else { return }
-    made.receiveMessage { [weak self] content, context, _, error in
+    made.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
       guard let self, !self.finished else { return }
+      if let data, !data.isEmpty {
+        if !self.upgraded { return self.takeHead(data, complete: isComplete) }
+        return self.take(data, complete: isComplete)
+      }
       if let error { return self.fail(PluginHostFetch.describe(error)) }
-      guard let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata else { return self.receive() }
-      let data = content ?? Data()
-      switch meta.opcode {
-      case .text: self.deliver(["data": String(decoding: data, as: UTF8.self), "binary": false])
-      case .binary: self.deliver(["data": data.base64EncodedString(), "binary": true])
-      case .close: self.finish(code: Self.number(meta.closeCode), reason: String(decoding: data.prefix(123), as: UTF8.self), clean: true)
-      default: self.receive()
+      if isComplete { return self.finish(code: 1006, reason: "the server closed the connection", clean: false) }
+      self.receive()
+    }
+  }
+
+  private func takeHead(_ data: Data, complete: Bool) {
+    head.append(data)
+    guard let end = PluginWebSocketCodec.headEnd(head) else {
+      if head.count > PluginWebSocketCodec.maxHeadBytes || complete { return fail("the server's answer wasn't a WebSocket upgrade") }
+      return receive()
+    }
+    let rest = Data(head.suffix(from: end))
+    switch PluginWebSocketCodec.checkHandshake(Data(head.prefix(end)), key: key, protocols: protocols) {
+    case .failure(let refusal): return fail(refusal.reason)
+    case .success(let chosen):
+      upgraded = true
+      head = Data()
+      if let reply = openReply {
+        openReply = nil
+        reply(["ok": true, "open": true, "protocol": chosen])
+      }
+      rest.isEmpty ? receive() : take(rest, complete: complete)
+    }
+  }
+
+  private func take(_ data: Data, complete: Bool) {
+    let messages: [PluginWebSocketMessage]
+    do {
+      messages = try parser.feed(data)
+    } catch let refusal as FolderRefusal {
+      return protocolError(refusal.reason)
+    } catch {
+      return protocolError("the server sent a bad frame")
+    }
+    deliver(messages[...], complete: complete)
+  }
+
+  private func deliver(_ messages: ArraySlice<PluginWebSocketMessage>, complete: Bool) {
+    guard !finished else { return }
+    guard let message = messages.first else {
+      if complete { return finish(code: 1006, reason: "the server closed the connection", clean: false) }
+      return receive()
+    }
+    let rest = messages.dropFirst()
+    switch message {
+    case .ping(let payload):
+      write(PluginWebSocketCodec.frame(opcode: 0xA, payload: payload))
+      deliver(rest, complete: complete)
+    case .pong:
+      deliver(rest, complete: complete)
+    case .close(let code, let reason):
+      write(PluginWebSocketCodec.frame(opcode: 0x8, payload: PluginWebSocketCodec.closePayload(code: code == 1005 ? 1000 : code, reason: "")))
+      finish(code: code, reason: reason, clean: true)
+    case .text(let payload), .binary(let payload):
+      let binary: Bool
+      if case .binary = message { binary = true } else { binary = false }
+      let body: [String: Any] = ["data": binary ? payload.base64EncodedString() : String(decoding: payload, as: UTF8.self), "binary": binary]
+      guard events.fits("net.ws.message", body) else {
+        events.send("net.ws.error", ["message": "a message was over the plugin channel's 1 MB line"]) { _ in }
+        return close(code: 1009, reason: "Message too big for the plugin channel.")
+      }
+      events.send("net.ws.message", body) { [weak self] delivered in
+        self?.queue.async {
+          guard let self else { return }
+          if delivered { self.deliver(rest, complete: complete) } else { self.close(code: 1008, reason: "The plugin fell behind.") }
+        }
       }
     }
   }
 
-  private func deliver(_ message: [String: Any]) {
-    events.send("net.ws.message", message) { [weak self] delivered in
-      self?.queue.async {
-        guard let self else { return }
-        if delivered { self.receive() } else { self.close(code: 1008, reason: "The plugin fell behind.") }
-      }
-    }
+  private func protocolError(_ reason: String) {
+    write(PluginWebSocketCodec.frame(opcode: 0x8, payload: PluginWebSocketCodec.closePayload(code: 1002, reason: "")))
+    fail(reason)
   }
 
-  static func number(_ code: NWProtocolWebSocket.CloseCode) -> Int {
-    switch code {
-    case .protocolCode(let defined): return Int(defined.rawValue)
-    case .applicationCode(let value), .privateCode(let value): return Int(value)
-    @unknown default: return 1006
+  private func write(_ data: Data, done: ((NWError?) -> Void)? = nil) {
+    guard let made = connection else {
+      done?(nil)
+      return
     }
+    made.send(content: data, completion: .contentProcessed { error in done?(error) })
   }
 
-  static func closeCode(_ code: Int) -> NWProtocolWebSocket.CloseCode {
-    if (3000...3999).contains(code) { return .applicationCode(UInt16(code)) }
-    if (4000...4999).contains(code) { return .privateCode(UInt16(code)) }
-    return .protocolCode(code == 1001 ? .goingAway : .normalClosure)
+  static func closeCode(_ code: Int) -> Int {
+    code == 1000 || code == 1001 || code == 1008 || code == 1009 || (3000...4999).contains(code) ? code : 1000
   }
 
   func send(_ text: String, binary: Bool, reply: @escaping ([String: Any]) -> Void) {
     queue.async { [self] in
-      guard !finished, openReply == nil, let made = connection else { return reply(PluginHostFetch.failed("the socket isn't open")) }
+      guard !finished, upgraded, connection != nil else { return reply(PluginHostFetch.failed("the socket isn't open")) }
       let data = binary ? Data(base64Encoded: text) : Data(text.utf8)
       guard let data else { return reply(PluginHostFetch.failed("a binary message must be base64")) }
       guard data.count <= Self.maxMessage else { return reply(PluginHostFetch.failed("the message is over \(Self.maxMessage >> 20) MB")) }
       guard queued < Self.maxQueued else { return reply(PluginHostFetch.failed("the socket has \(Self.maxQueued) messages waiting to send")) }
       queued += 1
-      let meta = NWProtocolWebSocket.Metadata(opcode: binary ? .binary : .text)
-      let context = NWConnection.ContentContext(identifier: "message", metadata: [meta])
-      made.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+      write(PluginWebSocketCodec.frame(opcode: binary ? 0x2 : 0x1, payload: data)) { [weak self] error in
         self?.queue.async {
           self?.queued -= 1
           reply(error.map { PluginHostFetch.failed(PluginHostFetch.describe($0)) } ?? ["ok": true])
         }
-      })
+      }
     }
   }
 
   func close(code: Int, reason: String) {
     queue.async { [self] in
       guard !finished else { return }
-      if openReply != nil { return fail("the socket closed before it opened") }
-      guard let made = connection else { return finish(code: code, reason: reason, clean: true) }
-      let meta = NWProtocolWebSocket.Metadata(opcode: .close)
-      meta.closeCode = Self.closeCode(code)
-      let context = NWConnection.ContentContext(identifier: "close", metadata: [meta])
-      made.send(content: Data(reason.utf8.prefix(123)), contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] _ in
-        self?.queue.async { self?.finish(code: code, reason: reason, clean: true) }
-      })
+      guard upgraded, connection != nil else { return finish(code: code, reason: reason, clean: true) }
+      let frame = PluginWebSocketCodec.frame(opcode: 0x8, payload: PluginWebSocketCodec.closePayload(code: Self.closeCode(code), reason: reason))
+      write(frame) { [weak self] _ in self?.queue.async { self?.finish(code: code, reason: reason, clean: true) } }
     }
   }
 
@@ -207,10 +269,16 @@ final class PluginWebSocket {
   private func finish(code: Int, reason: String, clean: Bool, announce: Bool = true) {
     guard !finished else { return }
     finished = true
+    var shouldAnnounce = announce && upgraded
     if let reply = openReply {
       openReply = nil
       reply(PluginHostFetch.failed(reason.isEmpty ? "the socket closed before it opened" : reason))
+      shouldAnnounce = false
     }
+    teardown(announce: shouldAnnounce, code: code, reason: reason, clean: clean)
+  }
+
+  private func teardown(announce: Bool, code: Int, reason: String, clean: Bool) {
     let made = connection
     connection = nil
     made?.stateUpdateHandler = nil

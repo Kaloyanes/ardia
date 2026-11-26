@@ -1449,7 +1449,13 @@ protocol PluginsNative {
   static func usage(_ promise: Promise)
   static func authSignIn(_ spec: [String: Any], _ promise: Promise)
   static func pickFiles(_ spec: [String: Any], _ promise: Promise)
-  static func saveFile(_ spec: [String: Any], _ promise: Promise)
+  static func openDroppedFiles(_ spec: [String: Any], _ promise: Promise)
+  static func readFileChunk(_ name: String, _ run: Int, _ handle: String, _ offset: Int, _ length: Int) -> [String: Any]
+  static func saveBegin(_ spec: [String: Any], _ promise: Promise)
+  static func saveChunk(_ name: String, _ run: Int, _ handle: String, _ data: String) -> [String: Any]
+  static func finishFile(_ name: String, _ run: Int, _ handle: String, _ commit: Bool) -> [String: Any]
+  static func loadImage(_ spec: [String: Any], _ promise: Promise)
+  static func readPluginAsset(_ name: String, _ folderId: String, _ approved: String, _ path: String) -> [String: Any]
 }
 
 extension PluginsNative {
@@ -1607,8 +1613,32 @@ extension PluginsNative {
     AsyncFunction("pickFiles") { (spec: [String: Any], promise: Promise) in Self.pickFiles(spec, promise) }.runOnQueue(.main)
   }
 
-  static var saveFileFunction: AnyDefinition {
-    AsyncFunction("saveFile") { (spec: [String: Any], promise: Promise) in Self.saveFile(spec, promise) }.runOnQueue(.main)
+  static var openDroppedFilesFunction: AnyDefinition {
+    AsyncFunction("openDroppedFiles") { (spec: [String: Any], promise: Promise) in Self.openDroppedFiles(spec, promise) }
+  }
+
+  static var readFileChunkFunction: AnyDefinition {
+    AsyncFunction("readFileChunk") { (name: String, run: Int, handle: String, offset: Int, length: Int) -> [String: Any] in Self.readFileChunk(name, run, handle, offset, length) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
+  }
+
+  static var saveBeginFunction: AnyDefinition {
+    AsyncFunction("saveBegin") { (spec: [String: Any], promise: Promise) in Self.saveBegin(spec, promise) }.runOnQueue(.main)
+  }
+
+  static var saveChunkFunction: AnyDefinition {
+    AsyncFunction("saveChunk") { (name: String, run: Int, handle: String, data: String) -> [String: Any] in Self.saveChunk(name, run, handle, data) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
+  }
+
+  static var finishFileFunction: AnyDefinition {
+    AsyncFunction("finishFile") { (name: String, run: Int, handle: String, commit: Bool) -> [String: Any] in Self.finishFile(name, run, handle, commit) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
+  }
+
+  static var loadImageFunction: AnyDefinition {
+    AsyncFunction("loadImage") { (spec: [String: Any], promise: Promise) in Self.loadImage(spec, promise) }
+  }
+
+  static var readPluginAssetFunction: AnyDefinition {
+    AsyncFunction("readPluginAsset") { (name: String, folderId: String, approved: String, path: String) -> [String: Any] in Self.readPluginAsset(name, folderId, approved, path) }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
   }
 }
 

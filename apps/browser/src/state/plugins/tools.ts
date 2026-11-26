@@ -6,6 +6,7 @@ import { activeManifest, currentPlugins } from "./store";
 import { ensurePluginActivated, pluginReadyRun } from "./activation";
 import { eventProfileId, manifestInProfile, windowProfileId } from "./profileScope";
 import { focusedWindowId } from "../browser/current";
+import { useBrowser } from "../browser/store";
 
 const MAX_CALLS_PER_PLUGIN = 16;
 const MAX_TOOL_JSON = 1 << 20;
@@ -132,13 +133,20 @@ function whileCallerRuns(caller: string | null, ready: Promise<number | ToolOutc
   });
 }
 
-export type CallOptions = { activate?: boolean; consent?: ConsentToken | null; signal?: AbortSignal; profile?: string | null };
+export type CallOptions = { activate?: boolean; consent?: ConsentToken | null; signal?: AbortSignal; profile?: string | null; allowed?: () => string | null };
 
-export const callReaches = (plugin: string, call: PluginCall, profileId: string | null) => (call.kind === "tool" || call.kind === "service") && profileId === null ? true : !!manifestInProfile(currentPlugins(), plugin, profileId);
+export const callReaches = (plugin: string, call: PluginCall, profileId: string | null, strict = false) => {
+  if ((call.kind === "tool" || call.kind === "service") && profileId === null) return !strict || activeManifest(currentPlugins(), plugin)?.scope !== "profile";
+  return !!manifestInProfile(currentPlugins(), plugin, profileId);
+};
 
 export async function invokePluginCall(plugin: string, call: PluginCall, caller: ToolCaller, timeoutMs: number, options: CallOptions = {}): Promise<ToolOutcome> {
-  const profileId = options.profile !== undefined ? options.profile : callProfile(plugin, call);
-  if (!callReaches(plugin, call, profileId)) return failed("refused", `${plugin} isn't on in that profile.`);
+  const strict = caller.kind === "plugin";
+  const asked = options.profile !== undefined ? options.profile : callProfile(plugin, call);
+  const profileId = asked === null && strict && options.profile === undefined ? (windowProfileId(focusedWindowId() ?? undefined) ?? useBrowser.getState().settings.defaultProfileId ?? null) : asked;
+  if (!callReaches(plugin, call, profileId, strict)) return failed("refused", `${plugin} isn't on in that profile.`);
+  const refusedBefore = options.allowed?.();
+  if (refusedBefore) return failed("refused", refusedBefore);
   const consent = options.consent !== undefined ? options.consent : consentToken();
   const trigger =
     call.kind === "tool" ? `onTool:${call.tool}` : call.kind === "command" ? `onCommand:${call.command}` : call.kind === "omnibox" ? `onOmnibox:${call.provider}` : call.kind === "service" ? `onService:${call.iface}` : `onEvent:${call.event}`;
@@ -148,7 +156,9 @@ export async function invokePluginCall(plugin: string, call: PluginCall, caller:
   if (typeof run !== "number") return run;
   if (callerName !== null && !callerStillRuns(callerName, callerRun)) return callerStopped(callerName);
   if (pluginReadyRun(plugin) !== run) return failed("failed", `${plugin} stopped before the call went out.`);
-  if (!callReaches(plugin, call, profileId)) return failed("refused", `${plugin} isn't on in that profile.`);
+  const refusedAfter = options.allowed?.();
+  if (refusedAfter) return failed("refused", refusedAfter);
+  if (!callReaches(plugin, call, profileId, strict)) return failed("refused", `${plugin} isn't on in that profile.`);
   return send(plugin, run, call, caller, timeoutMs, consent, options.signal, activeManifest(currentPlugins(), plugin)?.scope === "profile" ? profileId : null);
 }
 

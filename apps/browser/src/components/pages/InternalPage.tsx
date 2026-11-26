@@ -12,7 +12,7 @@ import { INTERNAL_PAGES, internalPageOf, internalQuery, pluginPageOf, tabDestina
 import { usePluginPageSpec } from "../../state/plugins/hooks";
 import { PluginPage } from "../plugins/PluginPage";
 
-export function InternalPage({ contentAreaOf: tabId }: { contentAreaOf: string }) {
+export function InternalPage({ contentAreaOf: tabId, hidden = false }: { contentAreaOf: string; hidden?: boolean }) {
   const url = useTab(tabId, (t) => (t ? tabDestination(t) : ""));
   const page = internalPageOf(url);
   const plugin = page ? null : pluginPageOf(url);
@@ -25,11 +25,12 @@ export function InternalPage({ contentAreaOf: tabId }: { contentAreaOf: string }
     const t = currentTab(tabId);
     const title = page ? INTERNAL_PAGES[page].title : pluginTitle;
     if (t && (t.url !== url || t.title !== title)) updateTab(tabId, { url, title, favicon: null });
-    updateLive(tabId, { isLoading: false, canGoBack: false, canGoForward: false });
+    if (!plugin) updateLive(tabId, { isLoading: false, canGoBack: false, canGoForward: false });
+    else updateLive(tabId, { isLoading: false });
     setPageProgress(tabId, 0);
   }, [page, plugin, pluginTitle, url]);
 
-  if (plugin) return <PluginPage tabId={tabId} name={plugin} />;
+  if (plugin) return hidden ? <View style={HIDDEN}><PluginPage tabId={tabId} name={plugin} /></View> : <PluginPage tabId={tabId} name={plugin} />;
   if (!page) return null;
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -39,3 +40,5 @@ export function InternalPage({ contentAreaOf: tabId }: { contentAreaOf: string }
     </View>
   );
 }
+
+const HIDDEN = { ...StyleSheet.absoluteFillObject, display: "none" } as const;

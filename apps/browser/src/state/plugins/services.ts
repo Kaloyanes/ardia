@@ -3,7 +3,9 @@ import type { PluginManifest } from "../../lib/pluginManifest";
 import { failure } from "../automation/automationMethods";
 import type { Body } from "../automation/controlSocket";
 import { notePlugin } from "../telemetry/pluginCounts";
-import { requestProfile } from "./channelData";
+import { callerProfile } from "./channelData";
+import { acceptsRun } from "./process";
+import { consentToken } from "../telemetry/choice";
 import { manifestInProfile } from "./profileScope";
 import { activeManifest, currentPlugins } from "./store";
 import { invokePluginCall } from "./tools";
@@ -65,21 +67,32 @@ function mayUse(m: PluginManifest, iface: string, provider: PluginManifest): boo
   return m.consumes.includes(iface) || depends;
 }
 
-function providersFor(c: Caller, m: PluginManifest, iface: string, profileId: string | null): PluginManifest[] {
+function providersFor(c: Caller, m: PluginManifest, iface: string, profileId: string): PluginManifest[] {
   const s = currentPlugins();
   return s.order.flatMap((name) => {
     const provider = activeManifest(s, name);
     if (!provider || !provider.provides.includes(iface) || !mayUse(m, iface, provider)) return [];
-    if (provider.scope === "profile" && profileId !== null && !manifestInProfile(s, name, profileId)) return [];
-    if (provider.scope === "profile" && profileId === null && m.scope === "profile") return [];
+    if (provider.scope === "profile" && !manifestInProfile(s, name, profileId)) return [];
     return name === c.name && !offered.get(iface)?.has(name) ? [] : [provider];
   });
 }
 
+function stillMayCall(c: Caller, iface: string, providerName: string, profileId: string): string | null {
+  const s = currentPlugins();
+  const caller = activeManifest(s, c.name);
+  const provider = activeManifest(s, providerName);
+  if (!caller || !acceptsRun(c.name, c.run)) return `${c.name}, which asked, stopped.`;
+  if (caller.scope === "profile" && !manifestInProfile(s, c.name, profileId)) return `${c.name} isn't on in that profile any more.`;
+  if (!provider || !provider.provides.includes(iface) || !mayUse(caller, iface, provider)) return `${providerName} no longer provides ${iface} to this plugin.`;
+  if (provider.scope === "profile" && !manifestInProfile(s, providerName, profileId)) return `${providerName} isn't on in that profile.`;
+  return null;
+}
+
 function listServices(c: Caller, m: PluginManifest, iface: string, params: Record<string, unknown>): Body {
   if (!m.consumes.includes(iface) && !Object.keys({ ...m.dependencies, ...m.optionalDependencies }).length) return failure("refused", `Listing ${iface} needs it in this plugin's consumes.`);
-  const profile = requestProfile(c.name, m, params);
-  const providers = providersFor(c, m, iface, profile.ok ? profile.profileId : null).map((p) => ({ plugin: p.id, version: p.version, methods: offered.get(iface)?.get(p.name)?.methods ?? [] }));
+  const profile = callerProfile(c.name, m, params);
+  if (!profile.ok) return failure("refused", profile.message);
+  const providers = providersFor(c, m, iface, profile.profileId).map((p) => ({ plugin: p.id, version: p.version, methods: offered.get(iface)?.get(p.name)?.methods ?? [] }));
   return { result: { providers } };
 }
 
@@ -89,19 +102,26 @@ async function callService(c: Caller, m: PluginManifest, iface: string, params: 
   const given = params.timeoutMs;
   if (given !== undefined && (typeof given !== "number" || !Number.isInteger(given) || given < CALL_TIMEOUT_MS.least || given > CALL_TIMEOUT_MS.most))
     return failure("bad_request", `timeoutMs is a whole number from ${CALL_TIMEOUT_MS.least} to ${CALL_TIMEOUT_MS.most}.`);
-  const profile = requestProfile(c.name, m, params);
-  const profileId = profile.ok ? profile.profileId : null;
+  const consent = consentToken();
+  const profile = callerProfile(c.name, m, params);
+  if (!profile.ok) {
+    notePlugin("plugin_service_refusals", consent);
+    return failure("refused", profile.message);
+  }
+  const profileId = profile.profileId;
   const candidates = providersFor(c, m, iface, profileId);
   const wanted = typeof params.provider === "string" ? candidates.find((p) => p.id === params.provider || p.name === params.provider) : candidates[0];
   if (!wanted) {
-    notePlugin("plugin_service_refusals");
+    notePlugin("plugin_service_refusals", consent);
     return failure("refused", candidates.length || typeof params.provider !== "string" ? `No plugin this plugin may use provides ${iface}.` : `${String(params.provider)} doesn't provide ${iface} to this plugin.`);
   }
   const known = offered.get(iface)?.get(wanted.name)?.methods;
   if (known && !known.includes(method)) return failure("bad_request", `${wanted.id} has no ${iface} method ${method}.`);
-  notePlugin("plugin_service_calls");
+  notePlugin("plugin_service_calls", consent);
   const outcome = await invokePluginCall(wanted.name, { kind: "service", iface, method, input: params.input ?? null }, { kind: "plugin", plugin: c.name }, (given as number | undefined) ?? CALL_TIMEOUT_MS.default, {
     profile: wanted.scope === "profile" ? profileId : null,
+    consent,
+    allowed: () => stillMayCall(c, iface, wanted.name, profileId),
   });
   return outcome.ok ? { result: outcome.result } : failure(outcome.code, outcome.message);
 }

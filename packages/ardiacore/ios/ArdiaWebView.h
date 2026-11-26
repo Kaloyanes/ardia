@@ -291,8 +291,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)answerAutofillPrompt:(NSInteger)promptId action:(NSString *)action NS_SWIFT_NAME(answerAutofillPrompt(_:action:));
 - (nullable NSString *)executeExtensionAction:(NSString *)extensionId NS_SWIFT_NAME(executeExtensionAction(_:));
 - (void)notificationAction:(NSString *)notificationId action:(NSString *)action NS_SWIFT_NAME(notificationAction(_:action:));
-- (void)runPluginWorld:(NSString *)world source:(NSString *)source completion:(void (^)(BOOL ran))completion NS_SWIFT_NAME(runPluginWorld(_:source:completion:));
-- (void)postPluginWorld:(NSString *)world expression:(NSString *)expression NS_SWIFT_NAME(postPluginWorld(_:expression:));
+- (void)pluginDocument:(void (^)(NSString *_Nullable document))completion NS_SWIFT_NAME(pluginDocument(_:));
+- (void)runPluginWorld:(NSString *)world source:(NSString *)source document:(NSString *)document completion:(void (^)(BOOL ran))completion NS_SWIFT_NAME(runPluginWorld(_:source:document:completion:));
+- (void)postPluginWorld:(NSString *)world expression:(NSString *)expression document:(NSString *)document NS_SWIFT_NAME(postPluginWorld(_:expression:document:));
 - (void)removePluginWorld:(NSString *)world teardown:(NSString *)teardown NS_SWIFT_NAME(removePluginWorld(_:teardown:));
 @end
 

@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { surfaceKey, usePluginSurfaces, type PluginSurfacesStore, type SidePanel } from "./surfaces";
 import { pluginToolbarItems } from "./toolbar";
 import { activeManifest, activeNames, consentListing, currentPlugins, needsReview, recordOf, usePlugins, webViewsOnline, type PluginsStore } from "./store";
-import { pageContextOf, pageViewUrl, shownContext, usePluginPages } from "./pages";
+import { pageContextOf, pageViewUrl, pluginPageOf, shownContext, usePluginPages } from "./pages";
 import { useBrowser } from "../browser/store";
 import { useKeyed, watchWindowRecord } from "../browser/keyedWatch";
 import { eligibleKind } from "../automation/automationWindows";
@@ -96,3 +96,11 @@ export function usePluginPageMenuItems<T extends { id: string; title: string }>(
 }
 
 export { runPluginPageMenu } from "./menus";
+
+export function useKeptPluginPage(tabId: string, shown: boolean): boolean {
+  const isPluginPage = useBrowser((s) => !!pluginPageOf(s.tabs[tabId]?.url ?? ""));
+  const kept = useRef(false);
+  if (!isPluginPage) kept.current = false;
+  else if (shown) kept.current = true;
+  return isPluginPage && kept.current;
+}

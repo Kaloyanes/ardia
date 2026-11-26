@@ -256,7 +256,7 @@ test("content scripts and page styles match both their own patterns and permissi
   assert.deepEqual(wantedFor(m, "https://gitlab.com/a").styles, []);
   assert.equal(postToContent("pages", "no-tab", { hi: 1 }), "That tab has none of this plugin's content scripts.");
   const before = host.events.length;
-  receiveWorldMessage("no-tab", worldOf("pages"), JSON.stringify([JSON.stringify({ message: 1 })]), null);
+  receiveWorldMessage("no-tab", worldOf("pages"), "doc-1", JSON.stringify([JSON.stringify({ message: 1 })]), null);
   assert.equal(host.events.length, before, "a message from a tab without the plugin's world goes nowhere");
 });
 
@@ -265,7 +265,8 @@ test("plugin worlds, local ports, input modes and the site kill switch parse onl
   assert.equal(worldOf("../x"), null);
   assert.equal(pluginOfWorld("ardia-plugin:pages"), "pages");
   assert.equal(pluginOfWorld("other:pages"), null);
-  assert.deepEqual(worldMessagesOf(JSON.stringify([JSON.stringify({ scriptId: "a", message: { x: 1 } }), { message: 2 }, "nope", 5])), [{ scriptId: "a", message: { x: 1 } }, { scriptId: null, message: 2 }]);
+  assert.deepEqual(worldMessagesOf(JSON.stringify([JSON.stringify({ doc: "dtoken1234", scriptId: "a", message: { x: 1 } }), { message: 2 }, "nope", 5])), [{ doc: "dtoken1234", scriptId: "a", message: { x: 1 } }, { doc: null, scriptId: null, message: 2 }]);
+  assert.deepEqual(worldMessagesOf(JSON.stringify([{ message: "x".repeat(300 * 1024) }])), [], "an object-form message is held to the size cap by its serialized size");
   assert.deepEqual(worldMessagesOf("{not json"), []);
   assert.equal(hostPatternProblem("localhost:11434"), null);
   assert.ok(!reachesLoopback("localhost", 80, ["localhost"]), "a bare localhost never opens loopback");

@@ -43,7 +43,12 @@ type Hooks = {
   busy(name: string): boolean;
   contentTabs(name: string): number;
   pauseScripts(name: string, pause: boolean): void;
+  resume(consent: ConsentToken | null): void;
+  sidecarRun(plugin: string): number | null;
 };
+
+const SIDECAR_SUFFIX = "/sidecar";
+export const ownerOfRow = (row: Pick<PluginUsageRow, "name">) => (row.name.endsWith(SIDECAR_SUFFIX) ? { plugin: row.name.slice(0, -SIDECAR_SUFFIX.length), sidecar: true } : { plugin: row.name, sidecar: false });
 let hooks: Hooks | null = null;
 
 export const pausedReason = (name: string): PauseReason | null => pausedFor.get(name) ?? null;
@@ -86,11 +91,12 @@ export function pausePlugin(name: string, reason: PauseReason, consent: ConsentT
   refreshHealth();
 }
 
-export function resumePlugin(name: string) {
+export function resumePlugin(name: string, consent: ConsentToken | null = null) {
   if (!pausedFor.delete(name)) return;
-  samples.delete(name);
+  for (const key of [...samples.keys()]) if (key.startsWith(`${name}#`) || key.startsWith(`${name}${SIDECAR_SUFFIX}#`)) samples.delete(key);
   ipc.delete(name);
   hooks?.pauseScripts(name, false);
+  hooks?.resume(consent);
   refreshHealth();
 }
 
@@ -117,21 +123,25 @@ export function checkIdle(consent: ConsentToken | null, now = Date.now(), usage:
   }
 }
 
-export function checkUsage(rows: PluginUsageRow[], consent: ConsentToken | null, now = Date.now()) {
+export function checkUsage(rows: PluginUsageRow[], consent: ConsentToken | null, now = Date.now(), sidecarRun: (plugin: string) => number | null = () => null) {
   const s = currentPlugins();
   for (const row of rows) {
-    const m = activeManifest(s, row.name);
-    if (!m || pausedFor.has(row.name)) continue;
-    const limitMB = m.main?.memoryMB ?? m.sidecar?.memoryMB ?? 0;
+    const { plugin, sidecar } = ownerOfRow(row);
+    const m = activeManifest(s, plugin);
+    if (!m || pausedFor.has(plugin)) continue;
+    const state = s.processes[plugin];
+    const current = sidecar ? sidecarRun(plugin) : state?.state === "running" ? state.run : null;
+    if (current !== row.run) continue;
+    const limitMB = sidecar ? (m.sidecar?.memoryMB ?? 0) : (m.main?.memoryMB ?? m.sidecar?.memoryMB ?? 0);
     if (limitMB > 0 && row.memoryBytes > limitMB * 1024 * 1024 * WATCHDOG.memoryShare) {
-      pausePlugin(row.name, "memory", consent);
+      pausePlugin(plugin, "memory", consent);
       continue;
     }
     const before = samples.get(`${row.name}#${row.run}`);
     const share = before ? (row.cpuMs - before.cpuMs) / Math.max(1, now - before.at) : 0;
     const hot = share >= WATCHDOG.cpuShare ? (before?.hot ?? 0) + 1 : 0;
     samples.set(`${row.name}#${row.run}`, { cpuMs: row.cpuMs, at: now, hot });
-    if (hot >= WATCHDOG.cpuSamples) pausePlugin(row.name, "cpu", consent);
+    if (hot >= WATCHDOG.cpuSamples) pausePlugin(plugin, "cpu", consent);
   }
   refreshHealth(rows);
 }
@@ -146,11 +156,13 @@ export function refreshHealth(rows: PluginUsageRow[] = lastRows) {
     const m = activeManifest(s, name);
     if (!m || (!m.main && !m.sidecar)) continue;
     const state = s.processes[name];
-    const row = rows.find((r) => r.name === name);
+    const row = rows.find((r) => r.name === name && state?.state === "running" && r.run === state.run);
+    const sidecarRow = rows.find((r) => r.name === `${name}${SIDECAR_SUFFIX}`);
     const paused = pausedFor.get(name) ?? null;
     const status: PluginHealth["status"] = paused ? "paused" : sleeping.has(name) ? "sleeping" : state?.state === "running" ? "running" : state?.state === "starting" || state?.state === "waiting" ? "starting" : state?.state === "crashed" || state?.state === "failed" ? "failed" : "stopped";
     const lastError = paused ? PAUSE_TITLES[paused] : state?.state === "crashed" || state?.state === "failed" ? state.reason : null;
-    out[name] = { status, memoryBytes: row && status === "running" ? row.memoryBytes : null, contentTabs: hooks?.contentTabs(name) ?? 0, channels: row ? row.streams + row.sockets : 0, lastError, paused };
+    const memory = row && status === "running" ? row.memoryBytes + (sidecarRow?.memoryBytes ?? 0) : null;
+    out[name] = { status, memoryBytes: memory, contentTabs: hooks?.contentTabs(name) ?? 0, channels: row ? row.streams + row.sockets : 0, lastError, paused };
   }
   usePluginHealth.setState({ rows: out });
 }
@@ -164,7 +176,7 @@ async function sample(consent: ConsentToken | null) {
   sampling = true;
   try {
     const rows = await pluginUsage().catch(() => [] as PluginUsageRow[]);
-    checkUsage(rows, consent);
+    checkUsage(rows, consent, Date.now(), hooks?.sidecarRun ?? (() => null));
   } finally {
     sampling = false;
   }

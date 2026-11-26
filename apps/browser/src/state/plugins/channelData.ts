@@ -5,7 +5,7 @@ import { withoutFragment } from "../../lib/url";
 import { minimizedUrl } from "../../lib/urlParts";
 import { webviews } from "../../platform/webviews";
 import { useBrowser } from "../browser/store";
-import { activeTabId } from "../browser/model";
+import { activeTabId, isIncognitoProfile } from "../browser/model";
 import type { Tab } from "../browser/types";
 import { failure } from "../automation/automationMethods";
 import { eligibleKind, isEligibleTab } from "../automation/automationWindows";
@@ -46,6 +46,19 @@ export function requestProfile(name: string, m: Pick<PluginManifest, "scope">, p
   const front = focused ? b.windows[focused]?.profileId : undefined;
   const fallback = [front, b.settings.defaultProfileId, ...(Array.isArray(limited) ? limited : [])].find((id): id is string => typeof id === "string" && allowed(id));
   return fallback ? { ok: true, profileId: fallback } : { ok: false, message: "This plugin isn't on in any profile." };
+}
+
+export function callerProfile(name: string, m: Pick<PluginManifest, "scope">, params: Record<string, unknown>): { ok: true; profileId: string } | { ok: false; message: string } {
+  const scoped = requestProfile(name, m, params);
+  if (!scoped.ok) return scoped;
+  if (scoped.profileId) return { ok: true, profileId: scoped.profileId };
+  const b = useBrowser.getState();
+  const usable = (id: unknown): id is string => typeof id === "string" && !!b.profiles[id] && !isIncognitoProfile(id);
+  if (params.profile !== undefined) return usable(params.profile) ? { ok: true, profileId: params.profile } : { ok: false, message: "profile isn't one of your profiles." };
+  const focused = focusedWindowId();
+  const front = focused ? b.windows[focused]?.profileId : undefined;
+  const id = [front, b.settings.defaultProfileId].find(usable);
+  return id ? { ok: true, profileId: id } : { ok: false, message: "There's no profile to use." };
 }
 
 export function storageMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Promise<Body> | Body {

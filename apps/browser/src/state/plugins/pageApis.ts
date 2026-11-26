@@ -17,22 +17,34 @@ import { recentPluginGesture } from "./gestures";
 import { pluginPageOf } from "./pages";
 import { postToContent } from "./pageWorlds";
 import { acceptsRun } from "./process";
+import { manifestInProfile } from "./profileScope";
 import { activeManifest, currentPlugins } from "./store";
 
 type Caller = { name: string; run: number };
+type Lease = { url: string; document: string; profileId: string };
+type Grant = { kind: "gesture"; id: number } | { kind: "lease"; lease: Lease };
 
 const READ_DEADLINE_MS = 4000;
 const MAX_LEASES = 8;
-const leases = new Map<string, Map<string, string>>();
+const MARKDOWN_URL = /(\]\()(https?:\/\/[^)\s]+)(\))/g;
+const leases = new Map<string, Map<string, Lease>>();
 
-export function grantTabLease(plugin: string, tabId: string, consent: ConsentToken | null): boolean {
-  const m = activeManifest(currentPlugins(), plugin);
+function tabReadable(plugin: string, tab: Tab | undefined): tab is Tab {
   const s = useBrowser.getState();
-  const tab = s.tabs[tabId];
-  if (!m?.permissions.multiTab || !tab || !isEligibleTab(s, tabId) || pluginPageOf(tab.url)) return false;
-  const held = leases.get(plugin) ?? new Map<string, string>();
+  const m = activeManifest(currentPlugins(), plugin);
+  if (!m || !tab || !isEligibleTab(s, tab.id) || pluginPageOf(tab.url)) return false;
+  return m.scope !== "profile" || !!manifestInProfile(currentPlugins(), plugin, tab.profileId);
+}
+
+export async function grantTabLease(plugin: string, tabId: string, consent: ConsentToken | null): Promise<boolean> {
+  const tab = useBrowser.getState().tabs[tabId];
+  if (!activeManifest(currentPlugins(), plugin)?.permissions.multiTab || !tabReadable(plugin, tab)) return false;
+  const document = await webviews.get(tabId)?.pluginDocument().catch(() => null);
+  const now = useBrowser.getState().tabs[tabId];
+  if (!document || !tabReadable(plugin, now) || now.url !== tab.url) return false;
+  const held = leases.get(plugin) ?? new Map<string, Lease>();
   if (!held.has(tabId) && held.size >= MAX_LEASES) held.delete(held.keys().next().value!);
-  held.set(tabId, withoutFragment(tab.url));
+  held.set(tabId, { url: withoutFragment(now.url), document, profileId: now.profileId });
   leases.set(plugin, held);
   notePlugin("plugin_tab_leases", consent);
   return true;
@@ -45,34 +57,45 @@ export function revokeTabLease(plugin: string, tabId?: string) {
   leases.get(plugin)?.delete(tabId);
 }
 
-function leasedTab(plugin: string, tabId: string): Tab | null {
-  const doc = leases.get(plugin)?.get(tabId);
-  const s = useBrowser.getState();
-  const tab = s.tabs[tabId];
-  if (!doc || !tab || !isEligibleTab(s, tabId) || withoutFragment(tab.url) !== doc) {
-    revokeTabLease(plugin, tabId);
-    return null;
-  }
-  return tab;
+function leaseHolds(plugin: string, tabId: string, lease: Lease): boolean {
+  const tab = useBrowser.getState().tabs[tabId];
+  const ok = leases.get(plugin)?.get(tabId) === lease && tabReadable(plugin, tab) && withoutFragment(tab.url) === lease.url && tab.profileId === lease.profileId;
+  if (!ok) revokeTabLease(plugin, tabId);
+  return ok;
 }
 
 type Read = { text?: unknown; markdown?: unknown; selection?: unknown; lang?: unknown; metadata?: unknown; headings?: unknown; links?: unknown; forms?: unknown };
 
 const flag = (params: Record<string, unknown>, key: string) => params[key] === true;
 
-async function readTab(c: Caller, m: PluginManifest, tab: Tab, params: Record<string, unknown>, consent: ConsentToken | null): Promise<Body> {
+export const minimizedMarkdown = (markdown: string) => markdown.replace(MARKDOWN_URL, (_all, open: string, url: string, close: string) => `${open}${minimizedUrl(url)}${close}`);
+
+function grantHolds(c: Caller, tab: Tab, grant: Grant): boolean {
+  if (!acceptsRun(c.name, c.run) || !activeManifest(currentPlugins(), c.name)?.permissions.activePage) return false;
+  if (grant.kind === "lease") return leaseHolds(c.name, tab.id, grant.lease);
+  const gesture = recentPluginGesture(c.name);
+  if (!gesture || gesture.id !== grant.id) return false;
+  const readable = readableTab(gesture);
+  return readable.ok && readable.tab.id === tab.id && tabReadable(c.name, readable.tab);
+}
+
+async function readTab(c: Caller, m: PluginManifest, tab: Tab, grant: Grant, params: Record<string, unknown>, consent: ConsentToken | null): Promise<Body> {
   const web = webviews.get(tab.id);
   if (!web) return failure("failed", "That tab's page isn't loaded.");
   const wantsShot = flag(params, "screenshot");
   if (wantsShot && !m.permissions.screenshot) return failure("refused", "A screenshot needs activePage.screenshot.");
+  const before = await web.pluginDocument().catch(() => null);
+  if (!before || (grant.kind === "lease" && grant.lease.document !== before)) return failure("refused", "That tab moved on to another page since it was attached.");
   const flags = { markdown: flag(params, "markdown"), metadata: flag(params, "metadata"), selection: params.selection !== false };
   const [read, shot] = await Promise.all([
     withDeadline(web.evaluate<Read>(pageReadScript(flags)), READ_DEADLINE_MS, null).catch(() => null) as Promise<Read | null>,
     wantsShot ? withDeadline(web.capturePicture(0.5), READ_DEADLINE_MS, null).catch(() => null) : Promise.resolve(null),
   ]);
-  if (!acceptsRun(c.name, c.run) || !activeManifest(currentPlugins(), c.name)?.permissions.activePage) return failure("refused", "The plugin stopped while the page was being read.");
+  const after = await web.pluginDocument().catch(() => null);
+  const now = useBrowser.getState().tabs[tab.id];
+  if (after !== before || !now || now.url !== tab.url || !grantHolds(c, now, grant)) return failure("refused", "The page changed while it was being read, or the plugin lost its access.");
   if (!read || typeof read.text !== "string") return failure("failed", "The page didn't answer.");
-  const full = m.permissions.fullUrls;
+  const full = activeManifest(currentPlugins(), c.name)?.permissions.fullUrls === true;
   const shown = (url: unknown) => (typeof url === "string" ? (full ? url : minimizedUrl(url)) : "");
   const metadata = isFields(read.metadata) ? { ...read.metadata, canonicalUrl: shown(read.metadata.canonicalUrl), image: shown(read.metadata.image) } : undefined;
   const links = Array.isArray(read.links) ? read.links.flatMap((l) => (isFields(l) ? [{ text: String(l.text ?? ""), url: shown(l.url) }] : [])) : undefined;
@@ -80,11 +103,11 @@ async function readTab(c: Caller, m: PluginManifest, tab: Tab, params: Record<st
   if (shot) notePlugin("plugin_page_screenshots", consent);
   return {
     result: {
-      tabId: tab.id,
-      url: full ? tab.url : minimizedUrl(tab.url),
-      title: tab.customTitle || tab.title,
+      tabId: now.id,
+      url: full ? now.url : minimizedUrl(now.url),
+      title: now.customTitle || now.title,
       text: read.text,
-      ...(typeof read.markdown === "string" ? { markdown: read.markdown } : {}),
+      ...(typeof read.markdown === "string" ? { markdown: full ? read.markdown : minimizedMarkdown(read.markdown) } : {}),
       ...(typeof read.selection === "string" ? { selection: read.selection } : {}),
       lang: typeof read.lang === "string" ? read.lang.slice(0, 35) : "",
       ...(metadata ? { metadata, headings: Array.isArray(read.headings) ? read.headings : [], links: links ?? [], forms: Array.isArray(read.forms) ? read.forms : [] } : {}),
@@ -101,18 +124,20 @@ export async function pageMethod(c: Caller, m: PluginManifest, method: string, p
     return problem ? failure("refused", problem) : { result: { ok: true } };
   }
   if (!m.permissions.activePage) return failure("refused", `${method} needs the activePage permission.`);
-  if (method === "page.readTab" && typeof params.tabId === "string") {
-    const gesture = recentPluginGesture(c.name);
-    const active = gesture?.tabId === params.tabId ? readableTab(gesture) : null;
-    if (active?.ok) return readTab(c, m, active.tab, params, consent);
-    if (!m.permissions.multiTab) return failure("refused", "Reading another tab needs activePage.multiTab and a tab you attached.");
-    const tab = leasedTab(c.name, params.tabId);
-    return tab ? readTab(c, m, tab, params, consent) : failure("refused", "That tab isn't one you attached to the plugin, or it changed since.");
-  }
   const gesture = recentPluginGesture(c.name);
+  if (method === "page.readTab" && typeof params.tabId === "string") {
+    const active = gesture?.tabId === params.tabId ? readableTab(gesture) : null;
+    if (gesture && active?.ok && tabReadable(c.name, active.tab)) return readTab(c, m, active.tab, { kind: "gesture", id: gesture.id }, params, consent);
+    if (!m.permissions.multiTab) return failure("refused", "Reading another tab needs activePage.multiTab and a tab you attached.");
+    const lease = leases.get(c.name)?.get(params.tabId);
+    const tab = useBrowser.getState().tabs[params.tabId];
+    return lease && tab && leaseHolds(c.name, params.tabId, lease) ? readTab(c, m, tab, { kind: "lease", lease }, params, consent) : failure("refused", "That tab isn't one you attached to the plugin, or it changed since.");
+  }
   if (!gesture) return failure("refused", `${method} works only just after you use the plugin (a command, menu, toolbar button or its view).`);
   const readable = readableTab(gesture);
-  return readable.ok ? readTab(c, m, readable.tab, params, consent) : readable.body;
+  if (!readable.ok) return readable.body;
+  if (!tabReadable(c.name, readable.tab)) return failure("refused", "That tab is in a profile this plugin isn't on in.");
+  return readTab(c, m, readable.tab, { kind: "gesture", id: gesture.id }, params, consent);
 }
 
 let watching = false;
@@ -122,9 +147,9 @@ export function watchTabLeases() {
   watching = true;
   useBrowser.subscribeTo(["tabs"], (now, prev) => {
     for (const [plugin, held] of leases) {
-      for (const [tabId, doc] of held) {
+      for (const [tabId, lease] of held) {
         const tab = now.tabs[tabId];
-        if (!tab || (prev.tabs[tabId]?.url !== tab.url && withoutFragment(tab.url) !== doc)) held.delete(tabId);
+        if (!tab || (prev.tabs[tabId]?.url !== tab.url && withoutFragment(tab.url) !== lease.url) || tab.profileId !== lease.profileId) held.delete(tabId);
       }
       if (!held.size) leases.delete(plugin);
     }

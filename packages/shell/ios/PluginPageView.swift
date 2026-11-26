@@ -69,6 +69,10 @@ final class PluginPageView: ExpoView, WKNavigationDelegate, WKUIDelegate {
     "default-src 'self' ardia-plugin: data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ardia-plugin:; form-action 'self'; worker-src 'none'"
 
   private var web: WKWebView?
+
+  func goBack() { web?.goBack() }
+
+  func goForward() { web?.goForward() }
   private var allowedOrigin: (scheme: String, host: String, port: Int?)?
 
   private let watcher = WindowWatcher()

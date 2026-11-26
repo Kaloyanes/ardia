@@ -168,3 +168,5 @@ export function sidecarMethod(c: { name: string; run: number }, m: PluginManifes
 }
 
 export const sidecarRunning = (name: string) => sidecars.get(name)?.run != null;
+
+export const sidecarRunOf = (name: string): number | null => sidecars.get(name)?.run ?? null;

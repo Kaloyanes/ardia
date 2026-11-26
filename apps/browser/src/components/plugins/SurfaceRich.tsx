@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, View, type ImageResizeMode } from "react-native";
 import type { PluginNode } from "../../lib/pluginProtocol";
 import { copyText } from "../../state/app/system";
-import { pickFilesForPluginView, pluginCanPickFiles, pluginImageSource } from "../../state/plugins/actions";
+import { dropFilesOnPluginView, pickFilesForPluginView, pluginCanPickFiles, pluginImage } from "../../state/plugins/actions";
 import { ActivitySpinner, Badge, Box, Button, Divider, monoFace, Segmented, space, Text, useTheme } from "../ui";
 import { SurfaceIcon } from "./SurfaceBasics";
 import { SurfaceMarkdown } from "./SurfaceMarkdown";
@@ -11,6 +11,19 @@ import { codeTokens, type CodeTone } from "./codeTokens";
 import { bool, fillToneOf, flattenNodes, isHandlerRef, isNode, num, records, spaceOf, str, strings, textOf, toneOf, useSurface } from "./surfaceNodes";
 
 type NodeProps = { node: PluginNode };
+
+function usePluginImage(plugin: string, src: string | undefined): string | null {
+  const [uri, setUri] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setUri(null);
+    void pluginImage(plugin, src).then((loaded) => live && setUri(loaded));
+    return () => {
+      live = false;
+    };
+  }, [plugin, src]);
+  return uri;
+}
 
 const ASPECT: Record<string, number> = { "1": 1, "3/2": 1.5, "2/3": 2 / 3, "4/3": 4 / 3, "3/4": 0.75, "16/9": 16 / 9, "9/16": 9 / 16 };
 const FITS: Record<string, ImageResizeMode> = { contain: "contain", cover: "cover", fill: "stretch" };
@@ -42,7 +55,7 @@ function GridCell({ item, columns, aspect, fit }: { item: PluginNode; columns: n
   const content = p.content;
   const source = typeof content === "string" ? content : str((content as Record<string, unknown> | null)?.source);
   const color = str((content as Record<string, unknown> | null)?.color);
-  const uri = pluginImageSource(plugin, source);
+  const uri = usePluginImage(plugin, source);
   const tile = (
     <View style={{ width: `${100 / columns}%`, padding: space.xs }}>
       <View style={{ aspectRatio: aspect, borderRadius: space.s, overflow: "hidden", backgroundColor: color ?? theme.chipFill, alignItems: "center", justifyContent: "center" }}>
@@ -214,7 +227,7 @@ export function CodeBlockNode({ node }: NodeProps) {
 export function ImageNode({ node }: NodeProps) {
   const { plugin, fire } = useSurface();
   const p = node.props;
-  const uri = pluginImageSource(plugin, p.source);
+  const uri = usePluginImage(plugin, str(p.source));
   const radiusSpace = spaceOf(p.radius);
   if (!uri) return <Text size="small" tone="textTertiary">{str(p.alt) ?? "This image isn't from a host the plugin may reach."}</Text>;
   const image = (
@@ -252,27 +265,40 @@ export function TagListNode({ node }: NodeProps) {
 }
 
 export function FileDropZoneNode({ node }: NodeProps) {
-  const { plugin, fire } = useSurface();
+  const { plugin, surfaceId, fire } = useSurface();
   const theme = useTheme();
   const p = node.props;
   const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
   const allowed = pluginCanPickFiles(plugin) && !bool(p.disabled);
-  const choose = async () => {
+  const options = { accept: strings(p.accept), multiple: bool(p.multiple), maxBytes: num(p.maxBytes) ?? null };
+  const hand = async (load: () => ReturnType<typeof pickFilesForPluginView>) => {
     if (!allowed || busy) return;
     setBusy(true);
-    const files = await pickFilesForPluginView(plugin, { accept: strings(p.accept), multiple: bool(p.multiple), maxBytes: num(p.maxBytes) ?? null });
+    const files = await load();
     setBusy(false);
     if (files?.length && isHandlerRef(p.onDrop)) fire(p.onDrop, [files]);
   };
-  const zone = { borderWidth: 1, borderStyle: "dashed", borderColor: theme.divider, borderRadius: space.s, opacity: allowed ? 1 : 0.5 } as const;
+  const zone = { borderWidth: 1, borderStyle: "dashed", borderColor: over ? theme.accent : theme.divider, borderRadius: space.s, opacity: allowed ? 1 : 0.5 } as const;
   return (
-    <Pressable onPress={() => void choose()} disabled={!allowed}>
-      <Box gap="xs" pad="l" center style={zone}>
-        {busy ? <ActivitySpinner style={SPINNER} /> : <SurfaceIcon name={str(p.icon) ?? "tray.and.arrow.down"} size={SURFACE.iconBox * 1.5} />}
-        <Text weight="medium">{str(p.title) ?? "Choose files"}</Text>
-        {str(p.description) ? <Text size="small" tone="textTertiary">{str(p.description)}</Text> : null}
-      </Box>
-    </Pressable>
+    <View
+      draggedTypes={allowed ? ["fileUrl"] : []}
+      onDragEnter={() => setOver(true)}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        const paths = (e.nativeEvent.dataTransfer?.files ?? []).flatMap((f) => (typeof f?.uri === "string" && f.uri.startsWith("file://") ? [decodeURIComponent(f.uri.replace(/^file:\/\//, ""))] : []));
+        if (paths.length) void hand(() => dropFilesOnPluginView(plugin, surfaceId, paths, options));
+      }}
+    >
+      <Pressable onPress={() => void hand(() => pickFilesForPluginView(plugin, surfaceId, options))} disabled={!allowed}>
+        <Box gap="xs" pad="l" center style={zone}>
+          {busy ? <ActivitySpinner style={SPINNER} /> : <SurfaceIcon name={str(p.icon) ?? "tray.and.arrow.down"} size={SURFACE.iconBox * 1.5} />}
+          <Text weight="medium">{str(p.title) ?? "Choose or drop files"}</Text>
+          {str(p.description) ? <Text size="small" tone="textTertiary">{str(p.description)}</Text> : null}
+        </Box>
+      </Pressable>
+    </View>
   );
 }
 

@@ -13,8 +13,9 @@ import { historyOf } from "../history/history";
 import { mediaCommand, useMedia } from "../media/media";
 import { openSplitPane } from "../splits/actions";
 import { notePlugin } from "../telemetry/pluginCounts";
-import { requestProfile } from "./channelData";
-import { focusedWindowId } from "../browser/current";
+import { callerProfile } from "./channelData";
+import { manifestInProfile } from "./profileScope";
+import { currentPlugins } from "./store";
 
 type Caller = { name: string; run: number };
 type Shown = { id: string; parentId: string | null; title: string; url?: string; children?: Shown[] };
@@ -26,15 +27,17 @@ const MEDIA_ACTIONS = { play: "play", pause: "pause", toggle: "toggle", next: "n
 const limitOf = (value: unknown, fallback: number) => (typeof value === "number" && Number.isInteger(value) && value > 0 ? Math.min(value, MAX_RESULTS) : fallback);
 const text = (value: unknown, max: number) => (typeof value === "string" ? value.slice(0, max) : undefined);
 
-function profileFor(c: Caller, m: PluginManifest, params: Record<string, unknown>): string | null {
-  const scoped = requestProfile(c.name, m, params);
-  if (scoped.ok && scoped.profileId) return scoped.profileId;
-  const s = useBrowser.getState();
-  const focused = focusedWindowId();
-  const front = focused ? s.windows[focused]?.profileId : undefined;
-  const id = front ?? s.settings.defaultProfileId;
-  return id && s.profiles[id] && !isIncognitoProfile(id) ? id : null;
+function profileFor(c: Caller, m: PluginManifest, params: Record<string, unknown>): { ok: true; id: string } | { ok: false; body: Body } {
+  const found = callerProfile(c.name, m, params);
+  return found.ok ? { ok: true, id: found.profileId } : { ok: false, body: failure("refused", found.message) };
 }
+
+const tabInScope = (c: Caller, m: PluginManifest, tabId: string) => {
+  const s = useBrowser.getState();
+  const tab = s.tabs[tabId];
+  if (!tab || !isEligibleTab(s, tabId) || isIncognitoProfile(tab.profileId)) return false;
+  return m.scope !== "profile" || !!manifestInProfile(currentPlugins(), c.name, tab.profileId);
+};
 
 function shown(node: BookmarkNode, depth: number): Shown {
   if (node.kind === "url") return { id: node.id, parentId: node.parentId, title: node.title, url: node.url };
@@ -46,8 +49,9 @@ function shown(node: BookmarkNode, depth: number): Shown {
 export function bookmarksMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Body {
   const writes = method !== "bookmarks.list" && method !== "bookmarks.search";
   if (!hasLevel(m.permissions, "bookmarks", writes ? "write" : "read")) return failure("refused", `${method} needs bookmarks: ${writes ? "write" : "read"}.`);
-  const profileId = profileFor(c, m, params);
-  if (!profileId) return failure("refused", "There's no profile this plugin may use.");
+  const profile = profileFor(c, m, params);
+  if (!profile.ok) return profile.body;
+  const profileId = profile.id;
   const s = useBrowser.getState();
   const roots = bookmarkRoots(s, profileId);
   const owned = (id: unknown): id is string => typeof id === "string" && ownerOfBookmark(s, id) === profileId;
@@ -95,8 +99,9 @@ export function bookmarksMethod(c: Caller, m: PluginManifest, method: string, pa
 
 export function historyMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Body {
   if (!hasLevel(m.permissions, "history", "read")) return failure("refused", `${method} needs history: read.`);
-  const profileId = profileFor(c, m, params);
-  if (!profileId) return failure("refused", "There's no profile this plugin may use.");
+  const profile = profileFor(c, m, params);
+  if (!profile.ok) return profile.body;
+  const profileId = profile.id;
   notePlugin("plugin_history_calls");
   const list = historyOf(useBrowser.getState(), profileId);
   const query = method === "history.search" ? (text(params.text, 200) ?? "").toLowerCase() : "";
@@ -117,12 +122,14 @@ export function profilesMethod(c: Caller, m: PluginManifest, method: string, par
   const writes = method === "profiles.switch";
   if (!hasLevel(m.permissions, "profiles", writes ? "write" : "read")) return failure("refused", `${method} needs profiles: ${writes ? "write" : "read"}.`);
   const s = useBrowser.getState();
-  const current = profileFor(c, m, params);
+  const found = profileFor(c, m, params);
+  if (!found.ok) return found.body;
+  const current = found.id;
   notePlugin("plugin_profile_calls");
-  const visible = s.profileOrder.filter((id) => s.profiles[id] && !isIncognitoProfile(id));
+  const visible = s.profileOrder.filter((id) => s.profiles[id] && !isIncognitoProfile(id) && (m.scope !== "profile" || !!manifestInProfile(currentPlugins(), c.name, id)));
   const row = (id: string) => ({ id, name: s.profiles[id]!.name, ...(s.profiles[id]!.icon ? { icon: s.profiles[id]!.icon! } : {}), color: String(s.profiles[id]!.color), current: id === current });
   if (method === "profiles.list") return { result: { profiles: visible.map(row) } };
-  if (method === "profiles.current") return current ? { result: row(current) } : failure("failed", "There's no current profile.");
+  if (method === "profiles.current") return { result: row(current) };
   const target = params.profile;
   if (typeof target !== "string" || !visible.includes(target)) return failure("bad_request", "profile isn't one of your profiles.");
   const windowId = lastFocusedEligibleWindow(s);
@@ -138,14 +145,14 @@ export function mediaMethod(c: Caller, m: PluginManifest, method: string, params
   const sessions = useMedia.getState().sessions;
   if (!controls) {
     const rows = Object.entries(sessions).flatMap(([tabId, session]) => {
-      if (!isEligibleTab(s, tabId)) return [];
+      if (!tabInScope(c, m, tabId)) return [];
       return [{ tabId, title: session.title ?? "", ...(session.artist ? { artist: session.artist } : {}), ...(session.album ? { album: session.album } : {}), playing: session.playbackState === "playing", muted: s.tabs[tabId]?.muted === true, ...(typeof session.duration === "number" ? { duration: session.duration } : {}) }];
     });
     return { result: { sessions: rows } };
   }
   const tabId = params.tabId;
   const action = typeof params.action === "string" && Object.hasOwn(MEDIA_ACTIONS, params.action) ? (params.action as keyof typeof MEDIA_ACTIONS) : null;
-  if (typeof tabId !== "string" || !isEligibleTab(s, tabId) || !sessions[tabId]) return failure("bad_request", "tabId isn't a tab playing media.");
+  if (typeof tabId !== "string" || !tabInScope(c, m, tabId) || !sessions[tabId]) return failure("bad_request", "tabId isn't a tab playing media.");
   if (!action) return failure("bad_request", `action is one of ${Object.keys(MEDIA_ACTIONS).join(", ")}.`);
   notePlugin("plugin_media_controls");
   if (action === "mute" || action === "unmute") useBrowser.getState().setMuted([tabId], action === "mute");
@@ -158,23 +165,25 @@ export function mediaMethod(c: Caller, m: PluginManifest, method: string, params
 
 const v3Intents = (m: PluginManifest): readonly string[] => (m.v3.permissions?.state && typeof m.v3.permissions.state === "object" ? (m.v3.permissions.state.intents ?? []) : []);
 
-export function intentMethod(_c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Body {
+export function intentMethod(c: Caller, m: PluginManifest, method: string, params: Record<string, unknown>): Body {
   if (!v3Intents(m).includes(method)) return failure("refused", `${method} needs ${method} in permissions.state.intents.`);
   const s = useBrowser.getState();
   const windowId = lastFocusedEligibleWindow(s);
   if (!windowId) return failure("no_window", "No window to use.");
+  const windowProfile = s.windows[windowId]?.profileId;
+  if (m.scope === "profile" && (!windowProfile || !manifestInProfile(currentPlugins(), c.name, windowProfile))) return failure("refused", "This plugin isn't on in the front window's profile.");
   const url = typeof params.url === "string" ? pluginWebUrl(params.url) : undefined;
   if (url && "problem" in url) return failure("bad_request", `url ${url.problem}.`);
   if (method === "peek.open") {
     if (!url) return failure("bad_request", "peek.open needs a url.");
     const source = activeTabId(s, windowId);
-    if (!source || !isEligibleTab(s, source)) return failure("refused", "There's no page to peek from.");
+    if (!source || !tabInScope(c, m, source)) return failure("refused", "There's no page to peek from.");
     notePlugin("plugin_peek_intents");
     return { result: { ok: !!s.openPeek(source, url.url) } };
   }
   const urls = Array.isArray(params.urls) ? params.urls.slice(0, 3).map(pluginWebUrl) : url ? [url] : [];
   if (urls.some((u) => "problem" in u)) return failure("bad_request", "urls must be http or https addresses.");
-  const tabs = Array.isArray(params.tabs) ? params.tabs.filter((t): t is string => typeof t === "string" && isEligibleTab(s, t) && s.tabs[t]?.windowId === windowId).slice(0, 3) : [];
+  const tabs = Array.isArray(params.tabs) ? params.tabs.filter((t): t is string => typeof t === "string" && tabInScope(c, m, t) && s.tabs[t]?.windowId === windowId).slice(0, 3) : [];
   const side = ["left", "right", "top", "bottom"].includes(params.side as string) ? (params.side as "left" | "right" | "top" | "bottom") : undefined;
   notePlugin("plugin_split_intents");
   const opened = [

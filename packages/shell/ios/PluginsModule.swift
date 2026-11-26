@@ -136,7 +136,19 @@ public class PluginsModule: Module, PluginsNative {
 
     Self.pickFilesFunction
 
-    Self.saveFileFunction
+    Self.openDroppedFilesFunction
+
+    Self.readFileChunkFunction
+
+    Self.saveBeginFunction
+
+    Self.saveChunkFunction
+
+    Self.finishFileFunction
+
+    Self.loadImageFunction
+
+    Self.readPluginAssetFunction
 
     View(PluginPageView.self) {
       Events("onLoaded", "onTitleChange", "onNavigationChange", "onMessage")
@@ -148,6 +160,8 @@ public class PluginsModule: Module, PluginsNative {
       Prop("run") { (view: PluginPageView, value: Int) in view.run = value }
       Prop("context") { (view: PluginPageView, value: String) in view.context = value }
       Prop("themeCss") { (view: PluginPageView, value: String?) in view.themeCss = value ?? "" }
+      AsyncFunction("goBack") { (view: PluginPageView) in view.goBack() }.runOnQueue(.main)
+      AsyncFunction("goForward") { (view: PluginPageView) in view.goForward() }.runOnQueue(.main)
     }
 
     OnDestroy {

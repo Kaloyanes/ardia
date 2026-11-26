@@ -18,5 +18,5 @@ export type WebViewCalls = {
 };
 
 export type WebViewEvents = {
-  "webView.pluginWorld": { tabId: string; world: string; json: string; epoch?: string };
+  "webView.pluginWorld": { tabId: string; world: string; document: string; json: string; epoch?: string };
 };

@@ -35,7 +35,9 @@ final class PluginHostFetch {
   private var stream: Stream?
   private var streamText = PluginUtf8Chunks()
   private var idle: DispatchWorkItem?
-  private var maxBody: Int { stream == nil ? PluginFetchPolicy.maxResponseBytes : Self.maxStreamBytes }
+  private var binary = false
+  private var bodyCap = PluginFetchPolicy.maxResponseBytes
+  private var maxBody: Int { stream == nil ? bodyCap : Self.maxStreamBytes }
 
   private init(request: PluginFetchRequest, allowedHosts: [String], allowLoopback: Bool, stream: Stream?, reply: @escaping Reply) {
     self.allowedHosts = allowedHosts
@@ -67,6 +69,10 @@ final class PluginHostFetch {
       return nil
     case .success(let request):
       let fetch = PluginHostFetch(request: request, allowedHosts: allowedHosts, allowLoopback: loopback, stream: stream, reply: reply)
+      if spec["binary"] as? Bool == true {
+        fetch.binary = true
+        fetch.bodyCap = PluginImageBytes.maxBytes
+      }
       fetch.start()
       return fetch
     }
@@ -308,7 +314,7 @@ final class PluginHostFetch {
   private func succeed(_ response: PluginHttpResponse) {
     finish([
       "ok": true, "status": response.status, "statusText": HTTPURLResponse.localizedString(forStatusCode: response.status),
-      "url": hop.url.absoluteString, "headers": response.joinedHeaders, "body": String(decoding: response.body, as: UTF8.self),
+      "url": hop.url.absoluteString, "headers": response.joinedHeaders, "body": binary ? response.body.base64EncodedString() : String(decoding: response.body, as: UTF8.self),
     ])
   }
 

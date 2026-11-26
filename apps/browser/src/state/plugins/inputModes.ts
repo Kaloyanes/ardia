@@ -12,7 +12,7 @@ import type { PluginManifest } from "../../lib/pluginManifest";
 
 export const INPUT_PREFIX = "ardia-input:";
 const MAX_QUERY = 2000;
-const TAB_CHIP = /(^|\s)@tab\b/g;
+const TAB_CHIP = /(?:^|\s)@tab\b/g;
 const KEYWORD = /^[A-Za-z0-9_-]{1,32}$/;
 
 export type InputModeSpec = { plugin: string; id: string; title: string; placeholder: string | null; icon: string | null; keyword: string; command: string };
@@ -60,14 +60,13 @@ export function runPluginInput(url: string, windowId: string, done: () => void):
   const m = manifestInProfile(currentPlugins(), parsed.plugin, windowProfileId(windowId));
   const spec = m ? inputModesOf(parsed.plugin, m).find((x) => x.id === parsed.mode) : undefined;
   if (!spec) return true;
-  const tabs: string[] = [];
-  const query = parsed.query.replace(TAB_CHIP, () => {
-    const tabId = activeTabId(useBrowser.getState(), windowId);
-    if (tabId && !tabs.includes(tabId) && grantTabLease(parsed.plugin, tabId, consent)) tabs.push(tabId);
-    return " ";
-  }).trim();
+  const asksForTab = /(?:^|\s)@tab\b/.test(parsed.query);
+  const query = parsed.query.replace(TAB_CHIP, " ").replace(/\s+/g, " ").trim();
+  const tabId = asksForTab ? activeTabId(useBrowser.getState(), windowId) : null;
   notePlugin("plugin_input_modes", consent);
-  void runPluginCommand(parsed.plugin, spec.command, windowId, { from: "inputMode", inputMode: spec.id, query, ...(tabs.length ? { tabs } : {}) }, undefined, consent);
+  void (tabId ? grantTabLease(parsed.plugin, tabId, consent) : Promise.resolve(false)).then((leased) =>
+    runPluginCommand(parsed.plugin, spec.command, windowId, { from: "inputMode", inputMode: spec.id, query, ...(leased && tabId ? { tabs: [tabId] } : {}) }, undefined, consent),
+  );
   return true;
 }
 

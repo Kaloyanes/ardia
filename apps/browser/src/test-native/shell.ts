@@ -746,8 +746,17 @@ export const pluginHost = {
   usage: [] as { name: string; run: number; memoryBytes: number; cpuMs: number; streams: number; sockets: number }[],
   authSpecs: [] as { plugin: string; scope: string; pluginName: string; authorizeUrl: string; clientId: string; scopes: string[] }[],
   authResult: { ok: false, reason: "no sign-in in tests" } as { ok: true; code: string; verifier: string; redirectUri: string } | { ok: false; reason: string; cancelled?: boolean },
-  pickResult: { ok: false, reason: "you didn't pick a file", cancelled: true } as { ok: true; files: { name: string; size: number; mimeType: string; data: string; encoding: "base64" | "utf8" }[] } | { ok: false; reason: string; cancelled?: boolean },
-  saves: [] as { name: string; data: string; encoding: "base64" | "utf8" }[],
+  pickResult: { ok: false, reason: "you didn't pick a file", cancelled: true } as { ok: true; files: { name: string; size: number; mimeType: string; data: string; encoding: "base64" | "utf8"; handle?: string }[] } | { ok: false; reason: string; cancelled?: boolean },
+  picks: [] as { name: string; run: number }[],
+  drops: [] as { name: string; run: number; paths: string[] }[],
+  chunks: {} as Record<string, string[]>,
+  chunkReads: {} as Record<string, number>,
+  saveBegins: [] as { name: string; run: number; fileName: string }[],
+  savedChunks: [] as { handle: string; data: string }[],
+  finishes: [] as { handle: string; commit: boolean }[],
+  imageLoads: [] as { url: string; allowedHosts: string[] }[],
+  imageResult: { ok: false, reason: "no images in tests" } as { ok: true; url: string } | { ok: false; reason: string },
+  assets: {} as Record<string, string>,
 };
 const withSource = <T extends { source?: "local" | "store" | "dev" }>(f: T) => ({ ...f, source: f.source ?? "local" });
 const pluginEvents = nativeEvents();
@@ -890,8 +899,20 @@ const plugins: Modules["ArdiaPlugins"] = {
   closeNet: (name, run) => void pluginHost.netCloses.push({ name, run }),
   usage: async () => pluginHost.usage.map((row) => ({ ...row })),
   authSignIn: async (spec) => (pluginHost.authSpecs.push({ plugin: spec.plugin, scope: spec.scope, pluginName: spec.pluginName, authorizeUrl: spec.authorizeUrl, clientId: spec.clientId, scopes: [...spec.scopes] }), pluginHost.authResult),
-  pickFiles: async () => pluginHost.pickResult,
-  saveFile: async (spec) => (pluginHost.saves.push({ name: spec.name, data: spec.data, encoding: spec.encoding }), { ok: true, saved: true, name: spec.name }),
+  pickFiles: async (spec) => (pluginHost.picks.push({ name: spec.name, run: spec.run }), pluginHost.pickResult),
+  openDroppedFiles: async (spec) => (pluginHost.drops.push({ name: spec.name, run: spec.run, paths: [...spec.paths] }), pluginHost.pickResult),
+  readFileChunk: async (_name, _run, handle) => {
+    const parts = pluginHost.chunks[handle];
+    if (!parts) return { ok: false, reason: "that file isn't open" };
+    const at = pluginHost.chunkReads[handle] ?? 0;
+    pluginHost.chunkReads[handle] = at + 1;
+    return { ok: true, data: parts[at] ?? "", eof: at >= parts.length - 1 };
+  },
+  saveBegin: async (spec) => (pluginHost.saveBegins.push({ name: spec.name, run: spec.run, fileName: spec.fileName }), { ok: true, saved: true, handle: "w1", name: spec.fileName }),
+  saveChunk: async (_name, _run, handle, data) => (pluginHost.savedChunks.push({ handle, data }), { ok: true }),
+  finishFile: async (_name, _run, handle, commit) => (pluginHost.finishes.push({ handle, commit }), { ok: true, saved: commit }),
+  loadImage: async (spec) => (pluginHost.imageLoads.push({ url: spec.url, allowedHosts: [...spec.allowedHosts] }), pluginHost.imageResult),
+  readPluginAsset: async (name, _folderId, _approved, path) => (pluginHost.assets[`${name}/${path}`] ? { ok: true, url: pluginHost.assets[`${name}/${path}`]! } : { ok: false, reason: "the image wasn't found" }),
   addListener: pluginEvents.addListener,
 };
 

@@ -492,6 +492,28 @@ describe("services, sidecar and content scripts", () => {
     await host.dispose();
   });
 
+  test("big files cross the channel in chunks: a picked handle is read whole, and a save is begun, chunked and committed", async () => {
+    const host = createMockHost({ strict: false });
+    const chunks = ["QUJD", "REVG"];
+    host.respond("fs.pickFiles", () => ({ files: [{ name: "big.bin", size: 6, mimeType: "application/octet-stream", data: "", encoding: "base64", handle: "h1" }] }));
+    host.respond("fs.readChunk", (params) => ({ data: chunks[params.offset / 3], eof: params.offset / 3 === chunks.length - 1 }));
+    host.respond("fs.closeFile", () => ({ saved: false }));
+    host.respond("fs.saveBegin", () => ({ saved: true, handle: "w1" }));
+    host.respond("fs.saveChunk", () => ({ ok: true }));
+    host.respond("fs.saveCommit", (params) => ({ saved: params.commit === true, name: "out.txt" }));
+    await host.load({});
+    const a = host.ardia;
+    const [file] = await a.fs.pickFiles();
+    assert.deepEqual([file.data, file.handle], ["QUJDREVG", undefined]);
+    assert.deepEqual(host.requests("fs.closeFile")[0], { handle: "h1" });
+    const big = "é".repeat(300 * 1024);
+    assert.deepEqual(await a.fs.saveFile({ name: "out.txt", data: big }), { saved: true, name: "out.txt" });
+    const sent = host.requests("fs.saveChunk").map((r) => r.data).join("");
+    assert.equal(Buffer.from(sent, "base64").toString("utf8"), big);
+    assert.ok(host.requests("fs.saveChunk").length > 1 && host.requests("fs.saveChunk").every((r) => r.data.length <= 512 * 1024));
+    await host.dispose();
+  });
+
   test("the rest of the v3 surface speaks the documented host methods", async () => {
     const host = createMockHost({ strict: false });
     host.respond("page.readActive", (params) => ({ tabId: "t", url: "https://a.com", title: "A", text: "x", ...(params.markdown ? { markdown: "# A" } : {}) }));
@@ -513,8 +535,8 @@ describe("services, sidecar and content scripts", () => {
     await a.fs.saveFile({ name: "a.txt", data: "hi" });
     await a.ui.notify({ title: "Done" });
     const methods = host.sent.map((r) => r.method);
-    for (const method of ["bookmarks.search", "history.recent", "profiles.list", "media.control", "splits.open", "peek.open", "fs.pickFiles", "fs.saveFile", "ui.notify"]) assert.ok(methods.includes(method), method);
-    assert.deepEqual(host.requests("fs.saveFile")[0], { encoding: "utf8", name: "a.txt", data: "hi" });
+    for (const method of ["bookmarks.search", "history.recent", "profiles.list", "media.control", "splits.open", "peek.open", "fs.pickFiles", "fs.saveBegin", "ui.notify"]) assert.ok(methods.includes(method), method);
+    assert.deepEqual(host.requests("fs.saveBegin")[0], { name: "a.txt" }, "a save asks for a place first, then sends chunks");
     await host.dispose();
   });
 

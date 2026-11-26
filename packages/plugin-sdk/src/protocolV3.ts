@@ -33,6 +33,11 @@ export const HOST_METHODS_V3 = {
   clipboardWriteText: "clipboard.writeText",
   filesPick: "fs.pickFiles",
   filesSave: "fs.saveFile",
+  filesReadChunk: "fs.readChunk",
+  filesClose: "fs.closeFile",
+  filesSaveBegin: "fs.saveBegin",
+  filesSaveChunk: "fs.saveChunk",
+  filesSaveCommit: "fs.saveCommit",
   notify: "ui.notify",
 } as const;
 
@@ -136,7 +141,9 @@ export type SplitOpenOptions = { tabs?: string[]; urls?: string[]; side?: "left"
 export type PeekOpenOptions = { url: string };
 
 export type PickFilesOptions = { multiple?: boolean; types?: string[]; title?: string };
-export type PickedFile = { name: string; size: number; mimeType: string; data: string; encoding: "base64" | "utf8" };
+export type PickedFile = { name: string; size: number; mimeType: string; data: string; encoding: "base64" | "utf8"; handle?: string };
+
+export const FILE_CHUNK_BYTES = 384 * 1024;
 export type SaveFileOptions = { name: string; data: string; encoding?: "base64" | "utf8"; mimeType?: string };
 
 export type NotifyOptions = { title: string; body?: string; subtitle?: string; icon?: string; command?: string; silent?: boolean };
