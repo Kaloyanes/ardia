@@ -14,7 +14,7 @@ import { activateStorePlugin, type PluginSource } from "../../platform/plugins";
 import { forgetLockKey } from "./lockfile";
 import { listingRevocation, revokedText } from "./revocationChecks";
 import { candidatesOf, listingsOf } from "./folderListings";
-import { lockAfterPromotion, officialCandidateProblem, officialProofMissing, settledPromotions, trackPromotion, undoPromotion, UNSIGNED_OFFICIAL } from "./promotedLock";
+import { lockAfterPromotion, officialCandidateProblem, officialProofMissing, settledPromotions, trackPromotion, undoPromotion, UNSIGNED_OFFICIAL, UNSTAGED, unstagedCandidate } from "./promotedLock";
 import { pluginsScanned } from "./scanListeners";
 import { stopProcess, superviseProcess, supervisedNames } from "./process";
 import { checkActivations, deactivatePlugin, shouldRun } from "./activation";
@@ -159,7 +159,7 @@ export function requestPluginConsent(name: string, extras: ConsentExtras = {}): 
   const target = consentTarget(name);
   if (currentPlugins().consent || !target?.manifest || !target.hash) return false;
   const unsigned = [{ name, listing: target }, ...(extras.bundle ?? []).map((b) => ({ name: b.name, listing: consentListing(currentPlugins(), b.name, b.hash) }))];
-  if (unsigned.some((u) => !u.listing || officialProofMissing(u.name, u.listing))) return false;
+  if (unsigned.some((u) => !u.listing || unstagedCandidate(u.name, u.listing) || officialProofMissing(u.name, u.listing))) return false;
   usePlugins.setState({ consent: { id: ++lastConsentId, name, hash: target.hash, ...(extras.bundle?.length ? { bundle: extras.bundle } : {}), ...(extras.added?.length ? { added: extras.added } : {}) }, unsaved: null });
   return true;
 }
@@ -185,6 +185,7 @@ export function confirmConsentRequest(id: number): boolean {
 export function approvalRefusal(name: string, hash: string): string | null {
   const listing = consentListing(currentPlugins(), name, hash);
   if (!listing?.manifest || listing.hash !== hash) return "It changed while you were deciding. Try again.";
+  if (unstagedCandidate(name, listing)) return `${listing.manifest.title}: ${UNSTAGED}`;
   if (officialProofMissing(name, listing)) return `${listing.manifest.title}: ${UNSIGNED_OFFICIAL}`;
   const revoked = listingRevocation(name, listing, currentPlugins().candidates[name] === listing);
   return revoked ? `${listing.manifest.title}: ${revokedText(revoked)}` : null;
@@ -220,7 +221,7 @@ export { settledPromotions };
 export function approvePlugin(name: string, hash: string, consent: ConsentToken | null): boolean {
   const listing = consentListing(currentPlugins(), name, hash);
   if (!listing?.manifest || listing.hash !== hash || removing.has(name)) return false;
-  if (officialProofMissing(name, listing) || listingRevocation(name, listing, currentPlugins().candidates[name] === listing)) return false;
+  if (unstagedCandidate(name, listing) || officialProofMissing(name, listing) || listingRevocation(name, listing, currentPlugins().candidates[name] === listing)) return false;
   const candidate = currentPlugins().candidates[name] === listing;
   const manifest = listing.manifest;
   const before = recordOf(currentPlugins(), name);
@@ -345,7 +346,7 @@ export async function removePlugin(name: string, mayGoOn: () => boolean = () => 
     const removed = await removePluginFiles(name, source, source === "local" ? (expected?.folderId ?? identity.folderId) : null).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
     if (!removed.ok) return removed;
     const secrets = source === "dev" ? { ok: true, remaining: [] } : await clearPluginSecretsEverywhere(name, Object.keys(useBrowser.getState().profiles)).catch((error: unknown): SecretsCleared => (warnFor(consent, `[plugins] couldn't remove ${name}'s secrets`, error), { ok: false, remaining: [] }));
-    const unlocked = source === "dev" || forgetLockKey(name, consent);
+    const unlocked = source === "dev" || (await forgetLockKey(name, consent));
     const forgotten = updateRecord(name, () => null, consent) && (await pluginRecordsSaved(consent)) && unlocked;
     if (!forgotten) toForget.add(name);
     await rescanPlugins(consent);

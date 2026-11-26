@@ -121,7 +121,7 @@ export function stagePlanLock(plan: InstallPlan, downloaded: readonly Downloaded
   return stageLockEntries(downloaded.map((d) => ({ folderId: d.folderId, entry: entries[d.plugin.id]! })), consent);
 }
 
-export function recordUnchangedInLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null) {
+export async function recordUnchangedInLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null) {
   const fetched = new Set(downloaded.map((d) => d.plugin.id));
   const entries = Object.entries(lockEntriesFor(plan, downloaded, requested)).filter(([id]) => !fetched.has(id));
   return !entries.length || updateLock((now) => ({ ...now, ...Object.fromEntries(entries) }), consent);
@@ -175,7 +175,10 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
   const got = await downloadPlan(fetching, consent, quiet);
   if (!got.ok) return got;
   for (const d of got.downloaded) wantCandidate(d.plugin.key, d.folderId);
-  await rescanPlugins(consent);
+  if (!(await rescanPlugins(consent))) {
+    dropDownloads(got.downloaded);
+    return { ok: false, reason: "Ardia couldn't read its plugin store after the download, so nothing was installed. Try again." };
+  }
   for (const d of got.downloaded) {
     const problem = listingProblem(d.plugin.key, d.folderId);
     const unsigned = problem ? null : await officialDownloadProblem(d);

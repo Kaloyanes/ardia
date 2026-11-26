@@ -10,7 +10,7 @@ import { warnFor } from "../telemetry/consoleConsent";
 import { dropCandidate, wantCandidate } from "./candidates";
 import { prepareInstall, recordUnchangedInLock, type Downloaded } from "./installer";
 import { approvePlugin, reconcilePlugins, requestPluginConsent, rescanPlugins, settledPromotions, updateRecord } from "./lifecycle";
-import { currentLock, lockEntryByKey, provenance, updateLockDurably, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
+import { currentLock, lockEntryByKey, provenance, updateLock, withProvenance, type LockEntry, type LockProvenance } from "./lockfile";
 import { fetchIndex, registryForUrl } from "./registryClient";
 import { officialNativeKeys } from "./registryKeys";
 import { currentRevocations, refreshRevocations, revocationReason, revocationsFor, stoppingRevocation } from "./revocations";
@@ -146,12 +146,16 @@ export async function rollbackPlugin(key: string): Promise<{ ok: boolean; reason
   if (!switched.ok) return switched;
   if (entry) {
     const restored: LockProvenance = target ?? { version: listing.previousVersion, source: entry.source, sha256, payloadDigest: null, dependencies: [] };
-    const written = await updateLockDurably((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent);
+    const written = await updateLock((now) => (now[entry.id] ? { ...now, [entry.id]: { ...withProvenance(now[entry.id]!, restored), previous: provenance(now[entry.id]!) } } : now), consent);
     const currentSha = shaOfFolderId(listing.folderId);
     if (!written && listing.manifest && currentSha) {
-      await rollbackStorePlugin(key, listing.manifest.version, currentSha).catch(() => null);
+      const back = await rollbackStorePlugin(key, listing.manifest.version, currentSha).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
       await rescanPlugins(consent);
-      return { ok: false, reason: `Ardia couldn't save plugins-lock.json, so it stayed on ${listing.manifest.version}. Try again.` };
+      if (back.ok) return { ok: false, reason: `Ardia couldn't save plugins-lock.json, so it stayed on ${listing.manifest.version}. Try again.` };
+      const running = currentPlugins().listings[key]?.manifest?.version ?? listing.previousVersion;
+      if (running === listing.previousVersion) updateRecord(key, (r) => ({ ...r, approved: r.previous ?? r.approved, previous: r.approved ?? undefined }), consent);
+      notePlugin("rollback_refusals", consent);
+      return { ok: false, reason: `Ardia went back to ${running}, but couldn't save plugins-lock.json or switch forward again (${back.reason}); the lock still lists ${listing.manifest.version} until it's saved.` };
     }
   }
   const note = { from: listing.manifest?.version ?? null, to: listing.previousVersion, added: [], rolledBack: true as const };

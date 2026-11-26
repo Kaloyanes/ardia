@@ -47,8 +47,8 @@ function providerFor(plugin: string, spec: OmniboxSpec): OmniboxProvider & { glo
     ...(spec.keyword ? { keyword: spec.keyword } : {}),
     global: spec.global,
     plugin,
-    async query(text, signal) {
-      const profile = windowProfileId(focusedWindowId() ?? undefined);
+    async query(text, signal, context = {}) {
+      const profile = windowProfileId(context.windowId ?? focusedWindowId() ?? undefined);
       if (signal.aborted || !manifestInProfile(currentPlugins(), plugin, profile)) return [];
       notePlugin("plugin_omnibox_queries");
       const outcome = await invokePluginCall(plugin, { kind: "omnibox", provider: spec.id, query: text.slice(0, OMNIBOX_LIMITS.query) }, { kind: "host" }, OMNIBOX_TIMEOUT_MS, { signal, profile });

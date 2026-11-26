@@ -67,7 +67,7 @@ beforeEach(async () => {
   configure();
   useBrowser.getState().hydrate({});
   startPlugins();
-  Object.assign(host, { folders: [], artifacts: {}, artifactResults: {}, artifactLog: [], artifactVersions: {}, artifactShas: {}, officialVerified: true, activations: [], activateResult: null, adoptions: [], rollbacks: [], localInstalls: [], localInstallResult: null });
+  Object.assign(host, { folders: [], artifacts: {}, artifactResults: {}, artifactLog: [], artifactVersions: {}, artifactShas: {}, officialVerified: true, activations: [], activateResult: null, adoptions: [], rollbacks: [], rollbackResults: [], artifactGate: null, listFails: false, localInstalls: [], localInstallResult: null });
   host.adoptResult = { ok: true, found: false, moved: [] };
   for (const doc of ["Plugins/plugins-lock.json", "Plugins/plugins-state.json", "Plugins/revocations-cache.json", "Plugins/registry-cache.json", "plugins.json"]) stub.docs.delete(doc);
   lockfile.resetLockForTests();
@@ -222,7 +222,7 @@ describe("revocations hold at every activation", () => {
     host.folders = [{ name: "ardia__tool", status: "ok", source: "store", text, folderId: `store-${sha(2)}`, previous: { folderId: `store-${sha(1)}`, text: earlier, version: "1.0.0" } }];
     await lifecycle.rescanPlugins(null);
     usePlugins.setState({ records: { ardia__tool: { enabled: true, approved: P().listings.ardia__tool.hash, previous: "b".repeat(64), values: {}, applied: {} } } });
-    lockfile.writeLock({ "@ardia/tool": { id: "@ardia/tool", key: "ardia__tool", version: "2.0.0", channel: "latest", source: { kind: "registry", url: BASE }, sha256: sha(2), payloadDigest: null, dependencies: [], root: true, official: true, installedAt: 1, previous: { version: "1.0.0", source: { kind: "registry", url: BASE }, sha256: sha(1), payloadDigest: null, dependencies: [] } } }, null);
+    await lockfile.writeLock({ "@ardia/tool": { id: "@ardia/tool", key: "ardia__tool", version: "2.0.0", channel: "latest", source: { kind: "registry", url: BASE }, sha256: sha(2), payloadDigest: null, dependencies: [], root: true, official: true, installedAt: 1, previous: { version: "1.0.0", source: { kind: "registry", url: BASE }, sha256: sha(1), payloadDigest: null, dependencies: [] } } }, null);
     const refused = await updater.rollbackPlugin("ardia__tool");
     assert.equal(refused.ok, false);
     assert.match(refused.reason, /release signature/);
@@ -647,7 +647,7 @@ describe("round 2: per-profile isolation", () => {
     const { callProfile } = await import("./tools.ts");
     const { storageMethod } = await import("./channelData.ts");
     assert.equal(callProfile("acme__m", { kind: "command", command: "go", context: { windowId: "ww" } }), "work");
-    useBrowser.setState({ focusedWindowId: "wd" });
+    useBrowser.setState((b) => ({ ui: { ...b.ui, focusOrder: ["wd", "ww"] } }));
     await storageMethod({ name: "acme__m", run: 1 }, P().listings.acme__m.manifest, "storage.set", { key: "k", value: 1, profile: "work" });
     assert.equal(host.storage["profiles/work/acme__m"], '{"k":1}', "the write lands in the invoking profile, not the focused window's");
     assert.equal(host.storage["profiles/default/acme__m"], undefined);
@@ -759,5 +759,112 @@ describe("round 3: work-only plugins see only work", () => {
     };
     const view = profileView(s, ["work"]);
     assert.deepEqual([Object.keys(view.windows), view.windowOrder, Object.keys(view.tabs), Object.keys(view.groups), view.ui.focusOrder], [["ww"], ["ww"], ["tw"], ["gw"], ["ww"]]);
+  });
+});
+
+describe("round 4: fault injection", () => {
+  const staged = (key, n) => ({ folderId: `store-${sha(n)}`, entry: { id: `@acme/${key.split("__")[1]}`, key, version: "1.0.0", channel: "latest", source: { kind: "registry", url: BASE }, sha256: sha(n), payloadDigest: null, dependencies: [], root: true, official: false, installedAt: 1 } });
+
+  test("a candidate isn't eligible for the sheet until its staged provenance has landed", async () => {
+    const { wantCandidate } = await import("./candidates.ts");
+    host.folders = [{ name: "acme__held", status: "missing", source: "store", candidates: [{ folderId: `store-${sha(3)}`, text: manifestFor("@acme/held", "1.0.0"), version: "1.0.0" }] }];
+    wantCandidate("acme__held", `store-${sha(3)}`);
+    await lifecycle.rescanPlugins(null);
+    let release;
+    shell.landingGates.set(LOCK_DOC, new Promise((resolve) => (release = resolve)));
+    const pending = lockfile.stageLockEntries([staged("acme__held", 3)]);
+    assert.equal(lifecycle.requestPluginConsent("acme__held"), false, "a write still in flight doesn't make it eligible");
+    assert.equal(lockfile.stagedLockEntry("acme__held", `store-${sha(3)}`), null);
+    shell.landingGates.delete(LOCK_DOC);
+    release();
+    assert.equal(await pending, true);
+    assert.equal(lifecycle.requestPluginConsent("acme__held"), true);
+    lifecycle.dismissPluginConsent();
+  });
+
+  test("two overlapping staged writes that never land leave neither behind", async () => {
+    shell.refusedLandings.add(LOCK_DOC);
+    try {
+      const results = await Promise.all([lockfile.stageLockEntries([staged("acme__one", 5)]), lockfile.stageLockEntries([staged("acme__two", 6)])]);
+      assert.deepEqual(results, [false, false]);
+    } finally {
+      shell.refusedLandings.delete(LOCK_DOC);
+    }
+    assert.equal(lockfile.stagedLockEntry("acme__one", `store-${sha(5)}`), null);
+    assert.equal(lockfile.stagedLockEntry("acme__two", `store-${sha(6)}`), null);
+    assert.deepEqual(lockfile.parseStaged(stub.docs.get(LOCK_DOC) ?? null), {}, "the file holds neither either");
+    assert.equal(await lockfile.stageLockEntries([staged("acme__three", 7)]), true);
+    assert.deepEqual(Object.keys(lockfile.parseStaged(stub.docs.get(LOCK_DOC))), ["acme__three"], "a later write starts from what actually landed");
+  });
+
+  test("a rollback whose lock write and switch back both fail says what's actually running", async () => {
+    await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+    client.resetRegistryCacheForTests();
+    await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+    host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "read" } });
+    await updater.checkPlugins(consentToken());
+    host.rollbackResults = [null, { ok: false, reason: "disk full" }];
+    shell.refusedLandings.add(LOCK_DOC);
+    let result;
+    try {
+      result = await updater.rollbackPlugin("acme__a");
+    } finally {
+      shell.refusedLandings.delete(LOCK_DOC);
+    }
+    assert.equal(result.ok, false);
+    assert.equal(P().listings.acme__a.manifest.version, "1.0.0");
+    assert.match(result.reason, /went back to 1\.0\.0/, "it doesn't claim to have stayed on 2.0.0");
+    assert.ok(activeManifest(P(), "acme__a"), "what's running is the one its approval now names");
+  });
+
+  test("an omnibox query keeps the profile of the window it started in, whatever has focus", async () => {
+    await scopedPlugin(["work"]);
+    host.folders = [{ name: "acme__o", status: "ok", source: "local", text: manifestFor("@acme/o", "1.0.0", { contributes: { omnibox: [{ id: "o", title: "O", global: true }] } }), folderId: `local-${"e".repeat(64)}` }];
+    await lifecycle.rescanPlugins(null);
+    assert.deepEqual(P().listings.acme__o.problems, []);
+    usePlugins.setState({ records: { acme__o: { enabled: true, approved: P().listings.acme__o.hash, values: {}, applied: {}, profiles: ["work"] } } });
+    const { useRegisteredProviders } = await import("../omnibox/providers.ts");
+    const provider = useRegisteredProviders.getState().list.find((p) => p.id.includes("acme__o"));
+    assert.ok(provider, "the plugin's provider is registered");
+    useBrowser.setState((b) => ({ ui: { ...b.ui, focusOrder: ["ww", "wd"] } }));
+    takePluginCounts();
+    const before = host.events.length;
+    const asked = new AbortController();
+    const answer = provider.query("x", asked.signal, { windowId: "wd" });
+    asked.abort();
+    assert.deepEqual(await answer, []);
+    assert.equal(takePluginCounts().plugin_omnibox_queries ?? 0, 0, "a Default window's query is never put to a work-only plugin, though Work has focus");
+    assert.equal(host.events.length, before);
+  });
+
+  test("queued snapshot frames built for an earlier profile assignment are dropped at delivery", async () => {
+    await scopedPlugin(["work"]);
+    const { dropOutOfScope, profileScopeKey } = await import("./stateEvents.ts");
+    assert.equal(profileScopeKey("acme__m"), "work");
+    const sub = { name: "acme__m", outbox: [{ topic: "tabs", scope: "*" }, { topic: "downloads", scope: "work" }], sent: new Map([["tabs", new Map([["td", "x"]])]]) };
+    assert.deepEqual(dropOutOfScope(sub), ["tabs"]);
+    assert.deepEqual(sub.outbox.map((f) => f.topic), ["downloads"], "rows queued before it was limited to Work never go out");
+    assert.equal(sub.sent.has("tabs"), false, "the next flush sends a fresh snapshot");
+  });
+
+  test("a store scan that fails after the download fails the install instead of trusting the earlier listing", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    host.artifactGate = {
+      then(resolve) {
+        host.listFails = true;
+        resolve();
+      },
+    };
+    try {
+      const result = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /after the download/);
+    } finally {
+      host.listFails = false;
+      host.artifactGate = null;
+    }
+    assert.equal(P().consent, null);
+    assert.deepEqual(host.activations, []);
   });
 });

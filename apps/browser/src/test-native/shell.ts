@@ -703,6 +703,7 @@ export const pluginHost = {
   activations: [] as { name: string; folderId: string; approved: string }[],
   activateResult: null as null | { ok: false; reason: string },
   rollbacks: [] as string[],
+  rollbackResults: [] as (null | { ok: false; reason: string })[],
   adoptions: [] as { from: string; to: string }[],
   adoptResult: { ok: true, found: false, moved: [] } as { ok: boolean; found: boolean; moved: string[]; leftover?: boolean; reason?: string },
   localInstalls: [] as string[],
@@ -816,6 +817,8 @@ const plugins: Modules["ArdiaPlugins"] = {
   },
   rollbackStore: async (name, expectedVersion, expectedSha256) => {
     pluginHost.rollbacks.push(name);
+    const scripted = pluginHost.rollbackResults.shift();
+    if (scripted) return scripted;
     const at = pluginHost.folders.findIndex((f) => f.name === name);
     const folder = at < 0 ? undefined : pluginHost.folders[at]!;
     if (!folder?.previous) return { ok: false, reason: "There's no earlier version to go back to." };

@@ -2,7 +2,7 @@ import { adoptLegacyPlugin, type PluginLegacyAdoption } from "../../platform/plu
 import type { ConsentToken } from "../telemetry/consentPeriod";
 import { notePlugin } from "../telemetry/pluginCounts";
 import { warnFor } from "../telemetry/consoleConsent";
-import { currentLock, lockSaved, updateLock } from "./lockfile";
+import { currentLock, updateLock } from "./lockfile";
 import { defaultRegistryUrl } from "./registryKeys";
 import { pluginRecordsSaved, pluginsExtras, writePluginsExtras } from "./savedState";
 import { commitPlugins, currentPlugins, type PluginRecord } from "./store";
@@ -30,14 +30,13 @@ async function carryRecord(legacy: Legacy, consent: ConsentToken | null): Promis
 
 async function pendLock(legacy: Legacy, consent: ConsentToken | null): Promise<boolean> {
   if (currentLock()[legacy.id]) return true;
-  const written = updateLock(
+  return updateLock(
     (now) => ({
       ...now,
       [legacy.id]: { id: legacy.id, key: legacy.key, version: null, channel: "latest", source: { kind: "registry", url: defaultRegistryUrl() }, sha256: null, payloadDigest: null, dependencies: [], root: true, official: true, installedAt: Date.now(), pending: "migration" },
     }),
     consent,
   );
-  return written && (await lockSaved());
 }
 
 export async function migrateLegacyPlugins(consent: ConsentToken | null): Promise<string[]> {

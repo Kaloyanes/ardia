@@ -52,7 +52,7 @@ async function turnOn(name) {
 
 setConsentPeriod(true, "test-epoch");
 S().hydrate({});
-officialLock();
+await officialLock();
 host.folders = [CLI_FOLDER, OTHER_FOLDER];
 host.afterUpdateQuitStops = { consent: "test-epoch", exitedOnTerm: 2, killed: 1 };
 startPlugins();
@@ -97,7 +97,7 @@ test("turning it off unlinks, and back on relinks with no new consent", async ()
 });
 
 test("a copy that isn't Ardia's verified download can't take ardia or run after-update steps", async () => {
-  officialLock(false);
+  await officialLock(false);
   await scan([CLI_FOLDER, OTHER_FOLDER]);
   assert.equal(P().listings.ardia__cli.official, undefined);
   const local = v3Text({ name: "cli2", title: "Mine", contributes: { programs: [{ name: "ardia", path: "bin/ardia" }] } }, "alice");
@@ -107,7 +107,7 @@ test("a copy that isn't Ardia's verified download can't take ardia or run after-
   assert.ok(P().listings.cli2.problems.some((p) => p.includes("ardia belongs to Ardia's official @ardia/cli plugin")));
   assert.ok(P().listings.after.problems.some((p) => p.includes("afterUpdate is only for Ardia's official plugins")));
   assert.ok(P().listings.ardia__cli.problems.some((p) => p.includes("ardia belongs to")), "a dev link of @ardia/cli is not the verified download");
-  officialLock();
+  await officialLock();
   await scan([CLI_FOLDER, OTHER_FOLDER]);
 });
 

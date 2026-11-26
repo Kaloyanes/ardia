@@ -172,8 +172,9 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   `plugins-lock.json` (version, SHA-256, dependencies, source, repo, official signature and platform), keeping the
   entry it replaced as `previous`. The entry waiting for its switch is kept in the lock file's `staged` section, so an
   **Update…** confirmed after a restart keeps its provenance; a download whose staged entry can't be saved fails before
-  the sheet. Every lock write that matters waits until it is on disk, and one that doesn't land puts the earlier lock
-  back in memory and in the file. A store that can't be listed fails the install. A failed switch fails the install
+  the sheet, and a store copy can't reach the sheet until its staged entry is on disk. Lock writes run one at a time,
+  each from the last state that landed; Ardia holds only what reached the disk, and a write that doesn't land writes
+  the earlier lock back. A store that can't be listed, before or after the download, fails the install. A failed switch fails the install
   and leaves the lock alone; a lock that can't be written after the switch switches back (or takes a first install away) and fails;
   removing a plugin drops its entry.
 - **Updates.** At launch and every 20 minutes Ardia reads `index.json` (cheap with its ETag) and compares each plugin's
@@ -212,8 +213,9 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   profile reaches it only when it's on in all of them). Its `storage.*` lives in `PluginData/profiles/<profileId>/`
   and its `secrets.*`, settings rows included (Settings picks the profile), under a Keychain account for that profile:
   the request's `profile`, else the front window's, else the default or first profile it's on in. Commands, tools a
-  command runs, decide hooks, omnibox queries (the profile of the window the query started in) and events from another
-  profile never reach it, its state snapshots hold only its profiles' windows, tabs, groups and downloads, and every
+  command runs, decide hooks, omnibox queries (the profile of the window the query started in, whatever has focus) and events from another
+  profile never reach it, its state snapshots hold only its profiles' windows, tabs, groups and downloads (frames queued before its profiles
+  changed are dropped and built again), and every
   call and event it gets carries the `profile` that invoked it (`call.profile`, a listener's `event.profile`), and
   `storage.*`/`secrets.*` take `{ profile }` so an async handler keeps to it; launch and idle replays pass the same
   gate as live events. `"scope": "global"` plugins keep one store. `"scope": "global"` is forced for plugins with `programs` or `control`.
@@ -227,7 +229,7 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   `ardia` keeps working, and the first registry copy of `@ardia/cli` installs with no sheet if the old one was on (a
   turned-off one stays off and asks). Its programs are copied to the new folder first and PATH is pointed there before
   the old folder goes, all under the PATH lock; if PATH can't be pointed there, the links that moved go back and the copy
-  goes, unless a link couldn't go back, in which case the copy stays so nothing dangles. The old
+  goes, unless a link couldn't go back or is gone from its name, in which case the copy stays so nothing dangles. The old
   download stays until the verified `@ardia/cli` copy is active and PATH points at the new folder; a move that fails is retried at the next check, and the move counts as done only
   then.
 - **Install links.** `ardia://plugin/install/@scope/name` opens Settings › Plugins on that plugin's Get; a link that

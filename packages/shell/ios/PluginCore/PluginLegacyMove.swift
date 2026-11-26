@@ -16,6 +16,7 @@ enum ReservedPrograms {
 enum PluginLegacyMove {
   static let legacyStoreFolder = "OfficialPlugins"
   static var swapLink: (BinFolder, String, [UInt8]) -> Bool = { bin, name, target in bin.swap(name, toBytes: target) }
+  static var beforeReverse: () -> Void = {}
 
   static func adopt(from: String, to: String, appData: String, places: ProgramPlaces, replaced: Bool) -> [String: Any] {
     guard PluginPrograms.isName(from), PluginPrograms.isKey(to), from != to else { return ["ok": false, "found": false, "moved": [], "leftover": false, "reason": "those aren't plugin names"] }
@@ -100,8 +101,9 @@ enum PluginLegacyMove {
       PluginPrograms.discard(oldPrograms)
       return nil
     }
+    beforeReverse()
     let back = retargetHeld(from: newPrograms, to: oldPrograms, places: places, only: Set(forward.moved))
-    if back.problem == nil { PluginPrograms.discard(newPrograms) }
+    if back.problem == nil, !linksInto(newPrograms, places: places) { PluginPrograms.discard(newPrograms) }
     return problem
   }
 
@@ -128,6 +130,14 @@ enum PluginLegacyMove {
       guard let target = bin.targetBytes(name), target.starts(with: oldBase) else { continue }
       if swapLink(bin, name, newBase + target.dropFirst(oldBase.count)) { moved.append(name) } else { stuck.append(name) }
     }
+    if let only { stuck.append(contentsOf: only.filter { !names.contains($0) }) }
     return (moved, stuck.isEmpty ? nil : "\(stuck.sorted().joined(separator: ", ")) on PATH couldn't be pointed at its new folder")
+  }
+
+  static func linksInto(_ folder: String, places: ProgramPlaces) -> Bool {
+    guard case .success(let bin) = PluginPrograms.openBin(places) else { return true }
+    guard let names = bin.names() else { return true }
+    let base = PluginPrograms.storeBase(folder)
+    return names.contains { bin.targetBytes($0)?.starts(with: base) == true }
   }
 }

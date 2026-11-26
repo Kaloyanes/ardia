@@ -131,72 +131,71 @@ export function withProvenance(entry: LockEntry, given: LockProvenance): LockEnt
 
 export const lockJson = (lock: PluginLock, stagedEntries: StagedLock = {}) => versionedJson(Object.keys(stagedEntries).length ? { plugins: lock, staged: stagedEntries } : { plugins: lock }, VERSION);
 
-let lock: PluginLock | null = null;
-let staged: StagedLock | null = null;
+type LockState = { lock: PluginLock; staged: StagedLock };
+
+let committed: LockState | null = null;
+let lastWrite: Promise<unknown> = Promise.resolve();
 
 export const useLock = create<{ lock: PluginLock }>()(() => ({ lock: {} }));
 
-export function currentLock(): PluginLock {
-  if (lock) return lock;
+function state(): LockState {
+  if (committed) return committed;
   try {
     const text = readDocument(LOCK_DOC);
-    lock = parseLock(text);
-    staged ??= parseStaged(text);
+    committed = { lock: parseLock(text), staged: parseStaged(text) };
   } catch {
-    lock = {};
+    committed = { lock: {}, staged: {} };
   }
-  useLock.setState({ lock });
-  return lock;
+  useLock.setState({ lock: committed.lock });
+  return committed;
 }
 
-const currentStaged = (): StagedLock => {
-  currentLock();
-  return (staged ??= {});
-};
+export const currentLock = (): PluginLock => state().lock;
 
-function saveLock(next: PluginLock, nextStaged: StagedLock, consent: ConsentToken | null): boolean {
-  try {
-    writeDocument(LOCK_DOC, lockJson(next, nextStaged));
-    lock = next;
-    staged = nextStaged;
-    useLock.setState({ lock: next });
-    return true;
-  } catch (error) {
-    warnFor(consent, "[plugins] couldn't save plugins-lock.json", error);
+const currentStaged = (): StagedLock => state().staged;
+
+export function mutateLock(change: (now: LockState) => LockState | null, consent: ConsentToken | null): Promise<boolean> {
+  const run = lastWrite.then(async () => {
+    const base = state();
+    const next = change(base);
+    if (!next) return true;
+    try {
+      writeDocument(LOCK_DOC, lockJson(next.lock, next.staged));
+    } catch (error) {
+      warnFor(consent, "[plugins] couldn't save plugins-lock.json", error);
+      return false;
+    }
+    const landed = await documentSaved(LOCK_DOC).then(
+      () => true,
+      () => false,
+    );
+    if (landed) {
+      committed = next;
+      useLock.setState({ lock: next.lock });
+      return true;
+    }
+    warnFor(consent, "[plugins] plugins-lock.json didn't reach the disk; Ardia put back what it held before");
+    try {
+      writeDocument(LOCK_DOC, lockJson(base.lock, base.staged));
+    } catch {}
     return false;
-  }
+  });
+  lastWrite = run.catch(() => false);
+  return run;
 }
 
-export const writeLock = (next: PluginLock, consent: ConsentToken | null): boolean => saveLock(next, currentStaged(), consent);
+export const writeLock = (next: PluginLock, consent: ConsentToken | null): Promise<boolean> => mutateLock((now) => ({ lock: next, staged: now.staged }), consent);
 
-async function saveLockDurably(next: PluginLock, nextStaged: StagedLock, consent: ConsentToken | null): Promise<boolean> {
-  const priorLock = currentLock();
-  const priorStaged = currentStaged();
-  if (!saveLock(next, nextStaged, consent)) return false;
-  const landed = await documentSaved(LOCK_DOC).then(
-    () => true,
-    () => false,
-  );
-  if (landed) return true;
-  warnFor(consent, "[plugins] plugins-lock.json didn't reach the disk; Ardia put back what it held before");
-  if (lock === next && staged === nextStaged) saveLock(priorLock, priorStaged, consent);
-  return false;
-}
-
-export const updateLockDurably = (change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): Promise<boolean> => saveLockDurably(change({ ...currentLock() }), currentStaged(), consent);
+export const updateLock = (change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): Promise<boolean> => mutateLock((now) => ({ lock: change({ ...now.lock }), staged: now.staged }), consent);
 
 export function stageLockEntries(given: readonly { folderId: string; entry: LockEntry }[], consent: ConsentToken | null = null): Promise<boolean> {
   if (!given.length) return Promise.resolve(true);
-  const next = { ...currentStaged() };
-  for (const { folderId, entry } of given) next[entry.key] = { folderId, entry };
-  return saveLockDurably(currentLock(), next, consent);
+  return mutateLock((now) => {
+    const next = { ...now.staged };
+    for (const { folderId, entry } of given) next[entry.key] = { folderId, entry };
+    return { lock: now.lock, staged: next };
+  }, consent);
 }
-
-export function updateLock(change: (now: PluginLock) => PluginLock, consent: ConsentToken | null): boolean {
-  return writeLock(change({ ...currentLock() }), consent);
-}
-
-export const lockSaved = (): Promise<boolean> => documentSaved(LOCK_DOC).then(() => true, () => false);
 
 export const lockEntryByKey = (key: string, given: PluginLock = currentLock()): LockEntry | undefined => Object.values(given).find((entry) => entry.key === key);
 
@@ -225,24 +224,28 @@ export const stagedLockEntry = (key: string, folderId: string): LockEntry | null
   return found?.folderId === folderId ? found.entry : null;
 };
 
-const withoutStaged = (key: string): StagedLock => Object.fromEntries(Object.entries(currentStaged()).filter(([k]) => k !== key));
+const withoutStaged = (staged: StagedLock, key: string): StagedLock => Object.fromEntries(Object.entries(staged).filter(([k]) => k !== key));
 
-export function dropStagedLock(key: string, consent: ConsentToken | null = null): boolean {
-  return !currentStaged()[key] || saveLock(currentLock(), withoutStaged(key), consent);
+export function dropStagedLock(key: string, consent: ConsentToken | null = null): Promise<boolean> {
+  return mutateLock((now) => (now.staged[key] ? { lock: now.lock, staged: withoutStaged(now.staged, key) } : null), consent);
 }
 
 export function commitStagedLock(key: string, next: LockEntry, consent: ConsentToken | null): Promise<boolean> {
-  const kept = Object.fromEntries(Object.entries(currentLock()).filter(([id, entry]) => entry.key !== key || id === next.id));
-  return saveLockDurably({ ...kept, [next.id]: next }, withoutStaged(key), consent);
+  return mutateLock((now) => {
+    const kept = Object.fromEntries(Object.entries(now.lock).filter(([id, entry]) => entry.key !== key || id === next.id));
+    return { lock: { ...kept, [next.id]: next }, staged: withoutStaged(now.staged, key) };
+  }, consent);
 }
 
-export function forgetLockKey(key: string, consent: ConsentToken | null): boolean {
-  if (!currentStaged()[key] && !Object.values(currentLock()).some((entry) => entry.key === key)) return true;
-  return saveLock(Object.fromEntries(Object.entries(currentLock()).filter(([, entry]) => entry.key !== key)), withoutStaged(key), consent);
+export function forgetLockKey(key: string, consent: ConsentToken | null): Promise<boolean> {
+  return mutateLock((now) => {
+    if (!now.staged[key] && !Object.values(now.lock).some((entry) => entry.key === key)) return null;
+    return { lock: Object.fromEntries(Object.entries(now.lock).filter(([, entry]) => entry.key !== key)), staged: withoutStaged(now.staged, key) };
+  }, consent);
 }
 
 export function resetLockForTests() {
-  lock = null;
-  staged = null;
+  committed = null;
+  lastWrite = Promise.resolve();
   useLock.setState({ lock: {} });
 }

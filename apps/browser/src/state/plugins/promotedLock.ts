@@ -65,6 +65,11 @@ export function candidateProvenance(name: string, candidate: Pick<PluginListing,
 const needsOfficialProof = (candidate: Pick<PluginListing, "manifest" | "source">) =>
   candidate.source === "store" && !!candidate.manifest && isOfficialId(candidate.manifest.id) && !!candidate.manifest.v3 && isNativeTier(candidate.manifest.v3);
 
+export const unstagedCandidate = (name: string, listing: Pick<PluginListing, "source" | "folderId">): boolean =>
+  currentPlugins().candidates[name]?.folderId === listing.folderId && listing.source === "store" && !stagedLockEntry(name, listing.folderId);
+
+export const UNSTAGED = "Ardia hasn't saved where this download came from yet, so it can't be approved. Try again.";
+
 export const UNSIGNED_OFFICIAL = "It reaches outside Ardia's sandbox but isn't signed by Ardia's release key, so Ardia won't turn it on.";
 
 export function officialProofMissing(name: string, candidate: Pick<PluginListing, "manifest" | "source" | "folderId">): boolean {

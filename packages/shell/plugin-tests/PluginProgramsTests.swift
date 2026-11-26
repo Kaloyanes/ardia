@@ -654,6 +654,18 @@ extension PluginProgramsTests {
     XCTAssertEqual(run("\(places.binDir)/extra-tool"), "old", "the untouched link still runs")
   }
 
+  func testALinkRenamedBeforeTheRollbackKeepsTheCopy() throws {
+    let original = PluginLegacyMove.beforeReverse
+    PluginLegacyMove.beforeReverse = { [places] in
+      _ = rename("\(places!.binDir)/hello-tool", "\(places!.binDir)/hello-renamed")
+    }
+    defer { PluginLegacyMove.beforeReverse = original }
+    let (_, moved) = try partlyRetargeted(reverseWorks: true)
+    XCTAssertEqual(moved["ok"] as? Bool, false)
+    XCTAssertTrue(PluginPrograms.isRealFolder(places.pluginStore("ardia__cli")), "a moved link that's gone under its name may still point at the copy, so it stays")
+    XCTAssertEqual(run("\(places.binDir)/hello-renamed"), "old", "the renamed link doesn't dangle")
+  }
+
   func testUnsignedOfficialScopeCopiesPutNoProgramOnPATH() {
     XCTAssertNotNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: false), "an unverified @ardia copy links no program, reserved or not")
     XCTAssertNil(ReservedPrograms.refusal(program: "hello-tool", plugin: "ardia__tool", official: true))

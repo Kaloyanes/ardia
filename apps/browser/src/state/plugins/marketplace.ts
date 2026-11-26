@@ -88,10 +88,10 @@ export function getPlugin(id: string, channel: Channel = "latest"): Promise<Inst
   return installPlugin({ id, channel }, { showSheet: false });
 }
 
-export function setPluginChannel(key: string, channel: Channel): boolean {
+export function setPluginChannel(key: string, channel: Channel): Promise<boolean> {
   const consent = consentToken();
   const id = Object.values(currentLock()).find((e) => e.key === key)?.id;
-  if (!id) return false;
+  if (!id) return Promise.resolve(false);
   notePlugin(channel === "beta" ? "channel_beta" : "channel_latest", consent);
   return updateLock((now) => ({ ...now, [id]: { ...now[id]!, channel } }), consent);
 }
