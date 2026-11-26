@@ -37,8 +37,6 @@ inline bool CanTransfer(bool offered, bool temporary, bool same_profile) {
   return offered && !temporary && same_profile;
 }
 
-// A tab the host already closed has nothing left to release: tab.close and a native close destroy its page, then
-// DropClosedTab erases the binding. A binding that still holds a page is live and stays under its claim.
 inline bool ReleasedTabIsGone(bool has_binding, bool has_page) {
   return !has_binding || !has_page;
 }

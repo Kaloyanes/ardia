@@ -7715,7 +7715,6 @@ void ShellHostView::Invoke(
     if (!binding && offscreen_released_.erase(args.FindInt("id").value_or(0))) {
       return std::move(done).Run(true, base::Value());
     }
-    // The view of a tab closed with tab.close or a native close still releases it when it unmounts, as on Mac and Windows.
     if (!binding && TabIsGone(args.FindInt("id").value_or(0))) return std::move(done).Run(true, base::Value());
     if (!binding) return std::move(done).Run(false, base::Value("No owned live tab"));
     binding->ResetPageCommands();

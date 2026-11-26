@@ -7,8 +7,6 @@ import { forgetSwitchViews, registerSwitchView, tabsSwitchedAhead, watchTabSwitc
 const RECT = { x: 240, y: 8, width: 1192, height: 884 };
 const settle = () => new Promise(setImmediate);
 
-// The Linux host's rules: tab.close destroys the page and drops its binding, and every later call that names
-// the tab must find a live binding under the caller's claim.
 function linuxHost() {
   const bound = new Map();
   const sent = [];
@@ -65,8 +63,6 @@ function stage() {
   };
   const errors = [];
   const original = console.error;
-  // The host's own failure lines (`[ardia host] release failed`, `[ardia host] early tab switch failed`); Node's
-  // process warnings also arrive through console.error and are not what these tests judge.
   console.error = (...args) => {
     const line = args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(" ");
     if (line.startsWith("[ardia host]")) errors.push(line);

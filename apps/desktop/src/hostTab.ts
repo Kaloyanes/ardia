@@ -51,7 +51,6 @@ export class HostTab {
   nextViewport: TabViewport | undefined;
   viewportSend: Promise<TabViewport | null> | undefined;
   releaseScheduled = false;
-  // The host was sent tab.close for this key: its page and binding are gone, though the view stays mounted until React unmounts it.
   closed = false;
   page: HostPageReceiver | undefined;
 
@@ -214,7 +213,6 @@ export class HostTab {
   }
 }
 
-// tab.close destroys the key's page on the host. Its owner can no longer be shown, sized or released there.
 export function noteHostTabClosed(host: ArdiaHost, key: string) {
   const owner = claims.get(host)?.get(key);
   if (owner) owner.closed = true;
