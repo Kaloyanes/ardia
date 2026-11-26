@@ -1000,6 +1000,12 @@ async function appStore(args) {
   const early = planSubmission(submissions, plan.version?.id ?? null, versionNames);
   if (early.act === "refuse") refuse(early.message);
   if (early.act === "done") {
+    if (plan.version.buildId !== build.id) {
+      refuse(
+        `version ${versionString} is in a review submission that is ${early.submission.state} with build ${plan.version.build ?? "none"}, not ${number}; ` +
+          "remove it from review in App Store Connect before sending another build",
+      );
+    }
     console.log(`version ${versionString} is already in a review submission that is ${early.submission.state}; nothing to do`);
     return;
   }
@@ -1123,6 +1129,11 @@ async function appStore(args) {
   const held = await requireVersionUnchanged(app.id, expected);
   await onlyThisVersion();
   const sent = await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { submitted: true } } });
+  const reviewed = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
+  if (reviewed?.buildId !== build.id) {
+    await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { canceled: true } } });
+    refuse(`version ${versionString} went to App Review with build ${reviewed?.build ?? "none"}, not ${number}, so its review submission was cancelled; run this again`);
+  }
   console.log(
     `version ${versionString} (${number}) submitted for App Review: ${sent?.attributes?.state ?? "WAITING_FOR_REVIEW"}. ` +
       `The release is ${held.releaseType}: press Release in App Store Connect once it is approved.`,

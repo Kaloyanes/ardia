@@ -294,6 +294,9 @@ function fakeAppStore() {
         })),
       );
     }
+    if (submission && method === "PATCH" && body.data.attributes.submitted && state.swapBuildOnSubmit) {
+      state.versions.find((row) => submission.items.includes(row.id)).build = state.swapBuildOnSubmit;
+    }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) {
       const resolved = state.submissions.find((row) => path.includes(`item-${row.id}-`));
@@ -554,16 +557,20 @@ test("app-store submits with its own App Manager key, and says so when Apple ref
 });
 
 test("app-store writes nothing when this version is already in a submitted review submission, whatever the version's state says", () => {
-  const run = appStore(
+  const submitted = (build) =>
     appStoreState({
-      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build: "b9", releaseType: "AFTER_APPROVAL" })],
+      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build, releaseType: "AFTER_APPROVAL" })],
       localizations: { v101: [{ id: "loc", ...listing }] },
       submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }],
-    }),
-  );
-  assert.equal(run.code, 0, run.err);
-  assert.deepEqual(run.writes, []);
-  assert.match(run.out, /already in a review submission that is WAITING_FOR_REVIEW/);
+    });
+  const same = appStore(submitted("b12"));
+  assert.equal(same.code, 0, same.err);
+  assert.deepEqual(same.writes, []);
+  assert.match(same.out, /already in a review submission that is WAITING_FOR_REVIEW/);
+  const other = appStore(submitted("b9"));
+  assert.equal(other.code, 1, other.out);
+  assert.match(other.err, /version 1\.0\.1 is in a review submission that is WAITING_FOR_REVIEW with build 9, not 12/);
+  assert.deepEqual(other.writes, []);
 });
 
 test("app-store stops before submitting when the review submissions change while it runs", () => {
@@ -784,4 +791,17 @@ test("app-store still stops before submitting when the release type, build or re
     assert.ok(run.steps.includes("POST /v1/reviewSubmissionItems"), JSON.stringify(changes));
     assert.ok(!run.steps.some((step) => step.startsWith("PATCH /v1/reviewSubmissions/")), `${JSON.stringify(changes)} submitted`);
   }
+});
+
+test("app-store checks the build again after submitting, and cancels its submission when another build went with it", () => {
+  const run = appStore(ready101({ swapBuildOnSubmit: "b9" }));
+  assert.equal(run.code, 1, run.out);
+  assert.match(run.err, /went to App Review with build 9, not 12/);
+  const submit = run.writes.findIndex((write) => write.body?.data?.attributes?.submitted);
+  assert.ok(submit >= 0);
+  assert.deepEqual(run.writes.slice(submit + 1), [
+    { method: "PATCH", path: "/v1/reviewSubmissions/made-1", body: { data: { type: "reviewSubmissions", id: "made-1", attributes: { canceled: true } } } },
+  ]);
+  const clean = appStore(ready101());
+  assert.ok(!clean.writes.some((write) => write.body?.data?.attributes?.canceled));
 });

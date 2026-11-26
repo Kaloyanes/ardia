@@ -4640,7 +4640,7 @@ In order:
   can't happen while Info.plist says false. The workflow waits up to 20 minutes for one still processing (`--timeout`).
 - **Reads before writes.** Before it writes anything, it reads the App Store versions and every open review
   submission with its items. It writes nothing when this version is already in a submission that is waiting for
-  review or in review, whatever the version's own state says, and stops, listing them, when a submission is in
+  review or in review with this build, whatever the version's own state says (with another build it refuses), and stops, listing them, when a submission is in
   review with other items, is being cancelled or completed, or holds anything but this version.
 - **The version.** It refuses while another version is waiting for review, in review or pending release, and when the
   build's version is already on sale (a new App Store release needs a new version, which is the owner's call). A
@@ -4664,7 +4664,9 @@ In order:
   version), and stops without submitting on any change, so a release type switched mid-run or an App Event added
   meanwhile never goes to App Review. The version's state may move only the way the run's own writes move it:
   from `PREPARE_FOR_SUBMISSION` to `READY_FOR_REVIEW` (Apple does that when the version joins a submission), and
-  from a rejected state to either of those two; anything else, such as `WAITING_FOR_REVIEW` set elsewhere, stops it. The summary prints the release type Apple holds.
+  from a rejected state to either of those two; anything else, such as `WAITING_FOR_REVIEW` set elsewhere, stops it.
+  Apple's API can't tie a review submission to a build, so right after submitting the run reads the version's build
+  once more; if another build went to review with it, the run cancels that submission and says so. The summary prints the release type Apple holds.
 
 Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
 it, the owner presses Release in App Store Connect. Google Play is not set up.
