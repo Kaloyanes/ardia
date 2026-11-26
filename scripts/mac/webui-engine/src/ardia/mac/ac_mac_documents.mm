@@ -7,6 +7,7 @@
 #include "ardia/linux/ac_linux_document_service.h"
 #include "ardia/linux/ac_linux_documents.h"
 #include "ardia/mac/ac_mac_shell_host.h"
+#include "ardia/mac/ac_mac_shell_policy.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -121,7 +122,7 @@ bool DocumentSession::Handles(std::string_view name) {
 }
 
 bool DocumentSession::Reserved(std::string_view name) {
-  return LinuxDocuments::Reserved(name);
+  return shell_policy::ReservedLiveDocument(name);
 }
 
 bool DocumentSession::EnsureClient(std::uint64_t renderer_generation) {

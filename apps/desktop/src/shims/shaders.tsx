@@ -13,8 +13,9 @@ import { BackdropFallback, HaloFallback, PowerUpFallback } from "./web/gl/fallba
 import { FilmGrain, Vibrancy } from "./web/gl/Vibrancy";
 import { mountMeadow, type MeadowScene } from "./web/gl/meadow";
 import { baseLine, baseStops, GRAIN_POINTS, GRAIN_SIDE, grainAlpha, overlayLine, overlayStops, padLayers, stopCss, swatchColors, type SwatchLine, type SwatchStop } from "./web/gl/themeSwatch";
-import { usePageHoleLayer } from "../shellAbove";
-import { behindWindowGlassAvailable, watchBehindWindowGlass } from "@platform/windowGlass";
+import { useAbovePages, usePageHoleLayer } from "../shellAbove";
+import { behindWindowGlassAvailable, nativeWindowBackdrop, refreshBehindWindowGlass, watchBehindWindowGlass } from "@platform/windowGlass";
+import { themedBackdropTheme, treatmentBackdropTheme, type BackdropThemeSource } from "../backdropTheme";
 import { behindWindowGlassSwitch, glassTreatment, wantsBehindWindowGlass } from "../behindWindowGlass";
 import { useSurfaceDark } from "./web/chrome";
 
@@ -63,10 +64,24 @@ export function WindowBackdrop({
   const layer = useRef<View & HTMLElement>(null);
   usePageHoleLayer(layer);
   const [glassAvailable] = useState(behindWindowGlassAvailable);
-  const [switchGlass] = useState(() => behindWindowGlassSwitch({ watch: watchBehindWindowGlass }));
+  const abovePages = useAbovePages();
+  const [nativeThemeAvailable] = useState(nativeWindowBackdrop);
+  const nativeTheme = nativeThemeAvailable && !abovePages;
+  const themeSource = useRef<BackdropThemeSource | null>(null);
+  themeSource.current = !nativeTheme
+    ? null
+    : themed
+      ? (size) => themedBackdropTheme({ colors: themeColors!, opacity: themeOpacity ?? 1, underlayAlpha: themeBaseAlpha ?? 0, grain: themeGrain, texture: themeTexture, angle: themeAngle, dark }, size)
+      : () => treatmentBackdropTheme({ dark, tintColor, tintAlpha, tintLightness, grainOpacity, grainScale });
+  const [switchGlass] = useState(() => behindWindowGlassSwitch({ watch: (element) => watchBehindWindowGlass(element, nativeTheme ? (size) => themeSource.current?.(size) ?? null : null) }));
   const behindGlass = wantsBehindWindowGlass(vibrancy, glassAvailable);
+  const themeKey = JSON.stringify([themed, dark, themeColors, themeOpacity, themeBaseAlpha, themeGrain, themeTexture, themeAngle, tintColor, tintAlpha, tintLightness, grainOpacity, grainScale]);
   useLayoutEffect(() => switchGlass(layer.current, behindGlass));
+  useLayoutEffect(() => {
+    if (nativeTheme && behindGlass) refreshBehindWindowGlass();
+  }, [nativeTheme, behindGlass, themeKey]);
   useEffect(() => () => switchGlass(null, false), [switchGlass]);
+  if (behindGlass && nativeTheme) return <View ref={layer} pointerEvents="none" style={style} />;
   if (behindGlass) {
     const treatment = themed ? null : glassTreatment(dark, tintColor, tintAlpha, tintLightness);
     return (

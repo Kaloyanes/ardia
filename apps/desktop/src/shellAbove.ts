@@ -134,6 +134,7 @@ export function useInputRegion(ref: RefObject<Element | null>, shape: RegionShap
 }
 
 export const AbovePages = createContext(false);
+export const useAbovePages = () => useContext(AbovePages);
 
 export function usePageHoleLayer(ref: RefObject<HTMLElement | null>) {
   const abovePages = useContext(AbovePages);

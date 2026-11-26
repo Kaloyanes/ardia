@@ -1,3 +1,5 @@
+import type { BackdropTheme, BackdropThemeSource } from "../../backdropTheme.ts";
+
 export const BACKDROP_METHOD = "shell.backdropRegions";
 export const BACKDROP_MATERIALS = ["liquid", "sidebar", "underWindow", "windowTreatment"] as const;
 export const WINDOW_TREATMENT_CAPABILITY = "shell.backdropRegions.windowTreatment";
@@ -5,7 +7,7 @@ export const BACKDROP_RETRY_MS = 250;
 export const BACKDROP_RETRY_MAX_MS = 4000;
 export type BackdropMaterial = (typeof BACKDROP_MATERIALS)[number];
 export type BackdropRect = { x: number; y: number; width: number; height: number };
-export type BackdropRegion = { rect: BackdropRect; material: BackdropMaterial };
+export type BackdropRegion = { rect: BackdropRect; material: BackdropMaterial; theme?: BackdropTheme };
 
 type BackdropDeps = {
   send: (regions: BackdropRegion[]) => Promise<unknown>;
@@ -15,7 +17,8 @@ type BackdropDeps = {
   clearTimeout: (handle: unknown) => void;
   watch: (element: Element, changed: () => void) => () => void;
   watchMotion: (changed: () => void) => () => void;
-  animating: (layers: readonly Element[]) => boolean;
+  animating: (layers: readonly Element[], fades: boolean) => boolean;
+  opacity?: (element: Element) => number;
 };
 
 export type AnimationLike = { playState: string; effect: { target?: Element | null; getKeyframes?: () => readonly Record<string, unknown>[] } | null };
@@ -27,10 +30,10 @@ export const fadesOnly = (animation: AnimationLike): boolean => {
   return !!frames && frames.every((frame) => Object.keys(frame).every((key) => key === "opacity" || TIMING_KEYS.has(key)));
 };
 
-export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[]): boolean =>
+export const animationMovesBackdrop = (animations: readonly AnimationLike[], layers: readonly Element[], fades = false): boolean =>
   animations.some((animation) => {
     const target = animation.playState === "running" ? animation.effect?.target : null;
-    return !!target && !fadesOnly(animation) && layers.some((layer) => target === layer || target.contains(layer));
+    return !!target && (fades || !fadesOnly(animation)) && layers.some((layer) => target === layer || target.contains(layer));
   });
 
 const HIDDEN_VISIBILITY = new Set(["hidden", "collapse"]);
@@ -46,7 +49,7 @@ export function measureBackdrop(element: Element, style: (element: Element) => {
 export const windowBackdropMaterial = (supports: (method: string) => boolean): BackdropMaterial => (supports(WINDOW_TREATMENT_CAPABILITY) ? "windowTreatment" : "liquid");
 
 export function createMacBackdrops(deps: BackdropDeps) {
-  const layers = new Map<Element, { material: BackdropMaterial; stop: () => void }>();
+  const layers = new Map<Element, { material: BackdropMaterial; theme: BackdropThemeSource | null; stop: () => void }>();
   let frameQueued = false;
   let accepted = "[]";
   let inFlight = false;
@@ -57,13 +60,16 @@ export function createMacBackdrops(deps: BackdropDeps) {
 
   const measured = () => {
     const seen = new Set<string>();
-    const regions = [...layers].flatMap(([element, { material }]) => {
+    const regions = [...layers].flatMap(([element, { material, theme }]): BackdropRegion[] => {
       const rect = deps.measure(element);
       if (!rect) return [];
-      const key = JSON.stringify([rect, material]);
+      const painted = theme?.(rect) ?? null;
+      const opacity = painted && deps.opacity ? Math.min(1, Math.max(0, deps.opacity(element))) : 1;
+      const region: BackdropRegion = painted ? { rect, material, theme: { ...painted, opacity: +(painted.opacity * opacity).toFixed(4) } } : { rect, material };
+      const key = JSON.stringify(region);
       if (seen.has(key)) return [];
       seen.add(key);
-      return [{ rect, material }];
+      return [region];
     });
     return { regions, text: JSON.stringify(regions) };
   };
@@ -102,7 +108,7 @@ export function createMacBackdrops(deps: BackdropDeps) {
   const flush = () => {
     frameQueued = false;
     transmit();
-    if (layers.size && deps.animating([...layers.keys()])) schedule();
+    if (layers.size && deps.animating([...layers.keys()], [...layers.values()].some((entry) => entry.theme))) schedule();
   };
 
   function schedule() {
@@ -112,8 +118,8 @@ export function createMacBackdrops(deps: BackdropDeps) {
   }
 
   return {
-    add(element: Element, material: BackdropMaterial = "liquid") {
-      const entry = { material, stop: deps.watch(element, schedule) };
+    add(element: Element, material: BackdropMaterial = "liquid", theme: BackdropThemeSource | null = null) {
+      const entry = { material, theme, stop: deps.watch(element, schedule) };
       layers.set(element, entry);
       stopMotion ??= deps.watchMotion(schedule);
       schedule();
@@ -136,6 +142,7 @@ export function createMacBackdrops(deps: BackdropDeps) {
       if (retry !== null) deps.clearTimeout(retry);
       retry = null;
     },
+    refresh: schedule,
     flushNow: flush,
     size: () => layers.size,
   };

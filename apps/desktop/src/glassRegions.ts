@@ -75,11 +75,11 @@ export function offPagePieces(rect: Rect, radii: CornerRadii, pages: readonly Re
   const near = (a: number, b: number) => Math.abs(a - b) < 0.01;
   const right = rect.x + rect.width;
   const bottom = rect.y + rect.height;
-  return pieces.map((piece) => {
+  return pieces.flatMap((piece) => {
     const pieceRight = piece.x + piece.width;
     const pieceBottom = piece.y + piece.height;
     const corner = (x: number, y: number, cornerX: number, cornerY: number, radius: number) => (near(x, cornerX) && near(y, cornerY) ? radius : 0);
-    return {
+    const kept = {
       rect: piece,
       radii: {
         upperLeft: corner(piece.x, piece.y, rect.x, rect.y, radii.upperLeft),
@@ -88,6 +88,8 @@ export function offPagePieces(rect: Rect, radii: CornerRadii, pages: readonly Re
         lowerLeft: corner(piece.x, pieceBottom, rect.x, bottom, radii.lowerLeft),
       },
     };
+    const corners = [kept.radii.upperLeft, kept.radii.upperRight, kept.radii.lowerRight, kept.radii.lowerLeft];
+    return corners.some((radius) => radius > piece.width / 2 + 0.01 || radius > piece.height / 2 + 0.01) ? [] : [kept];
   });
 }
 

@@ -1,7 +1,9 @@
 import { parseColor } from "../../browser/src/lib/color";
 import { adjustingLightness, displayP3, type Vec4 } from "./shims/web/gl/colors";
 
-export type BehindWindowGlass = { available: () => boolean; watch: (element: HTMLElement) => () => void };
+import type { BackdropThemeSource } from "./backdropTheme";
+
+export type BehindWindowGlass = { available: () => boolean; watch: (element: HTMLElement, theme?: BackdropThemeSource | null) => () => void };
 
 export const wantsBehindWindowGlass = (vibrancy: boolean | undefined, available: boolean): boolean => !!vibrancy && available;
 

@@ -500,3 +500,11 @@ test("a scrolling glass region leaves AppKit until it settles, then comes back",
   assert.equal(h.sent.at(-1).regions.length, 1, "the settled region never came back");
   assert.equal(h.sent.at(-1).regions[0].rect.x, 1210);
 });
+
+test("a slice too narrow for its rounded corner cuts no hole, so no hole can spill past the native outline", () => {
+  const rect = { x: 200, y: 100, width: 100, height: 40 };
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 206, y: 0, width: 800, height: 800 }]), []);
+  assert.deepEqual(offPagePieces(rect, RADII, [{ x: 220, y: 0, width: 800, height: 800 }]).map((piece) => piece.rect.width), [20]);
+  const square = { upperLeft: 0, upperRight: 0, lowerRight: 0, lowerLeft: 0 };
+  assert.deepEqual(offPagePieces(rect, square, [{ x: 203, y: 0, width: 800, height: 800 }]).map((piece) => piece.rect.width), [3]);
+});

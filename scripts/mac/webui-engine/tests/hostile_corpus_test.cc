@@ -283,7 +283,12 @@ TEST(bridge_documents) {
       CHECK(text.size() <= 200 && text.front() != '.' && Charset(text, "._-"));
       CHECK(!ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "session.json"));
     }
+    if (ardia_mac::shell_policy::ReservedLiveDocument(text)) {
+      CHECK(ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.json") ||
+            ardia_mac::shell_policy::EqualsIgnoringAsciiCase(text, "live.canonical.json"));
+    }
   }
+  CHECK(ardia_mac::shell_policy::ReservedLiveDocument("LIVE.CANONICAL.JSON"));
   CHECK(ardia_mac::shell_policy::ValidDocumentName("notes.json"));
   for (const std::string& text : Load().strings) {
     if (const auto id = ardia_mac::shell_policy::ParseAdoptId(text)) {

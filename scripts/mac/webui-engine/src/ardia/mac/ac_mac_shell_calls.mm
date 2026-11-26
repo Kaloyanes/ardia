@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ardia/linux/ac_linux_search_engines.h"
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_link_gesture.h"
@@ -97,6 +98,7 @@ constexpr std::string_view kCapabilities[] = {
     "shell.glassBehindWindow",
     "shell.backdropRegions",
     "shell.backdropRegions.windowTreatment",
+    "shell.windowBackdrop",
     "shell.showContextMenu",
     "shell.trafficLights",
     "ArdiaShell.setMainMenu",
@@ -517,6 +519,10 @@ void ShellHostView::Invoke(const std::string& method,
   if (method == "ArdiaShell.writeDocument" ||
       method == "ArdiaShell.saveDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name) || !values || values->size() != 2 ||
         !(*values)[1].is_string() ||
         (*values)[1].GetString().size() > kDocumentLimit) {
@@ -545,6 +551,10 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.removeDocument") {
     const std::string name = first_string();
+    if (DocumentSession::Reserved(name)) {
+      return std::move(done).Run(
+          false, Failure("ERR_DOCUMENT_RESERVED", "Live documents change only through typed operations"));
+    }
     if (!ValidDocumentName(name)) {
       return std::move(done).Run(
           false, Failure("ERR_DOCUMENT_NAME", "Invalid document name"));
@@ -664,6 +674,22 @@ void ShellHostView::Invoke(const std::string& method,
       method == "ArdiaShell.fetchBangList") {
     return std::move(done).Run(
         false, Failure("ERR_UNAVAILABLE", "The Mac WebUI spike sends nothing"));
+  }
+  if (method == "tabs.strips") {
+    return Reply(std::move(done), base::Value(base::DictValue()
+                                                  .Set("rev", 0)
+                                                  .Set("cmd", base::Value())
+                                                  .Set("strips", base::ListValue())));
+  }
+  if (method == "search.setEngineName") {
+    const auto text = [values](std::size_t index) {
+      return values && values->size() > index && (*values)[index].is_string() ? (*values)[index].GetString()
+                                                                               : std::string();
+    };
+    if (const std::optional<std::string> error = ardiacore::SetLinuxDefaultSearchEngine(text(0), text(1), text(2))) {
+      return std::move(done).Run(false, Failure("ERR_ENGINE", *error));
+    }
+    return Reply(std::move(done), base::Value());
   }
   if (method == "engine.info") {
     return Reply(std::move(done),

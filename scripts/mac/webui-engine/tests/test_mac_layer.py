@@ -64,6 +64,9 @@ class PureHeaderTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
+    def test_backdrop_theme(self):
+        compile_and_run(self, TESTS / 'backdrop_theme_test.cc', self.out / 'backdrop-theme')
+
     def test_glass_layout(self):
         compile_and_run(self, TESTS / 'glass_layout_test.cc', self.out / 'glass')
 
@@ -751,6 +754,36 @@ class ContractTests(unittest.TestCase):
             self.assertIn(f'"{name}"', inert)
         engine = calls.split('void ShellHostView::EngineCall(', 1)[1]
         self.assertLess(engine.index('kInvokedEngineCalls'), engine.index('"This engine call is not in the Mac WebUI shell"'))
+
+    def test_native_backdrop_sits_between_vibrancy_and_glass(self):
+        glass = self.read('ac_mac_glass.mm')
+        self.assertIn('for (ArdiaMacGlassSlotView* __strong* plane : {&views_->vibrancy, &views_->theme, &views_->glass}) {', glass)
+        self.assertIn('if (placement.source == glass::Source::kBackdrop) return views_->vibrancy;', glass)
+        self.assertIn('NSView* plane = views_->glass;', glass)
+        self.assertIn(': views_->glass;', glass)
+        self.assertNotIn(': views_->behind;', glass)
+        self.assertIn('themes.push_back(ThemeOf(dict->FindDict("theme")));', glass)
+        self.assertIn('[CATransaction setDisableActions:YES];', glass.split('void GlassRegions::LayOutThemes() {', 1)[1])
+        self.assertIn('"shell.windowBackdrop",', self.read('ac_mac_shell_calls.mm'))
+
+    def test_tab_strips_and_search_engines_answer_for_real(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        strips = calls.split('if (method == "tabs.strips") {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('.Set("rev", 0)', strips)
+        self.assertIn('.Set("strips", base::ListValue())', strips)
+        search = calls.split('if (method == "search.setEngineName") {', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('ardiacore::SetLinuxDefaultSearchEngine(text(0), text(1), text(2))', search)
+        copied = (ROOT / 'dev-copies.tsv').read_text()
+        self.assertIn('ardia/mac/shared/ac_linux_search_engines.cc', copied)
+        self.assertIn('ardia/mac/shared/ardia/desktop/ac_desktop_search_engine_policy.h', copied)
+        self.assertIn('"//components/search_engines",', (MAC / 'BUILD.gn').read_text())
+
+    def test_generic_document_routes_never_touch_live_documents(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        for route in ('if (method == "ArdiaShell.writeDocument" ||', 'if (method == "ArdiaShell.removeDocument") {'):
+            body = calls.split(route, 1)[1][:600]
+            self.assertIn('if (DocumentSession::Reserved(name)) {', body)
+        self.assertIn('return shell_policy::ReservedLiveDocument(name);', self.read('ac_mac_documents.mm'))
 
     def test_popover_panels_clip_their_page_and_leave_no_square_rim(self):
         popover = self.read('ac_mac_popover.mm')
