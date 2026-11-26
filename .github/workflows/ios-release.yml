@@ -37,7 +37,7 @@ on:
         type: string
         default: ""
       version:
-        description: Device build version. Leave empty to use the Mac app's MARKETING_VERSION for a USB build or the pinned version for TestFlight.
+        description: Device build version. Leave empty to use the Mac app's MARKETING_VERSION for a USB build or the pinned version for TestFlight and the App Store.
         type: string
         default: ""
   workflow_call:
@@ -72,6 +72,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  TESTFLIGHT_VERSION: 1.0.1
 
 jobs:
   status:
@@ -147,25 +150,28 @@ jobs:
           node apps/phone/scripts/asc.mjs "${args[@]}"
       - name: Submit for App Review
         env:
-          ASC_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
-          ASC_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
-          ASC_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          ASC_KEY_P8: ${{ secrets.ASC_APP_MANAGER_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_APP_MANAGER_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.ASC_APP_MANAGER_ISSUER }}
           BUILD: ${{ inputs.build }}
+          VERSION_INPUT: ${{ inputs.version }}
           NOTES: ${{ inputs.notes }}
           DEFAULT_BROWSER: ${{ inputs.default_browser }}
         run: |
           set -euo pipefail
           [ -n "$BUILD" ] || { echo "::error::app-store mode needs build"; exit 1; }
-          args=(app-store --build "$BUILD" --timeout 1200)
-          if [ -n "$NOTES" ]; then
-            case "$NOTES" in /*|*..*) echo "::error::notes takes a path inside the repo"; exit 1 ;; esac
-            [ -f "$NOTES" ] || { echo "::error::no notes file at $NOTES"; exit 1; }
-            args+=(--notes "$NOTES")
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER" ]; then
+            echo "::error::app-store mode needs the App Manager key in ASC_APP_MANAGER_KEY_P8, ASC_APP_MANAGER_KEY_ID and ASC_APP_MANAGER_ISSUER (docs/phone.md › The App Store)"
+            exit 1
           fi
+          VERSION="${VERSION_INPUT:-$TESTFLIGHT_VERSION}"
+          args=(app-store --build "$BUILD" --version "$VERSION" --timeout 1200)
+          [ -z "$NOTES" ] || args+=(--notes "$NOTES" --notes-root "$GITHUB_WORKSPACE")
           [ "$DEFAULT_BROWSER" = true ] || args+=(--no-default-browser)
           key="$RUNNER_TEMP/AuthKey.p8"
           (umask 077 && printf '%s' "$ASC_KEY_P8" | base64 -d > "$key")
           trap 'rm -f "$key"' EXIT
+          grep -q 'BEGIN PRIVATE KEY' "$key" || { echo "::error::ASC_APP_MANAGER_KEY_P8 isn't a base64 .p8 key"; exit 1; }
           ASC_KEY="$key" node apps/phone/scripts/asc.mjs "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   add-tester:
@@ -269,7 +275,6 @@ jobs:
       BUILD_INPUT: ${{ inputs.build }}
       DEFAULT_BROWSER: ${{ inputs.default_browser }}
       RELEASE_VERSION: ${{ inputs.version }}
-      TESTFLIGHT_VERSION: 1.0.1
     steps:
       - if: inputs.mode == 'device'
         name: Mask the UDID

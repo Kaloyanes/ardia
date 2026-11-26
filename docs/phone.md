@@ -4607,29 +4607,56 @@ submissions, beside the TestFlight builds.
 gh workflow run ios-release.yml -f mode=app-store -f build=<number> -f notes=<file in the repo>
 ```
 
-`node apps/phone/scripts/asc.mjs app-store --build <number> [--notes <file>]` does the same from a Mac with
-`ASC_KEY`, `ASC_KEY_ID` and `ASC_ISSUER`. In order:
+- **Its own key.** Submitting for App Review needs the App Manager role, and the notary key (`NOTARY_*`) stays a
+  Developer key, so `mode=app-store` uses a second key and stops at once when its secrets are missing. To make it:
+  App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys › Generate API Key,
+  named "Ardia App Store", access **App Manager**. Download `AuthKey_<id>.p8` (Apple offers it once) and set the
+  secrets, then delete the download:
+
+  ```sh
+  base64 -i AuthKey_<id>.p8 | gh secret set ASC_APP_MANAGER_KEY_P8
+  gh secret set ASC_APP_MANAGER_KEY_ID --body <key id>
+  gh secret set ASC_APP_MANAGER_ISSUER --body <issuer id>
+  ```
+
+  A 403 from Apple during the run means the key lacks that role, and the run says so.
+- **On a Mac**, `node apps/phone/scripts/asc.mjs app-store --build <number> --version <x.y.z> [--notes <file>]`
+  does the same with that key in `ASC_KEY`, `ASC_KEY_ID` and `ASC_ISSUER`. Each request carries a token minted for
+  15 minutes and made again a minute before it runs out, so a long wait for processing keeps working.
+
+In order:
 - **Preflight**, before any request (`asc.mjs preflight` alone needs no key): `ITSAppUsesNonExemptEncryption` in
   `apps/phone/ios/Ardia/Info.plist`, the privacy manifest `apps/phone/ios/PrivacyInfo.xcprivacy` and, unless
   `default_browser=false` (`--no-default-browser`), `com.apple.developer.web-browser` in
   `Config/Ardia-DefaultBrowser.entitlements`. Each missing one is named and nothing is sent.
-- **The build** must be `VALID`, not expired, and carry an export compliance answer. The workflow waits up to 20
-  minutes for one still processing (`--timeout`). The App Store version is the build's own version, the TestFlight
-  pin (`1.0.1` for now); `--version` only checks it.
+- **The notes** (`notes`) must resolve, symlinks followed, to a file inside the checkout (`--notes-root`): anything
+  outside is refused before a request.
+- **The build** is picked by its number and its version. Build numbers repeat across versions, so the workflow passes
+  the TestFlight pin (`1.0.1` for now, or `version` when given); without `--version` the CLI refuses a number that
+  two versions share and lists them. The build must be `VALID`, not expired, and carry an export compliance answer;
+  the workflow waits up to 20 minutes for one still processing (`--timeout`).
+- **Reads before writes.** Before it writes anything, it reads the App Store versions and every open review
+  submission with its items. It writes nothing when this version is already in a submission that is waiting for
+  review or in review, whatever the version's own state says, and stops, listing them, when a submission is in
+  review with other items, is being cancelled or completed, or holds anything but this version.
 - **The version.** It refuses while another version is waiting for review, in review or pending release, and when the
   build's version is already on sale (a new App Store release needs a new version, which is the owner's call). A
-  version already in review with this build is reported and left alone. Otherwise it takes the version's draft, or
-  renames the one draft Apple allows to the build's version, or makes it, then attaches the build (in place of an
-  older one) and sets the release to manual.
+  version already in review with this build is reported and left alone. Otherwise it takes this version's draft,
+  makes it, or renames the one other draft only when it is alone and still `PREPARE_FOR_SUBMISSION`; a rejected
+  draft, or more than one, stops the run with the list. Then it attaches the build (in place of an older one) and
+  sets the release to manual.
 - **What's New** comes from `notes`, at most 4,000 characters; without it the text is "Bug fixes and improvements."
   and the run says so. The App Store shows no What's New on an app's first version, so the run leaves it out then.
 - **The checks** list everything missing at once and stop before the submission: the primary locale's description,
-  keywords, support URL and screenshots, and App Review Information's contact name, phone, email and notes. The
-  notes must say how to try Continue with ChatGPT (Browse for Me), and a demo account needs its name and password.
-  Fill them in App Store Connect and run it again; the run never makes contact details up.
-- **The submission** goes through a review submission: it reuses an open one (ready, or rejected with unresolved
-  issues) or opens one, adds the version unless it is already in it, and submits it. One in review without this
-  version, or one being cancelled or completed, stops the run.
+  keywords, support URL and at least one screenshot (an empty screenshot set counts as none), and App Review
+  Information's contact name, phone, email and notes, and a demo account's name and password when one is required.
+  Notes that don't say how to try Continue with ChatGPT (Browse for Me) only print a warning. Fill the gaps in App
+  Store Connect and run it again; the run never makes contact details up.
+- **The submission** reuses an open review submission that is ready and holds nothing or only this version, or one
+  with unresolved issues that holds only this version; otherwise it opens one. Just before that it reads the
+  version and the submissions again and stops if either changed while it ran, and after adding the version it
+  checks the submission holds only this version before submitting it, so two runs at once don't submit each
+  other's work.
 
 Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
 it, the owner presses Release in App Store Connect. Google Play is not set up.

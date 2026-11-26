@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createPrivateKey, sign } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HELP = `App Store Connect, for the iPhone app's TestFlight and App Store builds.
@@ -17,7 +17,8 @@ const HELP = `App Store Connect, for the iPhone app's TestFlight and App Store b
   node apps/phone/scripts/asc.mjs public-link --build <number> [--what-to-test <file>] [--privacy-policy <url>]
   node apps/phone/scripts/asc.mjs add-tester --email <address> [--group <name>]
   node apps/phone/scripts/asc.mjs expire --build <number>
-  node apps/phone/scripts/asc.mjs app-store --build <number> [--version <x.y.z>] [--notes <file>] [--timeout <seconds>] [--no-default-browser] [--ios-dir <dir>]
+  node apps/phone/scripts/asc.mjs app-store --build <number> [--version <x.y.z>] [--notes <file> [--notes-root <dir>]]
+      [--timeout <seconds>] [--no-default-browser] [--ios-dir <dir>]
   node apps/phone/scripts/asc.mjs preflight [--no-default-browser] [--ios-dir <dir>]
 
 Reads the API key from ASC_KEY (path to AuthKey_<id>.p8), ASC_KEY_ID and ASC_ISSUER.
@@ -38,18 +39,23 @@ the invite once the group has an approved build. expire ends testing of an older
 good: nobody can install it again and Apple can't undo it. It refuses the newest build.
 register-device adds an iPhone to the team's devices, so a development-signed build
 (apps/phone/scripts/release-ios --development) installs on it; an iPhone already there is left as it is.
-app-store sends a processed build to App Review: it finds or makes the App Store version for the build's
-version, attaches the build, sets What's New from --notes (a short default without it), keeps the release
-manual, checks the listing and the App Review contact and notes, and submits through a review submission.
-It refuses while another version is in review or waits for release, and a re-run reports what is already
-done instead of doing it twice. --timeout waits that long for a build still processing. preflight, which
-app-store runs first and which needs no key, checks the export compliance answer in Info.plist, the
+app-store sends a processed build to App Review with an App Manager key. It picks the build by number
+and, when the number repeats across versions, --version; finds or makes the App Store version for it;
+attaches the build; sets What's New from --notes (a short default without it); keeps the release manual;
+checks the listing and the App Review contact and notes; and submits through a review submission. It
+reads every review submission before it writes and again before it submits, refuses while another
+version or submission is in review or waits for release, and a re-run reports what is already done
+instead of doing it twice. --notes-root refuses notes that resolve outside that directory. --timeout
+waits that long for a build still processing. preflight, which app-store runs first and which needs no
+key, checks the export compliance answer in Info.plist, the
 privacy manifest and, unless --no-default-browser, the default browser entitlement.`;
 
 const BUNDLE_PREFIX = "com.ardia.browser.ios";
 const DEVELOPMENT_CERTIFICATES = new Set(["DEVELOPMENT", "IOS_DEVELOPMENT"]);
 const PUBLIC_GROUP = "Public Testers";
 const API = "https://api.appstoreconnect.apple.com";
+const TOKEN_LIFETIME_S = 900;
+const TOKEN_MARGIN_S = 60;
 const IOS_DIR = fileURLToPath(new URL("../ios", import.meta.url));
 const DEFAULT_WHATS_NEW = "Bug fixes and improvements.";
 const WHATS_NEW_LIMIT = 4000;
@@ -72,10 +78,11 @@ function token() {
   }
   const now = Math.floor(Date.now() / 1000);
   const head = base64url(JSON.stringify({ alg: "ES256", kid: keyId, typ: "JWT" }));
-  const body = base64url(JSON.stringify({ iss: issuer, iat: now, exp: now + 900, aud: "appstoreconnect-v1" }));
+  const expires = now + TOKEN_LIFETIME_S;
+  const body = base64url(JSON.stringify({ iss: issuer, iat: now, exp: expires, aud: "appstoreconnect-v1" }));
   const key = createPrivateKey(readFileSync(keyPath));
   const signature = sign("sha256", Buffer.from(`${head}.${body}`), { key, dsaEncoding: "ieee-p1363" });
-  return `${head}.${body}.${signature.toString("base64url")}`;
+  return { jwt: `${head}.${body}.${signature.toString("base64url")}`, expires };
 }
 
 class ApiError extends Error {
@@ -85,7 +92,12 @@ class ApiError extends Error {
   }
 }
 
-let bearer;
+let bearer = null;
+
+function authorization() {
+  if (!bearer || Date.now() / 1000 >= bearer.expires - TOKEN_MARGIN_S) bearer = token();
+  return `Bearer ${bearer.jwt}`;
+}
 
 async function fail(response) {
   const text = await response.text();
@@ -103,7 +115,7 @@ async function read(url) {
     const last = attempt === RETRY_AFTER_MS.length;
     let response;
     try {
-      response = await fetch(url, { headers: { Authorization: `Bearer ${bearer}` } });
+      response = await fetch(url, { headers: { Authorization: authorization() } });
     } catch (error) {
       if (last) throw error;
     }
@@ -114,10 +126,9 @@ async function read(url) {
 }
 
 async function send(method, path, body) {
-  bearer ??= token();
   const response = await fetch(new URL(path, API), {
     method,
-    headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json" },
+    headers: { Authorization: authorization(), "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!response.ok) await fail(response);
@@ -128,7 +139,7 @@ const post = (path, body) => send("POST", path, body);
 const patch = (path, body) => send("PATCH", path, body);
 
 async function get(path, params = {}) {
-  bearer ??= token();
+  authorization();
   const url = new URL(path, API);
   for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   const rows = [];
@@ -653,13 +664,28 @@ function newestFirst(submissions) {
   return submissions.toSorted((a, b) => (b.submitted ?? "~").localeCompare(a.submitted ?? "~"));
 }
 
-async function submittedVersionIds(submissionId) {
+async function listSubmissionItems(submissionId) {
   const { rows } = await get(`/v1/reviewSubmissions/${submissionId}/items`, {
     "fields[reviewSubmissionItems]": "state,appStoreVersion",
     include: "appStoreVersion",
     limit: "50",
   });
-  return rows.map((row) => row.relationships?.appStoreVersion?.data?.id).filter(Boolean);
+  return rows.map((row) => ({ id: row.id, versionId: row.relationships?.appStoreVersion?.data?.id ?? null }));
+}
+
+async function openReviewSubmissions(appId) {
+  const open = (await listReviewSubmissions(appId)).filter((submission) => submission.state !== "COMPLETE");
+  const withItems = [];
+  for (const submission of open) withItems.push({ ...submission, items: await listSubmissionItems(submission.id) });
+  return withItems;
+}
+
+function submissionsFingerprint(submissions) {
+  return JSON.stringify(
+    submissions
+      .map((submission) => [submission.id, submission.state, submission.items.map((item) => `${item.id}:${item.versionId}`).sort()])
+      .sort((a, b) => a[0].localeCompare(b[0])),
+  );
 }
 
 function planVersion(versions, versionString, buildId) {
@@ -677,22 +703,39 @@ function planVersion(versions, versionString, buildId) {
   const busy = versions.find((version) => version !== same && !EDITABLE_VERSION_STATES.has(version.state) && !SHIPPED_VERSION_STATES.has(version.state));
   if (busy) return { act: "refuse", message: `version ${busy.version} is ${busy.state}; release it or remove it from review before submitting ${versionString}` };
   if (same) return { act: "use", version: same };
-  const draft = versions.find((version) => EDITABLE_VERSION_STATES.has(version.state));
-  if (draft) return { act: "rename", version: draft };
-  return { act: "create" };
+  const drafts = versions.filter((version) => EDITABLE_VERSION_STATES.has(version.state));
+  if (drafts.length === 0) return { act: "create" };
+  if (drafts.length === 1 && drafts[0].state === "PREPARE_FOR_SUBMISSION") return { act: "rename", version: drafts[0] };
+  return {
+    act: "refuse",
+    message: `${drafts.map((version) => `${version.version} is ${version.state}`).join(", ")}; only a lone draft in PREPARE_FOR_SUBMISSION is renamed to ${versionString}, so settle these in App Store Connect first`,
+  };
 }
 
-function planSubmission(submissions, versionId) {
-  const submitted = submissions.find((submission) => SUBMITTED_REVIEW_STATES.has(submission.state));
-  if (submitted) {
-    return submitted.versionIds.includes(versionId)
-      ? { act: "done", submission: submitted }
-      : { act: "refuse", message: `another review submission is ${submitted.state}; wait for it or cancel it in App Store Connect` };
+function planSubmission(submissions, versionId, versionNames) {
+  const holdsThis = (submission) => versionId !== null && submission.items.some((item) => item.versionId === versionId);
+  const others = (submission) => submission.items.filter((item) => item.versionId === null || item.versionId !== versionId);
+  const label = (item) => (item.versionId ? `version ${versionNames.get(item.versionId) ?? item.versionId}` : `item ${item.id}, which is not an App Store version`);
+  const holding = (submission) => {
+    const foreign = others(submission);
+    return foreign.length > 0 ? ` and holds ${foreign.map(label).join(", ")}` : "";
+  };
+  const submitted = submissions.find((submission) => SUBMITTED_REVIEW_STATES.has(submission.state) && holdsThis(submission));
+  if (submitted) return { act: "done", submission: submitted };
+  const blockers = [];
+  const reusable = [];
+  for (const submission of submissions) {
+    const clean = others(submission).length === 0;
+    if (submission.state === "READY_FOR_REVIEW" && clean) reusable.push(submission);
+    else if (submission.state === "UNRESOLVED_ISSUES" && clean && holdsThis(submission)) reusable.push(submission);
+    else if (SUBMITTED_REVIEW_STATES.has(submission.state)) blockers.push(`review submission ${submission.id} is ${submission.state}${holding(submission)}; wait for it or cancel it`);
+    else if (REOPENABLE_REVIEW_STATES.has(submission.state)) {
+      blockers.push(`review submission ${submission.id} is ${submission.state}${holding(submission) || " for nothing of this version"}; remove those items or settle it in App Store Connect`);
+    } else blockers.push(`review submission ${submission.id} is ${submission.state}; run this again in a few minutes`);
   }
-  const settling = submissions.find((submission) => !REOPENABLE_REVIEW_STATES.has(submission.state));
-  if (settling) return { act: "refuse", message: `a review submission is ${settling.state}; run this again in a few minutes` };
-  const reopen = submissions.find((submission) => submission.versionIds.includes(versionId)) ?? submissions[0];
-  return reopen ? { act: "use", submission: reopen } : { act: "create" };
+  if (blockers.length > 0) return { act: "refuse", message: `nothing was submitted:\n${blockers.map((blocker) => `- ${blocker}`).join("\n")}` };
+  const reuse = reusable.find(holdsThis) ?? reusable[0];
+  return reuse ? { act: "use", submission: reuse } : { act: "create" };
 }
 
 function preflightGaps(iosDir, defaultBrowser) {
@@ -733,7 +776,7 @@ async function preflight(args) {
   requirePreflight(args);
 }
 
-async function processedBuild(appId, number, timeout) {
+async function processedBuild(appId, number, wanted, timeout) {
   const deadline = Date.now() + timeout * 1000;
   let said = "";
   for (;;) {
@@ -744,33 +787,56 @@ async function processedBuild(appId, number, timeout) {
       include: "preReleaseVersion",
       "fields[preReleaseVersions]": "version",
     });
-    const row = rows.find((candidate) => candidate.attributes.version === number);
-    const state = row ? row.attributes.processingState : "not on App Store Connect";
-    if (row && state !== "PROCESSING") {
-      if (state !== "VALID") refuse(`build ${number} is ${state}`);
-      if (row.attributes.expired) refuse(`build ${number} has expired; upload a new build`);
-      if (row.attributes.usesNonExemptEncryption == null) {
-        refuse(`build ${number} has no export compliance answer; set ITSAppUsesNonExemptEncryption and upload a new build`);
-      }
-      if (row.attributes.usesNonExemptEncryption) console.log(`build ${number} declares non-exempt encryption, so App Review needs an approved encryption declaration`);
+    const versionOf = (row) => {
       const link = row.relationships?.preReleaseVersion?.data;
-      const version = included.find((candidate) => candidate.type === "preReleaseVersions" && candidate.id === link?.id)?.attributes.version;
-      if (!version) refuse(`App Store Connect gives build ${number} no version`);
+      return included.find((candidate) => candidate.type === "preReleaseVersions" && candidate.id === link?.id)?.attributes.version ?? "?";
+    };
+    const numbered = rows.filter((candidate) => candidate.attributes.version === number);
+    const matching = wanted ? numbered.filter((candidate) => versionOf(candidate) === wanted) : numbered;
+    if (matching.length > 1) {
+      refuse(`build ${number} is on App Store Connect for ${matching.map((row) => `${versionOf(row)} (${row.attributes.processingState})`).join(", ")}; pass --version`);
+    }
+    const row = matching[0];
+    const elsewhere = numbered.length > 0 ? ` (it is for ${numbered.map(versionOf).join(", ")})` : "";
+    const state = row ? row.attributes.processingState : `not on App Store Connect${wanted ? elsewhere : ""}`;
+    const subject = wanted ? `build ${number} of ${wanted}` : `build ${number}`;
+    if (row && state !== "PROCESSING") {
+      if (state !== "VALID") refuse(`${subject} is ${state}`);
+      if (row.attributes.expired) refuse(`${subject} has expired; upload a new build`);
+      if (row.attributes.usesNonExemptEncryption == null) {
+        refuse(`${subject} has no export compliance answer; set ITSAppUsesNonExemptEncryption and upload a new build`);
+      }
+      if (row.attributes.usesNonExemptEncryption) console.log(`${subject} declares non-exempt encryption, so App Review needs an approved encryption declaration`);
+      const version = versionOf(row);
+      if (version === "?") refuse(`App Store Connect gives ${subject} no version`);
       return { id: row.id, number, version };
     }
-    if (Date.now() >= deadline) refuse(`build ${number} is ${state}${timeout > 0 ? ` after ${timeout} s` : ""}`);
-    if (state !== said) console.log(`build ${number}: ${state}, waiting`);
+    if (Date.now() >= deadline) refuse(`${subject} is ${state}${timeout > 0 ? ` after ${timeout} s` : ""}`);
+    if (state !== said) console.log(`${subject}: ${state}, waiting`);
     said = state;
     await new Promise((resolve) => setTimeout(resolve, 30000));
   }
 }
 
-function whatsNewText(notesPath) {
+function notesInside(notesPath, root) {
+  let real;
+  try {
+    real = realpathSync(notesPath);
+  } catch {
+    refuse(`no notes file at ${notesPath}`);
+  }
+  const base = realpathSync(root);
+  if (!real.startsWith(base + sep)) refuse(`${notesPath} resolves to ${real}, outside ${base}`);
+  if (!statSync(real).isFile()) refuse(`${notesPath} is not a file`);
+  return real;
+}
+
+function whatsNewText(notesPath, root) {
   if (!notesPath) {
     console.log(`no --notes given, so What's New reads "${DEFAULT_WHATS_NEW}"`);
     return DEFAULT_WHATS_NEW;
   }
-  const text = readFileSync(notesPath, "utf8").trim();
+  const text = readFileSync(root ? notesInside(notesPath, root) : notesPath, "utf8").trim();
   if (!text) refuse(`${notesPath} is empty`);
   if (text.length > WHATS_NEW_LIMIT) refuse(`${notesPath} has ${text.length} characters; What's New takes at most ${WHATS_NEW_LIMIT}`);
   return text;
@@ -799,7 +865,6 @@ function reviewDetailGaps(detail) {
   ];
   for (const [field, label] of contact) if (!detail[field]?.trim()) gaps.push(`App Review ${label}`);
   if (!detail.notes?.trim()) gaps.push("App Review notes");
-  else if (!/chatgpt/i.test(detail.notes)) gaps.push("App Review notes on how to try Continue with ChatGPT");
   if (detail.demoAccountRequired && !(detail.demoAccountName && detail.demoAccountPassword)) gaps.push("App Review demo account name and password");
   return gaps;
 }
@@ -813,8 +878,13 @@ async function listingGaps(localization, locale) {
     ["supportUrl", "support URL"],
   ];
   for (const [field, label] of fields) if (!localization.attributes[field]?.trim()) gaps.push(`${locale} ${label}`);
-  const { rows: sets } = await get(`/v1/appStoreVersionLocalizations/${localization.id}/appScreenshotSets`, { "fields[appScreenshotSets]": "screenshotDisplayType", limit: "50" });
-  if (sets.length === 0) gaps.push(`${locale} screenshots`);
+  const { rows: sets } = await get(`/v1/appStoreVersionLocalizations/${localization.id}/appScreenshotSets`, {
+    "fields[appScreenshotSets]": "screenshotDisplayType,appScreenshots",
+    include: "appScreenshots",
+    limit: "50",
+  });
+  const screenshots = sets.reduce((count, set) => count + (set.relationships?.appScreenshots?.data?.length ?? 0), 0);
+  if (screenshots === 0) gaps.push(`${locale} screenshots${sets.length > 0 ? ` (${sets.length} empty screenshot sets)` : ""}`);
   return gaps;
 }
 
@@ -830,11 +900,10 @@ async function appStore(args) {
     process.exit(64);
   }
   requirePreflight(args);
-  const whatsNew = whatsNewText(option(args, "--notes"));
+  const whatsNew = whatsNewText(option(args, "--notes"), option(args, "--notes-root"));
   const app = await requireApp();
-  const build = await processedBuild(app.id, number, timeout);
-  const versionString = option(args, "--version") ?? build.version;
-  if (versionString !== build.version) refuse(`build ${number} is version ${build.version}, not ${versionString}`);
+  const build = await processedBuild(app.id, number, option(args, "--version"), timeout);
+  const versionString = build.version;
 
   const versions = await listAppStoreVersions(app.id);
   const plan = planVersion(versions, versionString, build.id);
@@ -843,6 +912,15 @@ async function appStore(args) {
     console.log(`version ${versionString} with build ${number} is already ${plan.version.state}; nothing to do`);
     return;
   }
+  const versionNames = new Map(versions.map((row) => [row.id, row.version]));
+  const submissions = await openReviewSubmissions(app.id);
+  const early = planSubmission(submissions, plan.version?.id ?? null, versionNames);
+  if (early.act === "refuse") refuse(early.message);
+  if (early.act === "done") {
+    console.log(`version ${versionString} is already in a review submission that is ${early.submission.state}; nothing to do`);
+    return;
+  }
+
   let version = plan.version;
   if (plan.act === "create") {
     const made = await post("/v1/appStoreVersions", {
@@ -860,6 +938,7 @@ async function appStore(args) {
   } else {
     console.log(`App Store version ${versionString} is ${version.state}`);
   }
+  versionNames.set(version.id, versionString);
 
   if (version.buildId === build.id) {
     console.log(`build ${number} is already attached`);
@@ -896,15 +975,20 @@ async function appStore(args) {
     console.log(`What's New set for ${locale}`);
   }
 
-  const gaps = [...(await listingGaps(primary, locale)), ...reviewDetailGaps(await reviewDetail(version.id))];
+  const detail = await reviewDetail(version.id);
+  const gaps = [...(await listingGaps(primary, locale)), ...reviewDetailGaps(detail)];
   if (gaps.length > 0) {
     refuse(`fill these in App Store Connect before version ${versionString} goes to App Review, then run this again:\n${gaps.map((gap) => `- ${gap}`).join("\n")}`);
   }
+  if (!/chatgpt/i.test(detail.notes)) console.log("warning: the App Review notes don't say how to try Continue with ChatGPT, so App Review may ask");
 
-  const open = (await listReviewSubmissions(app.id)).filter((submission) => submission.state !== "COMPLETE");
-  const withVersions = [];
-  for (const submission of open) withVersions.push({ ...submission, versionIds: await submittedVersionIds(submission.id) });
-  const pick = planSubmission(withVersions, version.id);
+  const now = (await listAppStoreVersions(app.id)).find((row) => row.id === version.id);
+  if (!now || !EDITABLE_VERSION_STATES.has(now.state) || now.buildId !== build.id) {
+    refuse(`version ${versionString} changed while this ran (${now ? `${now.state} with build ${now.build ?? "none"}` : "gone"}); nothing was submitted, run this again`);
+  }
+  const again = await openReviewSubmissions(app.id);
+  if (submissionsFingerprint(again) !== submissionsFingerprint(submissions)) refuse("the review submissions changed while this ran; nothing was submitted, run this again");
+  const pick = planSubmission(again, version.id, versionNames);
   if (pick.act === "refuse") refuse(pick.message);
   if (pick.act === "done") {
     console.log(`version ${versionString} is already in a review submission that is ${pick.submission.state}`);
@@ -915,12 +999,12 @@ async function appStore(args) {
     const made = await post("/v1/reviewSubmissions", {
       data: { type: "reviewSubmissions", attributes: { platform: "IOS" }, relationships: { app: { data: { type: "apps", id: app.id } } } },
     });
-    submission = { id: made.id, state: made.attributes?.state ?? "READY_FOR_REVIEW", versionIds: [] };
+    submission = { id: made.id, state: made.attributes?.state ?? "READY_FOR_REVIEW", items: [] };
     console.log("opened a review submission");
   } else {
-    console.log(`using the open review submission (${submission.state})`);
+    console.log(`using the open review submission ${submission.id} (${submission.state})`);
   }
-  if (submission.versionIds.includes(version.id)) {
+  if (submission.items.some((item) => item.versionId === version.id)) {
     console.log(`version ${versionString} is already in it`);
   } else {
     await post("/v1/reviewSubmissionItems", {
@@ -933,6 +1017,12 @@ async function appStore(args) {
       },
     });
     console.log(`version ${versionString} added to it`);
+  }
+  const items = await listSubmissionItems(submission.id);
+  const strays = items.filter((item) => item.versionId !== version.id);
+  if (strays.length > 0 || items.length === 0) {
+    const listed = strays.map((item) => (item.versionId ? `version ${versionNames.get(item.versionId) ?? item.versionId}` : `item ${item.id}`)).join(", ");
+    refuse(`review submission ${submission.id} now holds ${listed || "nothing"} besides version ${versionString}; nothing was submitted`);
   }
   const sent = await patch(`/v1/reviewSubmissions/${submission.id}`, { data: { type: "reviewSubmissions", id: submission.id, attributes: { submitted: true } } });
   console.log(
@@ -980,5 +1070,8 @@ try {
 } catch (error) {
   if (!(error instanceof ApiError)) throw error;
   console.error(`asc: App Store Connect answered ${error.message}`);
+  if (command === "app-store" && error.status === 403) {
+    console.error("asc: submitting for App Review needs a key with the App Manager role (docs/phone.md › The App Store)");
+  }
   process.exit(1);
 }

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(new URL("./asc.mjs", import.meta.url));
@@ -175,8 +175,20 @@ test("next-build gives no number when the uploads can't be read, and counts the 
 
 function fakeAppStore() {
   const state = JSON.parse(process.env.ASC_FAKE_STATE);
+  const log = (entry) => appendFileSync(process.env.ASC_FAKE_LOG, `${JSON.stringify(entry)}\n`);
   let made = 0;
-  globalThis.setTimeout = (resume) => queueMicrotask(resume);
+  let submissionReads = 0;
+  const tokens = new Set();
+  if (state.clock) {
+    let now = Date.now();
+    Date.now = () => now;
+    globalThis.setTimeout = (resume, ms) => {
+      now += ms ?? 0;
+      queueMicrotask(resume);
+    };
+  } else {
+    globalThis.setTimeout = (resume) => queueMicrotask(resume);
+  }
   const reply = (data, status = 200, included) => new Response(data === undefined ? null : JSON.stringify({ data, included }), { status });
   const versionRow = (version) => ({
     id: version.id,
@@ -188,7 +200,14 @@ function fakeAppStore() {
     const method = init.method ?? "GET";
     const { pathname: path, searchParams } = new URL(url);
     const body = init.body ? JSON.parse(init.body) : undefined;
-    if (method !== "GET") appendFileSync(process.env.ASC_FAKE_LOG, `${JSON.stringify({ method, path, body })}\n`);
+    const claims = JSON.parse(Buffer.from(String(init.headers?.Authorization ?? "").split(".")[1] ?? "", "base64url").toString() || "{}");
+    if (!tokens.has(claims.iat)) {
+      tokens.add(claims.iat);
+      log({ method: "TOKEN", iat: claims.iat, exp: claims.exp });
+    }
+    if (state.clock && !(claims.exp > Date.now() / 1000)) return new Response(JSON.stringify({ errors: [{ detail: "The token is expired." }] }), { status: 401 });
+    if (method !== "GET") log({ method, path, body });
+    if ((state.forbid ?? []).includes(`${method} ${path}`)) return new Response(JSON.stringify({ errors: [{ detail: "The API key in use does not allow this request" }] }), { status: 403 });
     const id = () => `made-${++made}`;
     if (path === "/v1/apps") return reply([{ id: "app", attributes: { bundleId: "com.ardia.browser.ios", name: "Ardia", primaryLocale: "en-US" } }]);
     if (path === "/v1/builds") {
@@ -228,25 +247,41 @@ function fakeAppStore() {
     }
     if (version && versionMatch[2] === "/appStoreReviewDetail") return reply(state.review ? { id: "review", type: "appStoreReviewDetails", attributes: state.review } : null);
     if (path.startsWith("/v1/appStoreVersionLocalizations/") && path.endsWith("/appScreenshotSets")) {
-      return reply(state.screenshots ? [{ id: "set", type: "appScreenshotSets", attributes: { screenshotDisplayType: "APP_IPHONE_67" } }] : []);
+      const sets = state.screenshots.map((count, at) => ({
+        id: `set-${at}`,
+        type: "appScreenshotSets",
+        attributes: { screenshotDisplayType: "APP_IPHONE_67" },
+        relationships: { appScreenshots: { data: Array.from({ length: count }, (_, shot) => ({ type: "appScreenshots", id: `shot-${at}-${shot}` })) } },
+      }));
+      return reply(sets);
     }
     if (method === "POST" && path === "/v1/appStoreVersionLocalizations") return reply({ id: id(), type: "appStoreVersionLocalizations", attributes: body.data.attributes }, 201);
     if (method === "PATCH" && path.startsWith("/v1/appStoreVersionLocalizations/")) return reply({ id: path.split("/").at(-1), attributes: body.data.attributes });
     if (path === "/v1/reviewSubmissions" && method === "GET") {
+      submissionReads++;
+      if (state.race && submissionReads === state.race.after + 1) state.submissions.push(state.race.submission);
       return reply(state.submissions.map((row) => ({ id: row.id, type: "reviewSubmissions", attributes: { state: row.state, platform: "IOS", submittedDate: row.submitted ?? null } })));
     }
     if (path === "/v1/reviewSubmissions" && method === "POST") {
-      state.submissions.push({ id: id(), state: "READY_FOR_REVIEW", versions: [] });
+      state.submissions.push({ id: id(), state: "READY_FOR_REVIEW", items: [] });
       return reply({ id: state.submissions.at(-1).id, type: "reviewSubmissions", attributes: { state: "READY_FOR_REVIEW" } }, 201);
     }
     const submissionMatch = path.match(/^\/v1\/reviewSubmissions\/([^/]+)(.*)$/);
     const submission = submissionMatch && state.submissions.find((row) => row.id === submissionMatch[1]);
     if (submission && submissionMatch[2] === "/items") {
-      return reply(submission.versions.map((versionId, at) => ({ id: `item-${at}`, type: "reviewSubmissionItems", relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: versionId } } } })));
+      return reply(
+        submission.items.map((item, at) => ({
+          id: `item-${submission.id}-${at}`,
+          type: "reviewSubmissionItems",
+          relationships: { appStoreVersion: { data: item.startsWith("event:") ? null : { type: "appStoreVersions", id: item } } },
+        })),
+      );
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
     if (method === "POST" && path === "/v1/reviewSubmissionItems") {
-      state.submissions.find((row) => row.id === body.data.relationships.reviewSubmission.data.id).versions.push(body.data.relationships.appStoreVersion.data.id);
+      const target = state.submissions.find((row) => row.id === body.data.relationships.reviewSubmission.data.id);
+      target.items.push(body.data.relationships.appStoreVersion.data.id);
+      if (state.raceItem) target.items.push(state.raceItem);
       return reply({ id: id(), type: "reviewSubmissionItems" }, 201);
     }
     return reply(null, 404);
@@ -265,7 +300,7 @@ function appStoreState(changes = {}) {
     versions: [],
     localizations: {},
     review: reviewReady,
-    screenshots: true,
+    screenshots: [3],
     submissions: [],
     ...changes,
   };
@@ -283,8 +318,10 @@ function appStore(state, extra = [], iosDir) {
     env: { ...process.env, ASC_KEY: key, ASC_KEY_ID: "key", ASC_ISSUER: "issuer", ASC_FAKE_STATE: JSON.stringify(state), ASC_FAKE_LOG: log },
     encoding: "utf8",
   });
-  const writes = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  return { code: run.status, out: run.stdout, err: run.stderr, writes, steps: writes.map((write) => `${write.method} ${write.path}`) };
+  const entries = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const writes = entries.filter((entry) => entry.method !== "TOKEN");
+  const tokens = entries.filter((entry) => entry.method === "TOKEN");
+  return { code: run.status, out: run.stdout, err: run.stderr, writes, tokens, steps: writes.map((write) => `${write.method} ${write.path}`) };
 }
 
 const shippedBefore = { id: "v100", version: "1.0.0", state: "READY_FOR_SALE", build: "b9" };
@@ -329,7 +366,7 @@ test("app-store takes What's New from the notes file, and leaves it out on the a
 test("app-store re-run reports an attached build and an open submission instead of adding them again", () => {
   const draft = { id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12", releaseType: "AFTER_APPROVAL" };
   const run = appStore(
-    appStoreState({ versions: [shippedBefore, draft], localizations: { v101: [{ id: "loc", ...listing, whatsNew: "Bug fixes and improvements." }] }, submissions: [{ id: "s1", state: "READY_FOR_REVIEW", versions: ["v101"] }] }),
+    appStoreState({ versions: [shippedBefore, draft], localizations: { v101: [{ id: "loc", ...listing, whatsNew: "Bug fixes and improvements." }] }, submissions: [{ id: "s1", state: "READY_FOR_REVIEW", items: ["v101"] }] }),
   );
   assert.equal(run.code, 0, run.err);
   assert.deepEqual(run.steps, ["PATCH /v1/appStoreVersions/v101", "PATCH /v1/reviewSubmissions/s1"]);
@@ -347,7 +384,7 @@ test("app-store does nothing for a version already waiting for review with this 
     assert.match(run.out, new RegExp(`already ${state}; nothing to do`));
   }
   const submitted = appStore(
-    appStoreState({ versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12" }], localizations: { v101: [{ id: "loc", ...listing }] }, submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", versions: ["v101"] }] }),
+    appStoreState({ versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12" }], localizations: { v101: [{ id: "loc", ...listing }] }, submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }] }),
   );
   assert.equal(submitted.code, 0, submitted.err);
   assert.ok(!submitted.steps.some((step) => step.includes("reviewSubmission")));
@@ -361,8 +398,8 @@ test("app-store refuses another version in review, a released version, another b
     [{ versions: [{ id: "v101", version: "1.0.1", state: "READY_FOR_SALE", build: "b9" }] }, /already READY_FOR_SALE; a new App Store release needs a new version/],
     [{ versions: [{ id: "v101", version: "1.0.1", state: "IN_REVIEW", build: "b9" }] }, /IN_REVIEW with build 9/],
     [
-      { versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12" }], localizations: { v101: [{ id: "loc", ...listing }] }, submissions: [{ id: "s1", state: "IN_REVIEW", versions: ["other"] }] },
-      /another review submission is IN_REVIEW/,
+      { versions: [{ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12" }], localizations: { v101: [{ id: "loc", ...listing }] }, submissions: [{ id: "s1", state: "IN_REVIEW", items: ["other"] }] },
+      /review submission s1 is IN_REVIEW and holds version other; wait for it or cancel it/,
     ],
     [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: ["INVALID"] }] }, /build 12 is INVALID/],
     [{ builds: [{ id: "b12", number: "12", version: "1.0.1", processing: [], expired: true }] }, /build 12 has expired/],
@@ -377,7 +414,7 @@ test("app-store refuses another version in review, a released version, another b
   }
   const mismatch = appStore(appStoreState(), ["--version", "1.1.0"]);
   assert.equal(mismatch.code, 1);
-  assert.match(mismatch.err, /build 12 is version 1\.0\.1, not 1\.1\.0/);
+  assert.match(mismatch.err, /build 12 of 1\.1\.0 is not on App Store Connect \(it is for 1\.0\.1\)/);
 });
 
 test("app-store renames a draft of another version instead of making a second one, and replaces its build", () => {
@@ -404,14 +441,14 @@ test("app-store lists what App Review still needs and submits nothing", () => {
       versions: [shippedBefore],
       localizations: { "made-1": [{ id: "loc", locale: "en-US", description: "A browser." }] },
       review: { contactEmail: "review@example.com", notes: "Sign in with the demo account.", demoAccountRequired: true },
-      screenshots: false,
+      screenshots: [],
     }),
   );
   assert.equal(run.code, 1);
-  for (const gap of ["en-US keywords", "en-US support URL", "en-US screenshots", "App Review contact first name", "App Review contact phone", "Continue with ChatGPT", "demo account name and password"]) {
+  for (const gap of ["en-US keywords", "en-US support URL", "en-US screenshots", "App Review contact first name", "App Review contact phone", "demo account name and password"]) {
     assert.match(run.err, new RegExp(`- [^\\n]*${gap}`));
   }
-  assert.doesNotMatch(run.err, /contact email/);
+  assert.doesNotMatch(run.err, /contact email|ChatGPT/);
   assert.ok(!run.steps.some((step) => step.includes("reviewSubmission")));
   const none = appStore(appStoreState({ versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] }, review: null }));
   assert.equal(none.code, 1);
@@ -452,8 +489,8 @@ test("status lists the App Store versions with their state and the newest review
   const state = appStoreState({
     versions: [shippedBefore, { id: "v101", version: "1.0.1", state: "WAITING_FOR_REVIEW", build: "b12" }],
     submissions: [
-      { id: "s0", state: "COMPLETE", submitted: "2026-10-01T00:00:00Z", versions: [] },
-      { id: "s1", state: "WAITING_FOR_REVIEW", submitted: "2026-11-20T00:00:00Z", versions: ["v101"] },
+      { id: "s0", state: "COMPLETE", submitted: "2026-10-01T00:00:00Z", items: [] },
+      { id: "s1", state: "WAITING_FOR_REVIEW", submitted: "2026-11-20T00:00:00Z", items: ["v101"] },
     ],
   });
   const preload = `import { appendFileSync } from "node:fs";\n(${fakeAppStore})();`;
@@ -467,4 +504,138 @@ test("status lists the App Store versions with their state and the newest review
   assert.match(versions, /^1\.0\.1 state=WAITING_FOR_REVIEW release=MANUAL build=12/m);
   const submissions = run.stdout.split("## App Store review submissions\n")[1].split("\n\n")[0].split("\n");
   assert.deepEqual(submissions, ["WAITING_FOR_REVIEW submitted 2026-11-20", "COMPLETE submitted 2026-10-01"]);
+});
+
+const draft101 = (changes = {}) => ({ id: "v101", version: "1.0.1", state: "PREPARE_FOR_SUBMISSION", build: "b12", ...changes });
+const ready101 = (changes = {}) => appStoreState({ versions: [shippedBefore, draft101()], localizations: { v101: [{ id: "loc", ...listing, whatsNew: "Bug fixes and improvements." }] }, ...changes });
+
+test("app-store submits with its own App Manager key, and says so when Apple refuses the key", () => {
+  const refused = appStore(ready101({ forbid: ["POST /v1/reviewSubmissions"] }));
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /403 The API key in use does not allow this request/);
+  assert.match(refused.err, /App Manager/);
+  const workflow = readFileSync(fileURLToPath(new URL("../../../.github/workflows/ios-release.yml", import.meta.url)), "utf8");
+  const job = workflow.split("\n  app-store:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+  assert.match(job, /secrets\.ASC_APP_MANAGER_KEY_P8/);
+  assert.match(job, /secrets\.ASC_APP_MANAGER_KEY_ID/);
+  assert.match(job, /secrets\.ASC_APP_MANAGER_ISSUER/);
+  assert.doesNotMatch(job, /NOTARY_/);
+  assert.match(job, /--version "\$VERSION"/);
+  assert.match(job, /--notes-root "\$GITHUB_WORKSPACE"/);
+});
+
+test("app-store writes nothing when this version is already in a submitted review submission, whatever the version's state says", () => {
+  const run = appStore(
+    appStoreState({
+      versions: [shippedBefore, draft101({ state: "READY_FOR_REVIEW", build: "b9", releaseType: "AFTER_APPROVAL" })],
+      localizations: { v101: [{ id: "loc", ...listing }] },
+      submissions: [{ id: "s1", state: "WAITING_FOR_REVIEW", items: ["v101"] }],
+    }),
+  );
+  assert.equal(run.code, 0, run.err);
+  assert.deepEqual(run.writes, []);
+  assert.match(run.out, /already in a review submission that is WAITING_FOR_REVIEW/);
+});
+
+test("app-store stops before submitting when the review submissions change while it runs", () => {
+  const raced = appStore(ready101({ race: { after: 1, submission: { id: "s9", state: "READY_FOR_REVIEW", items: [] } } }));
+  assert.equal(raced.code, 1);
+  assert.match(raced.err, /changed while this ran/);
+  assert.ok(!raced.steps.some((step) => step.includes("reviewSubmission")), raced.steps.join("\n"));
+  const crowded = appStore(ready101({ raceItem: "event:launch" }));
+  assert.equal(crowded.code, 1);
+  assert.match(crowded.err, /item-made-1-1/);
+  assert.ok(!crowded.steps.includes("PATCH /v1/reviewSubmissions/made-1"), crowded.steps.join("\n"));
+});
+
+test("app-store reuses only a review submission that holds this version alone or nothing, and lists anything else", () => {
+  const empty = appStore(ready101({ submissions: [{ id: "s1", state: "READY_FOR_REVIEW", items: [] }] }));
+  assert.equal(empty.code, 0, empty.err);
+  assert.deepEqual(empty.steps, ["POST /v1/reviewSubmissionItems", "PATCH /v1/reviewSubmissions/s1"]);
+  const cases = [
+    [[{ id: "s1", state: "READY_FOR_REVIEW", items: ["event:launch"] }], /review submission s1 is READY_FOR_REVIEW and holds item item-s1-0/],
+    [[{ id: "s1", state: "READY_FOR_REVIEW", items: ["v101", "v100"] }], /review submission s1 is READY_FOR_REVIEW and holds version 1\.0\.0/],
+    [[{ id: "s1", state: "UNRESOLVED_ISSUES", items: ["v100"] }], /review submission s1 is UNRESOLVED_ISSUES and holds version 1\.0\.0/],
+    [[{ id: "s1", state: "UNRESOLVED_ISSUES", items: [] }], /review submission s1 is UNRESOLVED_ISSUES/],
+  ];
+  for (const [submissions, refusal] of cases) {
+    const run = appStore(ready101({ submissions }));
+    assert.equal(run.code, 1, `${refusal}: ${run.out}`);
+    assert.match(run.err, refusal);
+    assert.deepEqual(run.writes, []);
+  }
+  const rejected = appStore(ready101({ submissions: [{ id: "s1", state: "UNRESOLVED_ISSUES", items: ["v101"] }] }));
+  assert.equal(rejected.code, 0, rejected.err);
+  assert.deepEqual(rejected.steps, ["PATCH /v1/reviewSubmissions/s1"]);
+});
+
+test("app-store makes a new token before the old one runs out during a long wait", () => {
+  const run = appStore(
+    appStoreState({ clock: true, builds: [{ id: "b12", number: "12", version: "1.0.1", processing: Array(45).fill("PROCESSING") }], versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }),
+    ["--timeout", "1500"],
+  );
+  assert.equal(run.code, 0, run.err);
+  assert.ok(run.tokens.length >= 2, `${run.tokens.length} tokens`);
+  for (const token of run.tokens) assert.ok(token.exp - token.iat <= 1200);
+});
+
+test("app-store picks the build by number and version, and lists the candidates when the number alone is ambiguous", () => {
+  const builds = [
+    { id: "b12old", number: "12", version: "1.0.0", processing: [] },
+    { id: "b12", number: "12", version: "1.0.1", processing: [] },
+  ];
+  const ambiguous = appStore(appStoreState({ builds }));
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.err, /build 12 is on App Store Connect for 1\.0\.0 \(VALID\), 1\.0\.1 \(VALID\); pass --version/);
+  assert.deepEqual(ambiguous.writes, []);
+  const picked = appStore(appStoreState({ builds, versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } }), ["--version", "1.0.1"]);
+  assert.equal(picked.code, 0, picked.err);
+  assert.deepEqual(picked.writes.find((write) => write.path.endsWith("/relationships/build")).body, { data: { type: "builds", id: "b12" } });
+  const missing = appStore(appStoreState({ builds: [builds[0]] }), ["--version", "1.0.1"]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /build 12 of 1\.0\.1 is not on App Store Connect \(it is for 1\.0\.0\)/);
+});
+
+test("app-store renames only a lone PREPARE_FOR_SUBMISSION draft and lists any other draft", () => {
+  const cases = [
+    [[shippedBefore, { id: "v102", version: "1.0.2", state: "REJECTED", build: "b9" }], /1\.0\.2 is REJECTED/],
+    [[shippedBefore, { id: "v102", version: "1.0.2", state: "METADATA_REJECTED", build: "b9" }], /1\.0\.2 is METADATA_REJECTED/],
+    [
+      [shippedBefore, { id: "v102", version: "1.0.2", state: "PREPARE_FOR_SUBMISSION" }, { id: "v103", version: "1.0.3", state: "DEVELOPER_REJECTED" }],
+      /1\.0\.2 is PREPARE_FOR_SUBMISSION, 1\.0\.3 is DEVELOPER_REJECTED/,
+    ],
+  ];
+  for (const [versions, refusal] of cases) {
+    const run = appStore(appStoreState({ versions }));
+    assert.equal(run.code, 1, `${refusal}: ${run.out}`);
+    assert.match(run.err, refusal);
+    assert.deepEqual(run.writes, []);
+  }
+});
+
+test("app-store counts screenshots inside their sets, and only warns when the notes don't mention ChatGPT", () => {
+  const empty = appStore(ready101({ screenshots: [0, 0] }));
+  assert.equal(empty.code, 1);
+  assert.match(empty.err, /- en-US screenshots \(2 empty screenshot sets\)/);
+  const quiet = appStore(ready101({ review: { ...reviewReady, notes: "Sign in with any account." } }));
+  assert.equal(quiet.code, 0, quiet.err);
+  assert.match(quiet.out + quiet.err, /warning: [^\n]*Continue with ChatGPT/);
+  assert.ok(quiet.steps.includes("PATCH /v1/reviewSubmissions/made-1"));
+});
+
+test("app-store reads notes only from inside --notes-root, whatever a symlink or .. says", () => {
+  const root = mkdtempSync(join(tmpdir(), "asc-root-"));
+  const outside = join(mkdtempSync(join(tmpdir(), "asc-outside-")), "secret.txt");
+  writeFileSync(outside, "outside");
+  writeFileSync(join(root, "notes.txt"), "Faster tabs.");
+  symlinkSync(outside, join(root, "link.txt"));
+  for (const notes of [join(root, "link.txt"), join(root, "..", basename(dirname(outside)), "secret.txt"), outside]) {
+    const run = appStore(ready101(), ["--notes", notes, "--notes-root", root]);
+    assert.equal(run.code, 1, notes);
+    assert.match(run.err, /outside/);
+    assert.deepEqual(run.writes, []);
+  }
+  const inside = appStore(ready101(), ["--notes", join(root, "notes.txt"), "--notes-root", root]);
+  assert.equal(inside.code, 0, inside.err);
+  assert.equal(inside.writes.find((write) => write.path === "/v1/appStoreVersionLocalizations/loc").body.data.attributes.whatsNew, "Faster tabs.");
 });
