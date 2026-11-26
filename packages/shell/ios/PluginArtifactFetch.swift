@@ -13,6 +13,7 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
   ]
 
   private struct Running {
+    let key: String
     let generation: Int
     var task: URLSessionDownloadTask?
     let finish: (Result<URL, Failure>) -> Void
@@ -49,6 +50,7 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
     let url: URL
     let sha256: String
     let sizeBytes: Int64
+    let official: OfficialProof?
 
     init?(_ raw: [String: Any]) {
       guard let key = raw["name"] as? String, let id = raw["id"] as? String, PluginStore.id(key) == id, let version = raw["version"] as? String,
@@ -56,14 +58,21 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
         PluginStore.isSha(sha), let size = (raw["sizeBytes"] as? NSNumber)?.int64Value, size > 0, size <= PluginArchive.maxDownload
       else { return nil }
       (self.key, self.id, self.version, self.url, self.sha256, self.sizeBytes) = (key, id, version, url, sha, size)
+      if let signature = raw["officialSig"] as? String, let platform = raw["platform"] as? String {
+        official = OfficialProof(platform: platform, signature: signature)
+      } else {
+        official = nil
+      }
     }
+
+    var identity: String { [key, version, sha256, url.absoluteString].joined(separator: "\u{0}") }
 
     var file: String { url.lastPathComponent.isEmpty ? "artifact.tar.gz" : url.lastPathComponent }
   }
 
   func fetch(_ raw: [String: Any], done: @escaping ([String: Any]) -> Void) {
     guard let spec = Spec(raw) else { return done(["ok": false, "code": "failed", "reason": "fetchArtifact needs name, id, version, an https url, sha256 and sizeBytes"]) }
-    let name = spec.key
+    let name = spec.identity
     lock.lock()
     if running[name] != nil {
       waiters[name, default: []].append(done)
@@ -73,17 +82,17 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
     generation += 1
     let mine = generation
     waiters[name] = [done]
-    running[name] = Running(generation: mine, task: nil, finish: { _ in })
+    running[name] = Running(key: spec.key, generation: mine, task: nil, finish: { _ in })
     lock.unlock()
     work.async { self.run(spec, generation: mine) }
   }
 
-  func cancel(_ name: String) {
+  func cancel(_ key: String) {
     lock.lock()
-    let task = running[name]?.task
-    if running[name] != nil { cancelled.insert(name) }
+    let mine = running.filter { $0.value.key == key }
+    cancelled.formUnion(mine.keys)
     lock.unlock()
-    task?.cancel()
+    for found in mine.values { found.task?.cancel() }
   }
 
   private func isCurrent(_ name: String, _ mine: Int) -> Bool {
@@ -102,18 +111,34 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
   }
 
   private func fail(_ name: String, _ failure: Failure) {
-    NSLog("[plugins] %@ wasn't fetched (%@): %@", name, failure.code, failure.reason)
+    NSLog("[plugins] %@ wasn't fetched (%@): %@", String(name.prefix { $0 != "\u{0}" }), failure.code, failure.reason)
     settle(name, ["ok": false, "code": failure.code, "reason": failure.reason, "cause": failure.cause.rawValue])
   }
 
+  private func deliver(_ spec: Spec, copy: StoreCopy, text: String, store: PluginStore, reused: Bool) {
+    let name = spec.identity
+    guard copy.version == spec.version, copy.sha == spec.sha256 else {
+      return fail(name, Failure(code: "verify", reason: "its copy is version \(copy.version), not \(spec.version)", cause: .mismatch))
+    }
+    if let proof = spec.official {
+      guard PluginOfficial.verify(id: spec.id, version: spec.version, sha256: spec.sha256, proof: proof, keys: PluginOfficial.keys(override: LaunchConfig.shared.pluginNativeKeys)) else {
+        return fail(name, Failure(code: "verify", reason: "\(spec.id) \(spec.version) isn't signed by Ardia's release key", cause: .mismatch))
+      }
+      guard store.recordOfficial(copy, proof: proof) else { return fail(name, Failure(code: "failed", reason: "its official signature couldn't be kept", cause: .io)) }
+    }
+    var reply: [String: Any] = ["ok": true, "candidate": PluginFolders.candidate(text, copy: copy), "official": spec.official != nil]
+    if reused { reply["reused"] = true }
+    settle(name, reply)
+  }
+
   private func run(_ spec: Spec, generation mine: Int) {
-    let name = spec.key
+    let name = spec.identity
     guard let folders = PluginFolders.current() else { return fail(name, Failure(code: "failed", reason: "Ardia has no data folder", cause: .folder)) }
     let store = folders.store()
-    if let copy = store.copy(name, sha: spec.sha256), let text = PluginFolders.manifestText(copy.path).text {
-      return settle(name, ["ok": true, "candidate": PluginFolders.candidate(text, copy: copy), "reused": true])
+    if let copy = store.copy(spec.key, sha: spec.sha256), let text = PluginFolders.manifestText(copy.path).text {
+      return deliver(spec, copy: copy, text: text, store: store, reused: true)
     }
-    guard let scratch = store.makeScratch(name, prefix: ".fetch-") else { return fail(name, Failure(code: "failed", reason: "its download folder couldn't be made", cause: .folder)) }
+    guard let scratch = store.makeScratch(spec.key, prefix: ".fetch-") else { return fail(name, Failure(code: "failed", reason: "its download folder couldn't be made", cause: .folder)) }
     let archive = URL(fileURLWithPath: (scratch as NSString).appendingPathComponent(spec.file))
     let fetched: Result<Void, Failure>
     if LaunchConfig.shared.isolated, let source = LaunchConfig.shared.instance(Self.sourceKey) {
@@ -134,7 +159,7 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
     PluginPrograms.discard(scratch)
     switch published {
     case .failure(let failure): fail(name, Failure(code: failure.code, reason: failure.reason, cause: failure.cause))
-    case .success(let made): settle(name, ["ok": true, "candidate": PluginFolders.candidate(made.manifest, copy: made.copy)])
+    case .success(let made): deliver(spec, copy: made.copy, text: made.manifest, store: store, reused: false)
     }
   }
 
@@ -159,11 +184,11 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
     request.setValue("Ardia", forHTTPHeaderField: "User-Agent")
     let task = session.downloadTask(with: request)
     lock.lock()
-    guard running[name]?.generation == mine, !cancelled.contains(name) else {
+    guard let key = running[name]?.key, running[name]?.generation == mine, !cancelled.contains(name) else {
       lock.unlock()
       return .failure(Failure(code: "cancelled", reason: "Cancelled."))
     }
-    running[name] = Running(generation: mine, task: task, finish: { result in
+    running[name] = Running(key: key, generation: mine, task: task, finish: { result in
       if case .success(let temporary) = result {
         do {
           try FileManager.default.moveItem(at: temporary, to: archive)
@@ -209,17 +234,18 @@ final class PluginArtifactFetch: NSObject, URLSessionDownloadDelegate {
   }
 
   func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-    guard let name = downloadTask.taskDescription else { return }
+    guard let identity = downloadTask.taskDescription else { return }
     if totalBytesWritten > PluginArchive.maxDownload || totalBytesExpectedToWrite > PluginArchive.maxDownload {
       downloadTask.cancel()
       return
     }
     lock.lock()
     let step = max(totalBytesExpectedToWrite / 50, 1 << 20)
-    let due = running[name].map { totalBytesWritten - $0.reported >= step } ?? false
-    if due { running[name]?.reported = totalBytesWritten }
+    let due = running[identity].map { totalBytesWritten - $0.reported >= step } ?? false
+    if due { running[identity]?.reported = totalBytesWritten }
+    let name = running[identity]?.key ?? ""
     lock.unlock()
-    if due { PluginHost.shared.emit(Self.progressEvent, ["name": name, "received": totalBytesWritten, "total": max(totalBytesExpectedToWrite, 0)]) }
+    if due, !name.isEmpty { PluginHost.shared.emit(Self.progressEvent, ["name": name, "received": totalBytesWritten, "total": max(totalBytesExpectedToWrite, 0)]) }
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {

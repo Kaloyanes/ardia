@@ -584,17 +584,37 @@ extension PluginProgramsTests {
     let appData = "\(root)/AppData"
     try FileManager.default.createDirectory(atPath: "\(appData)/PluginData/cli", withIntermediateDirectories: true)
     try FileManager.default.createDirectory(atPath: "\(appData)/OfficialPlugins/cli/aaaa", withIntermediateDirectories: true)
-    let moved = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places)
+    let moved = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places, replaced: false)
     XCTAssertEqual(moved["ok"] as? Bool, true)
     XCTAssertEqual(moved["found"] as? Bool, true)
-    XCTAssertEqual(Set(moved["moved"] as? [String] ?? []), ["programs", "data", "download"])
+    XCTAssertEqual(Set(moved["moved"] as? [String] ?? []), ["programs", "data"])
+    XCTAssertEqual(moved["leftover"] as? Bool, true, "the old download stays until @ardia/cli's verified copy replaces it")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: "\(appData)/OfficialPlugins/cli"))
     XCTAssertEqual(run("\(places.binDir)/hello-tool"), "old", "the command on PATH runs through the move")
     XCTAssertTrue(PluginPrograms.isLauncherPath(PluginPrograms.linkTarget("\(places.binDir)/hello-tool") ?? "", in: places.store, plugin: "ardia__cli"))
     XCTAssertFalse(FileManager.default.fileExists(atPath: places.pluginStore("cli")))
     XCTAssertTrue(FileManager.default.fileExists(atPath: "\(appData)/PluginData/ardia__cli"))
+    let replaced = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places, replaced: true)
+    XCTAssertEqual(replaced["ok"] as? Bool, true)
+    XCTAssertEqual(replaced["moved"] as? [String], ["download"])
+    XCTAssertEqual(replaced["leftover"] as? Bool, false)
     XCTAssertFalse(FileManager.default.fileExists(atPath: "\(appData)/OfficialPlugins"))
-    let again = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places)
+    let again = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places, replaced: true)
     XCTAssertEqual(again["found"] as? Bool, false, "a second run finds nothing to move")
+  }
+
+  func testAPathRetargetThatFailsKeepsTheOldDownloadAndSaysSo() throws {
+    let folder = try makePlugin("cli", version: "0.2.49", say: "old")
+    _ = try install(folder, plugin: "cli", version: "0.2.49")
+    let appData = "\(root)/AppData"
+    try FileManager.default.createDirectory(atPath: "\(appData)/OfficialPlugins/cli/aaaa", withIntermediateDirectories: true)
+    chmod(places.binDir, 0o555)
+    defer { chmod(places.binDir, 0o755) }
+    let moved = PluginLegacyMove.adopt(from: "cli", to: "ardia__cli", appData: appData, places: places, replaced: true)
+    XCTAssertEqual(moved["ok"] as? Bool, false, "a launcher left pointing at the old folder is a failure, not a silent success")
+    XCTAssertNotNil(moved["reason"] as? String)
+    XCTAssertEqual(moved["leftover"] as? Bool, true)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: "\(appData)/OfficialPlugins/cli"), "the old download isn't deleted while PATH may still need it")
   }
 
   func testOnlyTheOfficialCliMayPutArdiaOnPATH() {

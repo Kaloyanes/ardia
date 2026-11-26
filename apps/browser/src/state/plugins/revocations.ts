@@ -1,21 +1,19 @@
-import { matchRevocations, validateRevocationList, type RegistryRevocationsPayload, type RevocationMatch } from "@ardia/plugin-sdk/registry";
-import { readDocument, writeDocument } from "../../platform/documents";
+import { matchRevocations, strongestRevocation, validateRevocationList, type RegistryRevocationsPayload, type RevocationAction, type RevocationMatch } from "@ardia/plugin-sdk/registry";
+import { documentSaved, readDocument, writeDocument } from "../../platform/documents";
 import { isFields } from "../../lib/decode";
 import { defaultRegistry, fetchRevocationList, verifyCachedEnvelope } from "./registryClient";
-import type { LockEntry } from "./lockfile";
+import type { LockProvenance } from "./lockfile";
 
 const CACHE_DOC = "Plugins/revocations-cache.json";
-
-type Saved = { seq: number; envelope: unknown };
 
 let list: RegistryRevocationsPayload | null = null;
 let seq = -1;
 let loaded = false;
 
-function savedCache(): Saved | null {
+function savedEnvelope(): unknown {
   try {
     const doc = JSON.parse(readDocument(CACHE_DOC) ?? "null") as unknown;
-    return isFields(doc) && typeof doc.seq === "number" && Number.isSafeInteger(doc.seq) ? { seq: doc.seq, envelope: doc.envelope } : null;
+    return isFields(doc) ? doc.envelope : null;
   } catch {
     return null;
   }
@@ -24,14 +22,17 @@ function savedCache(): Saved | null {
 async function loadCache() {
   if (loaded) return;
   loaded = true;
-  const saved = savedCache();
-  if (!saved) return;
-  seq = Math.max(seq, saved.seq);
-  const verified = await verifyCachedEnvelope(defaultRegistry(), saved.envelope, (payload) => validateRevocationList(payload));
-  if (verified.ok && verified.value.seq === saved.seq) list = verified.value;
+  const envelope = savedEnvelope();
+  if (envelope === null || envelope === undefined) return;
+  const verified = await verifyCachedEnvelope(defaultRegistry(), envelope, (payload) => validateRevocationList(payload));
+  if (!verified.ok || verified.value.seq < seq) return;
+  list = verified.value;
+  seq = verified.value.seq;
 }
 
 export type RevocationsRefresh = { ok: boolean; changed: boolean; reason?: string };
+
+export const revocationsRequired = () => Object.keys(defaultRegistry().keys).length > 0;
 
 export async function refreshRevocations(): Promise<RevocationsRefresh> {
   await loadCache();
@@ -41,31 +42,54 @@ export async function refreshRevocations(): Promise<RevocationsRefresh> {
   const changed = got.value.seq !== seq || !list;
   list = got.value;
   seq = got.value.seq;
-  if (changed) {
-    try {
-      writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq, envelope: got.envelope })}\n`);
-    } catch {}
+  if (!changed) return { ok: true, changed };
+  try {
+    writeDocument(CACHE_DOC, `${JSON.stringify({ version: 1, seq, envelope: got.envelope })}\n`);
+    await documentSaved(CACHE_DOC);
+    return { ok: true, changed };
+  } catch {
+    return { ok: true, changed, reason: "The revocation list couldn't be saved; Ardia checks it again next time" };
   }
-  return { ok: true, changed };
+}
+
+export async function revocationPreflight(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!revocationsRequired()) return { ok: true };
+  const got = await refreshRevocations();
+  return got.ok ? { ok: true } : { ok: false, reason: `Ardia couldn't check the registry's revocation list, so nothing was installed: ${got.reason ?? "unknown"}` };
 }
 
 export const currentRevocations = (): RegistryRevocationsPayload | null => list;
 
 export const revocationSeq = () => seq;
 
-export function revocationsFor(entry: Pick<LockEntry, "id" | "version" | "sha256" | "source">, repo?: string): RevocationMatch[] {
+export type RevocationSubject = { id: string; version: string | null } & Partial<Pick<LockProvenance, "sha256" | "source" | "repo">>;
+
+export function revocationsFor(entry: RevocationSubject, repo?: string): RevocationMatch[] {
   if (!entry.version) return [];
+  const source = entry.source;
+  const named = repo ?? entry.repo ?? (source?.kind === "github" ? source.repo : undefined);
   return matchRevocations(
     {
       id: entry.id,
       version: entry.version,
       ...(entry.sha256 ? { sha256: entry.sha256 } : {}),
-      ...(repo ? { repo } : entry.source.kind === "github" ? { repo: entry.source.repo } : {}),
-      ...(entry.source.kind === "registry" ? { registry: entry.source.url } : {}),
+      ...(named ? { repo: named } : {}),
+      ...(source?.kind === "registry" ? { registry: source.url } : {}),
     },
     list,
   );
 }
+
+export const STOPPING_ACTIONS: readonly RevocationAction[] = ["disable", "block"];
+
+export function stoppingRevocation(entry: RevocationSubject, includeYank = false): RevocationMatch | null {
+  const matches = revocationsFor(entry);
+  const action = strongestRevocation(matches);
+  if (!action) return null;
+  return STOPPING_ACTIONS.includes(action) || (includeYank && action === "yank") ? matches[0]! : null;
+}
+
+export const revocationReason = (match: RevocationMatch) => match.entry?.reason ?? "Ardia's registry turned it off";
 
 export function resetRevocationsForTests(given: RegistryRevocationsPayload | null = null) {
   list = given;

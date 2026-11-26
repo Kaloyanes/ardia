@@ -79,7 +79,7 @@ test("the official command line links ardia with its after-update steps and gran
   await turnOn("ardia__cli");
   const link = host.links.at(-1);
   assert.equal(link.name, "ardia__cli");
-  assert.equal(link.official, true);
+  assert.equal(link.official, undefined, "native decides official trust from the store's recorded proof, never from a flag");
   assert.deepEqual(link.programs, [{ name: "ardia", path: "bin/ardia", afterUpdate: AFTER }]);
   assert.equal(S().settings.cliControl, true);
   assert.deepEqual(programsStatus("ardia__cli"), { state: "linked", linked: ["ardia"], failed: [], binDir: "/home/.local/bin" });
@@ -114,7 +114,7 @@ test("a copy that isn't Ardia's verified download can't take ardia or run after-
 test("any other plugin's programs follow consent: on links without after-update steps, off unlinks", async () => {
   reset();
   await turnOn("other");
-  assert.deepEqual(host.links.at(-1), { name: "other", folderId: "1:2", approved: P().records.other.approved, version: "1.0.0", official: false, programs: [{ name: "other-tool", path: "bin/other" }] });
+  assert.deepEqual(host.links.at(-1), { name: "other", folderId: "1:2", approved: P().records.other.approved, version: "1.0.0", programs: [{ name: "other-tool", path: "bin/other" }] });
   lifecycle.disablePlugin("other");
   await settle();
   assert.deepEqual(host.unlinks.at(-1), { name: "other", programs: ["other-tool"], remove: false });

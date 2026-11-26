@@ -72,31 +72,61 @@ struct PluginFolders {
     return folder
   }
 
-  private func source(_ name: String, folderId: String) -> (path: String, identity: String?)? {
-    if let copy = storeCopy(name, folderId: folderId) { return (copy.path, folderId) }
+  private func source(_ name: String, folderId: String) -> (path: String, identity: String?, digested: Bool)? {
+    if let copy = storeCopy(name, folderId: folderId) { return (copy.path, folderId, false) }
     if PluginStore.sha(ofFolderId: folderId) != nil { return nil }
     if folderId.hasPrefix(Self.devPrefix) {
       guard let path = devLink(name), Self.devFolderId(path) == folderId else { return nil }
-      return (path, folderId)
+      return (path, folderId, false)
     }
-    return lexicalFolder(name).map { ($0, nil) }
+    guard folderId.hasPrefix(PluginFolderDigest.prefix) else { return nil }
+    return lexicalFolder(name).map { ($0, nil, true) }
   }
 
   func approvedFolder(_ name: String, folderId: String, approved: String) -> Result<OpenedFolder, FolderRefusal> {
     guard let source = source(name, folderId: folderId) else { return .failure(FolderRefusal(reason: "it has no folder")) }
-    return PluginFiles.approvedFolder(source.path, folderId: folderId, approved: approved, identity: source.identity)
+    return PluginFiles.approvedFolder(source.path, folderId: folderId, approved: approved, identity: source.identity, digested: source.digested)
   }
 
   func readPageFile(_ name: String, folderId: String, approved: String, relative: String) -> Data? {
     guard let source = source(name, folderId: folderId) else { return nil }
-    return PluginFiles.readPageFile(source.path, folderId: folderId, approved: approved, relative: relative, identity: source.identity)
+    return PluginFiles.readPageFile(source.path, folderId: folderId, approved: approved, relative: relative, identity: source.identity, digested: source.digested)
+  }
+
+  static func localEntry(_ name: String, path: String) -> [String: Any] {
+    var entry: [String: Any] = ["name": name, "source": "local", "status": "missing"]
+    guard let folder = PluginFiles.openFolder(path) else { return entry }
+    defer { folder.close() }
+    let read = PluginFiles.readManifest(in: folder)
+    entry["status"] = read.status
+    guard case .text(let text) = read else { return entry }
+    switch PluginFiles.digestedFolder(folder) {
+    case .success(let named):
+      entry["folderId"] = named.id
+      entry["text"] = text
+    case .failure(let refusal):
+      entry["status"] = "unchecked"
+      entry["reason"] = refusal.reason
+    }
+    return entry
+  }
+
+  static func localFolderId(_ path: String) -> String? {
+    guard let folder = PluginFiles.openFolder(path) else { return nil }
+    defer { folder.close() }
+    guard case .success(let named) = PluginFiles.digestedFolder(folder) else { return nil }
+    return named.id
   }
 
   func dataRoot() -> String { (appData as NSString).appendingPathComponent("PluginData") }
 
+  static let profilesFolder = PluginDataPaths.profilesFolder
+  static func isProfileId(_ text: String) -> Bool { PluginDataPaths.isProfileId(text) }
+  static func dataPath(_ space: String) -> String? { PluginDataPaths.relative(space) }
+
   func dataFolder(_ name: String) -> OpenedFolder? {
-    guard Self.isName(name) else { return nil }
-    let folder = (dataRoot() as NSString).appendingPathComponent(name)
+    guard let relative = Self.dataPath(name) else { return nil }
+    let folder = (dataRoot() as NSString).appendingPathComponent(relative)
     try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     return PluginFiles.openDataFolder(folder)
   }
@@ -144,11 +174,7 @@ struct PluginFolders {
     var entries: [String: [String: Any]] = [:]
     for name in store().keys() { if let found = storeEntry(name) { entries[name] = found } }
     for name in user where entries[name] == nil {
-      let read = Self.manifestText((pluginsLexical as NSString).appendingPathComponent(name))
-      var entry: [String: Any] = ["name": name, "source": "local", "status": read.status]
-      if let id = read.id { entry["folderId"] = id }
-      if let text = read.text { entry["text"] = text }
-      entries[name] = entry
+      entries[name] = Self.localEntry(name, path: (pluginsLexical as NSString).appendingPathComponent(name))
     }
     for name in dev {
       guard var found = devEntry(name) else { continue }
@@ -170,10 +196,7 @@ struct PluginFolders {
       return nil
     default:
       let link = (pluginsLexical as NSString).appendingPathComponent(name)
-      if let folderId, lstat(link, &info) == 0, PluginFiles.openFolder(link).map({ folder -> String in
-        defer { folder.close() }
-        return folder.id
-      }) != folderId {
+      if let folderId, lstat(link, &info) == 0, Self.localFolderId(link) != folderId {
         return "Another folder took its place while it was being removed, so nothing was deleted. Try again."
       }
       if lstat(link, &info) == 0 {
@@ -188,12 +211,16 @@ struct PluginFolders {
         }
       }
     }
-    let data = (dataRoot() as NSString).appendingPathComponent(name)
-    guard lstat(data, &info) == 0 else { return nil }
-    do {
-      try FileManager.default.removeItem(atPath: data)
-    } catch {
-      return "Its files are gone, but its data couldn't be deleted (\(error.localizedDescription)); removing it again finishes that."
+    let profiles = (dataRoot() as NSString).appendingPathComponent(Self.profilesFolder)
+    let perProfile = ((try? FileManager.default.contentsOfDirectory(atPath: profiles)) ?? []).filter(Self.isProfileId).map {
+      ((profiles as NSString).appendingPathComponent($0) as NSString).appendingPathComponent(name)
+    }
+    for data in [(dataRoot() as NSString).appendingPathComponent(name)] + perProfile where lstat(data, &info) == 0 {
+      do {
+        try FileManager.default.removeItem(atPath: data)
+      } catch {
+        return "Its files are gone, but its data couldn't be deleted (\(error.localizedDescription)); removing it again finishes that."
+      }
     }
     return nil
   }

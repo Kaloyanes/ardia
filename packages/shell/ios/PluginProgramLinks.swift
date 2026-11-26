@@ -78,7 +78,7 @@ enum PluginProgramLinks {
       return ["ok": false, "reason": reason]
     }
     if PluginStore.sha(ofFolderId: folderId) != nil && copy == nil { return unverified("its downloaded copy is gone") }
-    let official = copy != nil && spec["official"] as? Bool == true && PluginStore.parts(name)?.scope == PluginInstaller.officialScope
+    let official = copy.map { folders.store().isOfficial($0, keys: PluginOfficial.keys(override: LaunchConfig.shared.pluginNativeKeys)) } ?? false
     if let refusal = programs.lazy.compactMap({ ReservedPrograms.refusal(program: $0.name, plugin: name, official: official) }).first {
       return ["ok": false, "reason": refusal]
     }
@@ -127,7 +127,9 @@ enum PluginProgramLinks {
   static func adoptLegacy(from: String, to: String, done: @escaping ([String: Any]) -> Void) {
     queue.async {
       guard let folders = PluginFolders.current(), case .success(let places) = folders.programPlaces() else { return done(["ok": false, "found": false, "moved": [], "reason": "Ardia has no data folder"]) }
-      done(PluginLegacyMove.adopt(from: from, to: to, appData: folders.appData, places: places))
+      let store = folders.store()
+      let replaced = store.active(to).map { store.isOfficial($0, keys: PluginOfficial.keys(override: LaunchConfig.shared.pluginNativeKeys)) } ?? false
+      done(PluginLegacyMove.adopt(from: from, to: to, appData: folders.appData, places: places, replaced: replaced))
     }
   }
 

@@ -20,19 +20,22 @@ const same = (a: string | undefined, b: string | undefined) => a !== undefined &
 
 const scopeOf = (id: string) => id.slice(0, Math.max(0, id.indexOf("/")));
 
-export function registryKey(value: string): { host: string; origin: string | null } {
-  const trimmed = value.trim().toLowerCase().replace(/\/+$/, "");
-  const found = /^([a-z][a-z0-9+.-]*):\/\/([^/]+)$/.exec(trimmed);
-  if (found) return { host: found[2]!, origin: `${found[1]}://${found[2]}` };
-  return { host: trimmed, origin: null };
+export function registryKey(value: string): { host: string; origin: string | null; path: string } {
+  const trimmed = value.trim().toLowerCase().replace(/\/index\.json$/, "").replace(/\/+$/, "");
+  const found = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)(\/[^?#]*)?$/.exec(trimmed);
+  if (found) return { host: found[2]!, origin: `${found[1]}://${found[2]}`, path: (found[3] ?? "").replace(/\/+$/, "") };
+  const slash = trimmed.indexOf("/");
+  return slash < 0 ? { host: trimmed, origin: null, path: "" } : { host: trimmed.slice(0, slash), origin: null, path: trimmed.slice(slash).replace(/\/+$/, "") };
 }
 
-export function sameRegistry(a: string | undefined, b: string | undefined): boolean {
-  if (a === undefined || b === undefined) return false;
-  const left = registryKey(a);
-  const right = registryKey(b);
-  if (left.origin && right.origin) return left.origin === right.origin;
-  return left.host === right.host;
+const pathCovers = (named: string, actual: string) => named === "" || named === actual || actual.startsWith(`${named}/`);
+
+export function sameRegistry(named: string | undefined, actual: string | undefined): boolean {
+  if (named === undefined || actual === undefined) return false;
+  const left = registryKey(named);
+  const right = registryKey(actual);
+  if (left.origin && right.origin ? left.origin !== right.origin : left.host !== right.host) return false;
+  return pathCovers(left.path, right.path) || pathCovers(right.path, left.path);
 }
 
 export function versionMatches(version: string, selectors: readonly string[]): boolean {

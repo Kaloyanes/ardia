@@ -252,4 +252,3 @@ test("when clauses refuse hasSelection, which Ardia never fills, rather than tak
   assert.match(read.problem, /names hasSelection, which isn't one of/);
   assert.equal(whenHolds("!hasSelection", { isActive: true }), false, "not even negated: the clause doesn't parse");
 });
-

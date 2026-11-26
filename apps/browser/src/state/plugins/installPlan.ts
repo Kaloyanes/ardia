@@ -10,6 +10,7 @@ import { pluginSubtle } from "../../platform/pluginCrypto";
 import { PLATFORM_IDS } from "../../lib/platformTerms";
 import { isOfficialId, keyOfId } from "../../lib/pluginIds";
 import { currentLock, type Channel, type LockSource } from "./lockfile";
+import { currentPlugins } from "./store";
 import { fetchDetail, registryFetcher, registryForId, type RegistryRef } from "./registryClient";
 import { officialNativeKeys } from "./registryKeys";
 import { currentRevocations } from "./revocations";
@@ -30,9 +31,13 @@ type Found = { detail: RegistryPluginPayload; source: LockSource };
 
 export const runningPlatform = () => currentPlatform(PLATFORM_IDS.otel, systemInfo().arch);
 
+export const storeFolderOf = (sha256: string) => `store-${sha256}`;
+
+const sourceUrl = (source: LockSource) => (source.kind === "registry" ? source.url : undefined);
+
 async function detailFor(id: string, source: LockSource | undefined, root: boolean): Promise<{ ok: true; found: Found } | Exclude<PlanResult, { ok: true }>> {
   if (source?.kind === "github" && root) {
-    const got = await githubDetail(registryFetcher(), source.repo);
+    const got = await githubDetail(registryFetcher(), source.repo, runningPlatform());
     return got.ok ? { ok: true, found: { detail: got.detail, source } } : { ok: false, code: "missing", reason: got.reason };
   }
   const ref: RegistryRef = registryForId(id);
@@ -72,7 +77,6 @@ export async function planInstall(request: PlanRequest, keepInstalled = true): P
   }
   const lock = currentLock();
   const installed = Object.fromEntries(Object.values(lock).flatMap((entry) => (entry.version && entry.id !== request.id ? [[entry.id, entry.version]] : [])));
-  const rootFound = found.get(request.id)!;
   const resolved = resolvePluginGraph({
     roots: [{ id: request.id, ...(request.range ? { range: request.range } : {}), channel: request.channel ?? lock[request.id]?.channel ?? "latest" }],
     catalog: (id) => found.get(id)?.detail,
@@ -81,7 +85,10 @@ export async function planInstall(request: PlanRequest, keepInstalled = true): P
     installed,
     keepInstalled,
     revocations: currentRevocations(),
-    ...(rootFound.source.kind === "registry" ? { registry: rootFound.source.url } : {}),
+    registry: (id: string) => {
+      const from = found.get(id);
+      return from ? sourceUrl(from.source) : undefined;
+    },
   });
   if (!resolved.ok) {
     const problem = resolved.problems[0];
@@ -99,7 +106,12 @@ export async function planInstall(request: PlanRequest, keepInstalled = true): P
   return { ok: true, plan: { root: request.id, plugins, skipped: resolved.skipped.map((s) => s.id) } };
 }
 
+export function onDisk(p: PlannedPlugin): boolean {
+  const listing = currentPlugins().listings[p.key];
+  return listing?.source === "store" && listing.folderId === storeFolderOf(p.artifact.sha256) && !!listing.manifest && listing.manifest.version === p.version;
+}
+
 export function newInPlan(plan: InstallPlan): PlannedPlugin[] {
   const lock = currentLock();
-  return plan.plugins.filter((p) => lock[p.id]?.version !== p.version || lock[p.id]?.sha256 !== p.artifact.sha256);
+  return plan.plugins.filter((p) => lock[p.id]?.version !== p.version || lock[p.id]?.sha256 !== p.artifact.sha256 || !onDisk(p));
 }

@@ -139,9 +139,13 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
 - **Official native code is co-signed.** An `@ardia/*` artifact of a `native` plugin (one with programs, a sidecar or
   `control`) needs `officialSig`: an Ed25519 signature, by the official-native key kept apart from the registry's,
   over `"ardia-official-native-v1\n" + canonicalJson({v: 1, id, version, platform, sha256})`, so even a compromised
-  registry server can't push a rogue `ardia` binary.
+  registry server can't push a rogue `ardia` binary. What counts is the `plugin.json` Ardia actually downloaded, not
+  the tier the registry claims: an `@ardia` download that declares any of those needs the signature before the sheet
+  opens. Native checks it again with its own copy of the keys (`PluginOfficial.swift`) and records the proof as
+  `.<version>-<sha12>.official` beside the store copy; only a copy with a proof that verifies may own `ardia` on PATH
+  or run after-update commands, and a rollback to an `@ardia` copy needs its recorded signature too.
 - **Overrides for testing.** `ARDIA_PLUGIN_REGISTRY_URL` points Ardia at another registry (its envelopes still have to
-  verify); in a test instance only, `ARDIA_PLUGIN_REGISTRY_PUBLIC_KEY` and `ARDIA_PLUGIN_NATIVE_PUBLIC_KEY` replace
+  verify; a plain-http loopback address only in an unsigned scratch build); in a test instance only, `ARDIA_PLUGIN_REGISTRY_PUBLIC_KEY` and `ARDIA_PLUGIN_NATIVE_PUBLIC_KEY` replace
   the built-in keys (`kid=key,…`, raw base64 or SPKI PEM), and `ARDIA_INSTANCE pluginArtifactsFrom=<folder>` serves
   artifacts from a folder by file name.
 - **Resolving.** `planInstall` fetches the plugin's registry file and every dependency's (at most 32), then runs the
@@ -152,36 +156,65 @@ natively `PluginCore/PluginStore.swift`, `PluginInstaller.swift`, `PluginArchive
   registry entry before anything is unpacked, then unpacked with strict caps (512 MB compressed, 1 GB unpacked, 20,000
   entries, 32 levels, a compression-ratio check; no links, devices, `..`, absolute or duplicate paths; every entry under
   `<name>/`), its `plugin.json` checked to be the expected id and version, and the copy sealed read-only. The approval
-  of a store copy binds the manifest to `store-<sha256>`, so it covers the whole package.
+  of a store copy binds the manifest to `store-<sha256>`, so it covers the whole package. Downloads are shared only
+  between requests for the exact same artifact (plugin, version, SHA-256 and address), and the copy native returns
+  must be that version and digest. A locked version whose files are gone is downloaded again.
+- **Folder installs.** A folder in `<config>/plugins/` is identified by `local-<sha256>`, a digest over every file and
+  folder in it (sorted paths, sizes, the executable bit and bytes; links and special files refused, 4,096 entries and
+  256 MB at most, Finder's `.DS_Store` skipped). The approval binds that digest with `plugin.json`, and every load,
+  page file and program link derives it again, so changing any script needs consent again.
 - **Consent.** One sheet asks for the plugin and every dependency the install pulls in, each with its plain-English
-  lines; a plugin that runs outside Ardia's sandbox (programs, control) says so first. Confirming approves them all,
-  switches their `active` links, and writes `plugins-lock.json`.
+  lines; a plugin that runs outside Ardia's sandbox (programs, control) says so first. Confirming approves them all
+  and the install finishes once their `active` links have switched; each switch writes that plugin's entry in
+  `plugins-lock.json` (version, SHA-256, dependencies, source, repo, official signature and platform), keeping the
+  entry it replaced as `previous`. A failed switch fails the install and leaves the lock alone; removing a plugin drops
+  its entry.
 - **Updates.** At launch and every 20 minutes Ardia reads `index.json` (cheap with its ETag) and compares each plugin's
   channel tag with what it runs. A newer compatible version is downloaded and checked like an install, then its whole
   security surface (`diffSecuritySurface`: permissions, contributions, dependencies) is compared with the approved one.
   The same or narrower switches over in the background, keeps the old copy as `previous`, and notes "Updated to …" in
   Settings. Anything more waits: the current version keeps running and Settings shows **Update…** with the exact
-  `+ Added` lines. **Roll Back** swaps `active` and `previous`.
+  `+ Added` lines. An update that needs a newer version of an installed dependency brings it along: silently when
+  neither widens, otherwise on the same sheet, with the dependency's additions named. **Roll Back** checks the earlier
+  version against revocations (and an `@ardia` copy's signature) before it swaps `active` and `previous`, and restores
+  that version's whole lock entry.
 - **Browser upgrades.** A plugin whose `engines.ardia` this Ardia is past stops with "Incompatible with Ardia X.Y.Z —
   waiting for plugin update", and the next check looks for a compatible version on its channel first.
 - **Revocations.** `revocations.json` is read at launch, every 20 minutes, and before every install and update; a list
-  with a lower `seq` than one seen is refused (no replays). `yank` refuses installs and updates to those versions;
+  with a lower `seq` than one seen is refused (no replays), and only a list that verifies sets that floor. Once Ardia
+  has a key for its registry, an install from any source (a registry you added, GitHub, a file) waits for the list and
+  fails if it can't load; with no key yet, Ardia's own registry stays closed and the others work without it. Every
+  approval checks the exact copy it approves, a `.tar.gz` or folder install is checked before its sheet, and the
+  check runs over every installed plugin, not only those in the lock. `yank` refuses installs and updates to those versions;
   `disable` stops the plugin, unlinks its programs, withdraws its UI and shows the reason, rolling back first when
   `rollbackTo` is the kept `previous`; `block` does the same across every source, matching `id`, `scope`,
   `githubOwner`, `repo` or an archive's `sha256`. Lifting a revocation lets the plugin run again.
 - **Custom registries** (Settings › Plugins › Registries) are an https address, the scopes they serve (`@acme/*`) and
-  the Ed25519 key they sign with; a plugin of a bound scope comes from its registry, everything else from Ardia's.
-  `github:owner/repo` reads the repo's releases and their `plugin.json` and needs a `.sha256` beside the `.tar.gz`.
+  the Ed25519 key they sign with; a plugin of a bound scope comes from its registry, everything else from Ardia's, and
+  the catalog lists each plugin only from the registry its install would use. A dependency comes from its own
+  registry, and revocations naming a registry match each plugin's own (an origin covers every registry under it).
+  `github:owner/repo` reads the repo's releases and their `plugin.json` and needs a `.sha256` beside the `.tar.gz`;
+  `release.assets` (or an `asset` with `{platform}`) picks this computer's archive, and only a plain `asset` is
+  universal.
 - **Per-profile plugins.** A `"scope": "profile"` plugin can be on in all profiles or selected ones (Settings, the
-  plugin's page). `"scope": "global"` is forced for plugins with `programs` or `control`.
+  plugin's page). Its menus, commands and events reach only windows and tabs of those profiles (an event with no
+  profile reaches it only when it's on in all of them). Its `storage.*` lives in `PluginData/profiles/<profileId>/`
+  and its runtime `secrets.*` under a Keychain account for that profile: the request's `profile`, else the front
+  window's, else the default or first profile it's on in. Secrets its settings rows hold stay shared, and
+  `"scope": "global"` plugins keep one store. `"scope": "global"` is forced for plugins with `programs` or `control`.
 - **Dev links.** `ardia-plugin dev` writes `<config>/plugins-dev/<scope>__<name>.json` and calls `plugins.devReload`
-  `{id, path, link}` on the control socket. Ardia rescans, reloads the plugin's host and answers `{ok: true, id,
+  `{id, path, link}` on the control socket, with the folder's real path. Ardia rescans, refuses a `path` that isn't
+  the folder the link points at, reloads the plugin's host and answers `{ok: true, id,
   version}`; a reload whose security surface grew, or a plugin never approved, answers `{ok: false, error: {code:
   "needs_consent", message}}` and opens the consent sheet. Other refusals: `bad_request`, `not_linked`, `manifest`.
 - **The old Command Line.** On the first launch of v3 an install of the `cli` plugin (0.2.48 and 0.2.49) is moved to
   `@ardia/cli`: its programs folder, its data and `~/.local/bin/ardia`'s link move to the new key in place, so
-  `ardia` keeps working, and the first registry copy of `@ardia/cli` installs with no sheet.
-- **Install links.** `ardia://plugin/install/@scope/name` opens Settings › Plugins on that plugin's Get.
+  `ardia` keeps working, and the first registry copy of `@ardia/cli` installs with no sheet if the old one was on (a
+  turned-off one stays off and asks). The old download stays until the verified `@ardia/cli` copy is active and
+  PATH points at the new folder; a move that fails is retried at the next check, and the move counts as done only
+  then.
+- **Install links.** `ardia://plugin/install/@scope/name` opens Settings › Plugins on that plugin's Get; a link that
+  launches Ardia waits until plugins have started.
 
 ## The manifest
 
@@ -1087,12 +1120,14 @@ Registry installs and updates (hourly, counts only, never ids, URLs or reasons):
 `registry_installs`, `registry_install_refusals`, `registry_offline`, `registry_downloads`, `registry_download_failures`,
 `registry_download_offline`, `registry_verify_failures`, `artifact_fetch_cause_<cause>`, `updates_silent`,
 `updates_prompted`, `updates_failed`, `updates_rolled_back`, `revocations_disable`, `revocations_block`,
-`revocations_rolled_back`, `migrations_found`, `migrations_adopted`, `dev_reloads`, `dev_reload_consents`,
+`revocations_rolled_back`, `migrations_found`, `migrations_adopted`, `migrations_failed`, `rollback_refusals`,
+`file_installs_revoked`, `dev_reloads`, `dev_reload_consents`,
 `catalog_loads`, `catalog_offline`, `catalog_gets`, `channel_beta`, `channel_latest`, `registries_added`,
 `file_installs_archive`, `file_installs_folder`, `deep_link_installs` and `onboarding_plugin_<shown|installed|skipped|failed>`,
 `onboarding_registry_offline`. Watch `registry_verify_failures` against `registry_downloads` (a signing or mirror
 problem), `updates_prompted` against `updates_silent` (how often updates ask for more), `revocations_*` after an admin
-action, and `migrations_adopted` against `migrations_found` (the old Command Line moving over).
+action, `rollback_refusals` and `file_installs_revoked` (a revoked or unsigned copy turned away), and
+`migrations_adopted` against `migrations_found`, with `migrations_failed` for a move that has to try again.
 
 Counts only, never plugin names, titles, URLs, row values, secrets, tool input or output, fetched hosts or view
 contents, each tied to the consent period the activity began in, so a count that finishes after sharing changed stays

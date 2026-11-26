@@ -16,6 +16,7 @@ struct PluginStore {
   static let activeName = "active"
   static let previousName = "previous"
   static let archiveSuffix = ".tar.gz"
+  static let officialSuffix = ".official"
   static let quarantineName = "com.apple.quarantine"
   static let folderPrefix = "store-"
   static let shaTag = 12
@@ -123,6 +124,33 @@ struct PluginStore {
     return Self.isSha(sha) && name.hasSuffix("-\(sha.prefix(Self.shaTag))") ? sha : nil
   }
 
+  private func proofPath(_ key: String, entry name: String) -> String? {
+    pluginFolder(key).map { ($0 as NSString).appendingPathComponent(".\(name)\(Self.officialSuffix)") }
+  }
+
+  func recordOfficial(_ copy: StoreCopy, proof: OfficialProof) -> Bool {
+    guard let path = proofPath(copy.key, entry: copy.entry), let data = try? JSONSerialization.data(withJSONObject: ["v": 1, "platform": proof.platform, "sig": proof.signature]) else { return false }
+    return withLock(copy.key) { () -> Bool in
+      guard self.copy(copy.key, sha: copy.sha)?.entry == copy.entry else { return false }
+      return (try? data.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil
+    } ?? false
+  }
+
+  func officialProof(_ copy: StoreCopy) -> OfficialProof? {
+    guard let path = proofPath(copy.key, entry: copy.entry) else { return nil }
+    var info = stat()
+    guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= 4096, let data = FileManager.default.contents(atPath: path),
+      let doc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], (doc["v"] as? NSNumber)?.intValue == 1, let platform = doc["platform"] as? String,
+      let signature = doc["sig"] as? String
+    else { return nil }
+    return OfficialProof(platform: platform, signature: signature)
+  }
+
+  func isOfficial(_ copy: StoreCopy, keys: [String]) -> Bool {
+    guard let id = Self.id(copy.key), id.hasPrefix(PluginOfficial.scopePrefix), let proof = officialProof(copy) else { return false }
+    return PluginOfficial.verify(id: id, version: copy.version, sha256: copy.sha, proof: proof, keys: keys)
+  }
+
   func archivePath(_ key: String, _ sha: String) -> String? {
     guard let folder = pluginFolder(key), let name = entry(key, sha: sha) else { return nil }
     return (folder as NSString).appendingPathComponent(name) + Self.archiveSuffix
@@ -172,6 +200,7 @@ struct PluginStore {
       close(keptFile)
       let shaFile = (folder as NSString).appendingPathComponent(".\(name).sha256")
       unlink(shaFile)
+      unlink((folder as NSString).appendingPathComponent(".\(name)\(Self.officialSuffix)"))
       guard written, rename(kept, target + Self.archiveSuffix) == 0 else {
         unlink(kept)
         PluginPrograms.discard(staged)
@@ -204,8 +233,15 @@ struct PluginStore {
       guard let made = copy(key, sha: sha), let folder = pluginFolder(key) else { return false }
       let before = PluginPrograms.linkTarget((folder as NSString).appendingPathComponent(Self.activeName))
       if before == made.entry { return true }
-      guard PluginPrograms.swapLink(in: folder, named: Self.activeName, to: made.entry) else { return false }
-      if let before, !before.contains("/") { _ = PluginPrograms.swapLink(in: folder, named: Self.previousName, to: before) }
+      let previousPath = (folder as NSString).appendingPathComponent(Self.previousName)
+      let earlier = PluginPrograms.linkTarget(previousPath)
+      if let before, !before.contains("/") {
+        guard PluginPrograms.swapLink(in: folder, named: Self.previousName, to: before) else { return false }
+      }
+      guard PluginPrograms.swapLink(in: folder, named: Self.activeName, to: made.entry) else {
+        if let earlier, !earlier.contains("/") { _ = PluginPrograms.swapLink(in: folder, named: Self.previousName, to: earlier) } else if before != nil { unlink(previousPath) }
+        return false
+      }
       return true
     } ?? false
   }
@@ -253,6 +289,8 @@ struct PluginStore {
         if Int(Date().timeIntervalSince1970) - modified(path) > Self.staleSeconds { PluginPrograms.discard(path) }
       } else if name.hasPrefix("."), name.hasSuffix(".sha256") {
         if !keep.contains(String(name.dropFirst().dropLast(".sha256".count))) { unlink(path) }
+      } else if name.hasPrefix("."), name.hasSuffix(Self.officialSuffix) {
+        if !keep.contains(String(name.dropFirst().dropLast(Self.officialSuffix.count))) { unlink(path) }
       } else if name.hasSuffix(Self.archiveSuffix) {
         if !keep.contains(String(name.dropLast(Self.archiveSuffix.count))) { unlink(path) }
       } else if !name.hasPrefix("."), !keep.contains(name) {

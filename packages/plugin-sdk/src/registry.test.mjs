@@ -290,6 +290,14 @@ describe("revocations", () => {
     assert.deepEqual(matchRevocations({ id: "@x/y", version: "1.0.0", registry: "https://evil.example.com/" }, list).map((m) => m.action), ["block"]);
     assert.deepEqual(matchRevocations({ id: "@x/y", version: "1.0.0", registry: "http://evil.example.com" }, list), []);
     assert.equal(sameRegistry("https://ardia.dev", "ardia.dev"), true);
+    assert.equal(sameRegistry("https://plugins.example.com", "https://plugins.example.com/r"), true, "an origin names every registry under it");
+    assert.equal(sameRegistry("https://plugins.example.com/r", "https://plugins.example.com/r/"), true);
+    assert.equal(sameRegistry("https://plugins.example.com/r/index.json", "https://plugins.example.com/r"), true);
+    assert.equal(sameRegistry("plugins.example.com", "https://plugins.example.com/r"), true);
+    assert.equal(sameRegistry("https://plugins.example.com/r", "https://plugins.example.com/other"), false, "a path names only the registry at it");
+    assert.equal(sameRegistry("https://plugins.example.com/r", "https://plugins.example.com/rx"), false);
+    assert.equal(sameRegistry("https://plugins.example.com/r", "https://evil.example.com/r"), false);
+    assert.deepEqual(matchRevocations({ id: "@x/y", version: "1.0.0", registry: "https://evil.example.com/r" }, list).map((m) => m.action), ["block"]);
     assert.deepEqual(matchRevocations({ id: "@a/b", version: "1.1.0" }, null), []);
   });
 
@@ -435,6 +443,14 @@ describe("resolvePluginGraph", () => {
     assert.equal(resolvePluginGraph({ ...base, revocations: yank, installed: { "@a/ai": "1.2.0" }, keepInstalled: true, roots: [{ id: "@a/ai", range: "^1.0.0" }] }).plan[0].version, "1.2.0");
     const blocked = { ...yank, entries: [revocation({ match: { id: "@a/ai" }, action: "block" })] };
     assert.match(resolvePluginGraph({ ...base, revocations: blocked, installed: { "@a/ai": "1.2.0" }, keepInstalled: true, roots: [{ id: "@a/ai" }] }).problems[0].message, /revoked/);
+  });
+
+  test("each plugin's revocations match the registry it came from", () => {
+    const revocations = { seq: 1, issuedAt: "2026-11-25T00:00:00Z", entries: [revocation({ match: { registry: "https://bad.example.com" }, action: "block" })] };
+    const from = (id) => (id === "@a/ai" ? "https://bad.example.com/r" : "https://ardia.dev/r");
+    const result = resolvePluginGraph({ ...base, revocations, registry: from, roots: [{ id: "@a/app" }] });
+    assert.equal(result.ok, false, "a dependency served by a revoked registry is refused even when its root comes from a good one");
+    assert.equal(resolvePluginGraph({ ...base, revocations, registry: () => "https://ardia.dev/r", roots: [{ id: "@a/app" }] }).ok, true);
   });
 });
 

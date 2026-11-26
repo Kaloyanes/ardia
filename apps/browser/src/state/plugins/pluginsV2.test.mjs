@@ -61,6 +61,7 @@ let nextId = 0;
 const READER = {
   manifest: 2,
   name: "reader",
+  scope: "global",
   title: "Reader",
   icon: "book",
   main: "dist/index.js",

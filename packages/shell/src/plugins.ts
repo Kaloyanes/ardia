@@ -8,7 +8,8 @@ export type PluginStoreCandidate = { folderId: string; text: string; version: st
 
 export type PluginFolderEntry = {
   name: string;
-  status: "ok" | "missing" | "link" | "notFile" | "tooBig" | "unreadable";
+  status: "ok" | "missing" | "link" | "notFile" | "tooBig" | "unreadable" | "unchecked";
+  reason?: string;
   source: PluginSource;
   text?: string;
   folderId?: string;
@@ -18,20 +19,19 @@ export type PluginFolderEntry = {
   shadowsStore?: boolean;
 };
 
-export type PluginArtifactSpec = { name: string; id: string; version: string; url: string; sha256: string; sizeBytes: number };
+export type PluginArtifactSpec = { name: string; id: string; version: string; url: string; sha256: string; sizeBytes: number; officialSig?: string; platform?: string };
 type PluginArtifactCode = "offline" | "failed" | "verify" | "cancelled" | "unsupported";
-export type PluginArtifactResult = { ok: true; candidate: PluginStoreCandidate & { payloadDigest: string }; reused?: boolean } | { ok: false; code: PluginArtifactCode; reason: string; cause?: string };
+export type PluginArtifactResult = { ok: true; candidate: PluginStoreCandidate & { payloadDigest: string }; reused?: boolean; official?: boolean } | { ok: false; code: PluginArtifactCode; reason: string; cause?: string };
 export type PluginArtifactProgress = { name: string; received: number; total: number };
 export type PluginLocalInstallResult = { ok: true; name: string; id: string; source: PluginSource; sha256?: string; candidate?: PluginStoreCandidate } | { ok: false; reason: string };
 export type PluginStoreSwitchResult = { ok: true; folderId?: string } | { ok: false; reason: string };
-export type PluginLegacyAdoption = { ok: boolean; found: boolean; moved: string[]; reason?: string };
+export type PluginLegacyAdoption = { ok: boolean; found: boolean; moved: string[]; leftover?: boolean; reason?: string };
 
 export type PluginProgramsSpec = {
   name: string;
   folderId: string;
   approved: string;
   version: string | null;
-  official: boolean;
   programs: { name: string; path: string; afterUpdate?: string[][] }[];
 };
 export type PluginAfterUpdateQuitStops = { consent: string; exitedOnTerm: number; killed: number };

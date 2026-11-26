@@ -506,6 +506,26 @@ test("plugins.devReload refuses any hostile id, path or link before it reads any
   }
 });
 
+test("a folder install's listing keeps native's hostile reasons and folder ids as inert text that never approves anything", async () => {
+  const { rescanPlugins } = await import("./state/plugins/lifecycle.ts");
+  const { usePlugins, activeManifest } = await import("./state/plugins/store.ts");
+  const text = v3Text({ name: "f", title: "F", main: "index.js" }, "acme");
+  for (const { value } of HOSTILE_VALUES) {
+    if (typeof value !== "string") continue;
+    stub.pluginHost.folders = [
+      { name: "acme__f", status: "unchecked", reason: value, source: "local" },
+      { name: "acme__g", status: "ok", source: "local", text, folderId: value },
+    ];
+    await rescanPlugins(null);
+    const s = usePlugins.getState();
+    assert.equal(s.listings.acme__f.manifest, null, show(value));
+    assert.ok(s.listings.acme__f.problems[0].startsWith("Ardia couldn't check the folder's files"), show(value));
+    assert.equal(activeManifest(s, "acme__g"), null, show(value));
+  }
+  stub.pluginHost.folders = [];
+  await rescanPlugins(null);
+});
+
 test("a WebKit page menu address reaches native's writer only as a string the cleaner returned, whatever the page holds", async () => {
   const { webKitAddressWrites } = stub;
   webKitAddressWrites.written.length = 0;

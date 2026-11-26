@@ -339,6 +339,16 @@ BOOL SignedForDistribution() {
   return _dataDirectory != nil;
 }
 
+- (nullable NSString *)pluginRegistryURL {
+  if (!_pluginRegistryURL) return nil;
+  if ([_pluginRegistryURL.lowercaseString hasPrefix:@"https://"]) return _pluginRegistryURL;
+  return self.testInstance ? _pluginRegistryURL : nil;
+}
+
+- (nullable NSString *)pluginNativeKeys {
+  return self.testInstance ? _pluginNativeKeys : nil;
+}
+
 - (BOOL)testInstance {
   @synchronized(self) {
     if (!_testInstance) _testInstance = @(_dataDirectory != nil && !_signedForDistribution());
@@ -442,9 +452,9 @@ BOOL SignedForDistribution() {
     @"trace" : [self.honouredAreas.allObjects sortedArrayUsingSelector:@selector(compare:)],
     @"test" : self.honouredTest,
     @"feedbackURL" : _feedbackURL ?: NSNull.null,
-    @"pluginRegistryURL" : _pluginRegistryURL ?: NSNull.null,
+    @"pluginRegistryURL" : self.pluginRegistryURL ?: NSNull.null,
     @"pluginRegistryKeys" : (self.testInstance ? _pluginRegistryKeys : nil) ?: NSNull.null,
-    @"pluginNativeKeys" : (self.testInstance ? _pluginNativeKeys : nil) ?: NSNull.null,
+    @"pluginNativeKeys" : self.pluginNativeKeys ?: NSNull.null,
     @"webUIShell" : @(_webUIShell),
     @"webUIRefusedDataDirectory" : @(_webUIRefusedDataDirectory),
   };

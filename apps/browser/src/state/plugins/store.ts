@@ -15,6 +15,8 @@ export type PluginListing = {
   version?: string;
   payloadDigest?: string;
   previousVersion?: string;
+  previousFolderId?: string;
+  previousNative?: boolean;
   devPath?: string;
   shadowsStore?: boolean;
 };
@@ -60,7 +62,9 @@ export type PluginRecord = {
 
 export type PluginUpdateNote = { from: string | null; to: string | null; added: string[]; runtime?: true; rolledBack?: true };
 
-export type PendingUpdate = { version: string; folderId: string; added: string[]; dependencies: string[] };
+export type PendingBundled = { name: string; folderId: string };
+
+export type PendingUpdate = { version: string; folderId: string; added: string[]; dependencies: string[]; bundle?: PendingBundled[] };
 
 export type PluginRevoked = { action: "disable" | "block"; reason: string; version?: string };
 

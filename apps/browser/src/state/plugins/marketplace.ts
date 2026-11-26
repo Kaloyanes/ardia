@@ -9,8 +9,10 @@ import { wantCandidate } from "./candidates";
 import { installPlugin, OFFLINE_REGISTRY } from "./installer";
 import type { InstallResult } from "./installWaiters";
 import { requestPluginConsent, rescanPlugins, updateRecord } from "./lifecycle";
-import { currentLock, updateLock, type Channel } from "./lockfile";
-import { customRegistries, defaultRegistry, fetchIndex, type RegistryRef } from "./registryClient";
+import { currentLock, stageLockEntry, updateLock, type Channel } from "./lockfile";
+import { customRegistries, defaultRegistry, fetchIndex, registryForId, type RegistryRef } from "./registryClient";
+import { revocationPreflight, revocationReason, stoppingRevocation } from "./revocations";
+import { dropCandidate } from "./candidates";
 import { registryUrl } from "./registryKeys";
 import { parseKeyList } from "./registryKeys";
 import { pluginsExtras, writePluginsExtras } from "./savedState";
@@ -27,11 +29,12 @@ const STALE_MS = 10 * 60 * 1000;
 
 let loading: Promise<void> | null = null;
 
+export const routesHere = (ref: RegistryRef, id: string) => !!splitPluginId(id) && registryForId(id).url === ref.url && (ref.isDefault || !id.startsWith("@ardia/"));
+
 async function indexOf(ref: RegistryRef): Promise<{ entries: CatalogEntry[]; reason: string | null }> {
   const got = await fetchIndex(ref);
   if (!got.ok) return { entries: [], reason: got.reason };
-  const allowed = (id: string) => ref.isDefault || !ref.scopes?.length || ref.scopes.includes(`@${splitPluginId(id)?.scope}`);
-  return { entries: got.value.plugins.filter((p) => allowed(p.id) && (ref.isDefault || !p.id.startsWith("@ardia/"))).map((p) => ({ ...p, registry: ref.url, isDefault: ref.isDefault })), reason: null };
+  return { entries: got.value.plugins.filter((p) => routesHere(ref, p.id)).map((p) => ({ ...p, registry: ref.url, isDefault: ref.isDefault })), reason: null };
 }
 
 export function refreshCatalog(force = false): Promise<void> {
@@ -101,6 +104,7 @@ export function addRegistry(url: string, scopes: string, keys: string): { ok: tr
   const clean = registryUrl(url);
   if (!clean) return { ok: false, reason: "A registry is an https:// address, like https://plugins.acme.example/r" };
   const scopeList = scopes.split(/[\s,]+/).map((s) => s.replace(/\/\*$/, "")).filter(Boolean);
+  if (!scopeList.length) return { ok: false, reason: "Name the scopes it serves, like @acme, so Ardia knows which plugins to get from it" };
   if (scopeList.some((s) => !/^@[a-z0-9][a-z0-9-]{0,38}$/.test(s))) return { ok: false, reason: "Scopes look like @acme or @acme/*" };
   if (scopeList.includes("@ardia")) return { ok: false, reason: "@ardia plugins come only from Ardia's registry" };
   const parsed = parseKeyList(keys);
@@ -126,11 +130,23 @@ export async function installFromFile(path: string): Promise<{ ok: true; name: s
   const consent = consentToken();
   const archive = /\.(?:tar\.gz|tgz)$/i.test(path);
   notePlugin(archive ? "file_installs_archive" : "file_installs_folder", consent);
+  const preflight = await revocationPreflight();
+  if (!preflight.ok) return { ok: false, reason: preflight.reason };
   const result = await (archive ? installPluginArchive(path) : installPluginFolder(path)).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) return result;
   if (result.candidate) wantCandidate(result.name, result.candidate.folderId);
   await rescanPlugins(consent);
-  if (archive && isPluginId(result.id)) updateLock((now) => ({ ...now, [result.id]: { id: result.id, key: result.name, version: result.candidate?.version ?? null, channel: "latest", source: { kind: "file" }, sha256: result.sha256 ?? null, payloadDigest: null, dependencies: [], root: true, official: false, installedAt: Date.now() } }), consent);
+  const listed = currentPlugins().candidates[result.name] ?? currentPlugins().listings[result.name];
+  const version = listed?.manifest?.version ?? result.candidate?.version ?? null;
+  const revoked = isPluginId(result.id) && version ? stoppingRevocation({ id: result.id, version, sha256: result.sha256 ?? null, source: { kind: "file" } }, true) : null;
+  if (revoked) {
+    notePlugin("file_installs_revoked", consent);
+    if (result.candidate) dropCandidate(result.name);
+    await rescanPlugins(consent);
+    return { ok: false, reason: `${result.id} ${version} was turned off by Ardia's registry: ${revocationReason(revoked)}` };
+  }
+  if (archive && isPluginId(result.id) && result.candidate)
+    stageLockEntry(result.candidate.folderId, { id: result.id, key: result.name, version, channel: "latest", source: { kind: "file" }, sha256: result.sha256 ?? null, payloadDigest: null, dependencies: Object.keys(listed?.manifest?.v3?.dependencies ?? {}).sort(), root: true, official: false, installedAt: Date.now() });
   if (!requestPluginConsent(result.name)) return { ok: false, reason: currentPlugins().candidates[result.name]?.problems[0] ?? currentPlugins().listings[result.name]?.problems[0] ?? "It can't load." };
   openSettings("plugins", null, result.name);
   return { ok: true, name: result.name };

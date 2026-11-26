@@ -1647,10 +1647,12 @@
   {
    "id": "plugin-registry:official-native",
    "source": "registry",
-   "guard": "An @ardia/* native artifact installs only with an officialSig the separate official-native key made over its id, version, platform and SHA-256; @ardia ids from any other registry, a GitHub repo, a folder or a .tar.gz are refused",
+   "guard": "An @ardia/* plugin whose downloaded plugin.json declares programs, a sidecar or control installs only with an officialSig the separate official-native key made over its id, version, platform and SHA-256, whatever tier the registry claims; native verifies it again and records the proof beside the store copy, and only that proof lets a copy own reserved programs or run after-update commands; @ardia ids from any other registry, a GitHub repo, a folder or a .tar.gz are refused",
    "checks": [
-    "apps/browser/src/state/plugins/installPlan.ts#officialProblem",
+    "apps/browser/src/state/plugins/installer.ts#officialDownloadProblem",
     "packages/plugin-sdk/src/officialArtifact.ts#verifyOfficialArtifact",
+    "packages/shell/ios/PluginCore/PluginOfficial.swift#verify",
+    "packages/shell/ios/PluginCore/PluginStore.swift#isOfficial",
     "packages/shell/ios/PluginCore/PluginInstaller.swift#localArchive"
    ],
    "detected": false
@@ -1658,7 +1660,7 @@
   {
    "id": "plugin-registry:custom-url",
    "source": "registry",
-   "guard": "A registry the user adds must be https (loopback only from the test override), carry its own Ed25519 key and can't serve @ardia; a github: spec must be owner/repo, and its release needs a .sha256 beside the archive",
+   "guard": "A registry the user adds must be https (loopback only from the test override in an unsigned scratch build), carry its own Ed25519 key, name the scopes it serves and can't serve @ardia; the catalog lists a plugin only from the registry its install routes to; a github: spec must be owner/repo, and its release needs a .sha256 beside this computer's archive",
    "checks": [
     "apps/browser/src/state/plugins/registryKeys.ts#registryUrl",
     "apps/browser/src/state/plugins/marketplace.ts#addRegistry",
@@ -1682,6 +1684,18 @@
    "detected": false
   },
   {
+   "id": "plugin-install:folder",
+   "source": "plugin",
+   "guard": "A folder plugin's identity is a SHA-256 over every file and folder in it (sorted paths, sizes, the executable bit and bytes; links and special files refused, 4096 entries and 256 MB at most); its approval binds that digest with plugin.json, and every load, page file and program link re-derives it from the open folder, so a changed script or an added file needs consent again (Swift tests in packages/shell/plugin-tests/PluginStoreTests.swift; native's hostile reasons and folder ids stay inert text in hostileInputs.test.mjs)",
+   "checks": [
+    "packages/shell/ios/PluginCore/PluginFolderDigest.swift#digest",
+    "packages/shell/ios/PluginCore/PluginFiles.swift#approvedFolder",
+    "packages/shell/ios/PluginFolders.swift#localEntry",
+    "apps/browser/src/state/plugins/lifecycle.ts#listingsOf"
+   ],
+   "detected": false
+  },
+  {
    "id": "plugin-install:deep-link",
    "source": "other-app",
    "guard": "ardia://plugin/install/@scope/name only opens Settings › Plugins on that id's Get: the id must match the scoped id pattern after one decode (200 characters at most), nothing installs without the consent sheet",
@@ -1694,7 +1708,7 @@
   {
    "id": "plugin-socket:devReload",
    "source": "socket",
-   "guard": "plugins.devReload takes only a scoped id, an absolute path and the exact dev link ardia-plugin writes under the config folder; it reloads only a plugin Ardia lists from that link with a manifest that loads, and a reload whose security surface grew, or one never approved, answers needs_consent and opens the sheet",
+   "guard": "plugins.devReload takes only a scoped id, an absolute path that is the dev link's own folder and the exact dev link ardia-plugin writes under the config folder; it reloads only a plugin Ardia lists from that link with a manifest that loads, and a reload whose security surface grew, or one never approved, answers needs_consent and opens the sheet",
    "checks": [
     "apps/browser/src/state/plugins/devReload.ts#devReload",
     "packages/shell/ios/PluginFolders.swift#devLink"

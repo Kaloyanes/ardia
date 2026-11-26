@@ -13,8 +13,8 @@ enum ReservedPrograms {
 enum PluginLegacyMove {
   static let legacyStoreFolder = "OfficialPlugins"
 
-  static func adopt(from: String, to: String, appData: String, places: ProgramPlaces) -> [String: Any] {
-    guard PluginPrograms.isName(from), PluginPrograms.isKey(to), from != to else { return ["ok": false, "found": false, "moved": [], "reason": "those aren't plugin names"] }
+  static func adopt(from: String, to: String, appData: String, places: ProgramPlaces, replaced: Bool) -> [String: Any] {
+    guard PluginPrograms.isName(from), PluginPrograms.isKey(to), from != to else { return ["ok": false, "found": false, "moved": [], "leftover": false, "reason": "those aren't plugin names"] }
     var moved: [String] = []
     var found = false
     var problems: [String] = []
@@ -26,8 +26,8 @@ enum PluginLegacyMove {
       case .some(let problem): problems.append(problem)
       case .none: moved.append("programs")
       }
-    } else if PluginPrograms.isRealFolder(newPrograms) {
-      retarget(from: oldPrograms, to: newPrograms, places: places)
+    } else if PluginPrograms.isRealFolder(newPrograms), let problem = retarget(from: oldPrograms, to: newPrograms, places: places) {
+      problems.append(problem)
     }
     let data = (appData as NSString).appendingPathComponent("PluginData")
     let oldData = (data as NSString).appendingPathComponent(from)
@@ -44,7 +44,11 @@ enum PluginLegacyMove {
       }
     }
     let oldStore = ((appData as NSString).appendingPathComponent(legacyStoreFolder) as NSString).appendingPathComponent(from)
-    if lstat(oldStore, &info) == 0 {
+    var leftover = false
+    if lstat(oldStore, &info) == 0, !replaced || !problems.isEmpty {
+      found = true
+      leftover = true
+    } else if lstat(oldStore, &info) == 0 {
       found = true
       PluginPrograms.unseal(oldStore)
       PluginPrograms.discard(oldStore)
@@ -55,7 +59,8 @@ enum PluginLegacyMove {
         PluginPrograms.discard(root)
       }
     }
-    var reply: [String: Any] = ["ok": problems.isEmpty, "found": found, "moved": moved]
+    if leftover == false, lstat(oldStore, &info) == 0 { leftover = true }
+    var reply: [String: Any] = ["ok": problems.isEmpty, "found": found, "moved": moved, "leftover": leftover]
     if let problem = problems.first { reply["reason"] = problem }
     return reply
   }
@@ -70,19 +75,27 @@ enum PluginLegacyMove {
     var info = stat()
     if lstat(newPrograms, &info) == 0 { return "its new programs folder is already there" }
     guard renamex_np(oldPrograms, newPrograms, UInt32(RENAME_EXCL)) == 0 else { return "its programs couldn't be moved (\(String(cString: strerror(errno))))" }
-    retarget(from: oldPrograms, to: newPrograms, places: places)
-    return nil
+    return retarget(from: oldPrograms, to: newPrograms, places: places)
   }
 
-  private static func retarget(from oldPrograms: String, to newPrograms: String, places: ProgramPlaces) {
-    guard let held = PluginPrograms.binLock(places) else { return }
+  static func retarget(from oldPrograms: String, to newPrograms: String, places: ProgramPlaces) -> String? {
+    guard let held = PluginPrograms.binLock(places) else { return "its programs on PATH couldn't be locked" }
     defer { close(held) }
-    guard case .success(let bin) = PluginPrograms.openBin(places), let names = bin.names() else { return }
+    let bin: BinFolder
+    switch PluginPrograms.openBin(places) {
+    case .success(let opened): bin = opened
+    case .failure(let refusal):
+      var info = stat()
+      return lstat(places.binDir, &info) != 0 && errno == ENOENT ? nil : "its programs on PATH couldn't be read (\(refusal.reason))"
+    }
+    guard let names = bin.names() else { return "its programs on PATH couldn't be listed" }
     let oldBase = PluginPrograms.storeBase(oldPrograms)
     let newBase = PluginPrograms.storeBase(newPrograms)
+    var stuck: [String] = []
     for name in names {
       guard let target = bin.targetBytes(name), target.starts(with: oldBase) else { continue }
-      _ = bin.swap(name, toBytes: newBase + target.dropFirst(oldBase.count))
+      if !bin.swap(name, toBytes: newBase + target.dropFirst(oldBase.count)) { stuck.append(name) }
     }
+    return stuck.isEmpty ? nil : "\(stuck.sorted().joined(separator: ", ")) on PATH couldn't be pointed at its new folder"
   }
 }

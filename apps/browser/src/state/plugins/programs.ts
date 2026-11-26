@@ -30,12 +30,12 @@ async function link(name: string, consent?: ConsentToken | null) {
   const listing = s.listings[name]!;
   const manifest = activeManifest(s, name)!;
   const hash = listing.hash!;
-  const official = !!listing.official && listing.source === "store";
+  const mayRunAfterUpdate = !!listing.official && listing.source === "store";
   const request = ++requests;
   requested.set(name, manifest.programs.map((p) => p.name));
   setPrograms(name, { state: "linking", hash, request });
-  const programs = manifest.programs.map((p) => (official && p.afterUpdate.length ? { name: p.name, path: p.path, afterUpdate: p.afterUpdate } : { name: p.name, path: p.path }));
-  const result = await linkPluginPrograms({ name, folderId: listing.folderId, approved: hash, version: manifest.version, official, programs }).catch(
+  const programs = manifest.programs.map((p) => (mayRunAfterUpdate && p.afterUpdate.length ? { name: p.name, path: p.path, afterUpdate: p.afterUpdate } : { name: p.name, path: p.path }));
+  const result = await linkPluginPrograms({ name, folderId: listing.folderId, approved: hash, version: manifest.version, programs }).catch(
     (error: unknown): PluginProgramsResult => ({ ok: false, reason: errorText(error) }),
   );
   const now = currentPlugins().programs[name];

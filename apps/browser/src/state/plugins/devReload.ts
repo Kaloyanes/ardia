@@ -17,6 +17,8 @@ export function devLinkPath(id: string, config = configDirectory()): string | nu
   return parts ? `${config.replace(/\/+$/, "")}/plugins-dev/${parts.scope}__${parts.name}.json` : null;
 }
 
+export const canonicalPath = (path: string) => path.replace(/\/+$/, "") || "/";
+
 export async function devReload(params: Record<string, unknown>): Promise<DevReloadReply> {
   const { id, path, link } = params;
   if (!isPluginId(id) || typeof path !== "string" || !path.startsWith("/") || typeof link !== "string") return refuse("bad_request", "plugins.devReload needs an id like @you/name, the plugin's absolute path and its dev link");
@@ -27,6 +29,7 @@ export async function devReload(params: Record<string, unknown>): Promise<DevRel
   await rescanPlugins(consent);
   const listing = currentPlugins().listings[key];
   if (!listing || listing.source !== "dev") return refuse("not_linked", `Ardia doesn't see a dev link for ${id}; run ardia-plugin dev again`);
+  if (!listing.devPath || canonicalPath(path) !== canonicalPath(listing.devPath)) return refuse("bad_request", `${id}'s dev link points at ${listing.devPath ?? "another folder"}, not ${path}; run ardia-plugin dev from that folder`);
   if (!listing.manifest || !listing.hash) return refuse("manifest", listing.problems[0] ?? "plugin.json can't load");
   notePlugin("dev_reloads", consent);
   const record = recordOf(currentPlugins(), key);

@@ -1,0 +1,463 @@
+import assert from "node:assert/strict";
+import { beforeEach, describe, test } from "node:test";
+import { detail, fakeRegistry, keyPair, officialSig, sha, version } from "./fixtures/registry.mjs";
+import { v3Text } from "./fixtures/manifests.mjs";
+const stub = await import("../../test-native/index.ts");
+const shell = await import("../../test-native/shell.ts");
+const { reloadLaunchConfigForTests } = await import("../../platform/launchConfig.ts");
+const { useBrowser } = await import("../browser/store.ts");
+const { usePlugins, activeManifest } = await import("./store.ts");
+const lifecycle = await import("./lifecycle.ts");
+const { startPlugins } = await import("./start.ts");
+const client = await import("./registryClient.ts");
+const revocations = await import("./revocations.ts");
+const lockfile = await import("./lockfile.ts");
+const { planInstall, newInPlan } = await import("./installPlan.ts");
+const { installPlugin } = await import("./installer.ts");
+const updater = await import("./updater.ts");
+const { migrateLegacyPlugins } = await import("./migration.ts");
+const { devReload, devLinkPath } = await import("./devReload.ts");
+const { githubDetail, wantedAssets } = await import("./githubSource.ts");
+const savedState = await import("./savedState.ts");
+const { resetCandidatesForTests } = await import("./candidates.ts");
+const { takePluginCounts } = await import("../telemetry/pluginCounts.ts");
+const { setConsentPeriod, consentToken } = await import("../telemetry/consentPeriod.ts");
+const { refreshCatalog, useCatalog, addRegistry, installFromFile, installFromDeepLink } = await import("./marketplace.ts");
+const { handlePluginInstallLinks, takePluginInstallLinks, resetInstallLinksForTests } = await import("./installLinks.ts");
+const { pluginMenuItems } = await import("./menus.ts");
+const { manifestInProfile, eventProfileId } = await import("./profileScope.ts");
+const { storageSpace } = await import("./storage.ts");
+const { secretSpace } = await import("./secrets.ts");
+const { requestProfile } = await import("./channelData.ts");
+setConsentPeriod(true, "plugins-registry-hardening-test");
+
+const BASE = "https://registry.test/r";
+const CUSTOM = "https://corp.test/r";
+const registryKeys = keyPair();
+const customKeys = keyPair();
+const nativeKeys = keyPair();
+const host = stub.pluginHost;
+const P = () => usePlugins.getState();
+const tick = () => new Promise((r) => setTimeout(r, 5));
+
+function configure(keys = true) {
+  shell.launch.pluginRegistryURL = BASE;
+  shell.launch.pluginRegistryKeys = keys ? `test=${registryKeys.publicPem}` : null;
+  shell.launch.pluginNativeKeys = `native=${nativeKeys.publicPem}`;
+  reloadLaunchConfigForTests();
+}
+
+const manifestFor = (id, v, extra = {}) => {
+  const [scope, name] = id.slice(1).split("/");
+  return v3Text({ name, title: name, version: v, main: "index.js", ...extra }, scope);
+};
+
+let registry;
+let custom;
+
+function route(defaultUp = true) {
+  client.setRegistryFetcherForTests((url, headers, signal) => {
+    if (url.startsWith(CUSTOM)) return custom.fetcher(url, headers, signal);
+    if (!defaultUp) return Promise.reject(new TypeError("Network request failed"));
+    return registry.fetcher(url, headers, signal);
+  });
+}
+
+beforeEach(async () => {
+  configure();
+  useBrowser.getState().hydrate({});
+  startPlugins();
+  Object.assign(host, { folders: [], artifacts: {}, artifactResults: {}, artifactLog: [], artifactVersions: {}, artifactShas: {}, officialVerified: true, activations: [], activateResult: null, adoptions: [], rollbacks: [], localInstalls: [], localInstallResult: null });
+  host.adoptResult = { ok: true, found: false, moved: [] };
+  for (const doc of ["Plugins/plugins-lock.json", "Plugins/plugins-state.json", "Plugins/revocations-cache.json", "Plugins/registry-cache.json", "plugins.json"]) stub.docs.delete(doc);
+  lockfile.resetLockForTests();
+  revocations.resetRevocationsForTests();
+  client.resetRegistryCacheForTests();
+  savedState.resetPluginsExtrasForTests();
+  resetCandidatesForTests();
+  usePlugins.setState({ records: {}, listings: {}, order: [], candidates: {}, consent: null, fetches: {} });
+  registry = fakeRegistry(BASE, registryKeys);
+  custom = fakeRegistry(CUSTOM, customKeys);
+  route();
+  takePluginCounts();
+});
+
+async function confirmWhenAsked(done) {
+  for (let i = 0; i < 100 && !P().consent; i++) await tick();
+  assert.ok(P().consent, "the consent sheet opened");
+  assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+  return done;
+}
+
+async function installed(id, v, extra = {}, versions = [version(v)]) {
+  await registry.publish([detail(id, versions)]);
+  host.artifacts[`${id}@${v}`] = manifestFor(id, v, extra);
+  assert.deepEqual(await confirmWhenAsked(installPlugin({ id }, { showSheet: false })), { ok: true });
+  await lifecycle.rescanPlugins(null);
+}
+
+const revocationList = (seq, entries) => ({ seq, issuedAt: "2026-11-25T10:00:00Z", entries: entries.map((e, i) => ({ entryId: `e${i}`, seq, issuedAt: "2026-11-25T10:00:00Z", reason: "Bad release", ...e })) });
+
+describe("official code is judged by the plugin.json Ardia downloaded", () => {
+  const PROGRAMS = { programs: [{ name: "ardia", path: "bin/ardia" }] };
+  const official = (sig) => detail("@ardia/cli", [version("1.0.0", { artifacts: { universal: { url: "https://github.com/ardia-browser/plugins/releases/download/cli-v1/cli.tar.gz", sha256: sha(1), sizeBytes: 10, ...(sig ? { officialSig: sig } : {}) } } })]);
+
+  test("an @ardia download whose plugin.json puts programs on PATH needs the official signature even when the registry calls it sandboxed", async () => {
+    await registry.publish([official(null)]);
+    host.artifacts["@ardia/cli"] = manifestFor("@ardia/cli", "1.0.0", PROGRAMS);
+    const refused = await installPlugin({ id: "@ardia/cli" }, { showSheet: false });
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /isn't signed by Ardia's release key/);
+    assert.equal(P().consent, null, "nothing reaches the consent sheet");
+    assert.equal(P().candidates.ardia__cli, undefined, "the unsigned download isn't offered");
+    assert.deepEqual(host.activations, []);
+    assert.equal(lockfile.currentLock()["@ardia/cli"], undefined);
+    client.resetRegistryCacheForTests();
+    const signed = await officialSig({ id: "@ardia/cli", version: "1.0.0", platform: "universal", sha256: sha(1) }, nativeKeys);
+    await registry.publish([official(signed)]);
+    assert.deepEqual(await confirmWhenAsked(installPlugin({ id: "@ardia/cli" }, { showSheet: false })), { ok: true });
+    assert.equal(host.artifactLog.at(-1).officialSig, signed, "native gets the signature to check and record itself");
+    assert.equal(host.artifactLog.at(-1).platform, "universal");
+    const entry = lockfile.currentLock()["@ardia/cli"];
+    assert.equal(entry.officialSig, signed);
+    assert.equal(entry.platform, "universal");
+  });
+
+  test("a signature native didn't confirm isn't enough", async () => {
+    const signed = await officialSig({ id: "@ardia/cli", version: "1.0.0", platform: "universal", sha256: sha(1) }, nativeKeys);
+    await registry.publish([official(signed)]);
+    host.artifacts["@ardia/cli"] = manifestFor("@ardia/cli", "1.0.0", PROGRAMS);
+    host.officialVerified = false;
+    try {
+      const refused = await installPlugin({ id: "@ardia/cli" }, { showSheet: false });
+      assert.equal(refused.ok, false);
+      assert.match(refused.reason, /isn't signed/);
+    } finally {
+      host.officialVerified = true;
+    }
+  });
+});
+
+describe("a download must be the exact copy the plan asked for", () => {
+  test("a copy that comes back with another digest or version is refused before consent", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    host.artifactShas[sha(1)] = sha(9);
+    const other = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+    assert.equal(other.ok, false);
+    assert.match(other.reason, /isn't the one the registry signed/);
+    host.artifactShas = {};
+    host.artifactVersions[sha(1)] = "9.9.9";
+    const older = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+    assert.equal(older.ok, false);
+    assert.match(older.reason, /version 9\.9\.9, not 1\.0\.0/);
+    assert.equal(P().consent, null);
+    assert.equal(takePluginCounts().registry_verify_failures, 2);
+  });
+});
+
+describe("revocations hold at every activation", () => {
+  test("a .tar.gz of a revoked version is turned away before the consent sheet", async () => {
+    await registry.publish([], revocationList(2, [{ match: { id: "@acme/file", versions: ["1.0.0"] }, action: "disable" }]));
+    const candidate = { folderId: `store-${sha(3)}`, text: manifestFor("@acme/file", "1.0.0"), version: "1.0.0" };
+    host.folders = [{ name: "acme__file", status: "missing", source: "store", candidates: [candidate] }];
+    host.localInstallResult = { ok: true, name: "acme__file", id: "@acme/file", source: "store", sha256: sha(3), candidate };
+    const result = await installFromFile("/tmp/acme-file.tar.gz");
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /turned off by Ardia's registry: Bad release/);
+    assert.equal(P().consent, null);
+    assert.equal(takePluginCounts().file_installs_revoked, 1);
+  });
+
+  test("a revocation reaches a plugin installed from a folder, which the lock never lists", async () => {
+    host.folders = [{ name: "acme__loose", status: "ok", source: "local", text: manifestFor("@acme/loose", "1.0.0"), folderId: `local-${"a".repeat(64)}` }];
+    await lifecycle.rescanPlugins(null);
+    usePlugins.setState({ records: { acme__loose: { enabled: true, approved: P().listings.acme__loose.hash, values: {}, applied: {} } } });
+    assert.ok(activeManifest(P(), "acme__loose"));
+    await registry.publish([], revocationList(3, [{ match: { id: "@acme/loose" }, action: "block" }]));
+    await updater.checkPlugins(consentToken());
+    assert.equal(P().records.acme__loose.revoked.action, "block");
+    assert.equal(activeManifest(P(), "acme__loose"), null);
+  });
+
+  test("approving a download the registry revoked while the sheet was open is refused and nothing switches", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    const done = installPlugin({ id: "@acme/a" }, { showSheet: false });
+    for (let i = 0; i < 100 && !P().consent; i++) await tick();
+    revocations.resetRevocationsForTests(revocationList(9, [{ match: { id: "@acme/a" }, action: "disable" }]));
+    assert.equal(lifecycle.confirmConsentRequest(P().consent.id), false);
+    const result = await done;
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /turned it off: Bad release/);
+    assert.deepEqual(host.activations, []);
+    assert.equal(P().records.acme__a?.enabled ?? false, false);
+  });
+
+  test("a rollback checks the earlier version against revocations and restores its whole lock entry", async () => {
+    await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+    client.resetRegistryCacheForTests();
+    await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+    host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "read" } });
+    await updater.checkPlugins(consentToken());
+    const updatedEntry = lockfile.currentLock()["@acme/a"];
+    assert.equal(updatedEntry.version, "2.0.0");
+    assert.deepEqual([updatedEntry.previous.version, updatedEntry.previous.sha256, updatedEntry.previous.repo], ["1.0.0", sha(1), "acme/plugins"], "the lock keeps the earlier copy's provenance");
+    revocations.resetRevocationsForTests(revocationList(10, [{ match: { id: "@acme/a", versions: ["1.0.0"] }, action: "disable" }]));
+    const refused = await updater.rollbackPlugin("acme__a");
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /turned off/);
+    assert.equal(P().listings.acme__a.manifest.version, "2.0.0", "nothing switched");
+    assert.equal(takePluginCounts().rollback_refusals, 1);
+    revocations.resetRevocationsForTests(revocationList(11, []));
+    assert.equal((await updater.rollbackPlugin("acme__a")).ok, true);
+    const back = lockfile.currentLock()["@acme/a"];
+    assert.deepEqual([back.version, back.sha256, back.repo], ["1.0.0", sha(1), "acme/plugins"]);
+    assert.equal(back.previous.version, "2.0.0", "going forward again stays possible");
+  });
+
+  test("an @ardia rollback target with no recorded release signature isn't switched to", async () => {
+    const text = manifestFor("@ardia/tool", "2.0.0", { programs: [{ name: "tool", path: "bin/tool" }] });
+    const earlier = manifestFor("@ardia/tool", "1.0.0", { programs: [{ name: "tool", path: "bin/tool" }] });
+    host.folders = [{ name: "ardia__tool", status: "ok", source: "store", text, folderId: `store-${sha(2)}`, previous: { folderId: `store-${sha(1)}`, text: earlier, version: "1.0.0" } }];
+    await lifecycle.rescanPlugins(null);
+    usePlugins.setState({ records: { ardia__tool: { enabled: true, approved: P().listings.ardia__tool.hash, previous: "b".repeat(64), values: {}, applied: {} } } });
+    lockfile.writeLock({ "@ardia/tool": { id: "@ardia/tool", key: "ardia__tool", version: "2.0.0", channel: "latest", source: { kind: "registry", url: BASE }, sha256: sha(2), payloadDigest: null, dependencies: [], root: true, official: true, installedAt: 1, previous: { version: "1.0.0", source: { kind: "registry", url: BASE }, sha256: sha(1), payloadDigest: null, dependencies: [] } } }, null);
+    const refused = await updater.rollbackPlugin("ardia__tool");
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /release signature/);
+    assert.deepEqual(host.rollbacks.filter((n) => n === "ardia__tool"), []);
+  });
+});
+
+describe("the lock follows what's active", () => {
+  test("Update… writes the new version to the lock only once it's switched to", async () => {
+    await installed("@acme/a", "1.0.0", { permissions: { tabs: "read" } });
+    client.resetRegistryCacheForTests();
+    await registry.publish([detail("@acme/a", [version("1.0.0"), version("2.0.0")])]);
+    host.artifacts["@acme/a@2.0.0"] = manifestFor("@acme/a", "2.0.0", { permissions: { tabs: "write" } });
+    await updater.checkPlugins(consentToken());
+    assert.equal(lockfile.currentLock()["@acme/a"].version, "1.0.0", "a waiting update isn't in the lock");
+    assert.ok(updater.reviewUpdate("acme__a"));
+    assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+    for (let i = 0; i < 100 && lockfile.currentLock()["@acme/a"].version !== "2.0.0"; i++) await tick();
+    const entry = lockfile.currentLock()["@acme/a"];
+    assert.deepEqual([entry.version, entry.sha256, entry.previous.version], ["2.0.0", sha(2), "1.0.0"]);
+  });
+
+  test("removing a plugin drops its lock entry", async () => {
+    await installed("@acme/a", "1.0.0");
+    assert.ok(lockfile.currentLock()["@acme/a"]);
+    const removed = await lifecycle.removePlugin("acme__a");
+    assert.equal(removed.ok, true, removed.reason);
+    assert.equal(lockfile.currentLock()["@acme/a"], undefined);
+  });
+
+  test("a locked version whose files are gone is downloaded again", async () => {
+    await installed("@acme/a", "1.0.0");
+    const plan = await planInstall({ id: "@acme/a" });
+    assert.deepEqual(newInPlan(plan.plan), [], "a copy on disk isn't fetched again");
+    host.folders = [];
+    await lifecycle.rescanPlugins(null);
+    assert.deepEqual(newInPlan(plan.plan).map((p) => p.id), ["@acme/a"]);
+  });
+
+  test("an install settles only after the switch, and a failed switch fails it and leaves the lock alone", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")])]);
+    host.artifacts["@acme/a"] = manifestFor("@acme/a", "1.0.0");
+    host.activateResult = { ok: false, reason: "disk full" };
+    const result = await confirmWhenAsked(installPlugin({ id: "@acme/a" }, { showSheet: false }));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "disk full");
+    assert.equal(lockfile.currentLock()["@acme/a"], undefined);
+  });
+
+  test("an install keeps each plugin's repo, so owner and repo revocations match", async () => {
+    await installed("@acme/a", "1.0.0");
+    assert.equal(lockfile.currentLock()["@acme/a"].repo, "acme/plugins");
+    revocations.resetRevocationsForTests(revocationList(4, [{ match: { githubOwner: "acme" }, action: "disable" }]));
+    await updater.enforceRevocations(null);
+    assert.equal(P().records.acme__a.revoked.action, "disable");
+  });
+});
+
+describe("background updates carry their dependencies", () => {
+  test("a root update that needs a newer installed dependency asks for both together and writes neither early", async () => {
+    await registry.publish([detail("@acme/app", [version("1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } })]), detail("@acme/lib", [version("1.0.0")])]);
+    host.artifacts["@acme/app@1.0.0"] = manifestFor("@acme/app", "1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } });
+    host.artifacts["@acme/lib@1.0.0"] = manifestFor("@acme/lib", "1.0.0");
+    assert.deepEqual(await confirmWhenAsked(installPlugin({ id: "@acme/app" }, { showSheet: false })), { ok: true });
+    await lifecycle.rescanPlugins(null);
+    client.resetRegistryCacheForTests();
+    const app2 = version("2.0.0", { dependencies: { "@acme/lib": "^2.0.0" } });
+    await registry.publish([detail("@acme/app", [version("1.0.0", { dependencies: { "@acme/lib": "^1.0.0" } }), app2]), detail("@acme/lib", [version("1.0.0"), version("2.0.0", { artifacts: { universal: { url: "https://github.com/acme/plugins/releases/download/lib2/lib.tar.gz", sha256: sha(5), sizeBytes: 10 } } })])]);
+    host.artifacts["@acme/app@2.0.0"] = manifestFor("@acme/app", "2.0.0", { dependencies: { "@acme/lib": "^2.0.0" } });
+    host.artifacts["@acme/lib@2.0.0"] = manifestFor("@acme/lib", "2.0.0", { permissions: { tabs: "read" } });
+    await updater.checkPlugins(consentToken());
+    const lock = lockfile.currentLock();
+    assert.deepEqual([lock["@acme/app"].version, lock["@acme/lib"].version], ["1.0.0", "1.0.0"], "nothing waiting is written to the lock");
+    const pending = P().records.acme__app.pendingUpdate;
+    assert.ok(pending, "the app's update waits");
+    assert.deepEqual(pending.bundle.map((b) => b.name), ["acme__lib"]);
+    assert.ok(pending.added.some((line) => line.startsWith("@acme/lib")), "the sheet names what the dependency adds");
+    assert.ok(updater.reviewUpdate("acme__app"));
+    assert.deepEqual(P().consent.bundle.map((b) => b.name), ["acme__lib"]);
+    assert.ok(lifecycle.confirmConsentRequest(P().consent.id));
+    for (let i = 0; i < 100 && lockfile.currentLock()["@acme/app"].version !== "2.0.0"; i++) await tick();
+    await lifecycle.rescanPlugins(null);
+    assert.deepEqual([lockfile.currentLock()["@acme/app"].version, lockfile.currentLock()["@acme/lib"].version], ["2.0.0", "2.0.0"]);
+    assert.deepEqual([P().listings.acme__app.manifest.version, P().listings.acme__lib.manifest.version], ["2.0.0", "2.0.0"]);
+  });
+});
+
+describe("the legacy cli move", () => {
+  test("a turned-off legacy cli stays off, and the move isn't done until native says nothing is left", async () => {
+    usePlugins.setState({ records: { cli: { enabled: false, approved: "a".repeat(64), values: {}, applied: {} } } });
+    host.adoptResult = { ok: true, found: true, moved: ["programs"], leftover: true };
+    await migrateLegacyPlugins(null);
+    assert.equal(P().records.ardia__cli.enabled, false);
+    assert.equal(P().records.ardia__cli.preapproved, undefined, "a disabled record isn't approved in advance");
+    assert.equal(savedState.pluginsExtras().migrated.includes("cli"), false, "the old download is still there");
+    await migrateLegacyPlugins(null);
+    assert.equal(P().records.ardia__cli.preapproved, undefined, "running again changes nothing");
+    host.adoptResult = { ok: true, found: false, moved: ["download"], leftover: false };
+    await migrateLegacyPlugins(null);
+    assert.ok(savedState.pluginsExtras().migrated.includes("cli"));
+  });
+
+  test("a move native couldn't finish is retried and keeps the old record", async () => {
+    usePlugins.setState({ records: { cli: { enabled: true, approved: "a".repeat(64), values: {}, applied: {} } } });
+    host.adoptResult = { ok: false, found: true, moved: [], reason: "PATH couldn't be pointed at its new folder" };
+    assert.deepEqual(await migrateLegacyPlugins(consentToken()), []);
+    assert.ok(P().records.cli, "the old record stays until the move works");
+    assert.equal(lockfile.currentLock()["@ardia/cli"], undefined);
+    assert.equal(savedState.pluginsExtras().migrated.includes("cli"), false);
+    assert.equal(takePluginCounts().migrations_failed, 1);
+  });
+});
+
+describe("registries you add", () => {
+  test("the catalog shows each plugin from the registry an install would use", async () => {
+    await registry.publish([detail("@acme/a", [version("1.0.0")]), detail("@corp/x", [version("1.0.0")])]);
+    await custom.publish([detail("@corp/x", [version("1.0.0")]), detail("@other/y", [version("1.0.0")])]);
+    assert.equal(addRegistry(CUSTOM, "", `test=${customKeys.publicPem}`).ok, false, "a registry names its scopes");
+    assert.deepEqual(addRegistry(CUSTOM, "@corp", `test=${customKeys.publicPem}`), { ok: true });
+    await refreshCatalog(true);
+    const rows = useCatalog.getState().entries.map((e) => `${e.id}@${e.registry}`).sort();
+    assert.deepEqual(rows, [`@acme/a@${BASE}`, `@corp/x@${CUSTOM}`]);
+    assert.equal(client.registryForId("@corp/x").url, CUSTOM);
+  });
+
+  test("with no built-in key, ardia.dev stays closed while a registry with its own key installs; with one, revocations must load first", async () => {
+    configure(false);
+    route();
+    await custom.publish([detail("@corp/x", [version("1.0.0")])]);
+    assert.deepEqual(addRegistry(CUSTOM, "@corp", `test=${customKeys.publicPem}`), { ok: true });
+    host.artifacts["@corp/x"] = manifestFor("@corp/x", "1.0.0");
+    assert.deepEqual(await confirmWhenAsked(installPlugin({ id: "@corp/x" }, { showSheet: false })), { ok: true });
+    const closed = await installPlugin({ id: "@acme/a" }, { showSheet: false });
+    assert.equal(closed.ok, false);
+    assert.match(closed.reason, /no key/);
+    configure(true);
+    route(false);
+    client.resetRegistryCacheForTests();
+    stub.docs.delete("Plugins/registry-cache.json");
+    const refused = await installPlugin({ id: "@corp/x", channel: "beta" }, { showSheet: false });
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /revocation list/);
+  });
+
+  test("github: releases give this computer's asset, not every asset labelled universal", async () => {
+    const m = { id: "@a/tool", version: "1.2.0", release: { github: "a/tool", assets: { "macos-arm64": "tool-{version}-mac.tar.gz", universal: "tool-{version}.tar.gz" } } };
+    assert.deepEqual(wantedAssets(m, "macos-arm64"), [{ platform: "macos-arm64", name: "tool-1.2.0-mac.tar.gz" }, { platform: "universal", name: "tool-1.2.0.tar.gz" }]);
+    assert.deepEqual(wantedAssets(m, "linux-x64"), [{ platform: "universal", name: "tool-1.2.0.tar.gz" }]);
+    assert.deepEqual(wantedAssets({ ...m, release: { github: "a/tool", asset: "tool-{platform}.tar.gz" } }, "linux-x64"), [{ platform: "linux-x64", name: "tool-linux-x64.tar.gz" }]);
+    const manifest = v3Text({ name: "tool", title: "Tool", version: "1.2.0", main: "index.js", release: { github: "a/tool", assets: { "macos-arm64": "tool-{version}-mac.tar.gz" } } }, "a");
+    const files = {
+      "https://api.github.com/repos/a/tool/releases?per_page=20": JSON.stringify([{ tag_name: "v1.2.0", prerelease: false, published_at: "2026-11-25T10:00:00Z", assets: [{ name: "tool-1.2.0-mac.tar.gz", browser_download_url: "https://github.com/a/tool/releases/download/v1.2.0/tool-1.2.0-mac.tar.gz", size: 50 }, { name: "tool-1.2.0-mac.tar.gz.sha256", browser_download_url: "https://github.com/a/tool/releases/download/v1.2.0/mac.sha256", size: 64 }] }]),
+      "https://raw.githubusercontent.com/a/tool/v1.2.0/plugin.json": manifest,
+      "https://github.com/a/tool/releases/download/v1.2.0/mac.sha256": `${sha(7)}  tool-1.2.0-mac.tar.gz\n`,
+    };
+    const fetcher = async (url) => (files[url] === undefined ? { status: 404, header: () => null, text: async () => "" } : { status: 200, header: () => null, text: async () => files[url] });
+    const got = await githubDetail(fetcher, "a/tool", "macos-arm64");
+    assert.equal(got.ok, true, got.reason);
+    assert.deepEqual(Object.keys(got.detail.versions[0].artifacts), ["macos-arm64"]);
+    assert.equal((await githubDetail(fetcher, "a/tool", "linux-x64")).ok, false, "there's nothing for this computer");
+  });
+});
+
+describe("dev reloads and install links", () => {
+  const devFolder = (text) => ({ name: "acme__dev", status: "ok", source: "dev", text, folderId: "dev-abc", devPath: "/work/dev" });
+  const params = { id: "@acme/dev", path: "/work/dev", link: devLinkPath("@acme/dev", "/config") };
+
+  test("a reload names the folder the dev link points at, or it's refused before any consent", async () => {
+    host.folders = [devFolder(manifestFor("@acme/dev", "1.0.0"))];
+    const elsewhere = await devReload({ ...params, path: "/tmp/evil" });
+    assert.equal(elsewhere.error.code, "bad_request");
+    assert.equal(P().consent, null);
+    assert.equal((await devReload({ ...params, path: "/work/dev/" })).error.code, "needs_consent", "a trailing slash is the same folder");
+    lifecycle.dismissPluginConsent();
+  });
+
+  test("an install link that arrives before plugins start waits for them", () => {
+    resetInstallLinksForTests();
+    try {
+      assert.deepEqual(takePluginInstallLinks(["ardia://plugin/install/@acme/jira", "ardia://plugin/install/@acme/jira", "https://a.example/"]), ["https://a.example/"]);
+      const seen = [];
+      handlePluginInstallLinks((id) => (seen.push(id), true));
+      assert.deepEqual(seen, ["@acme/jira"], "it's handed over once the handler is there, once");
+    } finally {
+      handlePluginInstallLinks(installFromDeepLink);
+    }
+  });
+});
+
+describe("profile-scoped plugins", () => {
+  const MENU = { commands: [{ name: "go", title: "Go" }], contributes: { menus: { tab: [{ command: "go" }] } }, permissions: { storage: true, secrets: true }, settings: { rows: [{ key: "token", type: "secret", title: "Token" }] } };
+
+  async function scopedPlugin(profiles) {
+    host.folders = [{ name: "acme__m", status: "ok", source: "local", text: manifestFor("@acme/m", "1.0.0", MENU), folderId: `local-${"c".repeat(64)}` }];
+    await lifecycle.rescanPlugins(null);
+    usePlugins.setState({ records: { acme__m: { enabled: true, approved: P().listings.acme__m.hash, values: {}, applied: {}, profiles } } });
+    useBrowser.setState((b) => ({
+      profiles: { ...b.profiles, work: { ...b.profiles.default, id: "work", name: "Work" } },
+      windows: { ...b.windows, ww: { ...(Object.values(b.windows)[0] ?? {}), id: "ww", kind: "main", profileId: "work" }, wd: { ...(Object.values(b.windows)[0] ?? {}), id: "wd", kind: "main", profileId: "default" } },
+    }));
+  }
+
+  test("menus, commands and events reach a profile plugin only in its profiles", async () => {
+    await scopedPlugin(["work"]);
+    assert.equal(P().listings.acme__m.manifest.scope, "profile");
+    const items = (windowId) => pluginMenuItems("tab", { when: {}, data: { windowId } }).map((i) => i.id);
+    assert.equal(items("ww").length, 1);
+    assert.deepEqual(items("wd"), [], "a window of another profile doesn't list it");
+    const { runPluginCommand } = await import("./commands.ts");
+    assert.equal(await runPluginCommand("acme__m", "go", "wd"), false, "its command doesn't run from another profile's window");
+    assert.ok(manifestInProfile(P(), "acme__m", "work"));
+    assert.equal(manifestInProfile(P(), "acme__m", "default"), null);
+    assert.equal(manifestInProfile(P(), "acme__m", null), null, "an event with no profile doesn't reach a plugin limited to some");
+    assert.equal(eventProfileId({ windowId: "ww" }), "work");
+  });
+
+  test("a profile plugin's storage and runtime secrets live under the profile; settings secrets stay shared", async () => {
+    await scopedPlugin(["work"]);
+    const m = P().listings.acme__m.manifest;
+    assert.equal(storageSpace("acme__m", "work"), "profiles/work/acme__m");
+    assert.equal(storageSpace("acme__m", null), "acme__m");
+    assert.equal(secretSpace("acme__m", "work"), "acme__m@work");
+    assert.deepEqual(requestProfile("acme__m", m, { profile: "work" }), { ok: true, profileId: "work" });
+    assert.equal(requestProfile("acme__m", m, { profile: "default" }).ok, false, "a profile it's off in is refused");
+    assert.deepEqual(requestProfile("acme__m", m, {}), { ok: true, profileId: "work" }, "with nothing named, the first profile it's on in");
+    assert.deepEqual(requestProfile("acme__m", { scope: "global" }, { profile: "work" }), { ok: true, profileId: null });
+  });
+});
+
+describe("the revocation list's floor", () => {
+  test("a cached list that doesn't verify can't raise the seq floor", async () => {
+    stub.docs.set("Plugins/revocations-cache.json", JSON.stringify({ version: 1, seq: 999, envelope: { v: 1, kid: "test", sig: "x", payload: {} } }));
+    await registry.publish([], revocationList(5, []));
+    const got = await revocations.refreshRevocations();
+    assert.equal(got.ok, true, got.reason);
+    assert.equal(revocations.revocationSeq(), 5);
+  });
+});

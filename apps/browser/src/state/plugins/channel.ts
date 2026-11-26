@@ -8,6 +8,7 @@ import { eventTargets, refreshFeed, setFeedConsumer, type Body } from "../automa
 import { launchToReplay } from "../automation/lifecycleEvents";
 import { isDecideEvent, type AutomationEventName } from "../automation/eventNames";
 import { activeManifest, currentPlugins } from "./store";
+import { eventProfileId, manifestInProfile } from "./profileScope";
 import { dropCalls } from "./tools";
 import { acceptsLine, onProcessStopped, processExited } from "./process";
 import { valuesFor } from "./values";
@@ -94,8 +95,9 @@ function deliverTo(c: Connection, name: AutomationEventName, data: Record<string
 function deliver(name: AutomationEventName, data: Record<string, unknown>, time: number) {
   const subs = new Map<number, Subscription>();
   const byIndex: Connection[] = [];
+  const profileId = eventProfileId(data);
   for (const c of connections.values()) {
-    if (!c.sub || !activeManifest(currentPlugins(), c.name)) continue;
+    if (!c.sub || !manifestInProfile(currentPlugins(), c.name, profileId)) continue;
     byIndex.push(c);
     subs.set(byIndex.length - 1, c.sub);
   }

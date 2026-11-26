@@ -56,10 +56,24 @@ function updatedOf(raw: unknown): PluginUpdateNote | null {
   return { from: versionOf(raw.from), to: versionOf(raw.to), added: linesOf(raw.added), ...(raw.runtime === true ? { runtime: true as const } : {}), ...(raw.rolledBack === true ? { rolledBack: true as const } : {}) };
 }
 
+const STORE_FOLDER = /^store-[0-9a-f]{64}$/;
+const BUNDLED_NAME = /^[a-z0-9][a-z0-9-]{0,39}__[a-z0-9][a-z0-9-]{0,39}$/;
+
+function bundleOf(raw: unknown): PendingUpdate["bundle"] {
+  if (!Array.isArray(raw)) return undefined;
+  const bundle = raw
+    .filter((b): b is { name: string; folderId: string } => isFields(b) && typeof b.name === "string" && BUNDLED_NAME.test(b.name) && typeof b.folderId === "string" && STORE_FOLDER.test(b.folderId))
+    .slice(0, MAX_UPDATE_LINES)
+    .map((b) => ({ name: b.name, folderId: b.folderId }));
+  return bundle.length ? bundle : undefined;
+}
+
 function pendingOf(raw: unknown): PendingUpdate | null {
   if (!isFields(raw)) return null;
   const version = versionOf(raw.version);
-  return version && typeof raw.folderId === "string" && /^store-[0-9a-f]{64}$/.test(raw.folderId) ? { version, folderId: raw.folderId, added: linesOf(raw.added), dependencies: linesOf(raw.dependencies) } : null;
+  if (!version || typeof raw.folderId !== "string" || !STORE_FOLDER.test(raw.folderId)) return null;
+  const bundle = bundleOf(raw.bundle);
+  return { version, folderId: raw.folderId, added: linesOf(raw.added), dependencies: linesOf(raw.dependencies), ...(bundle ? { bundle } : {}) };
 }
 
 function revokedOf(raw: unknown): PluginRevoked | null {

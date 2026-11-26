@@ -29,9 +29,9 @@ else
 fi
 [ "$(lipo -archs "$app/Contents/MacOS/Ardia")" = arm64 ] || die "the app's executable is $(lipo -archs "$app/Contents/MacOS/Ardia"), not arm64"
 
-echo "==> Official plugins (fetched on Install; the app carries only the pin and the program registry)"
+echo "==> Plugins (installed from the signed registry; the app bundles none)"
 plist="$app/Contents/Info.plist"
-[ ! -e "$app/Contents/Resources/Plugins" ] || die "the export bundles plugins; official plugins are fetched on Install"
+[ ! -e "$app/Contents/Resources/Plugins" ] || die "the export bundles plugins; plugins are installed from the registry"
 /usr/libexec/PlistBuddy -c "Delete :ArdiaBuiltInPlugins" "$plist" 2>/dev/null || true
 plutil -remove ArdiaOfficialPlugins "$plist" >/dev/null 2>&1 || true
 plutil -remove ArdiaProgramRegistry "$plist" >/dev/null 2>&1 || true

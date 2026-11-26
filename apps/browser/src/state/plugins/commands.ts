@@ -1,4 +1,4 @@
-import { shownNames, windowProfileId } from "./profileScope";
+import { manifestInProfile, shownNames, windowProfileId } from "./profileScope";
 import type { CommandAction as BarAction } from "@ardia/core";
 import type { CommandSpec, PageSide, PluginPermissions } from "../../lib/pluginManifest";
 import { minimizedUrl, urlParts } from "../../lib/urlParts";
@@ -111,7 +111,7 @@ async function runCommandSpec(name: string, title: string, permissions: PluginPe
 export async function runPluginCommand(name: string, commandName: string, windowId: string, context: CommandContext = {}, when?: WhenContext, consent?: ConsentToken | null): Promise<boolean> {
   const token = consent !== undefined ? consent : consentToken();
   if (!eligibleKind(useBrowser.getState(), windowId)) return false;
-  const m = activeManifest(currentPlugins(), name);
+  const m = manifestInProfile(currentPlugins(), name, windowProfileId(windowId));
   const command = m?.commands.find((c) => c.name === commandName);
   if (!m || !command || !whenHolds(command.when, when ?? windowWhenContext(windowId))) return false;
   await runCommandSpec(name, m.title, m.permissions, command, windowId, context, token);
@@ -125,7 +125,7 @@ export async function runPluginAction(id: string, windowId: string): Promise<voi
   if (slash < 0) return;
   const name = rest.slice(0, slash);
   const action = rest.slice(slash + 1);
-  const m = activeManifest(currentPlugins(), name);
+  const m = manifestInProfile(currentPlugins(), name, windowProfileId(windowId));
   if (!m) return;
   if (action === PAGE_ACTION) return void openPluginPage(windowId, name);
   await runPluginCommand(name, action, windowId);

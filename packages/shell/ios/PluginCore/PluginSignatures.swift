@@ -17,9 +17,14 @@ enum PluginSignatures {
   }
 
   static func verify(publicKey: String, signature: String, message: String) -> Bool {
-    guard let keyBytes = bytes(publicKey).flatMap(rawKey), let signatureBytes = bytes(signature), signatureBytes.count == 64, let messageBytes = bytes(message),
+    guard let messageBytes = bytes(message) else { return false }
+    return verify(publicKey: publicKey, signature: signature, data: messageBytes)
+  }
+
+  static func verify(publicKey: String, signature: String, data: Data) -> Bool {
+    guard let keyBytes = bytes(publicKey).flatMap(rawKey), let signatureBytes = bytes(signature), signatureBytes.count == 64,
       let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyBytes)
     else { return false }
-    return key.isValidSignature(signatureBytes, for: messageBytes)
+    return key.isValidSignature(signatureBytes, for: data)
   }
 }

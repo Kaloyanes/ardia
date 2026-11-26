@@ -8,14 +8,17 @@ import { warnFor } from "../telemetry/consoleConsent";
 import { dropCandidate, wantCandidate } from "./candidates";
 import { releaseOrphanedConsent } from "./consentSurface";
 import { waitForInstall, type InstallResult } from "./installWaiters";
-import { newInPlan, planInstall, type InstallPlan, type PlannedPlugin, type PlanRequest } from "./installPlan";
-import { ALREADY_ASKING, approvePlugin, requestPluginConsent, rescanPlugins } from "./lifecycle";
-import { currentLock, updateLock, type LockEntry } from "./lockfile";
-import { refreshRevocations } from "./revocations";
+import { isNativeTier, verifyOfficialArtifact } from "@ardia/plugin-sdk/registry";
+import { pluginSubtle } from "../../platform/pluginCrypto";
+import { newInPlan, planInstall, runningPlatform, storeFolderOf, type InstallPlan, type PlannedPlugin, type PlanRequest } from "./installPlan";
+import { ALREADY_ASKING, approvePlugin, requestPluginConsent, rescanPlugins, settledPromotions } from "./lifecycle";
+import { currentLock, dropStagedLock, stageLockEntry, updateLock, type LockEntry } from "./lockfile";
+import { revocationPreflight } from "./revocations";
 import { activeManifest, currentPlugins, recordOf, setPluginFetch, usePlugins } from "./store";
 import { githubDetail } from "./githubSource";
 import { registryFetcher } from "./registryClient";
-import { isPluginId } from "../../lib/pluginIds";
+import { officialNativeKeys } from "./registryKeys";
+import { isOfficialId, isPluginId } from "../../lib/pluginIds";
 
 export const FETCH_REASONS: Record<Exclude<PluginArtifactResult, { ok: true }>["code"], string> = {
   offline: "Couldn't download it. Check your internet connection, then try again.",
@@ -43,7 +46,17 @@ function watchProgress() {
   }
 }
 
-export type Downloaded = { plugin: PlannedPlugin; folderId: string; payloadDigest: string };
+export type Downloaded = { plugin: PlannedPlugin; folderId: string; payloadDigest: string; official: boolean };
+
+export function artifactSpecOf(plugin: PlannedPlugin) {
+  const signed = isOfficialId(plugin.id) && plugin.artifact.officialSig ? { officialSig: plugin.artifact.officialSig, platform: plugin.artifact.platform } : {};
+  return { name: plugin.key, id: plugin.id, version: plugin.version, url: plugin.artifact.url, sha256: plugin.artifact.sha256, sizeBytes: plugin.artifact.sizeBytes, ...signed };
+}
+
+export function identityProblem(plugin: PlannedPlugin, candidate: { folderId: string; version: string }): string | null {
+  if (candidate.folderId !== storeFolderOf(plugin.artifact.sha256)) return `${plugin.id}: the download Ardia got back isn't the one the registry signed`;
+  return candidate.version === plugin.version ? null : `${plugin.id}: the download is version ${candidate.version}, not ${plugin.version}`;
+}
 
 export async function downloadPlan(plugins: readonly PlannedPlugin[], consent: ConsentToken | null, quiet = false): Promise<{ ok: true; downloaded: Downloaded[] } | { ok: false; reason: string; cancelled?: true }> {
   watchProgress();
@@ -51,7 +64,7 @@ export async function downloadPlan(plugins: readonly PlannedPlugin[], consent: C
   for (const plugin of plugins) {
     if (!quiet) setPluginFetch(plugin.key, { state: "fetching", received: 0, total: plugin.artifact.sizeBytes });
     notePlugin("registry_downloads", consent);
-    const result = await fetchPluginArtifact({ name: plugin.key, id: plugin.id, version: plugin.version, url: plugin.artifact.url, sha256: plugin.artifact.sha256, sizeBytes: plugin.artifact.sizeBytes }).catch(
+    const result = await fetchPluginArtifact(artifactSpecOf(plugin)).catch(
       (error: unknown): PluginArtifactResult => ({ ok: false, code: "failed", reason: String(error) }),
     );
     if (!quiet) setPluginFetch(plugin.key, null);
@@ -61,7 +74,12 @@ export async function downloadPlan(plugins: readonly PlannedPlugin[], consent: C
       warnFor(consent, `[plugins] ${plugin.id} wasn't downloaded (${result.code}): ${result.reason}`);
       return result.code === "cancelled" ? { ok: false, reason: FETCH_REASONS.cancelled, cancelled: true } : { ok: false, reason: `${plugin.id}: ${FETCH_REASONS[result.code]}` };
     }
-    downloaded.push({ plugin, folderId: result.candidate.folderId, payloadDigest: result.candidate.payloadDigest });
+    const mismatch = identityProblem(plugin, result.candidate);
+    if (mismatch) {
+      notePlugin("registry_verify_failures", consent);
+      return { ok: false, reason: mismatch };
+    }
+    downloaded.push({ plugin, folderId: result.candidate.folderId, payloadDigest: result.candidate.payloadDigest, official: result.official === true });
   }
   return { ok: true, downloaded };
 }
@@ -75,6 +93,7 @@ export function lockEntriesFor(plan: InstallPlan, downloaded: readonly Downloade
     plan.plugins.map((p) => {
       const was = lock[p.id];
       const got = byId.get(p.id);
+      const signed = p.official && p.artifact.officialSig ? { officialSig: p.artifact.officialSig } : {};
       const entry: LockEntry = {
         id: p.id,
         key: p.key,
@@ -84,17 +103,50 @@ export function lockEntriesFor(plan: InstallPlan, downloaded: readonly Downloade
         sha256: p.artifact.sha256,
         payloadDigest: got?.payloadDigest ?? was?.payloadDigest ?? null,
         dependencies: p.dependencies,
+        repo: p.repo,
+        platform: p.artifact.platform,
+        ...signed,
         root: p.id === plan.root || (was?.root ?? false),
         official: p.official,
         installedAt: got ? Date.now() : (was?.installedAt ?? Date.now()),
+        ...(was?.previous ? { previous: was.previous } : {}),
       };
       return [p.id, entry];
     }),
   );
 }
 
-export const recordPlanInLock = (plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null) =>
-  updateLock((now) => ({ ...now, ...lockEntriesFor(plan, downloaded, requested) }), consent);
+export function stagePlanLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest) {
+  const entries = lockEntriesFor(plan, downloaded, requested);
+  for (const d of downloaded) stageLockEntry(d.folderId, entries[d.plugin.id]!);
+}
+
+export function recordUnchangedInLock(plan: InstallPlan, downloaded: readonly Downloaded[], requested: PlanRequest, consent: ConsentToken | null) {
+  const fetched = new Set(downloaded.map((d) => d.plugin.id));
+  const entries = Object.entries(lockEntriesFor(plan, downloaded, requested)).filter(([id]) => !fetched.has(id));
+  return !entries.length || updateLock((now) => ({ ...now, ...Object.fromEntries(entries) }), consent);
+}
+
+export async function officialDownloadProblem(d: Downloaded): Promise<string | null> {
+  const manifest = currentPlugins().candidates[d.plugin.key]?.manifest?.v3;
+  if (!isOfficialId(d.plugin.id) || !manifest || !isNativeTier(manifest)) return null;
+  const refused = `${d.plugin.id} ${d.plugin.version} reaches outside the sandbox but isn't signed by Ardia's release key`;
+  if (!d.official) return refused;
+  const verified = await verifyOfficialArtifact(
+    { id: d.plugin.id, version: d.plugin.version, platform: d.plugin.artifact.platform, sha256: d.plugin.artifact.sha256 },
+    d.plugin.artifact.officialSig,
+    officialNativeKeys(),
+    { subtle: pluginSubtle() },
+  );
+  return verified.ok ? null : `${refused}: ${verified.reason}`;
+}
+
+function dropDownloads(downloaded: readonly Downloaded[]) {
+  for (const d of downloaded) {
+    dropCandidate(d.plugin.key);
+    dropStagedLock(d.plugin.key);
+  }
+}
 
 function candidateHash(key: string, folderId: string): string | null {
   const candidate = currentPlugins().candidates[key];
@@ -108,8 +160,11 @@ function listingProblem(key: string, folderId: string): string | null {
 }
 
 export async function prepareInstall(request: PlanRequest, consent: ConsentToken | null, quiet = false): Promise<{ ok: true; plan: InstallPlan; downloaded: Downloaded[] } | { ok: false; reason: string; cancelled?: true }> {
-  const revoked = await refreshRevocations();
-  if (!revoked.ok && revoked.reason?.startsWith("This Ardia has no key")) return { ok: false, reason: `${OFFLINE_REGISTRY}: ${revoked.reason}` };
+  const preflight = await revocationPreflight();
+  if (!preflight.ok) {
+    notePlugin("registry_offline", consent);
+    return { ok: false, reason: `${OFFLINE_REGISTRY}. ${preflight.reason}` };
+  }
   const planned = await planInstall(request);
   if (!planned.ok) {
     notePlugin(planned.code === "offline" ? "registry_offline" : planned.code === "verify" || planned.code === "official" ? "registry_verify_failures" : "registry_install_refusals", consent);
@@ -122,14 +177,21 @@ export async function prepareInstall(request: PlanRequest, consent: ConsentToken
   await rescanPlugins(consent);
   for (const d of got.downloaded) {
     const problem = listingProblem(d.plugin.key, d.folderId);
-    if (problem) return { ok: false, reason: `${d.plugin.id}: ${problem}` };
+    const unsigned = problem ? null : await officialDownloadProblem(d);
+    if (problem || unsigned) {
+      if (unsigned) notePlugin("registry_verify_failures", consent);
+      dropDownloads(got.downloaded);
+      await rescanPlugins(consent);
+      return { ok: false, reason: unsigned ?? `${d.plugin.id}: ${problem}` };
+    }
   }
+  stagePlanLock(planned.plan, got.downloaded, request);
   return { ok: true, plan: planned.plan, downloaded: got.downloaded };
 }
 
 async function withGithubId(request: PlanRequest): Promise<{ ok: true; request: PlanRequest } | { ok: false; reason: string }> {
   if (request.source?.kind !== "github" || isPluginId(request.id)) return { ok: true, request };
-  const got = await githubDetail(registryFetcher(), request.source.repo);
+  const got = await githubDetail(registryFetcher(), request.source.repo, runningPlatform());
   return got.ok ? { ok: true, request: { ...request, id: got.detail.id } } : got;
 }
 
@@ -150,18 +212,21 @@ export async function installPlugin(given: PlanRequest, options: InstallOptions 
   const waiting = fresh.filter((f): f is { name: string; hash: string } => !!f.hash);
   const root = waiting.find((w) => w.name === rootPlugin.key) ?? (activeManifest(currentPlugins(), rootPlugin.key) ? null : { name: rootPlugin.key, hash: currentPlugins().listings[rootPlugin.key]?.hash ?? "" });
   const bundle = waiting.filter((w) => w.name !== rootPlugin.key);
-  if (!root || !root.hash) {
-    for (const b of bundle) approvePlugin(b.name, b.hash, consent);
-    recordPlanInLock(prepared.plan, prepared.downloaded, request, consent);
+  const finish = async (approved: readonly { name: string }[]): Promise<InstallResult> => {
+    const promoted = await settledPromotions(approved.map((w) => w.name));
+    if (!promoted.ok) return promoted;
+    if (!recordUnchangedInLock(prepared.plan, prepared.downloaded, request, consent)) return { ok: false, reason: "Ardia couldn't save its plugin settings. Try again." };
     notePlugin("registry_installs", consent);
     return { ok: true };
+  };
+  if (!root || !root.hash) {
+    if (!bundle.every((b) => approvePlugin(b.name, b.hash, consent))) return { ok: false, reason: "Ardia couldn't save its plugin settings. Try again." };
+    return finish(bundle);
   }
   if (options.silent || recordOf(currentPlugins(), root.name).preapproved) {
     const approved = [...bundle, root].every((w) => approvePlugin(w.name, w.hash, consent));
     if (!approved) return { ok: false, reason: "Ardia couldn't save its plugin settings. Try again." };
-    recordPlanInLock(prepared.plan, prepared.downloaded, request, consent);
-    notePlugin("registry_installs", consent);
-    return { ok: true };
+    return finish([...bundle, root]);
   }
   releaseOrphanedConsent();
   if (currentPlugins().consent) return { ok: false, reason: ALREADY_ASKING };
@@ -171,10 +236,10 @@ export async function installPlugin(given: PlanRequest, options: InstallOptions 
   if (options.showSheet !== false) openSettings("plugins", null, root.name);
   const result = await done;
   if (!result.ok) {
-    for (const d of prepared.downloaded) dropCandidate(d.plugin.key);
+    dropDownloads(prepared.downloaded);
     return result;
   }
-  recordPlanInLock(prepared.plan, prepared.downloaded, request, consent);
+  if (!recordUnchangedInLock(prepared.plan, prepared.downloaded, request, consent)) return { ok: false, reason: "Ardia couldn't save its plugin settings. Try again." };
   notePlugin("registry_installs", consent);
   return result;
 }

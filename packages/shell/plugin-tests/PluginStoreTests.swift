@@ -928,4 +928,131 @@ extension PluginStoreTests {
     XCTAssertFalse(PluginSignatures.verify(publicKey: raw.base64EncodedString(), signature: url(signature), message: Data("other".utf8).base64EncodedString()))
     XCTAssertFalse(PluginSignatures.verify(publicKey: "not a key", signature: url(signature), message: message.base64EncodedString()))
   }
+
+  func officialCopy(_ version: String = "1.2.0") throws -> StoreCopy {
+    let archive = try pluginArchive(manifest(version, id: "@ardia/tool"))
+    let sha = try XCTUnwrap(PluginArchive.sha256(file: archive))
+    let expectation = StoreExpectation(key: "ardia__tool", id: "@ardia/tool", version: version, sha256: sha)
+    let scratch = store.makeScratch("ardia__tool", prefix: ".fetch-")!
+    defer { PluginPrograms.discard(scratch) }
+    try FileManager.default.copyItem(atPath: archive, toPath: "\(scratch)/download.tar.gz")
+    return try PluginInstaller.verifyAndPublish(expectation, archive: "\(scratch)/download.tar.gz", scratch: scratch, store: store).get().copy
+  }
+
+  func officialSignature(_ signer: Curve25519.Signing.PrivateKey, _ copy: StoreCopy, platform: String = "universal") throws -> OfficialProof {
+    let message = try XCTUnwrap(PluginOfficial.message(id: "@ardia/tool", version: copy.version, platform: platform, sha256: copy.sha))
+    let signature = try signer.signature(for: message).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    return OfficialProof(platform: platform, signature: signature)
+  }
+
+  func testTheOfficialMessageIsTheBytesTheSdkSigns() {
+    let sha = String(repeating: "ab", count: 32)
+    let message = PluginOfficial.message(id: "@ardia/cli", version: "1.2.3-beta.1", platform: "macos-arm64", sha256: sha)
+    XCTAssertEqual(message.map { String(decoding: $0, as: UTF8.self) }, "ardia-official-native-v1\n{\"id\":\"@ardia/cli\",\"platform\":\"macos-arm64\",\"sha256\":\"\(sha)\",\"v\":1,\"version\":\"1.2.3-beta.1\"}")
+    XCTAssertNil(PluginOfficial.message(id: "@acme/cli", version: "1.0.0", platform: "universal", sha256: sha), "only @ardia plugins carry an official signature")
+    XCTAssertNil(PluginOfficial.message(id: "@ardia/cli", version: "1.0.0\"", platform: "universal", sha256: sha))
+    XCTAssertNil(PluginOfficial.message(id: "@ardia/cli", version: "1.0.0", platform: "plan9", sha256: sha))
+    XCTAssertEqual(PluginOfficial.keys(override: "kid-1=\(String(repeating: "A", count: 43))=, \(String(repeating: "B", count: 44))"), [String(repeating: "A", count: 43) + "=", String(repeating: "B", count: 44)])
+  }
+
+  func testAnOfficialCopyIsTrustedOnlyWithAProofSignedForItsExactDownload() throws {
+    let signer = Curve25519.Signing.PrivateKey()
+    let keys = [signer.publicKey.rawRepresentation.base64EncodedString()]
+    let copy = try officialCopy()
+    XCTAssertFalse(store.isOfficial(copy, keys: keys), "an @ardia name alone isn't official")
+    let other = try officialCopy("1.3.0")
+    XCTAssertTrue(store.recordOfficial(copy, proof: try officialSignature(signer, other)))
+    XCTAssertFalse(store.isOfficial(copy, keys: keys), "a signature for another version doesn't carry over")
+    XCTAssertTrue(store.recordOfficial(copy, proof: try officialSignature(signer, copy)))
+    XCTAssertTrue(store.isOfficial(copy, keys: keys))
+    XCTAssertFalse(store.isOfficial(copy, keys: [Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()]), "another key's signature isn't Ardia's")
+    XCTAssertFalse(store.isOfficial(copy, keys: []), "with no official key nothing is official")
+    let plain = try publishedVersion("1.0.0", say: "x")
+    XCTAssertTrue(store.recordOfficial(plain.copy, proof: try officialSignature(signer, copy)))
+    XCTAssertFalse(store.isOfficial(plain.copy, keys: keys), "a proof planted beside a non-@ardia copy isn't trusted")
+    XCTAssertTrue(store.activate("ardia__tool", sha: copy.sha))
+    store.sweep("ardia__tool")
+    XCTAssertTrue(store.isOfficial(try XCTUnwrap(store.active("ardia__tool")), keys: keys), "sweeping keeps the active copy's proof")
+    XCTAssertNil(store.copy("ardia__tool", sha: other.sha).flatMap(store.officialProof), "sweeping drops proofs of removed copies")
+  }
+
+  func testAnActivationThatCantKeepTheEarlierCopyChangesNothing() throws {
+    let first = try publishedVersion("1.0.0", say: "one")
+    let second = try publishedVersion("1.1.0", say: "two")
+    XCTAssertTrue(store.activate(key, sha: first.copy.sha))
+    let previous = "\(root)/Plugins/store/@test/tool/previous"
+    try FileManager.default.createDirectory(atPath: "\(previous)/held", withIntermediateDirectories: true)
+    XCTAssertFalse(store.activate(key, sha: second.copy.sha), "a switch that would lose the rollback copy fails")
+    XCTAssertEqual(store.active(key)?.version, "1.0.0", "the active copy is unchanged")
+    try FileManager.default.removeItem(atPath: previous)
+    XCTAssertTrue(store.activate(key, sha: second.copy.sha))
+    XCTAssertEqual(store.previous(key)?.version, "1.0.0")
+  }
+
+  func folderWith(_ files: [String: String]) throws -> String {
+    let folder = "\(root)/folder-\(UUID().uuidString)"
+    for (path, text) in files {
+      let file = (folder as NSString).appendingPathComponent(path)
+      try FileManager.default.createDirectory(atPath: (file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+      try Data(text.utf8).write(to: URL(fileURLWithPath: file))
+    }
+    return folder
+  }
+
+  func digest(_ folder: String) throws -> Result<String, PluginFolderDigest.Failure> {
+    let opened = try XCTUnwrap(PluginFiles.openFolder(folder))
+    defer { opened.close() }
+    return PluginFolderDigest.digest(opened.fd)
+  }
+
+  func testAFolderDigestCoversEveryFileAndRefusesLinks() throws {
+    let files = ["plugin.json": manifest(), "main.js": "run()", "lib/a.js": "a"]
+    let one = try folderWith(files)
+    let two = try folderWith(files)
+    let first = try digest(one).get()
+    XCTAssertEqual(try digest(two).get(), first, "the digest depends only on paths and bytes")
+    try Data("x".utf8).write(to: URL(fileURLWithPath: "\(one)/.DS_Store"))
+    XCTAssertEqual(try digest(one).get(), first, "Finder's .DS_Store doesn't change it")
+    try Data("evil()".utf8).write(to: URL(fileURLWithPath: "\(two)/lib/a.js"))
+    XCTAssertNotEqual(try digest(two).get(), first, "a changed script that isn't plugin.json changes it")
+    try Data("b".utf8).write(to: URL(fileURLWithPath: "\(one)/lib/b.js"))
+    XCTAssertNotEqual(try digest(one).get(), first, "an added file changes it")
+    let linked = try folderWith(files)
+    try FileManager.default.createSymbolicLink(atPath: "\(linked)/lib/escape.js", withDestinationPath: "/etc/hosts")
+    XCTAssertEqual(try digest(linked), .failure(.special("lib/escape.js")))
+  }
+
+  func testAnApprovedFolderIsBoundToItsWholeDigest() throws {
+    let folder = try folderWith(["plugin.json": manifest(), "main.js": "run()"])
+    let opened = try XCTUnwrap(PluginFiles.openFolder(folder))
+    let folderId = try PluginFiles.digestedFolder(opened).get().id
+    opened.close()
+    XCTAssertTrue(folderId.hasPrefix("local-"))
+    let approved = PluginFiles.approvalHash(text: manifest(), folderId: folderId)
+    guard case .success(let ok) = PluginFiles.approvedFolder(folder, folderId: folderId, approved: approved, digested: true) else { return XCTFail("the approved folder didn't open") }
+    ok.close()
+    XCTAssertNotNil(PluginFiles.readPageFile(folder, folderId: folderId, approved: approved, relative: "main.js", digested: true))
+    try Data("evil()".utf8).write(to: URL(fileURLWithPath: "\(folder)/main.js"))
+    guard case .failure = PluginFiles.approvedFolder(folder, folderId: folderId, approved: approved, digested: true) else { return XCTFail("a folder whose script changed after approval still opened") }
+    XCTAssertNil(PluginFiles.readPageFile(folder, folderId: folderId, approved: approved, relative: "main.js", digested: true))
+  }
+
+  func testHostileFileNamesAreDigestedByTheirBytesAndRenamingChangesTheDigest() throws {
+    let names = ["new\nline.js", "ünïcode.js", " lead space.js", "tab\there.js", String(repeating: "x", count: 200) + ".js", "-dash.js", "back\\slash.js"]
+    let folder = try folderWith(Dictionary(uniqueKeysWithValues: (names + ["plugin.json"]).map { ($0, $0 == "plugin.json" ? manifest() : "body") }))
+    let first = try digest(folder).get()
+    try FileManager.default.moveItem(atPath: "\(folder)/ünïcode.js", toPath: "\(folder)/unicode.js")
+    XCTAssertNotEqual(try digest(folder).get(), first, "a renamed file is another folder")
+    let fifo = "\(folder)/pipe"
+    XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+    XCTAssertEqual(try digest(folder), .failure(.special("pipe")))
+  }
+
+  func testProfileDataPathsTakeOnlyAProfileIdAndAPluginKey() {
+    XCTAssertEqual(PluginDataPaths.relative("acme__tool"), "acme__tool")
+    XCTAssertEqual(PluginDataPaths.relative("profiles/p-1x-2/acme__tool"), "profiles/p-1x-2/acme__tool")
+    for hostile in ["profiles", "profiles/../acme__tool", "profiles/p/../../x", "profiles//acme__tool", "profiles/p/acme__tool/extra", "../acme__tool", "profiles/p\u{0}/acme__tool", "profiles/p.q/acme__tool", "/abs", ""] {
+      XCTAssertNil(PluginDataPaths.relative(hostile), hostile)
+    }
+  }
 }

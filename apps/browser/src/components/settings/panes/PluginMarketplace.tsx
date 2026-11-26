@@ -155,7 +155,7 @@ export function RegistriesSection() {
       <SectionHeader anchor="plugins.registries" />
       <Group of="plugins.registries">
         {registries.map((r) => (
-          <Row key={r.url} title={r.url} description={r.scopes.length ? `Serves ${r.scopes.join(", ")}` : "Serves any scope but @ardia"}>
+          <Row key={r.url} title={r.url} description={r.scopes.length ? `Serves ${r.scopes.join(", ")}` : "Serves nothing until it names its scopes"}>
             <Button
               title="Remove"
               onPress={() => {

@@ -1,72 +1,30 @@
 import { defaultValues, rowValue } from "../../lib/pluginManifest";
-import { listPluginFolders, removePluginFiles, type PluginFolderEntry } from "../../platform/plugins";
-import { systemInfo } from "../../platform/app";
+import { listPluginFolders, removePluginFiles } from "../../platform/plugins";
 import { onConfigChange } from "../../platform/configFolder";
 import { useBrowser } from "../browser/store";
 import { notePlugin } from "../telemetry/pluginCounts";
 import { consentNow, consentToken, type ConsentToken } from "../telemetry/choice";
 import { warnFor } from "../telemetry/consoleConsent";
-import { listingOf } from "./appChecks";
 import { programControlOn, userTurnedControlOff } from "../app/programControlSetting";
 import { applySettingsPatch, planDisable, planEnable, spliceApplied } from "./defaults";
 import { pluginRecordsSaved, writePluginRecords } from "./savedState";
 import { settleInstall } from "./installWaiters";
 import { abandonWithdrawal, activeManifest, approvalMatches, setPluginFetch, clearUnsaved, UNSAVED, commitPlugins, consentListing, currentPlugins, withdrawalsFor, type PluginsCommit, NO_RECORD, recordApproves, recordOf, usePlugins, type PluginConsentRequest, type PluginListing, type PluginRecord } from "./store";
 import { activateStorePlugin, type PluginSource } from "../../platform/plugins";
-import { chosenCandidate } from "./candidates";
-import { currentLock } from "./lockfile";
+import { forgetLockKey } from "./lockfile";
+import { listingRevocation, revokedText } from "./revocationChecks";
+import { candidatesOf, listingsOf } from "./folderListings";
+import { lockAfterPromotion, settledPromotions, trackPromotion } from "./promotedLock";
 import { pluginsScanned } from "./scanListeners";
 import { stopProcess, superviseProcess, supervisedNames } from "./process";
 import { checkActivations, deactivatePlugin, shouldRun } from "./activation";
 import { clearPluginSurfaces } from "./surfaces";
-import { clearPluginSecrets, type SecretsCleared } from "./secrets";
+import { clearPluginSecretsEverywhere, type SecretsCleared } from "./secrets";
 import { closePluginStorage, reopenPluginStorage } from "./storage";
 import { forgetPluginGestures } from "./gestures";
 import { sendValues } from "./channel";
 import { reconcilePrograms, removePrograms } from "./programs";
 import { ownValue } from "../../lib/decode";
-
-const MAX_PLUGINS = 64;
-
-const READ_PROBLEMS: Record<Exclude<PluginFolderEntry["status"], "ok">, string> = {
-  missing: "The folder has no plugin.json",
-  link: "plugin.json is a link; it must be a file in the plugin's folder",
-  notFile: "plugin.json isn't a file",
-  tooBig: "plugin.json is over 1 MB",
-  unreadable: "plugin.json couldn't be read",
-};
-
-const officialStore = (e: PluginFolderEntry, listing: PluginListing) =>
-  e.source === "store" && !!listing.manifest?.official && currentLock()[listing.manifest.id]?.official === true;
-
-const sourceFlags = (e: PluginFolderEntry): Partial<PluginListing> => ({
-  source: e.source,
-  ...(e.source === "dev" && e.devPath ? { devPath: e.devPath } : {}),
-  ...(e.shadowsStore ? { shadowsStore: true } : {}),
-  ...(e.previous ? { previousVersion: e.previous.version } : {}),
-});
-
-function listingsOf(entries: PluginFolderEntry[]): PluginListing[] {
-  const settings = useBrowser.getState().settings;
-  const version = systemInfo().appVersion;
-  return entries.slice(0, MAX_PLUGINS).flatMap((e) => {
-    if (e.status !== "ok" && e.source === "store" && !e.text) return [];
-    const listing = listingOf(e.name, e.status === "ok" ? (e.text ?? "") : null, e.status === "ok" ? null : READ_PROBLEMS[e.status], settings, version, e.folderId ?? "", e.source);
-    return [{ ...listing, ...sourceFlags(e), ...(officialStore(e, listing) ? { official: true } : {}) }];
-  });
-}
-
-function candidatesOf(entries: PluginFolderEntry[]): PluginListing[] {
-  const settings = useBrowser.getState().settings;
-  const version = systemInfo().appVersion;
-  return entries.flatMap((e) => {
-    const wanted = chosenCandidate(e.name, currentPlugins().records[e.name]);
-    const c = wanted ? e.candidates?.find((candidate) => candidate.folderId === wanted) : undefined;
-    if (!c) return [];
-    const listing = listingOf(e.name, c.text, null, settings, version, c.folderId, "store");
-    return [{ ...listing, source: "store" as const, version: c.version, ...(officialStore(e, listing) ? { official: true } : {}) }];
-  });
-}
 
 function saveRecords(records: Record<string, PluginRecord>, consent: ConsentToken | null): boolean {
   if (!writePluginRecords(records, consent)) return false;
@@ -219,16 +177,29 @@ export function confirmConsentRequest(id: number): boolean {
   return asked?.id === id && enablePlugin(asked.name, asked.hash);
 }
 
+export function approvalRefusal(name: string, hash: string): string | null {
+  const listing = consentListing(currentPlugins(), name, hash);
+  if (!listing?.manifest || listing.hash !== hash) return "It changed while you were deciding. Try again.";
+  const revoked = listingRevocation(name, listing);
+  return revoked ? `${listing.manifest.title}: ${revokedText(revoked)}` : null;
+}
+
 export function enablePlugin(name: string, hash: string): boolean {
   const asked = currentPlugins().consent;
   if (asked?.name !== name || asked.hash !== hash) return false;
   const bundle = asked.bundle ?? [];
   if (!bundle.every((b) => consentListing(currentPlugins(), b.name, b.hash)?.hash === b.hash)) return false;
+  const refused = [...bundle, { name, hash }].map((b) => approvalRefusal(b.name, b.hash)).find((r) => r !== null);
+  if (refused) {
+    usePlugins.setState({ consent: null });
+    settleInstall(name, { ok: false, reason: refused });
+    return false;
+  }
   const consent = consentNow();
   for (const b of bundle) if (!approvePlugin(b.name, b.hash, consent)) return refuseConsent(name);
   if (!approvePlugin(name, hash, consent)) return refuseConsent(name);
   usePlugins.setState({ consent: null });
-  settleInstall(name, { ok: true });
+  void settledPromotions([...bundle.map((b) => b.name), name]).then((result) => settleInstall(name, result));
   return true;
 }
 
@@ -238,9 +209,12 @@ function refuseConsent(name: string): boolean {
   return false;
 }
 
+export { settledPromotions };
+
 export function approvePlugin(name: string, hash: string, consent: ConsentToken | null): boolean {
   const listing = consentListing(currentPlugins(), name, hash);
   if (!listing?.manifest || listing.hash !== hash || removing.has(name)) return false;
+  if (listingRevocation(name, listing)) return false;
   const candidate = currentPlugins().candidates[name] === listing;
   const manifest = listing.manifest;
   const before = recordOf(currentPlugins(), name);
@@ -253,7 +227,7 @@ export function approvePlugin(name: string, hash: string, consent: ConsentToken 
   const { pendingUpdate: _pending, preapproved: _preapproved, revoked: _revoked, ...rest } = before;
   const next: PluginRecord = { ...rest, enabled: true, approved: hash, values, applied: plan.applied, ...(previous ? { previous } : {}) };
   if (!saveRecords({ ...records, [name]: next }, consent)) return false;
-  if (candidate) void promoteCandidate(name, listing, consent);
+  if (candidate) trackPromotion(name, promoteCandidate(name, listing, consent));
   const asksControl = manifest.permissions.control;
   applySettingsPatch(kept || !asksControl || programControlOn(useBrowser.getState()) || userTurnedControlOff() ? plan.patch : { ...plan.patch, cliControl: true });
   clearUnsaved(name);
@@ -282,6 +256,7 @@ export async function promoteCandidate(name: string, candidate: PluginListing, c
   }
   const promoted = await activateStorePlugin(name, candidate.folderId, candidate.hash!).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!promoted.ok) warnFor(consent, `[plugins] ${name}'s download couldn't be switched to: ${promoted.reason}`);
+  if (promoted.ok && !lockAfterPromotion(name, candidate, consent)) warnFor(consent, `[plugins] ${name} was switched to, but plugins-lock.json couldn't be saved`);
   await rescanPlugins(consent);
   setPluginFetch(name, promoted.ok ? null : { state: "failed", code: "failed", reason: promoted.reason });
   if (!promoted.ok) setTimeout(() => void rescanPlugins(consent), PROMOTION_RETRY.delayMs);
@@ -360,8 +335,9 @@ export async function removePlugin(name: string, mayGoOn: () => boolean = () => 
       return { ok: false, reason: "It changed while it was being removed, so its files are still there. Try again." };
     const removed = await removePluginFiles(name, source, source === "local" ? (expected?.folderId ?? identity.folderId) : null).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
     if (!removed.ok) return removed;
-    const secrets = source === "dev" ? { ok: true, remaining: [] } : await clearPluginSecrets(name).catch((error: unknown): SecretsCleared => (warnFor(consent, `[plugins] couldn't remove ${name}'s secrets`, error), { ok: false, remaining: [] }));
-    const forgotten = updateRecord(name, () => null, consent) && (await pluginRecordsSaved(consent));
+    const secrets = source === "dev" ? { ok: true, remaining: [] } : await clearPluginSecretsEverywhere(name, Object.keys(useBrowser.getState().profiles)).catch((error: unknown): SecretsCleared => (warnFor(consent, `[plugins] couldn't remove ${name}'s secrets`, error), { ok: false, remaining: [] }));
+    const unlocked = source === "dev" || forgetLockKey(name, consent);
+    const forgotten = updateRecord(name, () => null, consent) && (await pluginRecordsSaved(consent)) && unlocked;
     if (!forgotten) toForget.add(name);
     await rescanPlugins(consent);
     if (!forgotten) return { ok: false, removed: true, reason: "Its files are removed, but Ardia couldn't save its plugin settings; it drops its record the next time it can save." };

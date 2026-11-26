@@ -677,7 +677,8 @@ type FakeCandidate = { folderId: string; text: string; version: string };
 export const pluginHost = {
   folders: [] as {
     name: string;
-    status: "ok" | "missing" | "link" | "notFile" | "tooBig" | "unreadable";
+    status: "ok" | "missing" | "link" | "notFile" | "tooBig" | "unreadable" | "unchecked";
+    reason?: string;
     source?: "local" | "store" | "dev";
     text?: string;
     folderId?: string;
@@ -689,13 +690,16 @@ export const pluginHost = {
   artifacts: {} as Record<string, string>,
   artifactResults: {} as Record<string, { ok: false; code: "offline" | "failed" | "verify" | "cancelled" | "unsupported"; reason: string; cause?: string }>,
   artifactGate: null as null | Promise<void>,
-  artifactLog: [] as { name: string; id: string; version: string; url: string; sha256: string }[],
+  artifactLog: [] as { name: string; id: string; version: string; url: string; sha256: string; officialSig?: string; platform?: string }[],
+  artifactVersions: {} as Record<string, string>,
+  artifactShas: {} as Record<string, string>,
+  officialVerified: true,
   artifactCancels: [] as string[],
   activations: [] as { name: string; folderId: string; approved: string }[],
   activateResult: null as null | { ok: false; reason: string },
   rollbacks: [] as string[],
   adoptions: [] as { from: string; to: string }[],
-  adoptResult: { ok: true, found: false, moved: [] } as { ok: boolean; found: boolean; moved: string[]; reason?: string },
+  adoptResult: { ok: true, found: false, moved: [] } as { ok: boolean; found: boolean; moved: string[]; leftover?: boolean; reason?: string },
   localInstalls: [] as string[],
   localInstallResult: null as null | { ok: true; name: string; id: string; source: "local" | "store" | "dev"; sha256?: string; candidate?: FakeCandidate } | { ok: false; reason: string },
   starts: [] as { name: string; run: string[]; memoryMB: number; network: boolean; folderId: string; approved: string; page: boolean; runtime?: "js" | "process"; entry?: string }[],
@@ -712,7 +716,7 @@ export const pluginHost = {
   events: [] as { name: string; run: number; line: string }[],
   removed: [] as string[],
   removeFolderIds: [] as (string | null)[],
-  links: [] as { name: string; folderId: string; approved: string; version: string | null; official: boolean; programs: { name: string; path: string; afterUpdate?: string[][] }[] }[],
+  links: [] as { name: string; folderId: string; approved: string; version: string | null; programs: { name: string; path: string; afterUpdate?: string[][] }[] }[],
   unlinks: [] as { name: string; programs: string[]; remove: boolean }[],
   sweeps: [] as string[][],
   afterUpdateQuitStops: null as null | { consent: string; exitedOnTerm: number; killed: number },
@@ -731,6 +735,14 @@ const pluginEvents = nativeEvents();
 export const emitPluginLine = (line: { name: string; run: number; line: string }) => pluginEvents.emit("onLine", line);
 export const emitPluginExit = (exit: { name: string; run: number; status: number | null; signal: number | null; overMemory: boolean }) => pluginEvents.emit("onExit", exit);
 export const storeFolderId = (sha: string) => `store-${sha}`;
+const textVersion = (text: string): string => {
+  try {
+    const version = (JSON.parse(text) as { version?: unknown }).version;
+    return typeof version === "string" ? version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+};
 const plugins: Modules["ArdiaPlugins"] = {
   folder: () => "/config/plugins",
   list: async () => {
@@ -767,7 +779,7 @@ const plugins: Modules["ArdiaPlugins"] = {
   revealFolder: () => {},
   devSnapshotPage: async () => false,
   fetchArtifact: async (spec) => {
-    pluginHost.artifactLog.push({ name: spec.name, id: spec.id, version: spec.version, url: spec.url, sha256: spec.sha256 });
+    pluginHost.artifactLog.push({ name: spec.name, id: spec.id, version: spec.version, url: spec.url, sha256: spec.sha256, ...(spec.officialSig ? { officialSig: spec.officialSig, platform: spec.platform } : {}) });
     await pluginHost.artifactGate;
     if (pluginHost.artifactCancels.includes(spec.name)) {
       pluginHost.artifactCancels = pluginHost.artifactCancels.filter((n) => n !== spec.name);
@@ -777,11 +789,11 @@ const plugins: Modules["ArdiaPlugins"] = {
     if (refused) return refused;
     const text = pluginHost.artifacts[`${spec.id}@${spec.version}`] ?? pluginHost.artifacts[spec.id];
     if (text === undefined) return { ok: false, code: "offline", reason: "The Internet connection appears to be offline." };
-    const candidate = { folderId: storeFolderId(spec.sha256), text, version: spec.version };
+    const candidate = { folderId: storeFolderId(pluginHost.artifactShas[spec.sha256] ?? spec.sha256), text, version: pluginHost.artifactVersions[spec.sha256] ?? spec.version };
     const at = pluginHost.folders.findIndex((f) => f.name === spec.name);
     if (at < 0) pluginHost.folders.push({ name: spec.name, status: "missing", source: "store", candidates: [candidate] });
     else pluginHost.folders[at] = { ...pluginHost.folders[at]!, candidates: [...(pluginHost.folders[at]!.candidates ?? []).filter((c) => c.folderId !== candidate.folderId), candidate] };
-    return { ok: true, candidate: { ...candidate, payloadDigest: "d".repeat(64) } };
+    return { ok: true, candidate: { ...candidate, payloadDigest: "d".repeat(64) }, ...(spec.officialSig && pluginHost.officialVerified ? { official: true } : {}) };
   },
   cancelArtifactFetch: (name) => void pluginHost.artifactCancels.push(name),
   installArchiveFile: async (path) => (pluginHost.localInstalls.push(path), pluginHost.localInstallResult ?? { ok: false, reason: "no archive" }),
@@ -793,7 +805,7 @@ const plugins: Modules["ArdiaPlugins"] = {
     const folder = at < 0 ? undefined : pluginHost.folders[at]!;
     const candidate = folder?.candidates?.find((c) => c.folderId === folderId);
     if (!folder || !candidate) return { ok: false, reason: "Its download is gone or changed. Try again." };
-    const previous = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: "0.0.0" } : undefined;
+    const previous = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: textVersion(folder.text) } : undefined;
     pluginHost.folders[at] = { name, status: "ok", source: "store", folderId, text: candidate.text, candidates: folder.candidates!.filter((c) => c.folderId !== folderId), ...(previous ? { previous } : {}) };
     return { ok: true, folderId };
   },
@@ -802,7 +814,7 @@ const plugins: Modules["ArdiaPlugins"] = {
     const at = pluginHost.folders.findIndex((f) => f.name === name);
     const folder = at < 0 ? undefined : pluginHost.folders[at]!;
     if (!folder?.previous) return { ok: false, reason: "There's no earlier version to go back to." };
-    const current = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: "0.0.0" } : undefined;
+    const current = folder.text && folder.folderId ? { folderId: folder.folderId, text: folder.text, version: textVersion(folder.text) } : undefined;
     pluginHost.folders[at] = { ...folder, folderId: folder.previous.folderId, text: folder.previous.text, ...(current ? { previous: current } : {}) };
     return { ok: true, folderId: folder.previous.folderId };
   },
