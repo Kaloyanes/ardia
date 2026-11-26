@@ -240,6 +240,53 @@ test("an offline download leaves nothing installed and offers Try Again, which w
   assert.deepEqual([T().phase, T().installed], ["installed", ["cli"]]);
 });
 
+test("coming back while the cancelled download is still winding down and pressing Install again downloads afresh and asks", async () => {
+  await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
+  let release;
+  host.officialFetchGate = new Promise((resolve) => (release = resolve));
+  const first = step.installPickedPlugins(offered());
+  await settle();
+  goToStep("home");
+  step.leavePluginsStep();
+  goToStep("plugins");
+  const again = step.installPickedPlugins(offered());
+  await settle();
+  release();
+  await first;
+  await settle();
+  assert.deepEqual([T().phase, T().current, P().consent?.name], ["working", "cli", "cli"]);
+  assert.deepEqual(host.officialFetchLog, ["cli", "cli"]);
+  assert.ok(step.confirmPluginConsent(P().consent.id));
+  await again;
+  assert.deepEqual([T().phase, T().installed], ["installed", ["cli"]]);
+  useOnboarding.setState({ windowId: null });
+});
+
+test("plugin folder changes that keep coming while it installs don't hold it on Installing", async () => {
+  await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
+  const done = step.installPickedPlugins(offered());
+  await settle();
+  host.listGate = { then: (resolve) => setTimeout(resolve, 2) };
+  let changing = true;
+  const changes = (async () => {
+    while (changing) {
+      stub.emitConfigChange();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  })();
+  try {
+    assert.ok(step.confirmPluginConsent(P().consent.id));
+    const outcome = await Promise.race([done.then(() => "done"), new Promise((resolve) => setTimeout(() => resolve("still installing"), 1000))]);
+    assert.equal(outcome, "done");
+    assert.deepEqual([T().phase, T().installed, P().programs.cli?.state], ["installed", ["cli"], "linked"]);
+  } finally {
+    changing = false;
+    await changes;
+    host.listGate = null;
+    useOnboarding.setState({ windowId: null });
+  }
+});
+
 test("leaving the step while it downloads cancels the download and asks nothing afterwards", async () => {
   await fresh([{ name: "cli", text: CLI, ...BUILT_IN }]);
   let release;

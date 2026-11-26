@@ -139,6 +139,7 @@ function watchProgress() {
 }
 
 const inFlight = new Map<string, Promise<InstallResult & { code?: string }>>();
+const cancelling = new Set<string>();
 
 function needsFetch(name: string): boolean {
   const s = currentPlugins();
@@ -151,6 +152,7 @@ function needsFetch(name: string): boolean {
 function fetchOfficialCandidate(name: string, consent: ConsentToken | null, quiet = false): Promise<InstallResult & { code?: string }> {
   if (!needsFetch(name)) return Promise.resolve({ ok: true });
   const running = inFlight.get(name);
+  if (running && cancelling.has(name)) return running.then(() => fetchOfficialCandidate(name, consent, quiet));
   if (running) return running;
   watchProgress();
   if (!quiet) setOfficialFetch(name, { state: "fetching", received: 0, total: 0 });
@@ -170,13 +172,18 @@ function fetchOfficialCandidate(name: string, consent: ConsentToken | null, quie
       if (!quiet) setOfficialFetch(name, null);
       return { ok: true };
     })
-    .finally(() => inFlight.delete(name));
+    .finally(() => {
+      inFlight.delete(name);
+      cancelling.delete(name);
+    });
   inFlight.set(name, task);
   return task;
 }
 
 export function cancelOfficialInstall(name: string) {
-  if (inFlight.has(name)) cancelOfficialPluginFetch(name);
+  if (!inFlight.has(name)) return;
+  cancelling.add(name);
+  cancelOfficialPluginFetch(name);
 }
 
 type InstallOptions = { showSheet?: boolean; onConsent?: (id: number) => void; alive?: () => boolean };
@@ -255,6 +262,7 @@ export function resetOfficialUpdatesForTests() {
   waitingNoted.clear();
   autoNoted.clear();
   inFlight.clear();
+  cancelling.clear();
 }
 
 const PROMPT_COUNTS: Record<UpdatePromptReason, PluginCount> = {

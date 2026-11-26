@@ -151,43 +151,55 @@ function applyListings(given: PluginListing[], consent: ConsentToken | null, can
   void adoptLegacyInstalls(consent).then((adopted) => adopted && reconcilePlugins(consent));
 }
 
-let scanning: Promise<void> | null = null;
-let nextScan: { consent: ConsentToken | null } | null = null;
+type QueuedScan = { consent: ConsentToken | null; done: Promise<void>; settle: (pass: Promise<void>) => void };
+
+let scanning = false;
+let queuedScan: QueuedScan | null = null;
+
+async function scanOnce(asked: ConsentToken | null) {
+  const entries = await listPluginFolders().catch((error: unknown) => {
+    warnFor(asked, "[plugins] couldn't list the plugins folder", error);
+    return null;
+  });
+  if (entries && currentPlugins().pinned === null) {
+    const pinned = PLATFORM_FEATURES.plugins ? await officialPluginsPinned().catch(() => null) : null;
+    usePlugins.setState({ pinned: pinned ?? [] });
+  }
+  if (entries) {
+    const claims = await loadProgramClaims();
+    const listings = listingsOf(entries, claims).filter((l) => keptLegacy(l, currentPlugins().records));
+    const withdrawing = withdrawBefore({ listings: listingsByName(listings), records: currentPlugins().records }, asked);
+    if (withdrawing) await withdrawing;
+    applyListings(listings, asked, candidatesOf(entries, claims));
+    pluginsScanned(asked);
+  }
+  closeChangedConsent();
+  if (!currentPlugins().scanned) usePlugins.setState({ scanned: true });
+}
+
+function startScan(consent: ConsentToken | null): Promise<void> {
+  scanning = true;
+  const pass = scanOnce(consent);
+  const next = () => {
+    const queued = queuedScan;
+    queuedScan = null;
+    scanning = !!queued;
+    if (queued) queued.settle(startScan(queued.consent));
+  };
+  pass.then(next, next);
+  return pass;
+}
 
 export function rescanPlugins(consent: ConsentToken | null): Promise<void> {
-  if (scanning) {
-    nextScan = { consent };
-    return scanning;
+  if (!scanning) return startScan(consent);
+  if (queuedScan) {
+    queuedScan.consent = consent;
+    return queuedScan.done;
   }
-  scanning = (async () => {
-    let scan: { consent: ConsentToken | null } | null = { consent };
-    while (scan) {
-      const asked = scan.consent;
-      nextScan = null;
-      const entries = await listPluginFolders().catch((error: unknown) => {
-        warnFor(asked, "[plugins] couldn't list the plugins folder", error);
-        return null;
-      });
-      if (entries && currentPlugins().pinned === null) {
-        const pinned = PLATFORM_FEATURES.plugins ? await officialPluginsPinned().catch(() => null) : null;
-        usePlugins.setState({ pinned: pinned ?? [] });
-      }
-      if (entries) {
-        const claims = await loadProgramClaims();
-        const listings = listingsOf(entries, claims).filter((l) => keptLegacy(l, currentPlugins().records));
-        const withdrawing = withdrawBefore({ listings: listingsByName(listings), records: currentPlugins().records }, asked);
-        if (withdrawing) await withdrawing;
-        applyListings(listings, asked, candidatesOf(entries, claims));
-        pluginsScanned(asked);
-      }
-      closeChangedConsent();
-      if (!currentPlugins().scanned) usePlugins.setState({ scanned: true });
-      scan = nextScan;
-    }
-  })().finally(() => {
-    scanning = null;
-  });
-  return scanning;
+  let settle!: QueuedScan["settle"];
+  const done = new Promise<void>((resolve, reject) => (settle = (pass) => pass.then(resolve, reject)));
+  queuedScan = { consent, done, settle };
+  return done;
 }
 
 let lastConsentId = 0;
