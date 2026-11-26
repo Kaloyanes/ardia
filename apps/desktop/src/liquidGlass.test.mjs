@@ -275,7 +275,7 @@ globalThis.location = { href: "chrome://ardia/", origin: "chrome://ardia" };
 
 const { getGlassEngine } = await import("../../../third_party/liquid-glass/engine.ts");
 const { drawDom } = await import("../../../third_party/liquid-glass/dom-snapshot.ts");
-const { attachGlass, mountGlass, invalidateLiquidGlass } = await import("./shims/web/liquidGlass.tsx");
+const { attachGlass, mountGlass, invalidateLiquidGlass, liquidGlassMoving } = await import("./shims/web/liquidGlass.tsx");
 const { backdropKeyOf, GLASS_OPTICS, glassGlow } = await import("./shims/web/liquidGlassOptics.ts");
 const { glassAppearanceSupported, nativeLiquidGlass, webLiquidGlassAllowed } = await import("./liquidGlassSupport.ts");
 
@@ -534,26 +534,31 @@ test("an image that fails to load releases every snapshot callback waiting on it
   assert.equal(copy.listenerCount, 0, "a failed image keeps no listener, and with it no surface's callback");
 });
 
-test("glass that slides into view keeps retaking its picture while it moves, with no event to say so, and goes quiet once still", () => {
-  const { glass, host, outer } = mountTile();
-  const isMoveCheck = (run) => !!run && String(run).includes("placeOf()");
-  const moveChecks = () => timers.filter(isMoveCheck).length;
-  const runMoveChecks = () => {
-    const due = timers.filter(isMoveCheck);
-    for (let i = 0; i < timers.length; i++) if (isMoveCheck(timers[i])) timers[i] = null;
-    for (const run of due) run();
-  };
+const isMoveCheck = (run) => !!run && String(run).includes("movedSinceDrawn()");
+const moveChecks = () => timers.filter(isMoveCheck).length;
+const runMoveChecks = () => {
+  const due = timers.filter(isMoveCheck);
+  for (let i = 0; i < timers.length; i++) if (isMoveCheck(timers[i])) timers[i] = null;
+  for (const run of due) run();
+};
+const slideTile = ({ host, outer }, dx, dy = 0) => {
+  for (const node of [outer, outer.children[0], host]) node.rect = { ...node.rect, left: node.rect.left + dx, top: node.rect.top + dy };
+};
+const settledTile = () => {
+  const tile = mountTile();
   runFrames();
   runTimers();
   runFrames();
+  return tile;
+};
+
+test("glass that slides into view keeps retaking its picture while it moves, with no event to say so, and goes quiet once still", () => {
+  const tile = settledTile();
   assert.equal(moveChecks(), 0, "glass that stayed put leaves no move check behind");
-  const slide = (by) => {
-    for (const node of [outer, outer.children[0], host]) node.rect = { ...node.rect, left: node.rect.left + by };
-  };
-  slide(70);
+  slideTile(tile, 70);
   intersections.at(-1).callback([{ isIntersecting: true }]);
   runFrames();
-  slide(70);
+  slideTile(tile, 70);
   runFrames();
   const entered = snapshotWalks;
   runMoveChecks();
@@ -566,7 +571,48 @@ test("glass that slides into view keeps retaking its picture while it moves, wit
   runFrames();
   assert.equal(snapshotWalks, settled, "once still, it takes no further picture");
   assert.equal(moveChecks(), 0, "and no move check is left running");
-  glass.stop();
+  tile.glass.stop();
+});
+
+test("a pager moving settled, visible glass wakes it, and the pager settling retakes the picture where it came to rest", () => {
+  const tile = settledTile();
+  slideTile(tile, -90);
+  runFrames();
+  const still = snapshotWalks;
+  assert.equal(moveChecks(), 0, "moving with no event and no intersection change arms nothing by itself");
+  liquidGlassMoving();
+  assert.equal(moveChecks(), 1, "the pager's motion arms one move check");
+  liquidGlassMoving();
+  assert.equal(moveChecks(), 1, "and only one, however many frames ask");
+  runMoveChecks();
+  runFrames();
+  assert.ok(snapshotWalks > still, "the glass the pager moved retakes its picture");
+  runMoveChecks();
+  runFrames();
+  slideTile(tile, 0.1);
+  const beforeSettle = snapshotWalks;
+  invalidateLiquidGlass();
+  runFrames();
+  assert.ok(snapshotWalks > beforeSettle, "the pager's settle takes one clean picture at the resting place, even for a move under the tolerance");
+  tile.glass.stop();
+  assert.equal(moveChecks(), 0, "a stopped glass leaves no move check");
+});
+
+test("subpixel jitter around a rounding edge never keeps the glass redrawing", () => {
+  const tile = settledTile();
+  for (const node of [tile.outer, tile.outer.children[0], tile.host]) node.rect = { ...node.rect, left: 20.24 };
+  invalidateLiquidGlass();
+  runFrames();
+  const walks = snapshotWalks;
+  for (let i = 0; i < 20; i++) {
+    for (const node of [tile.outer, tile.outer.children[0], tile.host]) node.rect = { ...node.rect, left: i % 2 ? 20.24 : 20.26 };
+    liquidGlassMoving();
+    runMoveChecks();
+    runFrames();
+  }
+  assert.equal(snapshotWalks, walks, "a 0.02 px wobble takes no new picture");
+  assert.equal(moveChecks(), 0);
+  tile.glass.stop();
 });
 
 test("the glass has no flat outline: its edge is a still key light from the top left, and a white pinned tile adds no white slab", () => {

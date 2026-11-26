@@ -3,17 +3,17 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { drawAround, drawDom } from "../../../../../third_party/liquid-glass/dom-snapshot";
 import { DESIGN_HEIGHT, MIRROR, clamp, getGlassEngine, onGlassEngineChange, rgbCss, surfaceColorOf, type GlassEngine, type GlassLens, type GlassView, type Rgb } from "../../../../../third_party/liquid-glass/engine";
 import { GLASS_OPTICS, RIM_MIRROR, rgb, tintedGlass, type GlassOptics, type LiquidGlassStyle, type LiquidGlassTheme } from "./liquidGlassOptics";
+import { fixedBehind, ownControl, ownOpacity } from "./liquidGlassPlace";
 
 const PAD_SIDE = 8;
 const PAD_TOP = 10;
 const PAGE_REFRESH_MS = 120;
 const MOVE_CHECK_MS = 16;
-const OWN_CONTROL_SLACK = 2;
-const FADED_RIM_FLOOR = 0.25;
+const MOVE_TOLERANCE_PX = 0.25;
 const layer: CSSProperties = { position: "absolute", inset: 0, pointerEvents: "none" };
 const canvasStyle: CSSProperties = { position: "absolute", pointerEvents: "none", maxWidth: "none", width: 0, height: 0 };
 
-export type GlassMount = { invalidate: () => void; repaint: () => void; suspend: () => void; reattach: () => void; stop: () => void; view: GlassView };
+export type GlassMount = { invalidate: () => void; repaint: () => void; watchMove: () => void; suspend: () => void; reattach: () => void; stop: () => void; view: GlassView };
 
 const mounted = new Set<GlassMount>();
 const PAGE_EVENTS = { capture: true, passive: true } as const;
@@ -22,6 +22,10 @@ let stopEngineWatch: (() => void) | null = null;
 
 export function invalidateLiquidGlass() {
   for (const glass of mounted) glass.invalidate();
+}
+
+export function liquidGlassMoving() {
+  for (const glass of mounted) glass.watchMove();
 }
 
 function repaintLiquidGlass() {
@@ -59,37 +63,6 @@ function track(glass: GlassMount, on: boolean) {
   }
 }
 
-function ownControl(host: HTMLElement): Element {
-  const frame = host.parentElement ?? host;
-  const box = frame.getBoundingClientRect();
-  let own: Element = frame;
-  for (let next = frame.parentElement; next && next !== document.body; next = next.parentElement) {
-    const r = next.getBoundingClientRect();
-    const same = Math.abs(r.left - box.left) <= OWN_CONTROL_SLACK && Math.abs(r.top - box.top) <= OWN_CONTROL_SLACK && Math.abs(r.width - box.width) <= 2 * OWN_CONTROL_SLACK && Math.abs(r.height - box.height) <= 2 * OWN_CONTROL_SLACK;
-    if (!same) break;
-    own = next;
-  }
-  return own;
-}
-
-function ownOpacity(host: HTMLElement, own: Element) {
-  let shown = 1;
-  for (let el: Element | null = host; el && el !== document.body; el = el.parentElement) {
-    const opacity = parseFloat(getComputedStyle(el).opacity);
-    if (Number.isFinite(opacity)) shown *= opacity;
-    if (el === own) break;
-  }
-  return clamp(shown, FADED_RIM_FLOOR, 1);
-}
-
-function fixedBehind(el: Element, own: Element) {
-  if (el.contains(own)) return false;
-  const style = getComputedStyle(el);
-  if (style.position !== "fixed") return false;
-  const z = parseInt(style.zIndex, 10);
-  return !(z > 0) && (el.compareDocumentPosition(own) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-}
-
 type Look = { optics: GlassOptics; tint: string | undefined };
 
 export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, look: { current: Look }, onReady: (ready: boolean) => void, acquire: () => GlassEngine | null = getGlassEngine): GlassMount | null {
@@ -107,7 +80,7 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
   let own: Element = host;
   let faded = 1;
   let ready = false;
-  let drawnAt = "";
+  let drawnAt: DOMRect | null = null;
   let settling = 0;
   const page = { canvas: document.createElement("canvas"), ctx: null as CanvasRenderingContext2D | null, key: "", at: 0, stale: true, fill: "" };
   const skip = (el: Element) => el === own || el === host || el.hasAttribute("data-glass-skip") || fixedBehind(el, own);
@@ -240,13 +213,17 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
       scale: rect.width / Math.max(w, 1e-3),
     };
   };
-  const placeOf = () => {
+  const movedSinceDrawn = () => {
+    if (!drawnAt) return false;
     const r = host.getBoundingClientRect();
-    return `${Math.round(r.left * 2)}:${Math.round(r.top * 2)}:${Math.round(r.width * 2)}:${Math.round(r.height * 2)}`;
+    return Math.abs(r.left - drawnAt.left) > MOVE_TOLERANCE_PX || Math.abs(r.top - drawnAt.top) > MOVE_TOLERANCE_PX || Math.abs(r.width - drawnAt.width) > MOVE_TOLERANCE_PX || Math.abs(r.height - drawnAt.height) > MOVE_TOLERANCE_PX;
   };
   const settle = () => {
     settling = 0;
-    if (placeOf() !== drawnAt) invalidate();
+    if (movedSinceDrawn()) invalidate();
+  };
+  const watchMove = () => {
+    if (drawnAt) settling ||= window.setTimeout(settle, MOVE_CHECK_MS);
   };
   const view: GlassView = {
     canvas,
@@ -256,13 +233,14 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     step: () => false,
     lens,
     drawn: () => {
-      drawnAt = placeOf();
-      settling ||= window.setTimeout(settle, MOVE_CHECK_MS);
+      drawnAt = host.getBoundingClientRect();
+      watchMove();
       if (ready) return;
       ready = true;
       onReady(true);
     },
     lost: () => {
+      drawnAt = null;
       ready = false;
       onReady(false);
     },
@@ -285,12 +263,14 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
     trailing = 0;
     if (settling) window.clearTimeout(settling);
     settling = 0;
+    drawnAt = null;
   };
   observe(true);
   engine.add(view);
   const glass: GlassMount = {
     view,
     invalidate,
+    watchMove,
     repaint: () => {
       view.repaint = true;
       engine.wake();

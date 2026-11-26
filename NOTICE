@@ -36,7 +36,8 @@ Ardia builds on and ships third-party software under its own licenses, including
   engine built while a lost context awaits restore and views reattached when it does, no cursor-light frames unless a
   lens asks for it, a press latched on pointerdown to the frontmost glass it began on and let go on window blur, stale GL
   errors drained before an allocation and a failed or out-of-memory upload falling back one view, canvases rechecked
-  before each copy, image callbacks released on error as on load)
+  before each copy, image callbacks released on error as on load, an optional still rim key light per lens that
+  never follows the pointer)
   (third_party/liquid-glass/engine.ts and dom-snapshot.ts), draw the web Liquid Glass
   of ardia.dev's demo and of the Linux, Windows and pre-Tahoe Mac app; its glass-layer.tsx mount is adapted in
   packages/demo/src/shims/web/liquidGlass.tsx and apps/desktop/src/shims/web/liquidGlass.tsx

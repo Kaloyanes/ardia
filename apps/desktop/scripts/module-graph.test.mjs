@@ -334,7 +334,7 @@ test("Linux shell exports and shared package Expo dialogs use one adapter", () =
 const LIQUID_GLASS = ["engine.ts", "dom-snapshot.ts"].map((file) => `${repo}third_party/liquid-glass/${file}`);
 
 test("every desktop build draws glass with the one vendored Liquid Glass engine, through the layer the demo shares byte for byte", { timeout: 120000 }, async () => {
-  for (const file of ["liquidGlass.tsx", "liquidGlassOptics.ts"]) assert.equal(readFileSync(`${desktop}shims/web/${file}`, "utf8"), readFileSync(`${repo}packages/demo/src/shims/web/${file}`, "utf8"), `the desktop and demo ${file} drifted apart`);
+  for (const file of ["liquidGlass.tsx", "liquidGlassOptics.ts", "liquidGlassPlace.ts"]) assert.equal(readFileSync(`${desktop}shims/web/${file}`, "utf8"), readFileSync(`${repo}packages/demo/src/shims/web/${file}`, "utf8"), `the desktop and demo ${file} drifted apart`);
   for (const mode of ["linux", "win", "mac"]) {
     const { graph, ids } = await productionGraph(mode);
     for (const id of LIQUID_GLASS) assert.deepEqual(only(ids, id), [id], `${mode}: ${id}`);
