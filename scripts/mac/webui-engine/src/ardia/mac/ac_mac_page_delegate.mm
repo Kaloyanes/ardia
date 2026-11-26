@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ardia/core/ac_hooks.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_page_events.h"
 #include "ardia/mac/ac_mac_page_policy.h"
 #include "ardia/mac/ac_mac_shell_host.h"
@@ -24,10 +25,13 @@
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/javascript_dialog_manager.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/javascript_dialog_type.h"
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace ardia_mac {
@@ -96,9 +100,51 @@ content::JavaScriptDialogManager* Dialogs() {
 
 class PageDelegate : public BrowserWebContentsDelegate {
  public:
-  using BrowserWebContentsDelegate::BrowserWebContentsDelegate;
+  PageDelegate(BrowserWindowInterface* browser,
+               ExclusiveAccessManager& exclusive_access_manager,
+               chrome::BrowserCommandController& command_controller,
+               UnloadController& unload_controller,
+               web_app::AppBrowserController* app_browser_controller,
+               BrowserWindow& window,
+               DesktopBrowserWindowCapabilities& capabilities,
+               BrowserUiController& browser_ui_controller)
+      : BrowserWebContentsDelegate(browser, exclusive_access_manager, command_controller,
+                                   unload_controller, app_browser_controller, window, capabilities,
+                                   browser_ui_controller),
+        browser_(browser) {}
+
+  content::WebContents* OpenURLFromTab(
+      content::WebContents* source,
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)> navigation_handle_callback) override {
+    if (source && InterceptLinkOpen(source, params)) {
+      return nullptr;
+    }
+    const WindowOpenDisposition disposition = OpeningDisposition(source, params);
+    if (disposition == params.disposition) {
+      return BrowserWebContentsDelegate::OpenURLFromTab(source, params,
+                                                        std::move(navigation_handle_callback));
+    }
+    content::OpenURLParams as_tab = params;
+    as_tab.disposition = disposition;
+    return BrowserWebContentsDelegate::OpenURLFromTab(source, as_tab,
+                                                      std::move(navigation_handle_callback));
+  }
+
+  content::WebContents* AddNewContents(content::WebContents* source,
+                                       std::unique_ptr<content::WebContents> new_contents,
+                                       const GURL& target_url,
+                                       WindowOpenDisposition disposition,
+                                       const blink::mojom::WindowFeatures& window_features,
+                                       bool user_gesture,
+                                       bool* was_blocked) override {
+    return BrowserWebContentsDelegate::AddNewContents(
+        source, std::move(new_contents), target_url, PopupDisposition(source, disposition),
+        window_features, user_gesture, was_blocked);
+  }
 
   void UpdateTargetURL(content::WebContents* source, const GURL& url) override {
+    NoteLinkTarget(source, url);
     if (PageEvents* events = EventsFor(source); events && events->TargetURL(url)) {
       return;
     }
@@ -158,6 +204,9 @@ class PageDelegate : public BrowserWebContentsDelegate {
           base::NumberToString(params.x) + "," + base::NumberToString(params.y));
     return true;
   }
+
+ private:
+  raw_ptr<BrowserWindowInterface> browser_;
 };
 
 std::unique_ptr<BrowserWebContentsDelegate> CreatePageDelegate(
@@ -245,6 +294,7 @@ void AssertPageHooks() {
 
 void InstallPageDelegate() {
   AssertPageHooks();
+  InstallLinkHooks();
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce([] {
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

@@ -12,6 +12,7 @@
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
 #include "ardia/mac/ac_mac_glass.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_menu.h"
 #include "ardia/mac/ac_mac_page_commands.h"
 #include "ardia/mac/ac_mac_page_delegate.h"
@@ -344,9 +345,11 @@ PageBinding::PageBinding(ShellHostView* owner,
   events_ = std::make_unique<PageEvents>(
       contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
   commands_ = std::make_unique<PageCommands>(this);
+  links_ = std::make_unique<PageLinks>(this, contents);
 }
 
 PageBinding::~PageBinding() {
+  links_.reset();
   if (owner_) {
     share::RetireBinding(owner_->window_id(), id_);
   }
@@ -408,11 +411,13 @@ base::DictValue PageBinding::CreationState() {
 
 void PageBinding::Rebind(content::WebContents* contents) {
   commands_->Reset();
+  links_.reset();
   events_.reset();
   Observe(contents);
   id_ = TabId(contents);
   events_ = std::make_unique<PageEvents>(
       contents, base::BindRepeating(&PageBinding::Report, base::Unretained(this)));
+  links_ = std::make_unique<PageLinks>(this, contents);
 }
 
 void PageBinding::ReportNavigation() {
@@ -745,6 +750,34 @@ void ShellHostView::BindingGone(PageBinding* binding) {
 bool ShellHostView::OwnsShellNativeView(gfx::NativeView view) const {
   content::WebContents* shell = shell_contents();
   return shell && view && shell->GetNativeView() == view;
+}
+
+std::optional<gfx::PointF> ShellHostView::ShellPointFor(const PageBinding* binding,
+                                                        gfx::PointF page_point) const {
+  if (!binding || binding->host() != this || !binding->viewport || !binding->visible) {
+    return std::nullopt;
+  }
+  const gfx::Rect bounds = binding->viewport->bounds();
+  const double zoom = ShellZoom();
+  const double x = std::clamp<double>(page_point.x(), 0, bounds.width()) + bounds.x();
+  const double y = std::clamp<double>(page_point.y(), 0, bounds.height()) + bounds.y();
+  return gfx::PointF(static_cast<float>(x / zoom), static_cast<float>(y / zoom));
+}
+
+PageBinding* ShellHostView::BindingHit(gfx::NativeView hit) const {
+  NSView* view = hit.GetNativeNSView();
+  if (!view || closing_) {
+    return nullptr;
+  }
+  for (const auto& [id, binding] : bindings_) {
+    content::WebContents* contents = binding->contents();
+    NSView* page = contents ? contents->GetNativeView().GetNativeNSView() : nil;
+    if (page && binding->visible && binding->viewport && binding->viewport->GetVisible() &&
+        [view isDescendantOf:page]) {
+      return binding.get();
+    }
+  }
+  return nullptr;
 }
 
 bool ShellHostView::PassesShellPoint(double x, double y) const {

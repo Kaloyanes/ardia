@@ -2631,6 +2631,35 @@
    "detected": false
   },
   {
+   "id": "mac-webui-links:gestures",
+   "source": "page",
+   "guard": "Mac WebUI host: a page's link clicks reach the shell only through Chromium's own browser-side hooks (OpenURLFromTab, AddNewContents, RenderFrameHostImpl::DownloadURL and WebContentsImpl::CreateNewWindow through the CONTENT_EXPORT setters apply.sh adds (SetArdiaMacDownloadUrlHook, SetArdiaMacNewWindowInPlaceHook), and a NavigationThrottle that apply.sh's g_ardia_mac_add_navigation_throttles adds), never through a page message. Each is matched against the last real left mouse-up the page's RenderWidgetHost saw (GestureGate): the release must be on that page, unused, not followed by another press, at most 10 s old and carry exactly the configured keys, the request must carry a user gesture and go to the URL the pointer was over at that release (TargetMatches), and the page must be shown, so a page cannot open a peek, split, window or background tab by itself (RouteForOpening). An Option-click download is taken only from the requesting frame's own tab, for a request with no suggested file name that follows redirects (apply.sh's dev-only HTMLAnchorElement hook gives an Option-clicked <a download> its attribute as the suggested name, so it always downloads) to the released-over link within 1 s, with a user gesture (OptionClickDownload); attachment responses never reach that hook. An unmatched renderer kNewWindow becomes a tab through Chromium's own path, so its popup blocker decides (WindowOpensAsTab). An other-site peek needs WasInitiatedByLinkClick, an initiator that is the primary main frame (an iframe's _top anchor follows), a user gesture, no POST, a NavigationInputStart equal to the release's timestamp (a synthetic click carries its own) and the released-over URL (SitePeekCandidate, SameInput); it is cancelled in WillStartRequest before any request and announced only when that navigation finishes uncommitted while its tab is not being destroyed (AnnouncesSitePeek). Little Ardia opens in place only an opener-less link to the released-over URL that is not a form submission, decided in OpenURLFromTab or, for an opener-suppressed request, at the start of CreateNewWindow before any WebContents is created or announced, where Chromium still has is_form_submission and the POST body (OpensInPlace); window.open with an opener never reaches it. Only http(s) URLs of at most 32 KB go to the shell. The shell's webView.setPeekModifier and setSplitLinkModifier take a string of at most 16 bytes that collapses to alt, shift or off and alt or altShift, setPeekOtherSiteTabs takes at most 4096 non-empty string ids of at most 256 bytes (SiteTabKeys), and the boolean options take only a boolean enabled. The shared corpus runs through these guards in tests/hostile_corpus_test.cc.",
+   "checks": [
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#GestureGate",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#RouteForOpening",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#TargetMatches",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#OptionClickDownload",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SitePeekCandidate",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#OpensInPlace",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#SiteTabKeys",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#OptionClickDownloadIntercepted",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#NoOpenerWindowOpensInPlace",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_policy.h#AnnouncesSitePeek",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#InterceptLinkOpen",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#SitePeekThrottle",
+    "scripts/mac/webui-engine/src/ardia/mac/ac_mac_link_gesture.mm#LinkRouteCall",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#stale_pressed_foreign_or_hidden_releases_never_peek",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#chrome_dispositions_map_to_link_keys_only_for_renderer_clicks",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#other_site_peeks_tell_a_real_anchor_click_from_scripted_navigations",
+    "scripts/mac/webui-engine/tests/hostile_corpus_test.cc#link_option_guards",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#an_option_click_in_one_tab_never_claims_another_tabs_download",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#a_same_process_iframe_anchor_targeting_top_never_peeks",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#a_synthetic_anchor_click_carries_its_own_time_and_never_peeks",
+    "scripts/mac/webui-engine/tests/link_policy_test.cc#a_cancelled_peek_is_announced_only_while_the_source_tab_lives"
+   ],
+   "detected": false
+  },
+  {
    "id": "mac-webui-extensions:surfaces",
    "source": "frame",
    "guard": "Mac WebUI host: extensionView.create takes exactly kind (popup or sidePanel), url and profile; the URL must be chrome-extension://<32 letters a-p>[/...] of at most 2 KB with no control characters (ExtensionUrlHost), the extension must be enabled in that profile (and allowed in private profiles), and a window holds at most 4 surfaces (SurfaceBook); viewport, place, command and release act only on a surface this window's current renderer generation opened (SurfaceBook::Owns), rectangles and placements must be finite and within +/-1e6 and are clipped to the window (ViewportBox, PopupLimitsFor, PopupBoxFor), radii are capped at 64 and fades at 1000 ms, and evaluate is refused; a reload retires older surfaces (CloseOlderThan). extensions.actionStates (a tab key and at most 64 valid ids), sidePanelUrl (a tab key and an id), chooseFolder (no arguments; a background instance answers null), inspectUnpacked (a normalized absolute folder other than /, read off the UI thread, icons only from inside the folder via ResourcePath) and extensions.resolveInstallPrompt (a request id of 1-64 bytes and a boolean, resolved only by the window and profile it was shown to, at most 8 pending with Chrome keeping its own prompt when the ledger is full or the shell has no live document, and aborted when the shell reloads, PromptLedger) take one JSON object of at most 1 MiB with exactly those keys, and a tab must be this window's tab in the same profile; tab.command executeExtensionAction takes exactly one valid extension id of an enabled extension. The shared corpus (scripts/security/hostile-inputs.mjs, exported byte-exact by tests/hostile-corpus.mjs) runs through the same guards in tests/hostile_corpus_test.cc, which asserts that whatever a guard lets through meets the sink's invariants, with a positive control.",

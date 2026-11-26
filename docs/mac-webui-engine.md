@@ -249,6 +249,45 @@ that branch). It is a development tool and never runs in a release. Like Windows
     each `tab.create`.
   - A tab whose contents Chromium replaces keeps its binding through a `pageLifecycle` rebind. A tab that leaves
     the window's tab strips loses its binding.
+- **Peek, split and link options** (`ac_mac_link_gesture.mm`, rules in `ac_mac_link_policy.h`, a port of Linux's
+  `ac_linux_link_gesture`). The host advertises and serves `webView.setPeekModifier`, `setSplitLinkModifier`,
+  `setPeekOtherSiteTabs`, `setLittleArdiaOpensNewTabLinks`, `setPopupsOpenAsTabs` and `setCommandScrollZoom`, so
+  Settings › Tabs shows its Peek and Little Ardia rows and Advanced shows ⌘-scroll zoom.
+  - The Mac shell runs no page script, so link clicks are read from Chromium's own dispositions: a renderer
+    `kNewWindow` (⇧-click, ⌥⇧-click) and `kNewSplitView` (⌥⌘-click) in the page delegate's `OpenURLFromTab`, and
+    ⌥-click's download in `RenderFrameHostImpl::DownloadURL`, which `apply.sh` hooks; the host registers through
+    `content::SetArdiaMacDownloadUrlHook`, exported with `CONTENT_EXPORT` so component builds link.
+    Each must match the last left mouse-up that page's `RenderWidgetHost` saw, with Linux's gate (on that page, unused,
+    no press since, at most 10 s old, exactly the configured keys), carry a user gesture, and go to the link the
+    pointer was over at that release (`UpdateTargetURL`). It is then sent as `ArdiaWebView` `openWindow` with `peek`
+    (and the click's `point`), `split`, `window` or `background`, as Linux does.
+  - The ⌥-click download hook sees the requesting frame, so it only takes a request from that tab with no suggested
+    file name that follows redirects, within 1 s of the release. Blink drops `<a download>`'s attribute on a ⌥-click,
+    so `apply.sh` also adds a dev-only hook to `HTMLAnchorElementBase::HandleClick` that keeps the attribute as the
+    suggested name; an ⌥-clicked `<a download>` then always downloads. `Content-Disposition: attachment` responses are navigations and never
+    reach it.
+  - A renderer `kNewWindow` that matches no gesture opens as a foreground tab through Chromium's own path, so its popup
+    blocker still decides.
+  - Links to other sites: `apply.sh` adds `g_ardia_mac_add_navigation_throttles` to
+    `CreateAndAddChromeThrottlesForNavigation`, and the host adds a throttle to primary main-frame navigations in the
+    shell's tabs while `setPeekOtherSiteTabs` lists any. In a listed tab, a plain cross-site anchor click is cancelled
+    in `WillStartRequest`, before any request goes out, when it is `WasInitiatedByLinkClick`, started by the primary
+    main frame (an iframe's `_top` anchor follows), carries a user gesture, isn't a POST, goes to the URL released
+    over, and its `NavigationInputStart` is that release's own timestamp (a script's `anchor.click()` carries the time
+    it was made). The peek is sent once that navigation finishes uncommitted, and not at all if the tab is being
+    destroyed (frame teardown finishes the navigation before `WebContentsDestroyed`).
+    A script's `location.href` from a click handler is not a link click and follows.
+  - Popups open as foreground tabs when `setPopupsOpenAsTabs` is on, except in Little Ardia. In Little Ardia
+    (`kind: "small"`), with `setLittleArdiaOpensNewTabLinks` on, a plain click on a link that would open a new tab
+    opens in place (`openWindow` `current`) when it has no opener and isn't a form submission. Chromium routes it
+    through `OpenURLFromTab` or, for `target="_blank"` and `rel="noopener"`, through `CreateNewWindow`. There
+    `apply.sh`'s hook (`content::SetArdiaMacNewWindowInPlaceHook`) runs first for opener-suppressed requests, before
+    any child `WebContents` is created or announced to observers, and still sees `is_form_submission` and the POST
+    body.
+    `window.open` with an opener and POST forms keep their own contents.
+  - ⌘ with a mouse wheel over a shown page zooms it one step per 30 points of scroll, routed by the native hit test at
+    the event's own location; the count restarts when the page changes or the setting is turned off, and precise
+    (trackpad, Magic Mouse) scrolling never zooms.
 - **UI bundle.** The host loads it from `ARDIA_WEBUI_BUNDLE`, else `--ardia-ui-dir`, else the app's
   `Resources/ardia-ui`. `assemble.sh` builds `Ardia WebUI Dev.app` (`com.ardia.browser.webui-dev`).
 

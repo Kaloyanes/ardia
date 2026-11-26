@@ -13,6 +13,7 @@
 #include "ardia/mac/ac_mac_dialog_policy.h"
 #include "ardia/mac/ac_mac_extension_view_policy.h"
 #include "ardia/mac/ac_mac_glass_layout.h"
+#include "ardia/mac/ac_mac_link_policy.h"
 #include "ardia/mac/ac_mac_menu_model.h"
 #include "ardia/mac/ac_mac_menu_state.h"
 #include "ardia/mac/ac_mac_page_policy.h"
@@ -622,6 +623,50 @@ TEST(page_guards) {
     }
   }
   CHECK(page::Handles("find") && page::PopupId("7") == 7);
+}
+
+TEST(link_option_guards) {
+  namespace link = ardia_mac::link_policy;
+  std::vector<std::optional<std::string>> keys;
+  for (const std::string& text : Load().strings) {
+    link::PageOptions options;
+    options.SetPeek(text);
+    CHECK(options.peek == "alt" || options.peek == "shift" || options.peek == "off");
+    options.SetSplit(text);
+    CHECK(options.split == "alt" || options.split == "altShift");
+    if (link::KeyFlags(text)) CHECK(text == "alt" || text == "shift" || text == "altShift" || text == "altMeta");
+    if (options.ActionFor(text)) CHECK(link::KeyFlags(text) != 0);
+    if (link::IsRoute(text)) CHECK(text.starts_with("webView.set") && Charset(text, "."));
+    if (const auto one = link::SiteTabKeys({text})) {
+      CHECK(one->size() == 1 && !text.empty() && text.size() <= link::kTabKeyMax);
+    }
+    keys.push_back(text);
+    link::GestureGate gate;
+    gate.NoteRelease(1, link::KeyFlags(text), 1, link::Point{0, 0}, text, 1);
+    const auto release = gate.FreshRelease(1, 1);
+    CHECK(release.target.size() <= link::kUrlMax);
+    if (link::TargetMatches(release.target, text)) CHECK(!text.empty() && text.size() <= link::kUrlMax);
+    link::Request request;
+    request.surface = 1;
+    request.key = text;
+    request.http = true;
+    request.visible = true;
+    request.now = 1;
+    const link::Decision decision = gate.Decide(request, link::PageOptions());
+    if (decision.outcome == link::Outcome::kPeek || decision.outcome == link::Outcome::kSplit) {
+      CHECK(link::PageOptions().ActionFor(text).has_value());
+    }
+  }
+  if (const auto all = link::SiteTabKeys(keys)) {
+    CHECK(all->size() <= link::kSiteTabsMax);
+    for (const std::string& key : *all) CHECK(!key.empty() && key.size() <= link::kTabKeyMax);
+  }
+  link::ScrollZoom zoom;
+  for (double delta : Load().numbers) {
+    const int step = zoom.Add(delta, 1);
+    CHECK(step >= -1 && step <= 1);
+    if (!std::isfinite(delta)) CHECK(step == 0);
+  }
 }
 
 int main(int argc, char** argv) {

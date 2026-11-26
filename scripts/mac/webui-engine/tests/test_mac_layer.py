@@ -34,6 +34,10 @@ HOOKED_FILES = (
     'chrome/browser/ui/views/frame/browser_frame_view_mac.mm',
     'components/renderer_context_menu/render_view_context_menu_base.cc',
     'chrome/browser/ui/views/overlay/video_overlay_window_views.cc',
+    'chrome/browser/chrome_content_browser_client_navigation_throttles.cc',
+    'content/browser/renderer_host/render_frame_host_impl.cc',
+    'content/browser/web_contents/web_contents_impl.cc',
+    'third_party/blink/renderer/core/html/html_anchor_element.cc',
 )
 
 
@@ -83,6 +87,9 @@ class PureHeaderTests(unittest.TestCase):
 
     def test_extension_view_policy(self):
         compile_and_run(self, TESTS / 'extension_view_policy_test.cc', self.out / 'extension-view-policy')
+
+    def test_link_policy(self):
+        compile_and_run(self, TESTS / 'link_policy_test.cc', self.out / 'link-policy')
 
     def test_swipe_policy(self):
         compile_and_run(self, TESTS / 'swipe_policy_test.cc', self.out / 'swipe-policy')
@@ -198,6 +205,34 @@ class ApplyTests(unittest.TestCase):
                 'void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {\n'
                 '  if (!GetBrowserView()->GetIsNormalType() &&\n'
                 '      !GetBrowserView()->GetIsWebAppType()) {\n    return;\n  }\n}\n',
+            'content/browser/renderer_host/render_frame_host_impl.cc':
+                '#include "build/build_config.h"\n\nnamespace content {\n\n'
+                'void RenderFrameHostImpl::DownloadURL(\n'
+                '    blink::mojom::DownloadURLParamsPtr blink_parameters) {\n'
+                '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n'
+                '      CreateDownloadUrlParameters(blink_parameters->url, traffic_annotation);\n'
+                '  StartDownload(std::move(parameters), nullptr);\n}\n\n}\n',
+            'content/browser/web_contents/web_contents_impl.cc':
+                '#include "build/build_config.h"\n\nnamespace content {\n\n'
+                'FrameTree* WebContentsImpl::CreateNewWindow(\n'
+                '    RenderFrameHostImpl* opener, const mojom::CreateNewWindowParams& params) {\n'
+                '  content::ChildProcessId render_process_id = opener->GetProcess()->GetID();\n'
+                '  if (!params.opener_suppressed) {\n    return nullptr;\n  }\n\n'
+                '  bool was_blocked = false;\n'
+                '  base::WeakPtr<WebContentsImpl> weak_new_contents =\n'
+                '      new_contents_impl->weak_factory_.GetWeakPtr();\n  return nullptr;\n}\n\n}\n',
+            'third_party/blink/renderer/core/html/html_anchor_element.cc':
+                '#include "third_party/blink/renderer/core/html/html_anchor_element.h"\n\n'
+                'void HTMLAnchorElementBase::HandleClick(MouseEvent& event) {\n'
+                '  ResourceRequest request(completed_url);\n'
+                '  NavigationPolicy navigation_policy = NavigationPolicyFromEvent(&event);\n\n'
+                '  if (FastHasAttribute(html_names::kDownloadAttr)) {\n  }\n}\n',
+            'chrome/browser/chrome_content_browser_client_navigation_throttles.cc':
+                '#include "build/build_config.h"\n\n}\n\n'
+                'void CreateAndAddChromeThrottlesForNavigation(\n'
+                '    content::NavigationThrottleRegistry& registry) {\n'
+                '  if (handle.IsInMainFrame()) {\n'
+                '    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);\n  }\n}\n',
             'components/renderer_context_menu/render_view_context_menu_base.cc':
                 '#include "build/build_config.h"\n#include "url/origin.h"\n\n'
                 'RenderViewContextMenuBase::~RenderViewContextMenuBase() {\n}\n\n'
@@ -250,6 +285,141 @@ class ApplyTests(unittest.TestCase):
             for path in HOOKED_FILES:
                 self.assertEqual((root / path).read_text(), originals[path], path)
             self.assertFalse((root / 'ardia/mac').exists())
+
+    def test_apply_migrates_reformatted_link_hooks_and_collapses_copies(self):
+        throttles = 'chrome/browser/chrome_content_browser_client_navigation_throttles.cc'
+        download = 'content/browser/renderer_host/render_frame_host_impl.cc'
+        windows = 'content/browser/web_contents/web_contents_impl.cc'
+        anchor_file = 'third_party/blink/renderer/core/html/html_anchor_element.cc'
+        menu = 'components/renderer_context_menu/render_view_context_menu_base.cc'
+        overlay = 'chrome/browser/ui/views/overlay/video_overlay_window_views.cc'
+        linked = (throttles, download, windows, anchor_file, menu, overlay)
+        guard = '#if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
+        with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
+            root = pathlib.Path(scratch)
+            originals = self.fake_tree(root)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            hooked = {path: (root / path).read_text() for path in linked}
+            self.assertIn('CONTENT_EXPORT void SetArdiaMacDownloadUrlHook(', hooked[download])
+            self.assertIn('CONTENT_EXPORT void SetArdiaMacNewWindowInPlaceHook(', hooked[windows])
+            self.assertIn('namespace {\nbool (*g_ardia_mac_download_url)(', hooked[download])
+            self.assertIn('request.SetSuggestedFilename(', hooked[anchor_file])
+            reformatted = {
+                throttles: hooked[throttles]
+                .replace('    if (g_ardia_mac_add_navigation_throttles) {\n',
+                         '    if ( g_ardia_mac_add_navigation_throttles ) {\n')
+                .replace(guard + 'void (*g_ardia_mac_add_navigation_throttles)(\n',
+                         '#if  BUILDFLAG(IS_MAC)  &&  !defined(OFFICIAL_BUILD)\nvoid (* g_ardia_mac_add_navigation_throttles)(\n'),
+                download: hooked[download].replace(guard + '  if (g_ardia_mac_download_url &&\n',
+                                                   '# if BUILDFLAG(IS_MAC) && !defined(OFFICIAL_BUILD)\n'
+                                                   '  if (g_ardia_mac_download_url  &&\n'),
+                windows: hooked[windows].replace('    return nullptr;\n  }\n#endif\n',
+                                                 '    return nullptr;\n  }\n#endif  \n'),
+                anchor_file: hooked[anchor_file].replace('#if !defined(OFFICIAL_BUILD)\n',
+                                                         '#if   !defined( OFFICIAL_BUILD )\n'),
+                menu: hooked[menu]
+                .replace('RenderViewContextMenuObserver* (*g_ardia_mac_page_menu_observer)(\n',
+                         'RenderViewContextMenuObserver* ( *g_ardia_mac_page_menu_observer )(\n')
+                .replace('  if (g_ardia_mac_page_menu_observer) {\n', '  if ( g_ardia_mac_page_menu_observer) {\n')
+                .replace('  if (g_ardia_mac_page_menu_destroyed) {\n', '  if (g_ardia_mac_page_menu_destroyed ) {\n'),
+                overlay: hooked[overlay]
+                .replace('(*g_ardia_mac_video_overlay)(\n', '(* g_ardia_mac_video_overlay)(\n')
+                .replace('  if (g_ardia_mac_video_overlay) {\n', '  if (g_ardia_mac_video_overlay ) {\n'),
+            }
+            for path, text in reformatted.items():
+                self.assertNotEqual(text, hooked[path], path)
+                (root / path).write_text(text)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            migrated = self.run_apply(root)
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            for path in linked:
+                self.assertEqual((root / path).read_text(), hooked[path], path)
+            self.assertEqual(self.run_apply(root, '--check').returncode, 0)
+            for path, text in reformatted.items():
+                (root / path).write_text(text)
+            reverted = self.run_apply(root, '--revert')
+            self.assertEqual(reverted.returncode, 0, reverted.stderr)
+            for path in linked:
+                self.assertEqual((root / path).read_text(), originals[path], path)
+            earlier = (guard + 'bool (*g_ardia_mac_download_url)(RenderFrameHost* frame,\n'
+                       '                                 const GURL& url,\n'
+                       '                                 bool follows_redirects,\n'
+                       '                                 bool names_file,\n'
+                       '                                 bool user_gesture) = nullptr;\n#endif\n\n')
+            function = 'void RenderFrameHostImpl::DownloadURL(\n'
+            (root / download).write_text(originals[download].replace(function, earlier + function, 1))
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            upgraded = (root / download).read_text()
+            self.assertEqual(upgraded.count('g_ardia_mac_download_url)('), 1)
+            self.assertIn('SetArdiaMacDownloadUrlHook', upgraded)
+            self.assertEqual(self.run_apply(root, '--check').returncode, 0)
+            call = hooked[download].split('blink_parameters) {\n', 1)[1].split('  std::unique_ptr', 1)[0]
+            self.assertTrue(call.startswith('#if ') and call.endswith('#endif\n'), call)
+            spaced = call.replace(guard, '#if BUILDFLAG(IS_MAC)  && !defined(OFFICIAL_BUILD)\n')
+            doubled = hooked[download].replace(
+                '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n',
+                spaced + '  std::unique_ptr<download::DownloadUrlParameters> parameters =\n', 1)
+            self.assertEqual(doubled.count('if (g_ardia_mac_download_url &&'), 2)
+            (root / download).write_text(doubled)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            collapsed = self.run_apply(root)
+            self.assertEqual(collapsed.returncode, 0, collapsed.stderr)
+            self.assertEqual((root / download).read_text(), hooked[download])
+            (root / download).write_text(doubled)
+            self.assertEqual(self.run_apply(root, '--revert').returncode, 0)
+            self.assertEqual((root / download).read_text(), originals[download])
+            for path in (menu, overlay):
+                (root / path).write_text(reformatted[path])
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            for path in (menu, overlay):
+                self.assertEqual((root / path).read_text(), hooked[path], path)
+            moved = (guard + '  if (g_ardia_mac_new_window_in_place &&\n'
+                     '      g_ardia_mac_new_window_in_place(\n'
+                     '          this, params.target_url, params.disposition,\n'
+                     '          params.is_form_submission || params.form_submission_post_data,\n'
+                     '          has_user_gesture)) {\n    return nullptr;\n  }\n#endif\n')
+            late = '  bool was_blocked = false;\n'
+            early = hooked[windows].split('CreateNewWindowParams& params) {\n', 1)[1].split('  content::ChildProcessId', 1)[0]
+            self.assertTrue(early.startswith(guard) and early.endswith('#endif\n'), early)
+            (root / windows).write_text(hooked[windows].replace(early, '', 1).replace(late, moved + late, 1))
+            self.assertEqual((root / windows).read_text().count('g_ardia_mac_new_window_in_place &&'), 1)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            relocated = (root / windows).read_text()
+            self.assertEqual(relocated, hooked[windows])
+            self.assertLess(relocated.index('params.opener_suppressed && g_ardia_mac_new_window_in_place'),
+                            relocated.index('content::ChildProcessId render_process_id'))
+
+    def test_apply_touches_only_the_hook_block_inside_an_outer_guard(self):
+        download = 'content/browser/renderer_host/render_frame_host_impl.cc'
+        with tempfile.TemporaryDirectory(prefix='ardia-mac-apply-') as scratch:
+            root = pathlib.Path(scratch)
+            originals = self.fake_tree(root)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            hooked = (root / download).read_text()
+            call = hooked.split('blink_parameters) {\n', 1)[1].split('  std::unique_ptr', 1)[0]
+            respaced = call.replace('  if (g_ardia_mac_download_url &&\n', '  if (g_ardia_mac_download_url   &&\n')
+            sibling = '  int ardia_sibling_kept = 1;\n'
+            outer = '#if !defined(OFFICIAL_BUILD)\n' + sibling + respaced + sibling.replace('1', '2') + '#endif\n'
+            nested = hooked.replace(call, outer, 1)
+            (root / download).write_text(nested)
+            self.assertNotEqual(self.run_apply(root, '--check').returncode, 0)
+            self.assertEqual(self.run_apply(root).returncode, 0)
+            applied = (root / download).read_text()
+            self.assertIn(sibling, applied)
+            self.assertIn(sibling.replace('1', '2'), applied)
+            self.assertEqual(applied.count('g_ardia_mac_download_url &&'), 1)
+            self.assertNotIn('g_ardia_mac_download_url   &&', applied)
+            self.assertEqual(self.run_apply(root, '--check').returncode, 0)
+            (root / download).write_text(nested)
+            self.assertEqual(self.run_apply(root, '--revert').returncode, 0)
+            reverted = (root / download).read_text()
+            self.assertIn('#if !defined(OFFICIAL_BUILD)\n' + sibling + sibling.replace('1', '2') + '#endif\n', reverted)
+            self.assertNotIn('g_ardia_mac_download_url', reverted)
+            self.assertNotIn('SetArdiaMacDownloadUrlHook', reverted)
+            self.assertEqual(reverted.replace('#if !defined(OFFICIAL_BUILD)\n' + sibling + sibling.replace('1', '2')
+                                              + '#endif\n', '', 1), originals[download])
 
     def test_apply_upgrades_an_earlier_page_menu_hook_and_reverts_it(self):
         target = 'components/renderer_context_menu/render_view_context_menu_base.cc'
@@ -1184,6 +1354,75 @@ class ContractTests(unittest.TestCase):
         self.assertIn('kZoomRoutes[] = {"sites.zoomLevels",\n                                                   "sites.setZoom"}',
                       self.read('ac_mac_page_policy.h'))
         self.assertIn('ac_zoom_set', (REPO / 'engine/ardiacore-linux/src/ardia/linux/ac_linux_history_zoom.cc').read_text())
+
+    def test_link_gestures_and_page_options_are_advertised_and_wired(self):
+        calls = self.read('ac_mac_shell_calls.mm')
+        self.assertIn('AppendLinkCapabilities(capabilities);', calls)
+        call = calls.split('void ShellHostView::EngineCall(', 1)[1]
+        self.assertLess(call.index('HandlesLinkRoute(name)'), call.index('desktop_routes::FindRoute(name)'))
+        policy = self.read('ac_mac_link_policy.h')
+        capabilities = (REPO / 'apps/desktop/src/hostCapabilities.ts').read_text()
+        for route in ('setPeekOtherSiteTabs', 'setLittleArdiaOpensNewTabLinks', 'setPopupsOpenAsTabs', 'setCommandScrollZoom'):
+            self.assertIn(f'"webView.{route}"', policy)
+            self.assertIn(f'has("webView.{route}")', capabilities)
+        page_options = (REPO / 'apps/browser/src/platform/pageOptions.ts').read_text()
+        for route in ('setPeekModifier', 'setSplitLinkModifier'):
+            self.assertIn(f'"webView.{route}"', policy)
+            self.assertIn(f'"webView.{route}"', page_options)
+        delegate = self.read('ac_mac_page_delegate.mm')
+        for wired in ('InterceptLinkOpen(source, params)', 'OpeningDisposition(source, params)',
+                      'PopupDisposition(source, disposition)', 'NoteLinkTarget(source, url);'):
+            self.assertIn(wired, delegate)
+        self.assertNotIn('CanDownload', delegate)
+        add = delegate.split('content::WebContents* AddNewContents(', 1)[1].split('\n  }\n', 1)[0]
+        self.assertIn('std::move(new_contents)', add)
+        install = delegate.split('void InstallPageDelegate() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('InstallLinkHooks();', install)
+        host = self.read('ac_mac_shell_host.mm')
+        rebind = host.split('void PageBinding::Rebind(', 1)[1].split('\n}\n', 1)[0]
+        self.assertLess(rebind.index('links_.reset();'), rebind.index('Observe(contents);'))
+        self.assertIn('links_ = std::make_unique<PageLinks>(this, contents);', rebind)
+        destructor = host.split('PageBinding::~PageBinding() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertTrue(destructor.lstrip().startswith('links_.reset();'))
+        gesture = self.read('ac_mac_link_gesture.mm')
+        self.assertIn('"openWindow"', gesture)
+        self.assertNotIn('ExecuteJavaScript', gesture)
+        self.assertNotIn('->Stop()', gesture)
+        self.assertNotIn('DidStartNavigation', gesture)
+        throttle = gesture.split('class SitePeekThrottle', 1)[1].split('\n};\n', 1)[0]
+        self.assertIn('ThrottleCheckResult WillStartRequest() override', throttle)
+        self.assertIn('CANCEL_AND_IGNORE : PROCEED', throttle)
+        peek = gesture.split('bool PageLinks::PeeksInsteadOf(', 1)[1].split('\n}\n', 1)[0]
+        for required in ('handle.WasInitiatedByLinkClick()', 'handle.NavigationInputStart()', 'handle.IsPost()',
+                         'lp::TargetMatches(release.target, url.spec())', 'handle.GetInitiatorFrameToken()',
+                         'main->GetGlobalFrameToken()'):
+            self.assertIn(required, peek)
+        self.assertNotIn('EmitDecision', peek)
+        self.assertNotIn('PostTask(', gesture)
+        finish = gesture.split('void PageLinks::DidFinishNavigation(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('handle->GetNavigationId() != peek_navigation_', finish)
+        self.assertLess(finish.index('lp::AnnouncesSitePeek(true, handle->HasCommitted(), !contents || contents->IsBeingDestroyed())'),
+                        finish.index('EmitDecision('))
+        self.assertIn('kInputMatchMicros = 0;', self.read('ac_mac_link_policy.h'))
+        self.assertIn('content::SetArdiaMacDownloadUrlHook(&OptionClickDownloadIntercepted);', gesture)
+        self.assertIn('content::SetArdiaMacNewWindowInPlaceHook(&NoOpenerWindowOpensInPlace);', gesture)
+        self.assertNotIn('g_ardia_mac_download_url', gesture)
+        in_place = gesture.split('bool PageLinks::OpensInPlace(', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('link.post = form_submission;', in_place)
+        self.assertIn("contents->IsBeingDestroyed()", finish)
+        self.assertIn("lp::AnnouncesSitePeek(", finish)
+        self.assertIn('g_ardia_mac_add_navigation_throttles = &AddLinkNavigationThrottles;', gesture)
+        zoom = gesture.split('void InstallCommandScrollZoom() {', 1)[1].split('\n}\n', 1)[0]
+        self.assertIn('event.hasPreciseScrollingDeltas', zoom)
+        self.assertIn('BindingUnder(event)', zoom)
+        self.assertNotIn('mouseLocation', gesture)
+        apply = (ROOT / 'apply.sh').read_text()
+        self.assertIn('MetricsNavigationThrottle::CreateAndAdd(registry);', apply)
+        self.assertIn('g_ardia_mac_add_navigation_throttles(registry);', apply)
+        self.assertIn('network::mojom::RedirectMode::kFollow', apply)
+        self.assertIn('blink_parameters->suggested_name.has_value()', apply)
+        self.assertIn('params.is_form_submission || params.form_submission_post_data', apply)
+        self.assertIn('FastHasAttribute(html_names::kDownloadAttr)', apply)
 
     def test_background_permission_prompts_get_a_nonvisual_prompt_after_ardiacore(self):
         delegate = self.read('ac_mac_page_delegate.mm')

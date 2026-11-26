@@ -11,6 +11,7 @@
 
 #include "ardia/linux/ac_linux_session.h"
 #include "ardia/mac/ac_mac_extension_view.h"
+#include "ardia/mac/ac_mac_link_gesture.h"
 #include "ardia/mac/ac_mac_pip.h"
 #include "ardia/mac/ac_mac_glass.h"
 #include "ardia/mac/ac_mac_menu.h"
@@ -311,6 +312,7 @@ std::string ShellHostView::BootstrapJson() const {
   for (std::string_view route : page_policy::kZoomRoutes) {
     capabilities.Append(route);
   }
+  AppendLinkCapabilities(capabilities);
   base::DictValue bootstrap;
   bootstrap.Set("windowId", window_id_);
   bootstrap.Set("startup", startup_);
@@ -681,6 +683,9 @@ void ShellHostView::EngineCall(const std::string& name,
   }
   if (pip_ && PipPresenter::HandlesEngineCall(name)) {
     return pip_->EngineCall(name, args, std::move(done));
+  }
+  if (HandlesLinkRoute(name)) {
+    return LinkRouteCall(name, args, std::move(done));
   }
   if (page_policy::IsZoomRoute(name)) {
     return WithProfile(profile,
