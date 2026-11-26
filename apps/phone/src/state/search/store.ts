@@ -222,7 +222,11 @@ export function forgetSearch(query: string) {
   if (!forgotten || !history().forget((url) => searchKey(url) === forgotten)) return;
   if (!useTabs.getState().incognito) countUsage("searches_forgotten");
   feedSources();
-  useSearch.setState((state) => (state.text.trim() ? { rows: state.rows.filter((row) => row.kind !== "query" || row.query.trim().toLowerCase() !== forgotten || row.query.trim().toLowerCase() === state.text.trim().toLowerCase()) } : { rows: rowsFor(state.text, []) }));
+  const { text } = useSearch.getState();
+  if (!text.trim()) return useSearch.setState({ rows: rowsFor(text, []) });
+  const carried = remote.text && text.startsWith(remote.text) ? remote.values.filter((value) => value.trim().toLowerCase() !== forgotten) : [];
+  const suggested = suggestionsFor(text, carried);
+  useSearch.setState({ rows: suggested.rows, completion: suggested.completion, completedFor: text });
 }
 
 export function applySearchEngine() {

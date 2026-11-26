@@ -6,7 +6,7 @@ import { SearchTray } from "../components/search/SearchTray";
 import * as browse from "../state/browse/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { history } from "../state/history/store";
-import { presentSearch, useSearch } from "../state/search/store";
+import { forgetSearch, presentSearch, setSearchText, useSearch } from "../state/search/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const onIos = Platform.OS === "ios" ? test : test.skip;
@@ -111,6 +111,39 @@ describe("deleting a past search", () => {
     expect(history().summary().map((row) => row.url)).toEqual([TAPAS]);
     expect(counted).toHaveBeenCalledWith("searches_forgotten");
     sheet.mockRestore();
+    unmount(root);
+  });
+
+  test("deleting the search being typed keeps the typed row without the clock, and its page and completion go too", () => {
+    const root = openIdleTray();
+    act(() => setSearchText("tapas"));
+    const typedRow = () => useSearch.getState().rows.find((row) => row.kind === "query" && row.query === "tapas");
+    expect(typedRow()).toMatchObject({ past: true });
+    expect(useSearch.getState().rows.some((row) => row.kind === "page" && row.url === TAPAS)).toBe(true);
+    act(() => forgetSearch("tapas"));
+    expect(typedRow()).toBeDefined();
+    expect(typedRow()).not.toMatchObject({ past: true });
+    expect(useSearch.getState().rows.some((row) => row.kind === "page" && row.url === TAPAS)).toBe(false);
+    unmount(root);
+  });
+
+  test("deleting the only search on an engine drops the inline completion it gave", () => {
+    withTabs(1);
+    history().clear(null);
+    history().record(TAPAS, "tapas", "typed", null, 3_000);
+    browse.useBrowse.setState({ surface: "start" });
+    presentSearch("start", "");
+    act(() => jest.runOnlyPendingTimers());
+    const root = renderSurface(
+      <DesignProvider design="original">
+        <SearchTray />
+      </DesignProvider>,
+    );
+    act(() => setSearchText("duck"));
+    expect(useSearch.getState().completion).toBe("duckgo.com");
+    act(() => forgetSearch("tapas"));
+    expect(useSearch.getState().completion).toBe("");
+    expect(useSearch.getState().completedFor).toBe("duck");
     unmount(root);
   });
 
