@@ -15,7 +15,7 @@ const { settledStops } = await import("./process.ts");
 const { notePluginGesture } = await import("./gestures.ts");
 const { reconcileTab, postToContent, receiveWorldMessage } = await import("./pageWorlds.ts");
 const { minimizedMarkdown } = await import("./pageApis.ts");
-const { openPluginPage, routePluginPage, isSelfRouted } = await import("./pages.ts");
+const { openPluginPage, routePluginPage, isSelfRouted, pluginPageLoadSeq } = await import("./pages.ts");
 const { parsePluginPageUrl, pluginPageUrl, pageRouteOfView, pluginPagePath } = await import("./pageNames.ts");
 const { mountPluginSurface, unmountPluginSurface } = await import("./surfaces.ts");
 const { acceptsFile, dropFilesOnPluginView, pickFilesForPluginView, droppedFilePaths } = await import("./surfaceMedia.ts");
@@ -418,7 +418,7 @@ test("plugin page tabs: scoped keys round-trip, in-page routes update the addres
   const w = S().createWindow({ url: "https://a.example/" });
   const tab = openPluginPage(w, "reader", { path: "/inbox" });
   assert.equal(S().tabs[tab].url, "ardia://reader/inbox");
-  assert.equal(routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html?ardiaPath=%2Fthread%2F7"), true);
+  assert.equal(routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html?ardiaPath=%2Fthread%2F7", pluginPageLoadSeq(S().tabs[tab])), true);
   assert.equal(S().tabs[tab].url, "ardia://reader/thread/7", "the address follows the page's own route");
   assert.equal(isSelfRouted(tab), true, "and the page isn't reloaded for a route it set itself");
   assert.equal(pluginPagePath(S().tabs[tab].url), "/thread/7");

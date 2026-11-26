@@ -16,6 +16,7 @@ type PluginFileViewProps = {
   style?: StyleProp<ViewStyle>;
   onMessage?: (message: unknown) => void;
   tabId?: string;
+  load?: number;
 };
 
 type NavigableView = { goBack(): Promise<void>; goForward(): Promise<void> };
@@ -28,7 +29,7 @@ const parsedMessage = (body: string): { ok: true; value: unknown } | { ok: false
   }
 };
 
-export function PluginFileView({ plugin, url, context = "", themed = true, style, onMessage, tabId }: PluginFileViewProps) {
+export function PluginFileView({ plugin, url, context = "", themed = true, style, onMessage, tabId, load = 0 }: PluginFileViewProps) {
   const view = useRef<NavigableView | null>(null);
   useEffect(() => {
     if (!tabId) return;
@@ -59,7 +60,7 @@ export function PluginFileView({ plugin, url, context = "", themed = true, style
         tabId
           ? (e) => {
               updateLive(tabId, { canGoBack: e.nativeEvent.canGoBack, canGoForward: e.nativeEvent.canGoForward });
-              routePluginPage(tabId, plugin, e.nativeEvent.url);
+              routePluginPage(tabId, plugin, e.nativeEvent.url, load);
             }
           : undefined
       }

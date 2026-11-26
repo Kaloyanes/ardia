@@ -87,6 +87,36 @@ final class PluginRunTableTests: XCTestCase {
     XCTAssertEqual(table.count("p"), 0)
   }
 
+  func testAStaleTerminalEventIsRefusedAfterItsIdWasReusedAndReleased() {
+    let table = PluginRunTable<Box>()
+    guard case .admitted(let first) = table.admit("p", 1, "s", cap: 8, make: { _ in Box("a") }) else { return XCTFail("refused") }
+    _ = table.take("p", 1, "s")
+    guard case .admitted(let second) = table.admit("p", 1, "s", cap: 8, make: { _ in Box("b") }) else { return XCTFail("refused") }
+    XCTAssertTrue(table.remove("p", 1, "s", token: second))
+    XCTAssertFalse(table.untaken("p", 1, "s", by: first), "A's queued end can't pass once B claimed and released the id")
+    XCTAssertTrue(table.untaken("p", 1, "s", by: second), "B's own last event still goes")
+  }
+
+  func testAdmissionIsRefusedTheMomentARunIsRetiredOrItsChannelCloses() throws {
+    let live = PluginLiveRuns()
+    let table = PluginRunTable<Box>()
+    let handles = PluginFileHandles()
+    live.replace(with: [(name: "p", run: 4), (name: "q", run: 9)])
+    XCTAssertEqual(table.admit("p", 4, "s", cap: 8, live: { live.contains("p", run: 4) }, make: { _ in Box("ok") }), .admitted(1))
+    live.replace(with: [(name: "q", run: 9)])
+    XCTAssertEqual(table.admit("p", 4, "t", cap: 8, live: { live.contains("p", run: 4) }, make: { _ in Box("late") }), .closed, "a removed plugin's run is out of the live set at once")
+    live.markClosed("q", run: 9)
+    XCTAssertEqual(table.admit("q", 9, "s", cap: 8, live: { live.contains("q", run: 9) }, make: { _ in Box("late") }), .closed, "and so is one whose control channel closed")
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent("closed-\(UUID().uuidString)").path
+    FileManager.default.createFile(atPath: path, contents: Data([1]))
+    defer { unlink(path) }
+    guard case .success(let file) = PluginBoundedFile.openRegular(path) else { return XCTFail("couldn't open") }
+    XCTAssertNil(handles.addRead("q", 9, fd: file.fd, size: file.size, live: { live.contains("q", run: 9) }))
+    let host = try String(contentsOfFile: #filePath.replacingOccurrences(of: "plugin-tests/PluginRunTableTests.swift", with: "ios/PluginHost.swift"), encoding: .utf8)
+    XCTAssertTrue(host.contains("onClose: { [weak self] process in"), "the host hears a closed control channel")
+    XCTAssertTrue(host.contains("for process in retiring { live.markClosed(process.name, run: process.run) }"), "and remove retires its runs from the live set")
+  }
+
   func testAFallingBehindSocketSaysSoBeforeClosing() {
     XCTAssertEqual(PluginWebSocketCodec.fellBehind.code, "backpressure")
     XCTAssertEqual(PluginWebSocketCodec.fellBehind.close, 1008)
@@ -164,6 +194,40 @@ final class PluginFileHandleTests: XCTestCase {
     XCTAssertEqual(blocks.sorted(), (0..<count).map { UInt8($0 % 251) }.sorted())
   }
 
+  func testAFailedSaveChunkPoisonsTheFileSoNoHoleyFileIsCommitted() throws {
+    let handles = PluginFileHandles()
+    let destination = folder.appendingPathComponent("holey.bin")
+    let temporary = folder.appendingPathComponent(".holey.part").path
+    FileManager.default.createFile(atPath: temporary, contents: Data())
+    let fd = Darwin.open(temporary, O_RDONLY | O_CLOEXEC)
+    XCTAssertGreaterThanOrEqual(fd, 0)
+    guard let id = handles.addWrite("p", 1, fd: fd, temporary: temporary, destination: destination) else { return XCTFail("no handle") }
+    XCTAssertEqual(handles.writeChunk("p", 1, id, data: Data(repeating: 1, count: 16))["ok"] as? Bool, false, "the write fails on a read-only descriptor")
+    let retry = handles.writeChunk("p", 1, id, data: Data(repeating: 2, count: 16))
+    XCTAssertEqual(retry["ok"] as? Bool, false, "a later chunk is refused instead of writing past the hole")
+    let finished = handles.finish("p", 1, id, commit: true)
+    XCTAssertEqual(finished["ok"] as? Bool, false)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path), "nothing is committed")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: temporary), "and the part file is removed")
+  }
+
+  func testADropSkipsARefusedCandidateAndKeepsTheValidOne() throws {
+    let handles = PluginFileHandles()
+    let big = try file("oversized.txt", bytes: 4096)
+    let valid = try file("valid.png", bytes: 64)
+    let result = PluginFileBatch.open([big, valid], maxBytes: 1024, skipRefused: true, textual: { _ in false }, mimeType: { $0.hasSuffix(".png") ? "image/png" : "text/plain" }) { fd, size in
+      handles.addRead("p", 1, fd: fd, size: size)
+    } discard: { handles.discard("p", 1, $0) }
+    guard case .success(let opened) = result else { return XCTFail("the drop failed") }
+    XCTAssertEqual(opened.files.map { $0["name"] as? String }, ["valid.png"])
+    let strict = PluginFileBatch.open([big, valid], maxBytes: 1024, textual: { _ in false }, mimeType: { _ in "x" }) { fd, size in
+      handles.addRead("p", 1, fd: fd, size: size)
+    } discard: { handles.discard("p", 1, $0) }
+    guard case .failure = strict else { return XCTFail("a picker batch still refuses") }
+    let none = PluginFileBatch.open([big], maxBytes: 1024, skipRefused: true, textual: { _ in false }, mimeType: { _ in "x" }) { _, _ in nil } discard: { _ in }
+    guard case .failure = none else { return XCTFail("a drop where nothing opens still says why") }
+  }
+
   func testAStoppedRunCantRegisterAHandleAndTheDescriptorIsClosed() throws {
     let handles = PluginFileHandles()
     handles.closeAll("p", run: 3)
@@ -232,7 +296,12 @@ final class PluginPageStoresTests: XCTestCase {
     stores.record("notes", key: "../escape")
     XCTAssertEqual(stores.keys("notes"), ["profile-a", "profile-b"])
     XCTAssertEqual(PluginPageStores(file: file).keys("notes"), ["profile-a", "profile-b"], "the keys survive a relaunch")
-    stores.forget("notes")
+    stores.forget("notes", key: "profile-a")
+    XCTAssertEqual(PluginPageStores(file: file).keys("notes"), ["profile-b"], "only a key whose store was removed leaves the index")
+    stores.forget("notes", key: "profile-b")
     XCTAssertEqual(PluginPageStores(file: file).keys("notes"), [])
+    for i in 0..<70 { stores.record("many", key: "p\(i)") }
+    XCTAssertEqual(stores.keys("many").count, 70, "no cap evicts an older profile's store from cleanup")
+    XCTAssertEqual(stores.keys("many").first, "p0")
   }
 }

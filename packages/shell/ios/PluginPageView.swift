@@ -121,11 +121,11 @@ final class PluginPageView: ExpoView, WKNavigationDelegate, WKUIDelegate {
   }
 
   static func removeData(_ plugin: String, done: @escaping () -> Void) {
-    let identifiers = [storeIdentifier(plugin)] + stores.keys(plugin).map { storeIdentifier(plugin, key: $0) }
-    stores.forget(plugin)
-    var left = identifiers.count
-    for identifier in identifiers {
-      PluginPageData.remove(identifier) { _ in
+    let keys = [""] + stores.keys(plugin)
+    var left = keys.count
+    for key in keys {
+      PluginPageData.remove(storeIdentifier(plugin, key: key)) { error in
+        if error == nil && !key.isEmpty { stores.forget(plugin, key: key) }
         left -= 1
         if left == 0 { done() }
       }

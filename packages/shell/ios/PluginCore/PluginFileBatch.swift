@@ -33,10 +33,12 @@ enum PluginFileBatch {
   }
 
   static func open(
-    _ paths: [String], maxBytes: Int, textual: (String) -> Bool, mimeType: (String) -> String, register: (Int32, Int) -> String?, discard: ([String]) -> Void
+    _ paths: [String], maxBytes: Int, skipRefused: Bool = false, textual: (String) -> Bool, mimeType: (String) -> String, register: (Int32, Int) -> String?,
+    discard: ([String]) -> Void
   ) -> Result<Opened, FolderRefusal> {
     var opened = Opened()
     var budget = inlineBudget
+    var skipped: String?
     func refuse(_ reason: String) -> Result<Opened, FolderRefusal> {
       discard(opened.handles)
       return .failure(FolderRefusal(reason: reason))
@@ -44,11 +46,21 @@ enum PluginFileBatch {
     for path in paths {
       let name = URL(fileURLWithPath: path).lastPathComponent
       switch PluginBoundedFile.openRegular(path) {
-      case .failure(let refusal): return refuse("\(name): \(refusal.reason)")
+      case .failure(let refusal):
+        if skipRefused {
+          skipped = skipped ?? "\(name): \(refusal.reason)"
+          continue
+        }
+        return refuse("\(name): \(refusal.reason)")
       case .success(let file):
         guard file.size <= maxBytes else {
           Darwin.close(file.fd)
-          return refuse("\(name) is over \(maxBytes >> 20 > 0 ? "\(maxBytes >> 20) MB" : "\(maxBytes) bytes")")
+          let reason = "\(name) is over \(maxBytes >> 20 > 0 ? "\(maxBytes >> 20) MB" : "\(maxBytes) bytes")"
+          if skipRefused {
+            skipped = skipped ?? reason
+            continue
+          }
+          return refuse(reason)
         }
         var row: [String: Any] = ["name": name, "size": file.size, "mimeType": mimeType(path)]
         switch inline(file.fd, size: file.size, textual: textual(path), budget: budget) {
@@ -70,6 +82,7 @@ enum PluginFileBatch {
         opened.files.append(row)
       }
     }
+    if opened.files.isEmpty, let skipped { return .failure(FolderRefusal(reason: skipped)) }
     return .success(opened)
   }
 }

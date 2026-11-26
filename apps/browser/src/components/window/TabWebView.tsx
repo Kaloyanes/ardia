@@ -52,6 +52,7 @@ import { withoutFragment } from "../../lib/url";
 import { adoptOf, loadedPage, navigationOf } from "../../state/tabs/pageSession";
 import { noteCommit } from "../../state/automation/automationEvents";
 import { notePluginStateCommit } from "../../state/plugins/stateCommits";
+import { notePluginWorldCommit } from "../../state/plugins/pageWorlds";
 import { forgetUnreadIfGone, noteAppBadge, noteUnreadFavicon, noteUnreadLoading, noteUnreadPageEnded } from "../../state/tabs/unread";
 import { trackPageProcessGone } from "../../state/telemetry/diagnostics";
 import { releaseTranslation, translateCrashContext } from "../../state/site/translate";
@@ -226,6 +227,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         const pageArrived = trackPageArrival(tabId);
         noteCommit(tabId, committedUrl, committedAt, httpStatus);
         notePluginStateCommit(tabId, committedUrl, committedAt);
+        notePluginWorldCommit(tabId, committedAt);
         verificationCodeDocument(tabId, committedAt);
         if (!retired) notePageCommit(tabId, committedAt);
         notePageDocument(tabId, reported, committedUrl, committedAt, isIncognitoProfile(profileId), documentReporter);

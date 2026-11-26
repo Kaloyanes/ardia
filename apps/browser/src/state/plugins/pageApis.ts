@@ -84,8 +84,14 @@ function cutToBytes(text: string, max: number): string {
   return out;
 }
 
+const READ_FIELD_BYTES = { url: 8 * 1024, title: 4 * 1024, selection: 64 * 1024, lang: 64 } as const;
+
 export function fittedRead(result: Record<string, unknown>, max = READ_REPLY_BYTES): Record<string, unknown> {
   const out = { ...result };
+  for (const [key, cap] of Object.entries(READ_FIELD_BYTES)) {
+    const value = out[key];
+    if (typeof value === "string" && byteLength(value) > cap) out[key] = cutToBytes(value, cap);
+  }
   const over = () => byteLength(JSON.stringify(out)) - max;
   for (const key of ["markdown", "text"] as const) {
     const value = out[key];
@@ -97,7 +103,9 @@ export function fittedRead(result: Record<string, unknown>, max = READ_REPLY_BYT
     out.screenshotOmitted = true;
   }
   for (const key of ["forms", "links", "headings"] as const) if (over() > 0 && Array.isArray(out[key])) out[key] = [];
-  return out;
+  if (over() > 0 && out.metadata) delete out.metadata;
+  for (const key of ["markdown", "selection", "text"] as const) if (over() > 0 && typeof out[key] === "string") out[key] = "";
+  return over() > 0 ? { tabId: out.tabId, url: cutToBytes(String(out.url ?? ""), 1024), title: cutToBytes(String(out.title ?? ""), 512), text: "", lang: "" } : out;
 }
 
 export function minimizedMarkdown(markdown: string): string {

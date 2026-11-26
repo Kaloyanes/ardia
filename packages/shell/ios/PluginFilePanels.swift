@@ -59,12 +59,12 @@ enum PluginFilePanels {
   static func dropped(_ spec: [String: Any], reply: @escaping ([String: Any]) -> Void) {
     guard let owner = owner(spec), let paths = spec["paths"] as? [String], !paths.isEmpty else { return reply(["ok": false, "reason": "openDropped needs the plugin's run and paths"]) }
     let maxBytes = min(maxFileBytes, (spec["maxBytes"] as? NSNumber)?.intValue ?? maxFileBytes)
-    DispatchQueue.global(qos: .userInitiated).async { reply(open(Array(paths.prefix(maxFiles)), owner: owner, maxBytes: maxBytes)) }
+    DispatchQueue.global(qos: .userInitiated).async { reply(open(Array(paths.prefix(maxFiles)), owner: owner, maxBytes: maxBytes, skipRefused: true)) }
   }
 
-  static func open(_ paths: [String], owner: (name: String, run: Int), maxBytes: Int) -> [String: Any] {
+  static func open(_ paths: [String], owner: (name: String, run: Int), maxBytes: Int, skipRefused: Bool = false) -> [String: Any] {
     let live = { PluginHost.shared.isLive(owner.name, run: owner.run) }
-    let batch = PluginFileBatch.open(paths, maxBytes: maxBytes, textual: { isText(URL(fileURLWithPath: $0)) }, mimeType: { mimeType(URL(fileURLWithPath: $0)) }) { fd, size in
+    let batch = PluginFileBatch.open(paths, maxBytes: maxBytes, skipRefused: skipRefused, textual: { isText(URL(fileURLWithPath: $0)) }, mimeType: { mimeType(URL(fileURLWithPath: $0)) }) { fd, size in
       PluginFileHandles.shared.addRead(owner.name, owner.run, fd: fd, size: size, live: live)
     } discard: { PluginFileHandles.shared.discard(owner.name, owner.run, $0) }
     switch batch {

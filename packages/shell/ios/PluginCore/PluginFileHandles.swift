@@ -16,6 +16,7 @@ final class PluginFileHandles {
     var written = 0
     var inFlight = 0
     var closed = false
+    var failed = false
 
     init(fd: Int32, size: Int, temporary: String? = nil, destination: URL? = nil) {
       self.fd = fd
@@ -104,15 +105,22 @@ final class PluginFileHandles {
     defer { end(handle) }
     lock.lock()
     let offset = handle.written
-    let room = data.count <= Self.maxChunk && offset + data.count <= Self.maxSaveBytes
+    let broken = handle.failed
+    let room = !broken && data.count <= Self.maxChunk && offset + data.count <= Self.maxSaveBytes
     if room { handle.written = offset + data.count }
     lock.unlock()
+    if broken { return ["ok": false, "reason": "an earlier part of the file couldn't be written, so it can't be saved"] }
     guard room else { return ["ok": false, "reason": "the file would be over \(Self.maxSaveBytes >> 20) MB"] }
     var done = 0
     while done < data.count {
       let step = data.withUnsafeBytes { pwrite(handle.fd, $0.baseAddress!.advanced(by: done), data.count - done, off_t(offset + done)) }
       if step < 0 && errno == EINTR { continue }
-      if step <= 0 { return ["ok": false, "reason": "the file couldn't be written"] }
+      if step <= 0 {
+        lock.lock()
+        handle.failed = true
+        lock.unlock()
+        return ["ok": false, "reason": "the file couldn't be written"]
+      }
       done += step
     }
     return ["ok": true]
@@ -132,6 +140,7 @@ final class PluginFileHandles {
     handles[key] = nil
     handle.closed = true
     let idle = handle.inFlight == 0
+    let broken = handle.failed
     lock.unlock()
     guard let destination = handle.destination, let temporary = handle.temporary else {
       if idle { handle.release() }
@@ -140,6 +149,10 @@ final class PluginFileHandles {
     guard commit else {
       if idle { handle.release() }
       return ["ok": true]
+    }
+    guard !broken else {
+      handle.release()
+      return ["ok": false, "reason": "part of the file couldn't be written, so it wasn't saved"]
     }
     let synced = fsync(handle.fd) == 0
     Darwin.close(handle.fd)

@@ -84,6 +84,12 @@ final class PluginHost {
       onLine: { [weak self] process, line in
         self?.sink?.send("onLine", ["name": process.name, "run": process.run, "launch": process.launch, "line": line])
       },
+      onClose: { [weak self] process in
+        guard let self else { return }
+        self.live.markClosed(process.name, run: process.run)
+        self.publishLive()
+        PluginNetChannels.shared.closeAll(process.name, run: process.run)
+      },
       onExit: { [weak self] process, status, signal, overMemory in
         guard let self else { return }
         self.live.markClosed(process.name, run: process.run)
@@ -214,12 +220,16 @@ final class PluginHost {
   func remove(_ name: String, source: String, folderId: String?, done: @escaping (String?) -> Void) {
     queue.async { [self] in
       lifecycle.enqueue(name, .remove) { [self] complete in
+        let retiring = runs.all.filter { $0.name == name || $0.name == name + PluginProcess.Spec.sidecarSuffix }
         runs.stopAll(name + PluginProcess.Spec.sidecarSuffix, graceMs: 1000) {}
         runs.stopAll(name, graceMs: 1000) {
           let problem = PluginFolders.current().map { $0.remove(name, source: source, folderId: folderId) } ?? "Ardia has no data folder."
           DispatchQueue.main.async { done(problem) }
           complete()
         }
+        for process in retiring { live.markClosed(process.name, run: process.run) }
+        publishLive()
+        for process in retiring { PluginNetChannels.shared.closeAll(process.name, run: process.run) }
       }
     }
   }

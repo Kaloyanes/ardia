@@ -30,7 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL autoPictureInPicture;
 @property (nonatomic, copy) NSArray<NSDictionary<NSString *, NSString *> *> *pageMenuItems;
 @property (nonatomic, copy, nullable) NSString *pageMenuDocument;
-@property (nonatomic, strong, nullable) NSMutableArray<dispatch_block_t> *pageMenuWaiting;
+@property (nonatomic, strong, nullable) NSMutableArray<void (^)(NSString *document)> *pageMenuWaiting;
 @property (nonatomic) NSUInteger pageMenuGeneration;
 @property (nonatomic) NSInteger pageMenuDocumentCount;
 @property (nonatomic, readonly) BOOL discarded;

@@ -1,8 +1,6 @@
 import Foundation
 
 final class PluginPageStores {
-  static let maxKeys = 64
-
   private let file: URL?
   private let lock = NSLock()
   private var known: [String: [String]]
@@ -10,7 +8,7 @@ final class PluginPageStores {
   init(file: URL?) {
     self.file = file
     if let file, let data = try? Data(contentsOf: file), let read = try? JSONSerialization.jsonObject(with: data) as? [String: [String]] {
-      known = read.mapValues { Array($0.filter(Self.isKey).prefix(Self.maxKeys)) }
+      known = read.mapValues { $0.filter(Self.isKey) }
     } else {
       known = [:]
     }
@@ -24,7 +22,7 @@ final class PluginPageStores {
     lock.lock()
     defer { lock.unlock() }
     guard Self.isKey(key), !(known[plugin] ?? []).contains(key) else { return }
-    known[plugin] = Array(((known[plugin] ?? []) + [key]).suffix(Self.maxKeys))
+    known[plugin] = (known[plugin] ?? []) + [key]
     save()
   }
 
@@ -34,10 +32,12 @@ final class PluginPageStores {
     return known[plugin] ?? []
   }
 
-  func forget(_ plugin: String) {
+  func forget(_ plugin: String, key: String) {
     lock.lock()
     defer { lock.unlock() }
-    guard known.removeValue(forKey: plugin) != nil else { return }
+    guard var keys = known[plugin], let at = keys.firstIndex(of: key) else { return }
+    keys.remove(at: at)
+    known[plugin] = keys.isEmpty ? nil : keys
     save()
   }
 

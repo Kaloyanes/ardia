@@ -249,10 +249,10 @@ test("in-page routes keep the destination current, Back to the root document res
   const tab = openPluginPage(w, "reader", { path: "/inbox" });
   assert.equal(pageRouteOfView("reader", "ardia-plugin://reader/page/index.html"), "", "a view URL without ardiaPath is the root route");
   assert.equal(pageRouteOfView("reader", "ardia-plugin://reader/page/index.html?ardiaPath=..%2Fx"), null);
-  routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html?ardiaPath=%2Fthread%2F7");
+  routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html?ardiaPath=%2Fthread%2F7", pluginPageLoadSeq(S().tabs[tab]));
   assert.equal(tabDestination(S().tabs[tab]), "ardia://reader/thread/7", "the tab's destination follows the page's own route");
   const seq = pluginPageLoadSeq(S().tabs[tab]);
-  routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html");
+  routePluginPage(tab, "reader", "ardia-plugin://reader/page/index.html", pluginPageLoadSeq(S().tabs[tab]));
   assert.equal(S().tabs[tab].url, "ardia://reader", "Back to the root document puts the root address back");
   assert.equal(tabDestination(S().tabs[tab]), "ardia://reader");
   assert.equal(isSelfRouted(tab), true);
@@ -278,7 +278,7 @@ test("page menu items refresh when the tab's predicates change at the same addre
   assert.match(hook, /const key = useBrowser\(\(s\) => pageMenuKey\(s, tabId\)\)/);
   const menu = source("packages/ardiacore/ios/ArdiaWebView+ContextMenu.mm");
   assert.match(menu, /committedDocumentCount/, "the cached document belongs to one commit");
-  assert.match(menu, /\[strong pageMenuStillOn:strong\.pageMenuDocumentCount\] \? \(strong\.pageMenuDocument \?: @""\) : @""/, "a click after a navigation sends no stale document");
+  assert.match(menu, /NSString \*resolved = strong && \[strong pageMenuStillOn:count\] \? \(document \?: @""\) : @"";/, "a click after a navigation sends no stale document");
   assert.match(menu, /\+\+self\.pageMenuGeneration/, "each menu starts a fresh lookup");
 });
 
@@ -337,5 +337,5 @@ test("liveness is a leaf lock: PluginHost never syncs onto its queue to answer i
   assert.ok(hostSource.indexOf("self.live.markClosed(process.name, run: process.run)") < hostSource.indexOf("PluginNetChannels.shared.closeAll(process.name, run: process.run)"), "a run is marked closed before its resources are");
   const handles = source("packages/shell/ios/PluginCore/PluginFileHandles.swift");
   const write = handles.slice(handles.indexOf("func writeChunk"), handles.indexOf("func finish"));
-  assert.match(write, /let offset = handle\.written\n[^\n]*\n\s*if room \{ handle\.written = offset \+ data\.count \}/, "the write offset is reserved in the same lock hold");
+  assert.match(write, /lock\.lock\(\)\n\s*let offset = handle\.written\n(?:[^\n]*\n){1,2}\s*if room \{ handle\.written = offset \+ data\.count \}\n\s*lock\.unlock\(\)/, "the write offset is reserved in the same lock hold");
 });

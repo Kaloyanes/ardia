@@ -92,10 +92,10 @@ export function isSelfRouted(tabId: string, tab: Tab | undefined = useBrowser.ge
 
 export const pluginPageLoadSeq = (tab: Tab | undefined) => navSeqOf(tab);
 
-export function routePluginPage(tabId: string, name: string, viewUrl: string): boolean {
+export function routePluginPage(tabId: string, name: string, viewUrl: string, load: number): boolean {
   const route = pageRouteOfView(name, viewUrl);
   const tab = useBrowser.getState().tabs[tabId];
-  if (route === null || !tab || pluginPageOf(tab.url) !== name) return false;
+  if (route === null || !tab || pluginPageOf(tab.url) !== name || navSeqOf(tab) !== load) return false;
   const panel = panelOfPath(pluginPagePath(tab.url));
   const kept = panel && !panelOfPath(route) ? `${route}${route.includes("?") ? "&" : "?"}${PANEL_PARAM}=${panel}` : route;
   const next = pluginPageUrl(name, isPagePath(kept) ? kept : route);

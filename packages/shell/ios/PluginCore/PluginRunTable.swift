@@ -16,6 +16,8 @@ final class PluginRunTable<Value> {
 
   private let lock = NSRecursiveLock()
   private var entries: [String: Entry] = [:]
+  private var issued: [String: UInt64] = [:]
+  private static var maxIssued: Int { 4096 }
   private var closedRuns: [String] = []
   private var lastToken: UInt64 = 0
   private let maxClosedRuns: Int
@@ -47,6 +49,8 @@ final class PluginRunTable<Value> {
       lastToken += 1
       let token = lastToken
       entries[key] = Entry(token: token, value: nil)
+      if issued.count >= Self.maxIssued { issued = issued.filter { entries[$0.key] != nil } }
+      issued[key] = token
       guard let value = make(token) else {
         if entries[key]?.token == token { entries[key] = nil }
         return .failed
@@ -62,7 +66,10 @@ final class PluginRunTable<Value> {
   }
 
   func untaken(_ name: String, _ run: Int, _ id: String, by token: UInt64) -> Bool {
-    locked { entries[Self.key(name, run, id)].map { $0.token == token } ?? true }
+    locked {
+      let key = Self.key(name, run, id)
+      return entries[key].map { $0.token == token } ?? (issued[key] == token)
+    }
   }
 
   func value(_ name: String, _ run: Int, _ id: String) -> Value? {
@@ -104,6 +111,7 @@ final class PluginRunTable<Value> {
       }
       let closing = entries.filter { $0.key.hasPrefix(prefix) }
       for key in closing.keys { entries[key] = nil }
+      for key in issued.keys where key.hasPrefix(prefix) { issued[key] = nil }
       return closing.values.compactMap(\.value)
     }
   }
