@@ -4660,9 +4660,11 @@ In order:
   with unresolved issues that holds only this version; otherwise it opens one. Just before that it reads the
   version and the submissions again and stops if either changed while it ran. A rejected item for this version,
   left from the last review, is marked resolved. Then, right before submitting, it reads the version once more (its
-  version string, state, build and release type must be what the run set) and the submission's items (only this
+  version string, build and release type must be what the run set) and the submission's items (only this
   version), and stops without submitting on any change, so a release type switched mid-run or an App Event added
-  meanwhile never goes to App Review. The summary prints the release type Apple holds.
+  meanwhile never goes to App Review. The version's state may move only the way the run's own writes move it:
+  from `PREPARE_FOR_SUBMISSION` to `READY_FOR_REVIEW` (Apple does that when the version joins a submission), and
+  from a rejected state to either of those two; anything else, such as `WAITING_FOR_REVIEW` set elsewhere, stops it. The summary prints the release type Apple holds.
 
 Every step reports what is already done, so a re-run after a failure picks up where it stopped. After Apple approves
 it, the owner presses Release in App Store Connect. Google Play is not set up.

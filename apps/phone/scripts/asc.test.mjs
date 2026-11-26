@@ -243,6 +243,7 @@ function fakeAppStore() {
     const version = versionMatch && state.versions.find((row) => row.id === versionMatch[1]);
     if (version && versionMatch[2] === "/relationships/build") {
       version.build = body.data.id;
+      if (state.transitions?.attach) version.state = state.transitions.attach;
       return reply(undefined, 204);
     }
     if (version && versionMatch[2] === "" && method === "PATCH") {
@@ -295,12 +296,17 @@ function fakeAppStore() {
     }
     if (submission && method === "PATCH") return reply({ id: submission.id, type: "reviewSubmissions", attributes: { state: "WAITING_FOR_REVIEW" } });
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) {
+      const resolved = state.submissions.find((row) => path.includes(`item-${row.id}-`));
+      const resolvedVersion = state.versions.find((row) => resolved?.items.includes(row.id));
+      if (state.transitions?.resolve && resolvedVersion) resolvedVersion.state = state.transitions.resolve;
       if (state.raceAfterResolve) state.submissions.find((row) => row.items.length > 0 && path.includes(`item-${row.id}-`)).items.push(state.raceAfterResolve);
     }
     if (method === "PATCH" && path.startsWith("/v1/reviewSubmissionItems/")) return reply({ id: path.split("/").at(-1), type: "reviewSubmissionItems", attributes: { state: "READY_FOR_REVIEW" } });
     if (method === "POST" && path === "/v1/reviewSubmissionItems") {
       const target = state.submissions.find((row) => row.id === body.data.relationships.reviewSubmission.data.id);
       target.items.push(body.data.relationships.appStoreVersion.data.id);
+      const added = state.versions.find((row) => row.id === body.data.relationships.appStoreVersion.data.id);
+      if (state.transitions?.addItem && added) added.state = state.transitions.addItem;
       if (state.raceItem) target.items.push(state.raceItem);
       return reply({ id: id(), type: "reviewSubmissionItems" }, 201);
     }
@@ -751,4 +757,31 @@ test("app-store refuses a build that declares non-exempt encryption without an a
   }
   const approved = appStore(ready101(build("APPROVED")));
   assert.equal(approved.code, 0, approved.err);
+});
+
+test("app-store submits in one go through the states Apple moves the version to for the run's own writes", () => {
+  const cases = [
+    [{ addItem: "READY_FOR_REVIEW" }, ready101()],
+    [{ attach: "READY_FOR_REVIEW", addItem: "READY_FOR_REVIEW" }, ready101({ versions: [shippedBefore, draft101({ build: "b9" })] })],
+    [{ addItem: "READY_FOR_REVIEW" }, appStoreState({ versions: [shippedBefore], localizations: { "made-1": [{ id: "loc", ...listing }] } })],
+    [
+      { attach: "PREPARE_FOR_SUBMISSION", resolve: "READY_FOR_REVIEW" },
+      ready101({ versions: [shippedBefore, draft101({ state: "REJECTED", build: "b9" })], submissions: [{ id: "s1", state: "UNRESOLVED_ISSUES", items: ["v101"], itemStates: { v101: "REJECTED" } }] }),
+    ],
+  ];
+  for (const [transitions, state] of cases) {
+    const run = appStore({ ...state, transitions });
+    assert.equal(run.code, 0, `${JSON.stringify(transitions)}: ${run.err}`);
+    assert.ok(run.steps.some((step) => /^PATCH \/v1\/reviewSubmissions\/(made-\d+|s1)$/.test(step)), `${JSON.stringify(transitions)} not submitted`);
+  }
+});
+
+test("app-store still stops before submitting when the release type, build or review state changes after it adds the version", () => {
+  for (const changes of [{ releaseType: "AFTER_APPROVAL" }, { build: "b9" }, { state: "WAITING_FOR_REVIEW" }, { state: "IN_REVIEW" }]) {
+    const run = appStore(ready101({ transitions: { addItem: "READY_FOR_REVIEW" }, mutate: { after: 2, id: "v101", changes } }));
+    assert.equal(run.code, 1, `${JSON.stringify(changes)}: ${run.out}`);
+    assert.match(run.err, /changed while this ran/);
+    assert.ok(run.steps.includes("POST /v1/reviewSubmissionItems"), JSON.stringify(changes));
+    assert.ok(!run.steps.some((step) => step.startsWith("PATCH /v1/reviewSubmissions/")), `${JSON.stringify(changes)} submitted`);
+  }
 });

@@ -63,6 +63,13 @@ const EDITABLE_VERSION_STATES = new Set(["PREPARE_FOR_SUBMISSION", "READY_FOR_RE
 const SHIPPED_VERSION_STATES = new Set(["READY_FOR_SALE", "READY_FOR_DISTRIBUTION", "PREORDER_READY_FOR_SALE", "REPLACED_WITH_NEW_VERSION", "REMOVED_FROM_SALE", "DEVELOPER_REMOVED_FROM_SALE"]);
 const SUBMITTED_REVIEW_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW"]);
 const REOPENABLE_REVIEW_STATES = new Set(["READY_FOR_REVIEW", "UNRESOLVED_ISSUES"]);
+const STATES_AFTER_OWN_WRITE = new Map([
+  ["PREPARE_FOR_SUBMISSION", ["READY_FOR_REVIEW"]],
+  ["REJECTED", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
+  ["METADATA_REJECTED", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
+  ["DEVELOPER_REJECTED", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
+  ["INVALID_BINARY", ["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]],
+]);
 const DEVICE_FAMILIES = new Map([
   ["1", { name: "iPhone", displayTypePrefix: "APP_IPHONE_" }],
   ["2", { name: "iPad", displayTypePrefix: "APP_IPAD_" }],
@@ -947,16 +954,21 @@ async function requireVersionUnchanged(appId, expected) {
   const now = (await listAppStoreVersions(appId)).find((row) => row.id === expected.id);
   const drift = now
     ? [
-        ["version", now.version, expected.version, now.version],
-        ["state", now.state, expected.state, now.state],
-        ["build", now.buildId, expected.buildId, now.build ?? "none"],
-        ["release", now.releaseType, expected.releaseType, now.releaseType],
+        ["version", now.version === expected.version, now.version],
+        ["state", expected.states.has(now.state), now.state],
+        ["build", now.buildId === expected.buildId, now.build ?? "none"],
+        ["release", now.releaseType === expected.releaseType, now.releaseType],
       ]
-        .filter(([, actual, wanted]) => actual !== wanted)
-        .map(([name, , , shown]) => `${name} is now ${shown}`)
+        .filter(([, same]) => !same)
+        .map(([name, , shown]) => `${name} is now ${shown}`)
     : ["it is gone"];
   if (drift.length > 0) refuse(`version ${expected.version} changed while this ran (${drift.join(", ")}); nothing was submitted, run this again`);
+  expected.states = new Set([now.state]);
   return now;
+}
+
+function allowOwnWrite(expected) {
+  for (const state of [...expected.states]) for (const next of STATES_AFTER_OWN_WRITE.get(state) ?? []) expected.states.add(next);
 }
 
 async function appStore(args) {
@@ -993,6 +1005,7 @@ async function appStore(args) {
   }
 
   let version = plan.version;
+  let wroteVersion = plan.act !== "use";
   if (plan.act === "create") {
     const made = await post("/v1/appStoreVersions", {
       data: {
@@ -1015,10 +1028,12 @@ async function appStore(args) {
     console.log(`build ${number} is already attached`);
   } else {
     await patch(`/v1/appStoreVersions/${version.id}/relationships/build`, { data: { type: "builds", id: build.id } });
+    wroteVersion = true;
     console.log(`build ${number} attached${version.build ? ` in place of build ${version.build}` : ""}`);
   }
   if (version.releaseType !== "MANUAL") {
     await patch(`/v1/appStoreVersions/${version.id}`, { data: { type: "appStoreVersions", id: version.id, attributes: { releaseType: "MANUAL" } } });
+    wroteVersion = true;
     console.log(`release set to manual (was ${version.releaseType})`);
   }
 
@@ -1031,6 +1046,7 @@ async function appStore(args) {
   if (!versions.some((row) => SHIPPED_VERSION_STATES.has(row.state))) {
     console.log("What's New left out: the App Store shows it from the second version on");
   } else if (!primary) {
+    wroteVersion = true;
     primary = await post("/v1/appStoreVersionLocalizations", {
       data: {
         type: "appStoreVersionLocalizations",
@@ -1043,6 +1059,7 @@ async function appStore(args) {
     console.log(`What's New for ${locale} already reads the notes`);
   } else {
     await patch(`/v1/appStoreVersionLocalizations/${primary.id}`, { data: { type: "appStoreVersionLocalizations", id: primary.id, attributes: { whatsNew } } });
+    wroteVersion = true;
     console.log(`What's New set for ${locale}`);
   }
 
@@ -1053,7 +1070,8 @@ async function appStore(args) {
   }
   if (!/chatgpt/i.test(detail.notes)) console.log("warning: the App Review notes don't say how to try Continue with ChatGPT, so App Review may ask");
 
-  const expected = { id: version.id, version: versionString, state: version.state, buildId: build.id, build: number, releaseType: "MANUAL" };
+  const expected = { id: version.id, version: versionString, states: new Set([version.state]), buildId: build.id, releaseType: "MANUAL" };
+  if (wroteVersion) allowOwnWrite(expected);
   await requireVersionUnchanged(app.id, expected);
   const again = await openReviewSubmissions(app.id);
   if (submissionsFingerprint(again) !== submissionsFingerprint(submissions)) refuse("the review submissions changed while this ran; nothing was submitted, run this again");
@@ -1086,6 +1104,7 @@ async function appStore(args) {
       },
     });
     console.log(`version ${versionString} added to it`);
+    allowOwnWrite(expected);
   }
   const onlyThisVersion = async () => {
     const items = await listSubmissionItems(submission.id);
@@ -1099,6 +1118,7 @@ async function appStore(args) {
   for (const item of (await onlyThisVersion()).filter((row) => row.state === "REJECTED")) {
     await patch(`/v1/reviewSubmissionItems/${item.id}`, { data: { type: "reviewSubmissionItems", id: item.id, attributes: { resolved: true } } });
     console.log(`the rejected review item for version ${versionString} marked resolved`);
+    allowOwnWrite(expected);
   }
   const held = await requireVersionUnchanged(app.id, expected);
   await onlyThisVersion();
