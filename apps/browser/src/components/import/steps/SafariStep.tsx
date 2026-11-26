@@ -4,7 +4,8 @@ import { SectionHeader } from "../../settings/Form";
 import { APP } from "../model";
 import { ErrorText, FileDrop, FullDiskAccessSteps, Spacer, TargetPicker, Title } from "../Parts";
 import { importLayout } from "../tokens";
-import { backTo, closeImport, recheckAccess, setImportTarget, setSafariCookies, type ImportFlow } from "../../../state/import/flow";
+import { backTo, canGoBackToChoose, closeImport, inRun, runStepLabel, setImportTarget, setSafariCookies, type ImportFlow } from "../../../state/import/flow";
+import { recheckAccess, skipSource } from "../../../state/import/runImport";
 import { chooseSafariExport, importSafariDirect, importSafariExport, openFullDiskAccessSettings } from "../../../state/import/fileImports";
 
 const EXPORT_STEPS = ["Open Safari", "File menu › Export Browsing Data to File", `Upload the .zip file to ${APP}`];
@@ -16,7 +17,11 @@ export function SafariBody({ flow }: { flow: ImportFlow }) {
   if (fullDiskAccess)
     return (
       <>
-        <Title title="Import from Safari" subtitle={`Ardia can read Safari directly. Bring your bookmarks, history, Reading List, open tabs and sign-ins into ${APP}.`} />
+        <Title
+          title="Import from Safari"
+          subtitle={`Ardia can read Safari directly. Bring your bookmarks, history, Reading List, open tabs and sign-ins into ${APP}.`}
+          turn={runStepLabel(flow)}
+        />
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.l }}>
           {source?.iconPath ? <Image source={{ uri: `file://${source.iconPath}` }} style={{ width: importLayout.safariIcon, height: importLayout.safariIcon }} /> : null}
           <View style={{ flex: 1 }}>
@@ -37,7 +42,11 @@ export function SafariBody({ flow }: { flow: ImportFlow }) {
     );
   return (
     <>
-      <Title title="Give Ardia access to Safari" subtitle={`To import Safari's bookmarks, history and tabs directly, ${APP} needs Full Disk Access.`} />
+      <Title
+        title="Give Ardia access to Safari"
+        subtitle={`To import Safari's bookmarks, history and tabs directly, ${APP} needs Full Disk Access.`}
+        turn={runStepLabel(flow)}
+      />
       <FullDiskAccessSteps onOpen={openFullDiskAccessSettings} onRecheck={() => void recheckAccess()} />
       <SectionHeader title="Or import everything (including passwords) from an export file:" />
       <View style={{ gap: space.s, marginBottom: space.l }}>
@@ -51,15 +60,21 @@ export function SafariBody({ flow }: { flow: ImportFlow }) {
   );
 }
 
-export function SafariFooter({ flow }: { flow: ImportFlow }) {
+function TurnFooter({ flow, picker }: { flow: ImportFlow; picker: boolean }) {
+  const several = inRun(flow);
   return (
     <>
-      <Button title="Back" onPress={() => backTo("choose")} />
+      {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose")} />}
       <Spacer />
-      <TargetPicker target={flow.target} onChange={setImportTarget} />
+      {picker && !several && <TargetPicker target={flow.target} onChange={setImportTarget} />}
+      {several && flow.source ? <Button title={`Skip ${flow.source.name}`} onPress={skipSource} /> : null}
       <Button title="Cancel" onPress={closeImport} />
     </>
   );
+}
+
+export function SafariFooter({ flow }: { flow: ImportFlow }) {
+  return <TurnFooter flow={flow} picker />;
 }
 
 export function AccessBody({ flow }: { flow: ImportFlow }) {
@@ -69,6 +84,7 @@ export function AccessBody({ flow }: { flow: ImportFlow }) {
     <>
       <Title
         title={`Give ${APP} access to ${source.name}`}
+        turn={runStepLabel(flow)}
         subtitle={`macOS protects ${source.name}'s data from other apps. To import your bookmarks, history, tabs, passwords and cookies, ${APP} needs Full Disk Access.`}
       />
       <FullDiskAccessSteps onOpen={openFullDiskAccessSettings} onRecheck={() => void recheckAccess()} />
@@ -78,11 +94,5 @@ export function AccessBody({ flow }: { flow: ImportFlow }) {
 
 export function AccessFooter({ flow }: { flow: ImportFlow }) {
   if (!flow.source) return null;
-  return (
-    <>
-      <Button title="Back" onPress={() => backTo("choose")} />
-      <Spacer />
-      <Button title="Cancel" onPress={closeImport} />
-    </>
-  );
+  return <TurnFooter flow={flow} picker={false} />;
 }

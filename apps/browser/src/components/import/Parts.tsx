@@ -6,9 +6,14 @@ import { SelectableCard } from "../settings/SelectableCard";
 import { APP } from "./model";
 import { importLayout, importType } from "./tokens";
 
-export function Title({ title, subtitle, spinner }: { title: string; subtitle?: string; spinner?: boolean }) {
+export function Title({ title, subtitle, spinner, turn }: { title: string; subtitle?: string; spinner?: boolean; turn?: string }) {
   return (
     <View style={{ marginBottom: space.xxl }}>
+      {turn ? (
+        <Text size="small" weight="medium" tone="textSecondary" style={{ marginBottom: space.xs }}>
+          {turn}
+        </Text>
+      ) : null}
       <Text weight="bold" style={importType.heading}>
         {title}
       </Text>

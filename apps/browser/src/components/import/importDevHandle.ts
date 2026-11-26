@@ -1,8 +1,19 @@
 import { useEffect } from "react";
 import { emptyCounts, type ImportKind } from "../../state/import/apply";
 import { importSafariDirect, importSafariExport } from "../../state/import/fileImports";
-import { backTo, chooseSource, closeImport, NO_EXTENSIONS, patchImport, setImportKinds, type ImportFlow } from "../../state/import/flow";
-import { continueImport, skipEncryptedData, unlockAndImport } from "../../state/import/runImport";
+import { backTo, chooseSource, closeImport, NO_EXTENSIONS, patchImport, pickSources, setImportKinds, type ImportFlow } from "../../state/import/flow";
+import {
+  chooseAllConflicts,
+  chooseConflictVersion,
+  closeConflictList,
+  currentChoices,
+  handChanges,
+  importChosenPasswords,
+  openConflictList,
+  pickConflictVersions,
+  setConflictFilter,
+} from "../../state/import/importOutcome";
+import { continueImport, skipEncryptedData, skipSource, unlockAndImport } from "../../state/import/runImport";
 import { openListedExtensionsInStore } from "../../state/import/listedExtensions";
 import { takeOfferedEngine } from "../../state/import/searchEngine";
 import { devRegister } from "../dev/devRegister";
@@ -11,13 +22,37 @@ export function useImportDevHandle(flow: ImportFlow) {
   useEffect(() => {
     const { step } = flow;
     const done = step.name === "done" ? step : null;
+    const conflicts = step.name === "conflicts" ? step : null;
+    const chosen = conflicts ? currentChoices(conflicts) : {};
     return devRegister("acImport", null, {
       select: (id: string) => {
         const b = flow.browsers.find((x) => x.id === id);
         if (b) chooseSource(b);
         return !!b;
       },
+      pick: (ids: string[]) => pickSources(ids),
+      picked: flow.picked,
+      run: flow.run ? { ids: flow.run.ids, at: flow.run.at, finished: flow.run.outcomes.map((o) => ({ id: o.source.id, skipped: o.skipped })) } : null,
+      skip: skipSource,
       next: continueImport,
+      conflicts: conflicts
+        ? {
+            count: conflicts.conflicts.length,
+            view: conflicts.view,
+            pick: conflicts.pick,
+            filter: conflicts.filter,
+            saving: conflicts.saving,
+            changed: handChanges(conflicts.view === "list" ? conflicts.draft : conflicts.custom),
+            rows: conflicts.conflicts.map((c) => ({ id: c.id, site: c.site, username: c.username, versions: c.versions, choice: chosen[c.id] ?? null })),
+          }
+        : null,
+      chooseConflicts: (pick: string) => pickConflictVersions(pick),
+      letMeChoose: openConflictList,
+      filterConflicts: setConflictFilter,
+      chooseConflict: (id: string, browserId: string) => chooseConflictVersion(id, browserId),
+      chooseAllConflicts: (browserId: string) => chooseAllConflicts(browserId),
+      doneChoosing: closeConflictList,
+      importPasswords: () => importChosenPasswords(),
       back: () => backTo("choose"),
       unlock: unlockAndImport,
       skipEncrypted: skipEncryptedData,
@@ -31,6 +66,7 @@ export function useImportDevHandle(flow: ImportFlow) {
       setSourceProfiles: (sourceProfiles: string[]) => patchImport({ sourceProfiles }),
       browsers: flow.source ? flow.source.profiles.map((p) => ({ id: p.id, name: p.name, spaces: p.spaces ?? [] })) : [],
       counts: done?.counts ?? emptyCounts(),
+      sources: done?.sources ?? [],
       failures: done?.failures ?? [],
       extensions: done?.extensions ?? NO_EXTENSIONS,
       notes: done?.notes ?? [],

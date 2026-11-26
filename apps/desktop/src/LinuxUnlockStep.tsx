@@ -2,7 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { View } from "react-native";
 import { Button, TextField } from "../../browser/src/components/ui";
 import { ErrorText, Handoff, Spacer, Title } from "../../browser/src/components/import/Parts";
-import { backTo, importNow, importsBySpaces, patchImport, type ImportFlow } from "../../browser/src/state/import/flow";
+import { backTo, canGoBackToChoose, importNow, importsBySpaces, patchImport, runStepLabel, type ImportFlow } from "../../browser/src/state/import/flow";
 import { importModule } from "../../browser/src/state/import/importApi";
 import { runImport } from "../../browser/src/state/import/runImport";
 import { asksPrimaryPassword, createSecretSlot, unlockCopy, unlockForStep, unlockSource, withoutEncrypted } from "./importUnlock";
@@ -42,7 +42,7 @@ export function UnlockBody({ flow }: { flow: ImportFlow }) {
   const copy = unlockCopy(source, sourceProfiles, kinds);
   return (
     <>
-      <Title title={copy.title} subtitle={copy.subtitle} />
+      <Title title={copy.title} subtitle={copy.subtitle} turn={runStepLabel(flow)} />
       <Handoff iconPath={source.iconPath} symbol="lock.fill" lead={copy.lead} detail={copy.detail} />
       {copy.field && (
         <View style={{ alignSelf: "center", width: 260, marginTop: 16 }}>
@@ -67,9 +67,10 @@ export function UnlockFooter({ flow }: { flow: ImportFlow }) {
   if (!source || step.name !== "unlock") return null;
   const { unlocking } = step;
   const copy = unlockCopy(source, sourceProfiles, kinds);
+  const back = source.profiles.length > 1 || importsBySpaces(source) ? "profiles" : "choose";
   return (
     <>
-      <Button title="Back" onPress={() => backTo(source.profiles.length > 1 || importsBySpaces(source) ? "profiles" : "choose")} />
+      {(back === "profiles" || canGoBackToChoose(flow)) && <Button title="Back" onPress={() => backTo(back)} />}
       <Spacer />
       <Button title="Skip Encrypted Data" onPress={() => skipEncrypted(source)} />
       <Button

@@ -1,13 +1,31 @@
 import { ardiaError } from "@ardia/core";
-import { applySafari, emptyCounts, importBookmarks, untitledLinks, type ImportKind } from "./apply";
-import { finishImport, importNow, importSignal, NO_EXTENSIONS, patchImport, startProgress, updateStatus } from "./flow";
+import { applySafari, emptyCounts, importBookmarks, untitledLinks, type ImportCounts, type ImportKind, type SafariExport } from "./apply";
+import { finishImport, importNow, importSignal, inRun, NO_EXTENSIONS, patchImport, startProgress, updateStatus } from "./flow";
 import { importModule } from "./importApi";
-import { consentToken } from "../telemetry/client";
+import { collectLogins } from "./importOutcome";
+import { settleSource } from "./runImport";
+import { consentToken, type ConsentToken } from "../telemetry/client";
 import { noteUntitledBookmarks } from "../telemetry/importRuns";
 
 export const chooseSafariExport = () => importModule().chooseImportFile("safariExport");
 export const openFullDiskAccessSettings = () => void importModule().openFullDiskAccessSettings();
 
+function withLoginsHeld(target: string, data: SafariExport): SafariExport {
+  const { source } = importNow();
+  if (!source || !inRun(importNow()) || !data.credentials.length) return data;
+  collectLogins(source.id, target, data.credentials);
+  return { ...data, credentials: [] };
+}
+
+function settleSafari(signal: AbortSignal, counts: ImportCounts, failed: ImportKind[], consent: ConsentToken | null) {
+  const failures = failed.map((kind) => ({ kind, profiles: [] }));
+  const { source } = importNow();
+  if (!source || !inRun(importNow())) return finishImport(signal, { counts, failures, notes: [], extensions: NO_EXTENSIONS });
+  void settleSource(
+    { source: { id: source.id, name: source.name, family: source.family }, counts, failures, notes: [], extensions: { profileId: "", found: [], groups: [] }, engines: [], skipped: false },
+    consent,
+  );
+}
 
 export async function importSafariExport(path: string) {
   const consent = consentToken();
@@ -17,10 +35,10 @@ export async function importSafariExport(path: string) {
   try {
     const data = await importModule().importSafariExport(path);
     const failed: ImportKind[] = [];
-    const counts = await applySafari(target, data, false, (k) => failed.push(k), consent);
+    const counts = await applySafari(target, withLoginsHeld(target, data), false, (k) => failed.push(k), consent);
     noteUntitledBookmarks(untitledLinks(data.bookmarks), consent);
     updateStatus(signal, () => ({ bookmarks: "done", history: failed.includes("history") ? "failed" : "done", passwords: "done", autofill: failed.includes("autofill") ? "failed" : "done" }));
-    finishImport(signal, { counts, failures: failed.map((kind) => ({ kind, profiles: [] })), notes: [], extensions: NO_EXTENSIONS });
+    settleSafari(signal, counts, failed, consent);
   } catch (e) {
     if (signal.aborted) return;
     patchImport({ step: { name: "safari", error: ardiaError(e).code === "unsupported" ? "Please select a folder or zip file." : "The selected file is invalid. Please try again." } });
@@ -36,10 +54,10 @@ export async function importSafariDirect() {
   try {
     const data = await api.importSafariDirect({ signal });
     const failed: ImportKind[] = [];
-    const counts = await applySafari(target, data, safariCookies, (k) => failed.push(k), consent);
+    const counts = await applySafari(target, withLoginsHeld(target, data), safariCookies, (k) => failed.push(k), consent);
     noteUntitledBookmarks(untitledLinks(data.bookmarks), consent);
     updateStatus(signal, () => ({ bookmarks: "done", history: failed.includes("history") ? "failed" : "done", tabs: "done", ...(safariCookies ? { cookies: failed.includes("cookies") ? "failed" : ("done" as const) } : {}) }));
-    finishImport(signal, { counts, failures: failed.map((kind) => ({ kind, profiles: [] })), notes: [], extensions: NO_EXTENSIONS });
+    settleSafari(signal, counts, failed, consent);
   } catch (e) {
     const { code } = ardiaError(e);
     if (code === "cancelled" || signal.aborted) return;
@@ -66,7 +84,7 @@ export async function importBookmarksHtml() {
     if (signal.aborted) return;
     noteUntitledBookmarks(untitledLinks(root), consent);
     const failures = failed.map((kind) => ({ kind, profiles: [] }));
-    patchImport({ source: null, step: { name: "done", counts: { ...emptyCounts(), bookmarks }, failures, notes: [], extensions: NO_EXTENSIONS } });
+    patchImport({ source: null, picked: [], step: { name: "done", counts: { ...emptyCounts(), bookmarks }, failures, notes: [], extensions: NO_EXTENSIONS } });
   } catch {
     if (!signal.aborted) patchImport({ step: { name: "choose", error: "The selected file is invalid. Please try again." } });
   }

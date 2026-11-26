@@ -25,7 +25,7 @@ import { openPages, pageKey } from "../tabs/pageKeys";
 import type { ProfileColor } from "../browser/types";
 import { DEFAULT_PROFILE } from "../profiles/profiles";
 import { focusedWindowOf } from "../windows/ui";
-import { originOfLogin } from "../site/savedPasswords";
+import { loginOrigin, type LoginToSave } from "./passwordConflicts";
 import { importFavicons, importTabs, linksOf, windowFor } from "./tabImport";
 import { bookmarkedPages, mergeImportedBookmarks } from "./bookmarkMerge";
 import { readImportedFolders, saveImportedFolders } from "./importedFolders";
@@ -33,7 +33,7 @@ import { readImportedFolders, saveImportedFolders } from "./importedFolders";
 export { importTabs };
 export { importArcSpace } from "./sidebarTree";
 
-export type { BrowserProfile, BrowserSource, DiaTabsResult, ImportedExtension, ImportedSearchEngine, ImportKind, ImportResult, SpaceSummary } from "../../platform/importModule";
+export type { BrowserProfile, BrowserSource, Credential, DiaTabsResult, ImportedExtension, ImportedSearchEngine, ImportKind, ImportResult, SafariExport, SpaceSummary } from "../../platform/importModule";
 
 export type ImportCounts = { bookmarks: number; history: number; tabs: number; passwords: number; cookies: number; addresses: number; cards: number; rules: number; archived: number; settings: number };
 
@@ -88,16 +88,20 @@ export async function importHistory(
   return added;
 }
 
-async function importPasswords(profileId: string, credentials: Credential[]): Promise<number> {
+export async function saveLogins(logins: readonly Omit<LoginToSave, "browserId">[]): Promise<boolean[]> {
   const tally = passwordImportTally("browser");
-  let saved = 0;
-  for (const c of credentials) {
-    const origin = originOfLogin(c.realm?.startsWith("http") ? c.realm : c.url);
-    if (!origin || !c.password) continue;
-    if (await tally.attempt(savePassword(engineProfile(useBrowser.getState(), profileId), origin, c.username, asSecret("password", c.password)))) saved++;
-  }
+  const saved: boolean[] = [];
+  for (const l of logins) saved.push(await tally.attempt(savePassword(engineProfile(useBrowser.getState(), l.profileId), l.origin, l.username, asSecret("password", l.password))));
   tally.done();
   return saved;
+}
+
+async function importPasswords(profileId: string, credentials: Credential[]): Promise<number> {
+  const logins = credentials.flatMap((c) => {
+    const origin = loginOrigin(c);
+    return origin && c.password ? [{ profileId, origin, username: c.username, password: c.password }] : [];
+  });
+  return (await saveLogins(logins)).filter(Boolean).length;
 }
 
 async function importNative(

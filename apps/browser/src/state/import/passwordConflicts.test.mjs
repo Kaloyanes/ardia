@@ -1,0 +1,103 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+const { changedChoices, choicesFor, conflictBrowsers, loginAge, matchingConflicts, newerCounts, newestVersion, planLogins, resolutionOf, resolvedLogins } = await import("./passwordConflicts.ts");
+
+const login = (browserId, profileId, url, username, password, times = {}) => ({ browserId, profileId, credential: { url, username, password, ...times } });
+const ORDER = ["chrome", "arc", "firefox"];
+
+test("the same password for the same account from several browsers is saved once, under the first browser", () => {
+  const plan = planLogins(
+    [
+      login("chrome", "p", "https://mail.example/login", "me", "same"),
+      login("arc", "p", "https://mail.example/other/page", "me", "same"),
+      login("firefox", "p", "mail.example", "me", "same"),
+    ],
+    ORDER,
+  );
+  assert.deepEqual(plan.conflicts, []);
+  assert.equal(plan.merged, 2);
+  assert.deepEqual(plan.clean, [{ browserId: "chrome", profileId: "p", origin: "https://mail.example", username: "me", password: "same" }]);
+});
+
+test("different passwords for one account make one conflict naming every browser that has it, in run order", () => {
+  const plan = planLogins(
+    [
+      login("arc", "p", "https://bank.example/", "me", "new", { lastUsed: 2_000 }),
+      login("chrome", "p", "https://bank.example/", "me", "old", { created: 1_000 }),
+      login("firefox", "p", "https://bank.example/", "me", "old", { created: 500 }),
+    ],
+    ORDER,
+  );
+  assert.equal(plan.conflicts.length, 1);
+  const [c] = plan.conflicts;
+  assert.equal(c.site, "bank.example");
+  assert.equal(c.username, "me");
+  assert.deepEqual(c.versions.map((v) => v.browserId), ["chrome", "arc", "firefox"]);
+  assert.equal(newestVersion(c), "arc");
+  assert.deepEqual(JSON.stringify(c).includes("new") || JSON.stringify(c).includes("old"), false, "a conflict never carries the password");
+  assert.deepEqual(resolvedLogins(plan, {}).map((l) => l.password), ["new"]);
+  assert.deepEqual(resolvedLogins(plan, { [c.id]: "chrome" }).map((l) => [l.browserId, l.password]), [["chrome", "old"]]);
+});
+
+test("accounts in different destination profiles or with different usernames never conflict", () => {
+  const plan = planLogins(
+    [
+      login("chrome", "personal", "https://a.example/", "me", "1"),
+      login("arc", "work", "https://a.example/", "me", "2"),
+      login("arc", "personal", "https://a.example/", "you", "3"),
+    ],
+    ORDER,
+  );
+  assert.deepEqual(plan.conflicts, []);
+  assert.equal(plan.clean.length, 3);
+});
+
+test("logins without a usable origin or password are dropped, as a single import drops them", () => {
+  const plan = planLogins([login("chrome", "p", "", "me", "x"), login("chrome", "p", "https://b.example/", "me", ""), login("chrome", "p", "android://x", "me", "y")], ORDER);
+  assert.deepEqual(plan.clean.map((l) => l.origin), ["android://x"]);
+});
+
+test("a realm that is a web address is the origin, as it is when importing one browser", () => {
+  const plan = planLogins([login("chrome", "p", "https://app.example/", "me", "1"), { browserId: "arc", profileId: "p", credential: { url: "https://other.example/", realm: "https://app.example/x", username: "me", password: "2" } }], ORDER);
+  assert.equal(plan.conflicts.length, 1);
+});
+
+test("within one browser, the newest copy of an account stands for it", () => {
+  const plan = planLogins([login("chrome", "p", "https://c.example/", "me", "a", { created: 1 }), login("chrome", "p", "https://c.example/", "me", "b", { lastUsed: 9 }), login("arc", "p", "https://c.example/", "me", "b")], ORDER);
+  assert.deepEqual(plan.conflicts, []);
+  assert.equal(plan.clean[0].password, "b");
+});
+
+test("newest is the later of last used and created, and a tie goes to the earlier browser", () => {
+  assert.equal(loginAge({ created: 5, lastUsed: 3 }), 5);
+  assert.equal(loginAge({}), 0);
+  const plan = planLogins([login("chrome", "p", "https://d.example/", "me", "a", { created: 7 }), login("arc", "p", "https://d.example/", "me", "b", { lastUsed: 7 })], ORDER);
+  assert.equal(newestVersion(plan.conflicts[0]), "chrome");
+  assert.deepEqual(newerCounts(plan.conflicts), {}, "a tie makes neither browser newer");
+});
+
+test("choosing one browser takes its version where it has one and the newest elsewhere", () => {
+  const plan = planLogins(
+    [
+      login("chrome", "p", "https://e.example/", "me", "1", { created: 10 }),
+      login("arc", "p", "https://e.example/", "me", "2", { created: 20 }),
+      login("chrome", "p", "https://f.example/", "me", "3", { created: 30 }),
+      login("firefox", "p", "https://f.example/", "me", "4", { created: 5 }),
+    ],
+    ORDER,
+  );
+  const [e, f] = plan.conflicts;
+  assert.deepEqual(choicesFor(plan.conflicts, "arc"), { [e.id]: "arc", [f.id]: "chrome" });
+  assert.deepEqual(choicesFor(plan.conflicts, "newest"), { [e.id]: "arc", [f.id]: "chrome" });
+  assert.deepEqual(conflictBrowsers(plan.conflicts, ORDER), ["chrome", "arc", "firefox"]);
+  assert.deepEqual(newerCounts(plan.conflicts), { arc: 1, chrome: 1 });
+  assert.equal(changedChoices({ [e.id]: "arc", [f.id]: "chrome" }, { [e.id]: "chrome", [f.id]: "chrome" }), 1);
+  assert.deepEqual(matchingConflicts(plan.conflicts, " F.EX ").map((c) => c.id), [f.id]);
+  assert.deepEqual(matchingConflicts(plan.conflicts, "").length, 2);
+});
+
+test("a resolution reads as newest, one browser, or custom", () => {
+  assert.equal(resolutionOf("newest"), "newest");
+  assert.equal(resolutionOf("custom"), "custom");
+  assert.equal(resolutionOf("arc"), "browser");
+});
