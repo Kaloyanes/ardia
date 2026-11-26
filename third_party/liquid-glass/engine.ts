@@ -1392,6 +1392,7 @@ function createEngine(): GlassEngine | null {
     const w = from.width
     const h = from.height
     if (!to.tex || to.w !== w || to.h !== h) {
+      for (let stale = 0; stale < 8 && gl.getError() !== gl.NO_ERROR; stale++);
       if (to.tex) gl.deleteTexture(to.tex)
       to.tex = gl.createTexture()
       gl.bindTexture(gl.TEXTURE_2D, to.tex)
@@ -1666,13 +1667,26 @@ function createEngine(): GlassEngine | null {
   const latchPress = () => {
     let chosen: GlassView | null = null
     let chosenLit: Lit | null = null
+    let chosenDepth = Infinity
+    let stack: Element[] | null = null
+    const depthOf = (host: HTMLElement | null) => {
+      if (!host) return Infinity
+      stack ??= typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(beam.x, beam.y) : []
+      const at = stack.findIndex((hit) => hit === host || hit.contains(host))
+      return at < 0 ? Infinity : at
+    }
     for (const [v, s] of lights) {
       if (!v.visible || !under(v, s) || !innermost(v)) continue
       const host = hostOf(v)
-      const chosenHost = chosen ? hostOf(chosen) : null
-      if (chosenHost && host && !(chosenHost.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING)) continue
+      const depth = depthOf(host)
+      if (chosen) {
+        const chosenHost = hostOf(chosen)
+        const later = !!chosenHost && !!host && !!(chosenHost.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING)
+        if (depth > chosenDepth || (depth === chosenDepth && !later)) continue
+      }
       chosen = v
       chosenLit = s
+      chosenDepth = depth
     }
     beam.target = chosen
     beam.targetX = chosenLit ? beam.x - (chosenLit.sx - chosenLit.bodyX) : 0
@@ -2683,6 +2697,13 @@ function createEngine(): GlassEngine | null {
     }
     wake()
   }
+  listen(window, 'blur', () => {
+    if (beam.id === -1 && !beam.target) return
+    beam.id = -1
+    beam.target = null
+    for (const s of lights.values()) s.press = false
+    lightMoved()
+  })
   listen(window, 'keydown', key, true)
   listen(window, 'keyup', key, true)
   listen(window,
@@ -2737,7 +2758,16 @@ function createEngine(): GlassEngine | null {
     }
     pulls.clear()
     retire()
-    glCanvas.addEventListener('webglcontextrestored', () => announceEngine('restored'), { once: true })
+    awaitingRestore = true
+    glCanvas.addEventListener(
+      'webglcontextrestored',
+      () => {
+        awaitingRestore = false
+        if (engine === null) engine = undefined
+        announceEngine('restored')
+      },
+      { once: true },
+    )
     announceEngine('lost')
   })
 
@@ -2749,6 +2779,7 @@ function createEngine(): GlassEngine | null {
     },
     remove: (v) => {
       views.delete(v)
+      if (beam.target === v) beam.target = null
       if (!views.size) releaseWhenIdle()
       lights.delete(v)
       flashes.delete(v)
@@ -2787,6 +2818,7 @@ function createEngine(): GlassEngine | null {
 }
 
 let engine: GlassEngine | null | undefined
+let awaitingRestore = false
 
 export type GlassEngineChange = 'lost' | 'restored'
 const engineWatchers = new Set<(change: GlassEngineChange) => void>()
@@ -2801,6 +2833,9 @@ function announceEngine(change: GlassEngineChange) {
 /** The shared engine (created on first use, client only). `null` = no WebGL2: use the CSS look. */
 export function getGlassEngine(): GlassEngine | null {
   if (typeof window === 'undefined') return null
-  if (engine === undefined) engine = createEngine()
+  if (engine === undefined) {
+    if (awaitingRestore) return null
+    engine = createEngine()
+  }
   return engine
 }

@@ -99,14 +99,16 @@ function isLoaded(image: HTMLImageElement, onStale?: () => void) {
   if (!callbacks) {
     const pending = (callbacks = new Set())
     waiting.set(image, pending)
-    image.addEventListener(
-      'load',
-      () => {
-        waiting.delete(image)
-        pending.forEach((notify) => notify())
-      },
-      { once: true },
-    )
+    const settle = (event: Event) => {
+      image.removeEventListener('load', settle)
+      image.removeEventListener('error', settle)
+      waiting.delete(image)
+      const notified = [...pending]
+      pending.clear()
+      if (event.type === 'load') notified.forEach((notify) => notify())
+    }
+    image.addEventListener('load', settle)
+    image.addEventListener('error', settle)
   }
   callbacks.add(onStale)
   return false

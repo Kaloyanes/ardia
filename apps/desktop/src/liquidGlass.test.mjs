@@ -46,6 +46,8 @@ globalThis.HTMLVideoElement = class HTMLVideoElement extends globalThis.HTMLElem
 const glContexts = [];
 const uploadFailures = { left: 0 };
 const glErrors = [];
+const allocationErrors = [];
+let hitStack = null;
 const lit = [];
 let shownLight = 0;
 let snapshotWalks = 0;
@@ -59,7 +61,9 @@ function fakeGl(canvas) {
           uploadFailures.left--;
           throw new DOMException("tainted", "SecurityError");
         }
-      }, getError: () => glErrors.shift() ?? constants.NO_ERROR, getUniformLocation: (_, name) => ({ name }), uniform4f: (location, a, b, c, d) => {
+      }, getError: () => glErrors.shift() ?? constants.NO_ERROR, texStorage2D: () => {
+        if (allocationErrors.length) glErrors.push(allocationErrors.shift());
+      }, getUniformLocation: (_, name) => ({ name }), uniform4f: (location, a, b, c, d) => {
         if (location?.name === "uLight") shownLight = d;
       }, isContextLost: () => false, getProgramParameter: () => true, getShaderParameter: () => true, getExtension: () => null, getAttribLocation: () => 0, checkFramebufferStatus: () => constants.FRAMEBUFFER_COMPLETE },
     {
@@ -144,6 +148,19 @@ class FakeCanvas extends FakeElement {
   }
 }
 globalThis.HTMLCanvasElement = FakeCanvas;
+const images = [];
+class FakeImage extends FakeElement {
+  constructor() {
+    super("img");
+    this.complete = false;
+    this.naturalWidth = 0;
+    this.src = "";
+    this.currentSrc = "";
+    images.push(this);
+  }
+}
+globalThis.HTMLImageElement = FakeImage;
+globalThis.Image = FakeImage;
 
 const canvases = [];
 const body = new FakeElement("body", { left: 0, top: 0, width: 800, height: 600 });
@@ -161,6 +178,7 @@ globalThis.document = Object.assign(tracked(new FakeTarget()), {
     return canvas;
   },
   createRange: () => ({ selectNodeContents() {}, getClientRects: () => [] }),
+  elementsFromPoint: () => hitStack ?? [],
 });
 const media = [];
 const timers = [];
@@ -256,7 +274,8 @@ globalThis.DOMMatrix = class {};
 globalThis.location = { href: "chrome://ardia/", origin: "chrome://ardia" };
 
 const { getGlassEngine } = await import("../../../third_party/liquid-glass/engine.ts");
-const { mountGlass, invalidateLiquidGlass } = await import("./shims/web/liquidGlass.tsx");
+const { drawDom } = await import("../../../third_party/liquid-glass/dom-snapshot.ts");
+const { attachGlass, mountGlass, invalidateLiquidGlass } = await import("./shims/web/liquidGlass.tsx");
 const { backdropKeyOf, GLASS_OPTICS } = await import("./shims/web/liquidGlassOptics.ts");
 const { glassAppearanceSupported, nativeLiquidGlass, webLiquidGlassAllowed } = await import("./liquidGlassSupport.ts");
 
@@ -273,7 +292,7 @@ function mountTile(left = 20) {
   const ready = [];
   const look = { current: { optics: GLASS_OPTICS.light.clear, tint: undefined } };
   const glass = mountGlass(host, canvas, canvas.getContext("2d"), look, (value) => ready.push(value));
-  return { glass, ready, canvas };
+  return { glass, ready, canvas, outer, host, look };
 }
 
 const pageListeners = () => window.listenerCount + document.listenerCount + documentElement.listenerCount + media.reduce((sum, query) => sum + query.listenerCount, 0);
@@ -404,7 +423,7 @@ test("a scroll inside the 120 ms picture cache still retakes the picture once th
 });
 
 test("a texture the GPU cannot allocate (GL_OUT_OF_MEMORY) leaves that surface on CSS instead of calling it drawn", () => {
-  glErrors.push(constants.OUT_OF_MEMORY);
+  allocationErrors.push(constants.OUT_OF_MEMORY);
   const failing = mountTile();
   runFrames();
   assert.equal(failing.ready.includes(true), false, "the surface never claimed a WebGL frame");
@@ -430,4 +449,87 @@ test("a press lights only the surface it began on, even when the pointer moves o
   runFrames();
   pressed.glass.stop();
   other.glass.stop();
+});
+
+const lose = () => canvases.find((canvas) => canvas.gl === glContexts.at(-1));
+
+test("a surface that mounts while the context is lost waits for the restore and then draws with WebGL", async () => {
+  await settle();
+  const first = mountTile();
+  runFrames();
+  const gl = lose();
+  gl.dispatchEvent({ type: "webglcontextlost" });
+  const made = canvases.length;
+  assert.equal(getGlassEngine(), null, "no engine is built against a lost GPU");
+  assert.equal(canvases.length, made, "and no canvas or context is made for it");
+  const latecomer = mountTile(100);
+  assert.equal(latecomer.glass, null);
+  const canvas = new FakeCanvas();
+  latecomer.host.appendChild(canvas);
+  const ready = [];
+  const attachment = attachGlass(latecomer.host, canvas, canvas.getContext("2d"), latecomer.look, (value) => ready.push(value));
+  assert.equal(attachment.mounted(), false, "the latecomer waits on CSS");
+  gl.dispatchEvent({ type: "webglcontextrestored" });
+  assert.equal(attachment.mounted(), true, "the restore attaches it");
+  runFrames();
+  assert.equal(ready.at(-1), true, "the latecomer is drawn with WebGL");
+  assert.equal(first.ready.at(-1), true, "the surface that was there before is back too");
+  attachment.stop();
+  first.glass.stop();
+  await settle();
+});
+
+test("an earlier, unrelated GL error never fails a healthy surface's new texture", () => {
+  glErrors.push(constants.INVALID_OPERATION, constants.INVALID_VALUE);
+  const healthy = mountTile();
+  runFrames();
+  assert.equal(healthy.ready.at(-1), true);
+  healthy.glass.stop();
+});
+
+test("a press on overlapping glass lights the one stacked on top, not the one later in the document", () => {
+  const top = mountTile(20);
+  const below = mountTile(20);
+  runFrames();
+  lit.length = 0;
+  hitStack = [top.outer, body, documentElement];
+  window.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, pointerType: "mouse", clientX: 50, clientY: 60, target: body });
+  runFrames(10);
+  hitStack = null;
+  const lights = (canvas) => lit.filter((entry) => entry.canvas === canvas && entry.light > 0).length;
+  assert.ok(lights(top.canvas) > 0, "the glass on top takes the light");
+  assert.equal(lights(below.canvas), 0, "the glass beneath it stays unlit");
+  window.dispatchEvent({ type: "pointerup", pointerId: 9, pointerType: "mouse", target: body });
+  runFrames();
+  top.glass.stop();
+  below.glass.stop();
+});
+
+test("leaving the window lets go of a press, so its light does not stick", () => {
+  const tile = mountTile();
+  runFrames();
+  window.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 11, pointerType: "mouse", clientX: 50, clientY: 60, target: body });
+  runFrames(5);
+  lit.length = 0;
+  window.dispatchEvent({ type: "blur" });
+  runFrames(200);
+  const last = lit.filter((entry) => entry.canvas === tile.canvas).at(-1);
+  assert.ok(last, "the glass is drawn again as its light fades");
+  assert.ok(last.light < 1 / 255, `the light fades below one 8-bit level after the window loses focus (${last.light})`);
+  tile.glass.stop();
+});
+
+test("an image that fails to load releases every snapshot callback waiting on it", () => {
+  const root = new FakeElement("div", { left: 0, top: 0, width: 100, height: 100 });
+  const picture = new FakeImage();
+  picture.rect = { left: 10, top: 10, width: 20, height: 20 };
+  picture.currentSrc = "https://example.invalid/favicon.png";
+  root.appendChild(picture);
+  const pageCanvas = new FakeCanvas();
+  const before = images.length;
+  drawDom(pageCanvas.getContext("2d"), root, { origin: { left: 0, top: 0 }, onStale: () => {} });
+  const copy = images.slice(before).find((image) => image !== picture && image.listenerCount > 0);
+  assert.ok(copy, "the snapshot waits on its own copy of the image");
+  copy.dispatchEvent({ type: "error" });
+  assert.equal(copy.listenerCount, 0, "a failed image keeps no listener, and with it no surface's callback");
 });

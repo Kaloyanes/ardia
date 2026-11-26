@@ -290,6 +290,31 @@ export function mountGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx:
   return glass;
 }
 
+export type GlassAttachment = { invalidate: () => void; stop: () => void; mounted: () => boolean };
+
+export function attachGlass(host: HTMLDivElement, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, look: { current: Look }, onReady: (ready: boolean) => void, acquire: () => GlassEngine | null = getGlassEngine): GlassAttachment {
+  let mount = mountGlass(host, canvas, ctx, look, onReady, acquire);
+  let stopWaiting: (() => void) | null = mount
+    ? null
+    : onGlassEngineChange((change) => {
+        if (change !== "restored" || mount) return;
+        mount = mountGlass(host, canvas, ctx, look, onReady, acquire);
+        if (!mount) return;
+        stopWaiting?.();
+        stopWaiting = null;
+      });
+  return {
+    invalidate: () => mount?.invalidate(),
+    mounted: () => !!mount,
+    stop: () => {
+      stopWaiting?.();
+      stopWaiting = null;
+      mount?.stop();
+      mount = null;
+    },
+  };
+}
+
 export type LiquidGlassLayerProps = {
   theme: LiquidGlassTheme;
   glassStyle: LiquidGlassStyle;
@@ -310,17 +335,16 @@ export function LiquidGlassLayer({ theme, glassStyle, cornerRadius, radius, tint
   const [ready, setReady] = useState(false);
   const look = useRef<Look>({ optics: GLASS_OPTICS[theme][glassStyle], tint });
   look.current = { optics: GLASS_OPTICS[theme][glassStyle], tint };
-  const glass = useRef<GlassMount | null>(null);
+  const glass = useRef<GlassAttachment | null>(null);
   useLayoutEffect(() => {
     const node = host.current;
     const surface = canvas.current;
     const ctx = enabled ? surface?.getContext("2d") : null;
     if (!node || !surface || !ctx) return;
-    const mount = mountGlass(node, surface, ctx, look, setReady);
-    if (!mount) return;
-    glass.current = mount;
+    const attachment = attachGlass(node, surface, ctx, look, setReady);
+    glass.current = attachment;
     return () => {
-      mount.stop();
+      attachment.stop();
       glass.current = null;
       setReady(false);
     };
