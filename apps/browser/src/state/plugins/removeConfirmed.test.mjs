@@ -68,14 +68,23 @@ test("Cancel in the Remove dialog keeps the plugin, its files and its record", a
 test("Remove in the dialog removes the plugin", async () => {
   await installedAndOn();
   answering(true);
-  const told = telling();
   const removed = await removePluginAfterConfirm("example", "Example", "settings");
   assert.equal(removed, true);
   assert.deepEqual(host.removed, ["example"]);
-  assert.deepEqual(told, [], "a removal that finished has nothing to explain");
   const counts = takePluginCounts();
   assert.equal(counts.plugin_removals, 1);
   assert.equal(counts.plugin_removals_cancelled, 0);
+});
+
+test("A removal that finished has nothing to explain and counts no failure", async () => {
+  await installedAndOn();
+  answering(true);
+  const told = telling();
+  assert.equal(await removePluginAfterConfirm("example", "Example", "settings"), true);
+  assert.deepEqual(told, [], "no dialog after a removal that finished");
+  const counts = takePluginCounts();
+  assert.equal(counts.plugin_removals, 1);
+  assert.equal(counts.plugin_removal_failures, 0);
 });
 
 test("A removal that didn't finish says why in Settings and keeps the record for removing it again", async () => {
