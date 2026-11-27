@@ -6,9 +6,11 @@ import { withDeadline } from "../../lib/deadline";
 import { hermesHeapMegabytes } from "../../lib/hermesHeap";
 import { activeTab } from "../browser/model";
 import { useBrowser } from "../browser/store";
-import { capture, consentNow, consentToken, counted, isSharing, saveContext, stillValid, onConsentPeriodChange } from "./client";
+import { capture, consentNow, consentToken, counted, isSharing, saveContext, stillValid, onConsentPeriodChange, type ConsentToken } from "./client";
 import { nativeConsent } from "./nativeConsent";
-import { hoverLostProperties, oneOf } from "./hoverLost";
+import { hoverLostProperties } from "./hoverLost";
+import { windowUnpaintedProperties } from "./windowUnpainted";
+import { dropHeldQuitEpisode, dropQuitEpisodes, holdQuitEpisode, retireHeldQuitEpisode, sendCommittedQuitEpisode } from "./hoverLostAtQuit";
 import { formatRecentPages, readRecentPages, type RecentPage, type SavedContext } from "./savedContext";
 import { noteDragsEnded } from "./stuckDrags";
 import { noteEngineCliTotals } from "./cliCounts";
@@ -22,9 +24,6 @@ const HARDWARE_WAIT_MS = 1_000;
 const MAX_PAGE_PROCESS_EVENTS = 30;
 const MAX_HOVER_LOST_EVENTS = 20;
 const MAX_WINDOW_UNPAINTED_EVENTS = 20;
-const MAX_WINDOW_VIEWS = 1_000;
-const MAX_HOLD_MS = 600_000;
-const UNPAINTED_REASON_BITS = (1 << 9) - 1;
 const MINUTE_MS = 60_000;
 const MIN_SAMPLES = 12;
 const MAX_SAMPLES = 600;
@@ -216,6 +215,11 @@ export function startContextSamples() {
   watchWebuiPage();
 }
 
+export function resumeAfterCancelledQuit() {
+  startContextSamples();
+  dropHeldQuitEpisode();
+}
+
 export function stopContextSamples() {
   clearTimeout(firstSample);
   clearInterval(everySample);
@@ -299,61 +303,30 @@ export function trackPageProcessGone(info: { reason: string; code: number }, vis
 
 export function trackHoverLost(e: HoverLostEpisode) {
   const consent = nativeConsent(e);
+  if (e.endedBy === "quit") return holdHoverLostAtQuit(e, consent);
+  retireHeldQuitEpisode(e.serial);
   if (hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
   const valid = stillValid(consent);
   if (valid) hoverLostEvents++;
   capture("page_hover_lost", { ...hoverLostProperties(e, sessionMinutes()), episode: valid ? hoverLostEvents : null }, consent);
 }
 
-const UNPAINTED_WINDOWS = new Set(["regular", "private"]);
-const UNPAINTED_TRIGGERS = new Set(["seen", "key", "profileSwitch"]);
-const UNPAINTED_OCCLUSIONS = new Set(["visible", "occluded"]);
-
-const cappedCount = (value: unknown) => (Number.isFinite(value) ? Math.min(Math.max(0, Math.round(value as number)), MAX_WINDOW_VIEWS) : null);
-const hasBit = (bits: unknown, bit: number) => typeof bits === "number" && Number.isSafeInteger(bits) && (bits & (1 << bit)) !== 0;
-const reasonBits = (bits: unknown) => (typeof bits === "number" && Number.isSafeInteger(bits) && bits >= 0 ? bits & UNPAINTED_REASON_BITS : null);
-const holdMilliseconds = (value: unknown) => (Number.isFinite(value) ? Math.min(Math.max(0, Math.round(value as number)), MAX_HOLD_MS) : null);
-const flag = (value: unknown) => (typeof value === "boolean" ? value : null);
-
-function windowUnpaintedProperties(r: WindowUnpaintedRecord) {
-  return {
-    window: oneOf(UNPAINTED_WINDOWS, r.window),
-    trigger: oneOf(UNPAINTED_TRIGGERS, r.trigger),
-    seen: r.seen === true,
-    occlusion: oneOf(UNPAINTED_OCCLUSIONS, r.occlusion),
-    overruled: r.overruled === true,
-    app_active: r.appActive === true,
-    windows: cappedCount(r.windows),
-    share_tabs: !!useBrowser.getState().settings?.shareTabsAcrossWindows,
-    views: cappedCount(r.views),
-    unpainted: cappedCount(r.unpainted),
-    alpha_zero: hasBit(r.reasons, 0),
-    view_hidden: hasBit(r.reasons, 1),
-    page_hidden: hasBit(r.reasons, 2),
-    page_detached: hasBit(r.reasons, 3),
-    frame_hold_awaiting: hasBit(r.reasons, 4),
-    stand_in_lent: hasBit(r.reasons, 5),
-    stand_in_leaving: hasBit(r.reasons, 6),
-    veil_up: hasBit(r.reasons, 7),
-    stand_in_showing: hasBit(r.reasons, 8),
-    held_ms: holdMilliseconds(r.heldMs),
-    webkit_views: cappedCount(r.webkitViews),
-    webkit_on_top: flag(r.webkitOnTop),
-    still_unpainted: cappedCount(r.stillUnpainted),
-    still_reasons: reasonBits(r.stillReasons),
-    session_min: sessionMinutes(),
-  };
+function holdHoverLostAtQuit(e: HoverLostEpisode, consent: ConsentToken | null) {
+  if (!stillValid(consent) || hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
+  holdQuitEpisode(e.serial, { ...hoverLostProperties(e, sessionMinutes()), episode: hoverLostEvents + 1 }, consent);
 }
 
 export function trackWindowUnpainted(r: WindowUnpaintedRecord) {
   const consent = nativeConsent(r);
   if (windowUnpaintedEvents >= MAX_WINDOW_UNPAINTED_EVENTS) return;
   if (stillValid(consent)) windowUnpaintedEvents++;
-  capture("window_unpainted", windowUnpaintedProperties(r), consent);
+  capture("window_unpainted", windowUnpaintedProperties(r, !!useBrowser.getState().settings?.shareTabsAcrossWindows, sessionMinutes()), consent);
 }
 
 export function watchEngineReports() {
+  void sendCommittedQuitEpisode();
   onHoverLost(trackHoverLost);
+  onConsentPeriodChange(dropQuitEpisodes);
   onWindowUnpainted(trackWindowUnpainted);
 }
 

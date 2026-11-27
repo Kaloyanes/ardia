@@ -16,10 +16,11 @@ import { closeTabById, currentTabs, openNewTab, useTabs } from "../tabs/store";
 import { isSyncableUrl, type BrowserTab } from "../tabs/tabModels";
 import { findTab } from "../tabs/tabsState";
 import { blockersToast, searchQuery, translationAsks, translationUrl, type NightShadeMode } from "./pageMenu";
-import { backLayer, downloadedToast, downloadFailedToast, downloadingToast, pressPlan, stoppedPrivateDownloadsToast, type PressAction, type Request } from "./pagePrompts";
+import { backLayer, downloadedToast, downloadFailedToast, downloadingToast, opensInInstaller, pressPlan, stoppedPrivateDownloadsToast, type PressAction, type Request } from "./pagePrompts";
+import { installDownloadedPackage } from "../appUpdate/store";
 import { onboardingBack } from "../onboarding/store";
 import { refreshSettings } from "../settings/actions";
-import { openSettings, openSettingsPage, popSettings, type SettingsRoute } from "../settings/nav";
+import { openSettings, openSettingsPage, popSettings, settingsNav, type SettingsRoute } from "../settings/nav";
 import { pinToMac, sendTab } from "../sync/actions";
 import type { SyncedDevice } from "../../platform/sync";
 import { linkToCopy } from "./linkCopy";
@@ -387,6 +388,31 @@ export function openSiteSettingsSheet() {
   afterPageMenu(() => openSettingsPage({ page: "siteSettings" }), { sameDocument: false });
 }
 
+function somethingElseOverPage(tabId: string) {
+  const ui = pageUi();
+  const browse = useBrowse.getState();
+  return pageRequest(tabId) !== null || pageIsFullscreen(tabId) || ui.menuOpen || ui.findOpen || ui.readerTabId !== null || ui.press !== null || browse.surface !== "browsing" || browse.sheet !== null || searchState().open || settingsNav().open || useLibrary.getState().open || useVoice.getState().presented;
+}
+
+export function openSiteSettingsOverMenu() {
+  const document = currentDocument();
+  markMenuPhase("siteSettingsPressed");
+  afterMenu = null;
+  closePageMenu();
+  const open = () => {
+    markMenuPhase("siteSettingsOpened");
+    openSettingsPage({ page: "siteSettings" });
+  };
+  if (!document) {
+    open();
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (opening?.id !== document.opening || selectedId() !== document.tabId || somethingElseOverPage(document.tabId)) return;
+    open();
+  });
+}
+
 export function openSiteSettingsRoute(route: SettingsRoute, { direct = false } = {}) {
   closePageMenu();
   openSettings(route, { direct });
@@ -679,7 +705,8 @@ function downloadEvent(event: DownloadEvent) {
     return;
   }
   const uri = event.uri;
-  showToast(downloadedToast(event.fileName), "download", TOAST_LONG_DURATION_MS, uri ? { label: actionWords.open, run: () => quietly(() => downloads.open(uri)) } : null);
+  const open = opensInInstaller(Platform.OS, event.fileName) && downloads.installsPackages() ? (target: string) => quietly(async () => (await installDownloadedPackage(target)) || showToast("Couldn’t open the installer.", "warning")) : (target: string) => quietly(() => downloads.open(target));
+  showToast(downloadedToast(event.fileName), "download", TOAST_LONG_DURATION_MS, uri ? { label: actionWords.open, run: () => open(uri) } : null);
 }
 
 function pageEvent(event: PageEngineEvent) {

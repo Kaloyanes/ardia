@@ -16,7 +16,7 @@ import { opaqueCard } from "../ui/opaqueCard";
 import { handOff, takeHandOff, wantsPage } from "../../state/tabs/tabPages";
 import { noteDiscarded, noteGone, noteReady } from "../../state/tabs/tabLifecycle";
 import { noteTabHidden, presentTab, trackPageArrival } from "../../state/tabs/busyTabWatch";
-import { notePageCommit, noteWebKitPage, persistEngine, refusedVideoSiteOf } from "../../state/engines/actions";
+import { forgetCommittedDocumentIfGone, notePageCommit, noteWebKitPage, persistEngine, refusedVideoSiteOf } from "../../state/engines/actions";
 import { offerWebKit } from "../../state/engines/siteMoves";
 import { heldBySwap, watchFirstPaint } from "../../state/engines/engineSwap";
 import { useRetiringEngine } from "../../state/engines/hooks";
@@ -54,7 +54,8 @@ import { noteCommit } from "../../state/automation/automationEvents";
 import { notePluginStateCommit } from "../../state/plugins/stateCommits";
 import { forgetUnreadIfGone, noteAppBadge, noteUnreadFavicon, noteUnreadLoading, noteUnreadPageEnded } from "../../state/tabs/unread";
 import { trackPageProcessGone } from "../../state/telemetry/diagnostics";
-import { releaseTranslation, translateCrashContext } from "../../state/site/translate";
+import { defaultTarget, languageName, releaseTranslation, revertPage, translateCrashContext, translatePage, translation, useTranslatePageMenu } from "../../state/site/translate";
+import { translatePageMenuItems } from "../../state/site/translateMenu";
 import { notePagePress, notePagePressRefused } from "../../state/telemetry/tabPresses";
 import { noteWebKitFocusRestore } from "../../state/telemetry/pageFocusReturns";
 import { noteAutoPictureInPictureKept, notePageOverlay, noteReopenedPage, noteSiteControls, noteWebKitPageKeptHidden } from "../../state/telemetry/usage";
@@ -103,6 +104,8 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
     return (handle: Parameters<typeof register>[0]) => (handle && peekOf !== undefined && promotedFromPeek(tabId) ? undefined : register(handle));
   }, [tabId]);
   const autoPictureInPicture = useAutoPictureInPicture(tabId, visible);
+  const translateMenu = useTranslatePageMenu(tabId);
+  const pageMenuItems = useMemo(() => (translation ? translatePageMenuItems(translateMenu, languageName(defaultTarget())) : []), [translateMenu]);
   useEffect(() => (visible ? presentTab(tabId) : noteTabHidden(tabId)), [tabId, visible]);
   const pageColor = useProfilesValue(profileId, (profiles) => (isIncognitoProfile(profileId) ? "incognito" : (profiles[profileId]?.color ?? "plum")));
   const theme = useProfileTheme(profileId);
@@ -144,6 +147,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
     persistEngine(tabId, engine);
     return () => {
       forgetPageDocument(tabId, documentReporter);
+      forgetCommittedDocumentIfGone(tabId);
       if (wentRetired.current) return;
       if (handedToTab()) return forgetPeekHandover(tabId);
       noteGone(tabId);
@@ -207,6 +211,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
       warm={warm}
       neighbour={neighbour}
       autoPictureInPicture={autoPictureInPicture}
+      pageMenuItems={pageMenuItems}
       pageColor={pageColor}
       contentsBackgroundColor={backdrop}
       shownUrl={shownUrl}
@@ -357,6 +362,8 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         else if (command === "copyLinkToHighlight") void copyLinkToSelection(tabId);
         else if (command === "escape") escapePressed(tabId, "page");
         else if (command === "hideElement" && point) void startHidingElement(tabId, point);
+        else if (command === "translatePage") void translatePage(tabId, defaultTarget(), "page_menu");
+        else if (command === "showOriginal") void revertPage(tabId);
       }}
       onSelection={(selection) => setPageSelection(tabId, selection)}
       onScroll={(state) => noteScroll(tabId, state)}
