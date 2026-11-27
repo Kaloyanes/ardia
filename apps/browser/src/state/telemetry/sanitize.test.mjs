@@ -471,3 +471,15 @@ test("ordinary words, identifiers and error text keep reading the same", () => {
     "Couldn't save the sync state; can't retry",
   ]) assert.equal(scrubText(text), text);
 });
+
+test("a crash with the engine's posted-task frames sends them as their own entry after the crash, never on their own", () => {
+  const { exceptions } = nativeCrashExceptions({
+    signal: "SIGTRAP",
+    exceptionType: "EXC_BREAKPOINT",
+    frames: [{ image: "Chromium Framework", offset: 0x896a2b8 }],
+    postedFrames: [{ image: "Chromium Framework", offset: 0x83ab024 }, { image: "Chromium Framework", offset: 0x2b092fc }],
+  });
+  assert.deepEqual(exceptions.map((e) => e.type), ["EXC_BREAKPOINT", "PostedTask"]);
+  assert.deepEqual(exceptions[1].frames.map((f) => f.function), ["Chromium Framework + 0x2b092fc", "Chromium Framework + 0x83ab024"]);
+  assert.deepEqual(nativeCrashExceptions({ frames: [], postedFrames: [] }).exceptions.map((e) => e.type), ["Crash"]);
+});

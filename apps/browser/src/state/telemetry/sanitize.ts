@@ -304,6 +304,7 @@ type NativeCrash = {
   exceptionSubtype?: string;
   frames: NativeFrame[];
   exceptionFrames?: NativeFrame[];
+  postedFrames?: NativeFrame[];
   images?: NativeImage[];
 };
 
@@ -314,10 +315,11 @@ export function nativeCrashExceptions(report: NativeCrash) {
   const subtype = report.exceptionSubtype && SUBTYPE.test(report.exceptionSubtype) ? report.exceptionSubtype : null;
   const images = nativeImages(report.images);
   const crash = { type: machType, value: signal ? `${machType} (${signal})` : machType, frames: nativeFrames(report.frames) };
-  if (!report.exceptionFrames?.length && !name) return { name, signal, subtype, images, exceptions: [crash] };
+  const posted = report.postedFrames?.length ? [{ type: "PostedTask", value: "Task posted from", frames: nativeFrames(report.postedFrames, 17) }] : [];
+  if (!report.exceptionFrames?.length && !name) return { name, signal, subtype, images, exceptions: [crash, ...posted] };
   const type = name ?? "NSException";
   const thrown = { type, value: `Uncaught ${type}`, frames: nativeFrames(report.exceptionFrames ?? []) };
-  return { name, signal, subtype, images, exceptions: [thrown, crash] };
+  return { name, signal, subtype, images, exceptions: [thrown, crash, ...posted] };
 }
 
 export const nativeCrashTermination = (namespace: string | undefined) => (namespace && SUBTYPE.test(namespace) ? namespace : null);
