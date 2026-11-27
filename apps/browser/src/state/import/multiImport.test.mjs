@@ -30,10 +30,6 @@ globalThis.acTestNativeModules = {
     unlockBrowser: (...args) => native.unlockBrowser(...args),
     isBrowserUnlocked: () => unlocked,
     safariHasFullDiskAccess: () => false,
-    writeImported: async () => {
-      await native.onWrite();
-      return JSON.stringify({ cookies: 0, addresses: 0, cards: 0 });
-    },
     discardImported: (token) => discarded.push(token),
     listBrowsers: () => native.listBrowsers(),
     chooseImportFile: (kind) => native.chooseImportFile(kind),

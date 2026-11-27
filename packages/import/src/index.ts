@@ -294,7 +294,7 @@ export const isBrowserUnlocked = (browserId: string) => Native.isBrowserUnlocked
 export const forgetUnlockedKeys = () => Native.forgetUnlockedKeys();
 
 export function writeImported(token: string, profile: string, kinds: ("cookies" | "autofill")[], options: Pick<ImportOptions, "signal"> = {}) {
-  if (!options.signal || typeof Native.writeImportedJob !== "function") return call<WrittenCounts>(Native.writeImported(token, profile, kinds));
+  if (!options.signal) return call<WrittenCounts>(Native.writeImported(token, profile, kinds));
   return job<WrittenCounts>({ signal: options.signal }, (jobId) => Native.writeImportedJob(jobId, token, profile, kinds));
 }
 
