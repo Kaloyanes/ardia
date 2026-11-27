@@ -169,11 +169,12 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
           IMPORT_IDLE_MS,
           () => {},
         );
-      const abort = () => {
+      const giveUp = (code: string, message: string) => {
         cancel();
-        finish(() => reject(failure("cancelled", "Import cancelled")));
+        finish(() => reject(failure(code, message)));
         discardLate();
       };
+      const abort = () => giveUp("cancelled", "Import cancelled");
       const watch = awaitEvents(
         jobId,
         (event) => {
@@ -201,10 +202,7 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
           return false;
         },
         IMPORT_IDLE_MS,
-        () => {
-          cancel();
-          finish(() => reject(failure("timeout", "The import stopped responding")));
-        },
+        () => giveUp("timeout", "The import stopped responding"),
       );
       options.signal?.addEventListener("abort", abort);
       const native = { historyLimit: options.historyLimit, historySince: options.historySince, spaceIds: nativeSpaceIds(options.spaceIds, profileSpaces.get(spacesKey(browserId, profileId))) };
