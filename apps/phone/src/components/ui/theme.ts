@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo } from "react";
-import { useDarkScheme } from "../../state/settings/appearance";
+import { useDarkScheme, usePageDarkScheme } from "../../state/settings/appearance";
 import { backdropStops, presetLook, showsTheme, windowTintStops, type PresetSpec, type ProfileLook } from "../../lib/profileLook";
 import { withAlpha } from "../../lib/color";
 import { colorRoles, PROFILE_COLORS, tabsInk, type ColorRoles, type ProfileColor } from "./tokens";
@@ -44,9 +44,12 @@ export const IncognitoLook = IncognitoLookContext.Provider;
 
 export const useIncognitoLook = () => useContext(IncognitoLookContext);
 
-export function useTheme(): Theme {
+export const useTheme = (): Theme => useThemeFor(useDarkScheme());
+
+export const usePageTheme = (): Theme => useThemeFor(usePageDarkScheme());
+
+function useThemeFor(schemeDark: boolean): Theme {
   const look = useProfileLook();
-  const schemeDark = useDarkScheme();
   const incognitoLook = useIncognitoLook();
   const material = useDesign() === "material";
   const { scheme } = useMaterialTheme();
