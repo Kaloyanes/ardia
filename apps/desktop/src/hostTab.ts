@@ -38,8 +38,11 @@ function nativeAdoptId(adoptId: string | undefined, host: ArdiaHost): string | u
   return ADOPTED_AS_COPIES.includes(kind) && hostSupports("tab.adoptCopies", host) ? adoptId : undefined;
 }
 const UNORDERED_COMMANDS = new Set(["downloadFavicon", "webStoreRequest"]);
-const HELD_WHILE_CLOSED = Symbol("held while closed");
 type HeldViewport = { promise: Promise<TabViewport | null>; settle(result: Promise<TabViewport | null> | null): void };
+class HeldWhileClosed {
+  promise: Promise<TabViewport | null>;
+  constructor(promise: Promise<TabViewport | null>) { this.promise = promise; }
+}
 
 export class HostTab {
   host: ArdiaHost;
@@ -155,13 +158,13 @@ export class HostTab {
 
   viewport(viewport: TabViewport): Promise<TabViewport | null> {
     this.nextViewport = viewport;
-    return this.viewportSend ??= enqueueTab(this.host, this.key, async (): Promise<TabViewport | null | typeof HELD_WHILE_CLOSED> => {
+    return this.viewportSend ??= enqueueTab(this.host, this.key, async (): Promise<TabViewport | null | HeldWhileClosed> => {
       this.viewportSend = undefined;
       const latest = this.nextViewport;
       this.nextViewport = undefined;
       if (latest && this.closed && !this.disposed && this.identity) {
         this.nextViewport ??= latest;
-        return HELD_WHILE_CLOSED;
+        return new HeldWhileClosed(this.holdViewport());
       }
       if (!latest || this.disposed || !this.identity || !this.ownsPage()) return null;
       const host = this.host;
@@ -179,7 +182,7 @@ export class HostTab {
         if (latest.visible) noteLinuxPageViewportRejected(consent);
         throw error;
       });
-    }).then((result) => (result === HELD_WHILE_CLOSED ? this.holdViewport() : result));
+    }).then((result) => (result instanceof HeldWhileClosed ? result.promise : result));
   }
 
   holdViewport(): Promise<TabViewport | null> {

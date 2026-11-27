@@ -266,3 +266,29 @@ test("a late failure of an earlier close leaves a newer close of the same tab in
     stop();
   }
 });
+
+for (const [how, act, expected] of [
+  ["the tab wakes", ({ store }) => store.wake("a"), (resized) => resized],
+  ["its view unmounts", ({ a }) => a.dispose(), () => null],
+]) {
+  test(`a resize the queue holds just before ${how} still settles`, async () => {
+    const { host, store, view, stop } = stage("defers");
+    try {
+      const stopLifecycle = startHostTabLifecycle(host, store);
+      const a = await view("a");
+      await a.viewport({ rect: RECT, visible: true });
+      store.sleep("a");
+      await settle();
+      const resized = { rect: { ...RECT, height: 640 }, visible: true };
+      const held = a.viewport(resized);
+      for (let turn = 0; turn < 20 && a.viewportSend; turn++) await Promise.resolve();
+      assert.equal(a.viewportSend, undefined);
+      act({ store, a });
+      const outcome = await Promise.race([held, settle().then(settle).then(() => "still pending")]);
+      assert.equal(outcome, expected(resized));
+      stopLifecycle();
+    } finally {
+      stop();
+    }
+  });
+}
