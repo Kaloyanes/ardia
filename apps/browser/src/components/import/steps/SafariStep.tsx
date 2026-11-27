@@ -30,7 +30,7 @@ export function SafariBody({ flow }: { flow: ImportFlow }) {
               Full Disk Access is granted.
             </Text>
             <View style={{ marginTop: space.m }}>
-              <Checkbox label="Cookies (stay signed in)" value={safariCookies} onChange={setSafariCookies} />
+              <Checkbox label="Cookies (stay signed in)" value={safariCookies} onChange={(v) => setSafariCookies(v, flow.turn)} />
             </View>
           </View>
           <Button title="Import from Safari" kind="primary" onPress={() => void importSafariDirect(flow.turn)} />
@@ -64,9 +64,9 @@ function TurnFooter({ flow, picker }: { flow: ImportFlow; picker: boolean }) {
   const several = inRun(flow);
   return (
     <>
-      {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose")} />}
+      {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose", flow.turn)} />}
       <Spacer />
-      {picker && !several && <TargetPicker target={flow.target} onChange={setImportTarget} />}
+      {picker && !several && <TargetPicker target={flow.target} onChange={(id) => setImportTarget(id, flow.turn)} />}
       {several && flow.source ? <Button title={`Skip ${flow.source.name}`} onPress={() => skipSource(flow.turn)} /> : null}
       <Button title="Cancel" onPress={closeImport} />
     </>

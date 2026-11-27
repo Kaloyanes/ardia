@@ -214,7 +214,7 @@ export function DoneFooter({ flow }: { flow: ImportFlow }) {
   return (
     <>
       <Spacer />
-      {failed && <Button title="Try Again" onPress={() => backTo("choose")} />}
+      {failed && <Button title="Try Again" onPress={() => backTo("choose", flow.turn)} />}
       <Button title={failed ? "Continue" : "Finish importing"} kind="primary" onPress={closeImport} />
     </>
   );

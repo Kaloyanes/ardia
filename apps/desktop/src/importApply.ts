@@ -1,4 +1,4 @@
-import { applyResult as sharedApplyResult, type ApplyOptions, type ImportCounts, type PasswordsWritten } from "../../browser/src/state/import/apply.ts";
+import { applyResult as sharedApplyResult, discardImportedResult as sharedDiscardImportedResult, type ApplyOptions, type ImportCounts, type PasswordsWritten } from "../../browser/src/state/import/apply.ts";
 import { engineProfile, isIncognitoProfile } from "../../browser/src/state/browser/model.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import type { ImportKind, ImportResult } from "../../browser/src/platform/importModule.ts";
@@ -65,3 +65,9 @@ export async function applyResult(
   return counts;
 }
 
+
+export function discardImportedResult(result: Pick<ImportResult, "vaultToken">) {
+  sharedDiscardImportedResult(result);
+  const pending = sink?.pending(result);
+  if (pending) sink?.discard(pending.token);
+}

@@ -84,7 +84,7 @@ export function ChooseFooter({ flow }: { flow: ImportFlow }) {
     <>
       <Button title="Bookmarks HTML File…" onPress={() => void importBookmarksHtml()} />
       <Spacer />
-      <TargetPicker target={flow.target} onChange={setImportTarget} />
+      <TargetPicker target={flow.target} onChange={(id) => setImportTarget(id, flow.turn)} />
       <Button title="Cancel" onPress={closeImport} />
       <Button title="Continue" kind="primary" disabled={nothing} onPress={() => continueImport("choose", flow.turn)} />
     </>

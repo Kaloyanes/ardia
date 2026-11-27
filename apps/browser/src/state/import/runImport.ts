@@ -162,22 +162,25 @@ function proceed(from: ImportStepName, turn: ImportTurn) {
   void importIn(turn, kinds, false);
 }
 
-const stillUnlocking = (turn: ImportTurn) => {
+let unlockAttempts = 0;
+
+const stillUnlocking = (turn: ImportTurn, attempt: number) => {
   const { step } = importNow();
-  return ownsTurn(turn) && step.name === "unlock" && step.unlocking;
+  return attempt === unlockAttempts && ownsTurn(turn) && step.name === "unlock" && step.unlocking;
 };
 
 export async function unlockAndImport(token: number | null) {
   const { source, step } = importNow();
   const turn = turnFor(token, "unlock");
   if (!source || !turn || step.name !== "unlock" || step.unlocking) return;
+  const attempt = ++unlockAttempts;
   patchImport({ step: { name: "unlock", unlocking: true, error: step.error } });
   try {
     await whileOwned(turn, importModule().unlockBrowser(source.id), () => {
-      if (stillUnlocking(turn)) void importIn(turn, importNow().kinds, false);
+      if (stillUnlocking(turn, attempt)) void importIn(turn, importNow().kinds, false);
     });
   } catch {
-    if (stillUnlocking(turn))
+    if (stillUnlocking(turn, attempt))
       patchImport({ step: { name: "unlock", unlocking: false, error: `macOS didn't allow access to ${source.name}'s keychain item. Try again, or skip the encrypted data.` } });
   }
 }

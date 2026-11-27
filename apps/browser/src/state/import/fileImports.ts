@@ -38,8 +38,11 @@ async function readSafari(turn: ImportTurn, how: "export" | "direct", path: stri
   const api = importModule();
   startProgress(how === "export" ? EXPORT_STATUS : { bookmarks: "active", history: "active", tabs: "active", ...(cookies ? { cookies: "active" as const } : {}) }, 1);
   try {
-    await whileOwned(turn, how === "export" ? api.importSafariExport(path, { signal: turn.signal }) : api.importSafariDirect({ signal: turn.signal }), (data) =>
-      applySafariRead(turn, data, { how, target, cookies, multi }),
+    await whileOwned(
+      turn,
+      how === "export" ? api.importSafariExport(path, { signal: turn.signal }) : api.importSafariDirect({ signal: turn.signal }),
+      (data) => applySafariRead(turn, data, { how, target, cookies, multi }),
+      discardVault,
     );
   } catch (e) {
     const { code } = ardiaError(e);
@@ -57,6 +60,10 @@ async function readSafari(turn: ImportTurn, how: "export" | "direct", path: stri
     patchImport({ step: { name: "safari", error }, ...(how === "direct" ? { fullDiskAccess: api.safariHasFullDiskAccess() } : {}) });
   }
 }
+
+const discardVault = (data: { vaultToken?: string } | null | undefined) => {
+  if (data?.vaultToken) importModule().discardImported(data.vaultToken);
+};
 
 type SafariApply = { how: "export" | "direct"; target: string; cookies: boolean; multi: boolean };
 
@@ -91,7 +98,7 @@ export async function importBookmarksHtml() {
   try {
     const root = await api.importBookmarksHTML(path);
     const failed: ImportKind[] = [];
-    const bookmarks = await importBookmarks(importNow().target, root, "HTML File", consent, (kind) => failed.push(kind));
+    const bookmarks = await importBookmarks(importNow().target, root, "HTML File", consent, (kind) => failed.push(kind), signal);
     if (signal.aborted) return;
     noteUntitledBookmarks(untitledLinks(root), consent);
     const failures = failed.map((kind) => ({ kind, profiles: [] }));

@@ -160,9 +160,9 @@ async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], sig
   });
 }
 
-const conflictStep = () => {
+const conflictStep = (token?: number) => {
   const { step } = importNow();
-  return step.name === "conflicts" ? step : null;
+  return step.name === "conflicts" && (token === undefined || step.token === token) ? step : null;
 };
 
 type ConflictStep = NonNullable<ReturnType<typeof conflictStep>>;
@@ -175,41 +175,41 @@ export function currentChoices(step: ConflictStep): Record<string, string> {
 
 export const handChanges = (set: ConflictChoiceSet | null) => (set ? changedChoices(set.base, set.choices) : 0);
 
-export function pickConflictVersions(pick: ConflictPick) {
-  const step = conflictStep();
+export function pickConflictVersions(pick: ConflictPick, token: number) {
+  const step = conflictStep(token);
   if (!step || step.saving || (pick === "custom" && !step.custom)) return;
   patchImport({ step: { ...step, pick, view: "summary" } });
 }
 
-export function openConflictList() {
-  const step = conflictStep();
+export function openConflictList(token: number) {
+  const step = conflictStep(token);
   if (!step || step.saving || step.view === "list") return;
   const choices = currentChoices(step);
   const base = step.pick === "custom" && step.custom ? step.custom.base : choices;
   patchImport({ step: { ...step, view: "list", draft: { choices, base }, filter: "" } });
 }
 
-export function setConflictFilter(filter: string) {
-  const step = conflictStep();
+export function setConflictFilter(filter: string, token: number) {
+  const step = conflictStep(token);
   if (step?.view === "list") patchImport({ step: { ...step, filter } });
 }
 
-export function chooseConflictVersion(id: string, browserId: string) {
-  const step = conflictStep();
+export function chooseConflictVersion(id: string, browserId: string, token: number) {
+  const step = conflictStep(token);
   const conflict = step?.conflicts.find((c) => c.id === id);
   if (!step || step.view !== "list" || !conflict?.versions.some((v) => v.browserId === browserId)) return;
   patchImport({ step: { ...step, draft: { ...step.draft, choices: { ...step.draft.choices, [id]: browserId } } } });
 }
 
-export function chooseAllConflicts(browserId: string) {
-  const step = conflictStep();
+export function chooseAllConflicts(browserId: string, token: number) {
+  const step = conflictStep(token);
   if (!step || step.view !== "list") return;
   const choices = Object.fromEntries(step.conflicts.map((c) => [c.id, c.versions.some((v) => v.browserId === browserId) ? browserId : step.draft.choices[c.id]!]));
   patchImport({ step: { ...step, draft: { ...step.draft, choices } } });
 }
 
-export function closeConflictList() {
-  const step = conflictStep();
+export function closeConflictList(token: number) {
+  const step = conflictStep(token);
   if (!step || step.view !== "list") return;
   patchImport({ step: { ...step, view: "summary", pick: "custom", custom: step.draft } });
 }

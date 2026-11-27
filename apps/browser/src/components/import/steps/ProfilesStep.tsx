@@ -48,7 +48,7 @@ export function ProfilesBody({ flow }: { flow: ImportFlow }) {
             <SelectRow
               key={s.id}
               selected={spaces.includes(s.id)}
-              onToggle={(v) => toggleImportSpace(s.id, v)}
+              onToggle={(v) => toggleImportSpace(s.id, v, flow.turn)}
               icon={<SpaceIcon space={s} />}
               title={s.name || "Space"}
               subtitle={spaceSubtitle(source, s)}
@@ -60,7 +60,7 @@ export function ProfilesBody({ flow }: { flow: ImportFlow }) {
                 <SelectRow
                   key={p.id}
                   selected={sourceProfiles.includes(p.id)}
-                  onToggle={(v) => toggleSourceProfile(p.id, v)}
+                  onToggle={(v) => toggleSourceProfile(p.id, v, flow.turn)}
                   icon={<Monogram name={p.name} color={p.color} />}
                   title={p.name}
                   subtitle={p.isDefault ? "Default profile" : undefined}
@@ -78,7 +78,7 @@ export function ProfilesBody({ flow }: { flow: ImportFlow }) {
           <SelectRow
             key={p.id}
             selected={sourceProfiles.includes(p.id)}
-            onToggle={(v) => toggleSourceProfile(p.id, v)}
+            onToggle={(v) => toggleSourceProfile(p.id, v, flow.turn)}
             icon={<ProfileAvatar path={p.avatarPath} name={p.name} color={p.color} />}
             title={p.name}
             subtitle={p.email ?? (p.isDefault ? "Default profile" : undefined)}
@@ -96,9 +96,9 @@ export function ProfilesFooter({ flow }: { flow: ImportFlow }) {
   const several = inRun(flow);
   return (
     <>
-      {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose")} />}
+      {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose", flow.turn)} />}
       <Spacer />
-      {several ? <Button title={`Skip ${source.name}`} onPress={() => skipSource(flow.turn)} /> : <TargetPicker target={flow.target} onChange={setImportTarget} />}
+      {several ? <Button title={`Skip ${source.name}`} onPress={() => skipSource(flow.turn)} /> : <TargetPicker target={flow.target} onChange={(id) => setImportTarget(id, flow.turn)} />}
       <Button
         title="Continue"
         kind="primary"

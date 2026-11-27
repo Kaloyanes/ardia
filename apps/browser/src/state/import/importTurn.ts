@@ -27,7 +27,7 @@ export const ownsTurn = (turn: ImportTurn) => !turn.signal.aborted && live?.toke
 
 export const liveTurn = (): ImportTurn | null => (live && !live.signal.aborted && !live.settled ? live : null);
 
-export async function whileOwned<T, R>(turn: ImportTurn, work: Promise<T>, apply: (value: T) => R): Promise<R | typeof STALE> {
+export async function whileOwned<T, R>(turn: ImportTurn, work: Promise<T>, apply: (value: T) => R, drop?: (value: T) => void): Promise<R | typeof STALE> {
   let value: T;
   try {
     value = await work;
@@ -35,7 +35,9 @@ export async function whileOwned<T, R>(turn: ImportTurn, work: Promise<T>, apply
     if (!ownsTurn(turn)) return STALE;
     throw error;
   }
-  return ownsTurn(turn) ? apply(value) : STALE;
+  if (ownsTurn(turn)) return apply(value);
+  drop?.(value);
+  return STALE;
 }
 
 export const isLiveToken = (token: number | null) => token !== null && live?.token === token && !live.signal.aborted && !live.settled;

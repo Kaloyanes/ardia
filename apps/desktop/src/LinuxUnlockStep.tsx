@@ -72,7 +72,7 @@ export function UnlockFooter({ flow }: { flow: ImportFlow }) {
   const back = source.profiles.length > 1 || importsBySpaces(source) ? "profiles" : "choose";
   return (
     <>
-      {(back === "profiles" || canGoBackToChoose(flow)) && <Button title="Back" onPress={() => backTo(back)} />}
+      {(back === "profiles" || canGoBackToChoose(flow)) && <Button title="Back" onPress={() => backTo(back, flow.turn)} />}
       <Spacer />
       <Button title="Skip Encrypted Data" onPress={() => skipEncrypted(source, flow.turn)} />
       <Button

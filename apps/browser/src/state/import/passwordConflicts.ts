@@ -23,7 +23,8 @@ const DEFAULT_PORTS: Readonly<Record<string, number>> = { http: 80, https: 443, 
 const ORIGIN_PARTS = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^:/?#]*)(?::(\d+))?(?=$|[/?#])/i;
 
 const asciiLabel = (label: string) => (/^[\x00-\x7f]*$/.test(label) ? label : `xn--${punycodeEncode(label)}`);
-const asciiHost = (host: string) => host.normalize("NFC").toLowerCase().split(".").map(asciiLabel).join(".");
+const IDEOGRAPHIC_DOTS = /[\u3002\uff0e\uff61]/g;
+const asciiHost = (host: string) => host.normalize("NFKC").toLowerCase().replace(IDEOGRAPHIC_DOTS, ".").split(".").map(asciiLabel).join(".");
 
 export function sameOriginKey(origin: string): string {
   const found = ORIGIN_PARTS.exec(origin.trim());

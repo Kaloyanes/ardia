@@ -160,3 +160,12 @@ test("a trailing dot is its own origin, while case, a padded default port, IPv6 
   const plan = planLogins([login("chrome", "p", "https://example.com/", "me", "1"), login("arc", "p", "https://example.com./", "me", "2")], ORDER);
   assert.deepEqual([plan.clean.length, plan.conflicts.length], [2, 0]);
 });
+
+test("hosts fold as Chromium reads them: ideographic and fullwidth dots, fullwidth letters and IDN case, with a trailing dot kept", async () => {
+  const { sameOriginKey } = await import("./passwordConflicts.ts");
+  const ascii = "https://xn--bcher-kva.example";
+  for (const host of ["https://bücher\u3002example", "https://bücher\uff0eexample", "https://bücher\uff61example", "https://BÜCHER.example", "https://ｂüｃｈｅｒ.ｅｘａｍｐｌｅ"]) assert.equal(sameOriginKey(host), ascii, host);
+  assert.equal(sameOriginKey("https://ＥＸＡＭＰＬＥ.com"), "https://example.com");
+  assert.notEqual(sameOriginKey("https://bücher.example."), ascii);
+  assert.equal(sameOriginKey("https://bücher\u3002example\u3002"), `${ascii}.`);
+});

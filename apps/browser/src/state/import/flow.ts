@@ -203,7 +203,13 @@ export function takeTurn(b: BrowserSource) {
 
 const toggled = (list: string[], id: string, on: boolean) => (on ? [...list, id] : list.filter((x) => x !== id));
 
+const onStep = (token: number | null, ...steps: ImportStepName[]) => {
+  const flow = importNow();
+  return flow.turn === token && steps.includes(flow.step.name);
+};
+
 export function toggleImportKind(kind: ImportKind, on: boolean) {
+  if (importNow().step.name !== "choose") return;
   const kinds = new Set(importNow().kinds);
   if (on) kinds.add(kind);
   else kinds.delete(kind);
@@ -211,13 +217,34 @@ export function toggleImportKind(kind: ImportKind, on: boolean) {
 }
 
 export const setImportKinds = (kinds: Iterable<ImportKind>) => patchImport({ kinds: new Set(kinds) });
-export const toggleSourceProfile = (id: string, on: boolean) => patchImport({ sourceProfiles: toggled(importNow().sourceProfiles, id, on) });
-export const toggleImportSpace = (id: string, on: boolean) => patchImport({ spaces: toggled(importNow().spaces, id, on) });
-export const setImportTarget = (target: string) => patchImport({ target });
-export const setSafariCookies = (safariCookies: boolean) => patchImport({ safariCookies });
-export function backTo(name: "choose" | "profiles") {
+
+export function toggleSourceProfile(id: string, on: boolean, token: number | null) {
+  if (onStep(token, "profiles")) patchImport({ sourceProfiles: toggled(importNow().sourceProfiles, id, on) });
+}
+
+export function toggleImportSpace(id: string, on: boolean, token: number | null) {
+  if (onStep(token, "profiles")) patchImport({ spaces: toggled(importNow().spaces, id, on) });
+}
+
+export function setImportTarget(target: string, token: number | null) {
+  if (onStep(token, "choose", "profiles", "safari") && !inRun(importNow())) patchImport({ target });
+}
+
+export function setSafariCookies(safariCookies: boolean, token: number | null) {
+  if (onStep(token, "safari")) patchImport({ safariCookies });
+}
+
+const BACK_TO_CHOOSE: ImportStepName[] = ["profiles", "unlock", "safari", "access"];
+
+export function backTo(name: "choose" | "profiles", token: number | null) {
   const flow = importNow();
-  if (name === "profiles") return patchImport({ step: { name } });
+  if (flow.turn !== token) return;
+  if (name === "profiles") {
+    if (flow.step.name === "unlock") patchImport({ step: { name } });
+    return;
+  }
+  const fromDone = flow.step.name === "done";
+  if (!fromDone && !(BACK_TO_CHOOSE.includes(flow.step.name) && canGoBackToChoose(flow))) return;
   endTurn();
   const first = flow.run ? pickedBrowsers(flow)[0] : undefined;
   patchImport({

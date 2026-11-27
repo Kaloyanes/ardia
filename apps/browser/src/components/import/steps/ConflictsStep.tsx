@@ -51,7 +51,7 @@ function Summary({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
       <View style={{ gap: space.s }}>
         <ChoiceRow
           selected={step.pick === "newest"}
-          onPress={() => pickConflictVersions("newest")}
+          onPress={() => pickConflictVersions("newest", step.token)}
           icon={<Symbol name="clock" size={18} color={theme.icon} style={{ width: importLayout.browserIcon, height: importLayout.browserIcon }} />}
           title="Newest of each"
         />
@@ -59,7 +59,7 @@ function Summary({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
           <ChoiceRow
             key={b.id}
             selected={step.pick === b.id}
-            onPress={() => pickConflictVersions(b.id)}
+            onPress={() => pickConflictVersions(b.id, step.token)}
             icon={<BrowserIcon iconPath={b.iconPath} size={importLayout.browserIcon} />}
             title={b.name}
             detail={newer[b.id] ? `newer for ${newer[b.id]}` : undefined}
@@ -68,7 +68,7 @@ function Summary({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
         {step.custom && (
           <ChoiceRow
             selected={step.pick === "custom"}
-            onPress={() => pickConflictVersions("custom")}
+            onPress={() => pickConflictVersions("custom", step.token)}
             icon={<Symbol name="slider.horizontal.3" size={18} color={theme.icon} style={{ width: importLayout.browserIcon, height: importLayout.browserIcon }} />}
             title="Your choices"
             detail={changed ? `${changed} changed` : "none changed"}
@@ -97,13 +97,13 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
       <Title title="Choose for each" subtitle="Pick which browser's password to keep for each account. Passwords stay hidden." />
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.m, marginBottom: space.l }}>
         <View style={{ flex: 1 }}>
-          <SearchField value={step.filter} onChangeText={setConflictFilter} placeholder={`Search ${plural(step.conflicts.length, "account")}`} />
+          <SearchField value={step.filter} onChangeText={(text) => setConflictFilter(text, step.token)} placeholder={`Search ${plural(step.conflicts.length, "account")}`} />
         </View>
         <Text tone="textSecondary" ardiaCentersCapitals>
           All:
         </Text>
         {browsers.map((b) => (
-          <Button key={b.id} title={b.name} onPress={() => chooseAllConflicts(b.id)} />
+          <Button key={b.id} title={b.name} onPress={() => chooseAllConflicts(b.id, step.token)} />
         ))}
       </View>
       {shown.length ? (
@@ -116,7 +116,7 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
             >
               <Segmented
                 value={choices[c.id] ?? c.versions[0]!.browserId}
-                onChange={(id) => chooseConflictVersion(c.id, id)}
+                onChange={(id) => chooseConflictVersion(c.id, id, step.token)}
                 options={c.versions.map((v) => {
                   const age = v.at ? shortAgo(v.at, now) : "no date";
                   const icon = iconOf(v.browserId);
@@ -147,12 +147,12 @@ export function ConflictsFooter({ flow }: { flow: ImportFlow }) {
     return (
       <>
         <Spacer />
-        <Button title="Done" kind="primary" onPress={closeConflictList} />
+        <Button title="Done" kind="primary" onPress={() => closeConflictList(step.token)} />
       </>
     );
   return (
     <>
-      <Button variant="text" look="link" pad="none" title="Let me choose…" disabled={step.saving} onPress={openConflictList} />
+      <Button variant="text" look="link" pad="none" title="Let me choose…" disabled={step.saving} onPress={() => openConflictList(step.token)} />
       <Spacer />
       <Button title={step.saving ? "Importing…" : "Import"} kind="primary" disabled={step.saving} onPress={() => void importChosenPasswords(step.token)} />
     </>

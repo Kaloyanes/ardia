@@ -8,7 +8,7 @@ import { createProfile } from "../profiles/actions";
 import { noteImportedSpaces } from "../telemetry/usage";
 import { noteArcImport, noteDiaSidebar, noteDiaTabProfiles, noteFirefoxFavicons, noteImportCore, noteImportRun, noteUntitledBookmarks } from "../telemetry/importRuns";
 import type { ConsentToken } from "../telemetry/client";
-import { adoptSpaceIdentity, applyResult, emptyCounts, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
+import { adoptSpaceIdentity, applyResult, discardImportedResult, emptyCounts, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
 import type { BrowserProfile, BrowserSource, DiaTabsResult, ImportCounts, ImportedExtension, ImportKind, ImportedSearchEngine, ImportResult } from "./apply";
 import { diaProfilesFor, diaProfilesWithoutFolder } from "./diaTabs";
 import { importArcSpace, importDiaSpace } from "./sidebarTree";
@@ -160,6 +160,10 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       passwordsWritten.failed += w.failed;
     },
   };
+  const dropVault = (r: ImportResult): undefined => {
+    discardImportedResult(r);
+    return undefined;
+  };
   const withLogins = (dest: string, r: ImportResult): ImportResult => {
     if (!collecting) return r;
     if (r.credentials.length) held.push({ profileId: dest, credentials: r.credentials });
@@ -207,7 +211,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
         continue;
       }
     }
-    if (signal.aborted) return;
+    if (signal.aborted) return dropVault(result);
     const sidebarMissed =
       readsSidebarFile(profile) &&
       (!result.diaSidebar || sidebarKinds.some((k) => result.failed.includes(k) || result.warnings.some((w) => w.kind === k && w.code === "empty")));
@@ -245,7 +249,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
         const shared = plan.sharesTopApps && plan.spaces.filter((p) => p.partition === partition).length > 1;
         const first = destinationIndex === 0;
         const dest = await nextDestination(name, space.color, space.emoji, head, shared);
-        if (signal.aborted) return;
+        if (signal.aborted) return dropVault(result);
         if (first && adoptSpaceIdentity(dest, space)) startersNamed += 1;
         (members[partition] ??= []).push(dest);
         arc.homes.set(space.id, dest);
@@ -256,7 +260,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       const dest = members[plan.dataPartition]?.[0] ?? (await nextDestination(result.profile?.name ?? profile.name, result.profile?.color));
       members[plan.dataPartition] ??= [dest];
       arc.home ||= dest;
-      if (signal.aborted) return;
+      if (signal.aborted) return dropVault(result);
       add(await applyResult(dest, withLogins(dest, { ...result, favorites: [] }), source.name, profileKinds, refused, consent, applyOptions));
       if (signal.aborted) return;
       let essentials = 0;
@@ -278,7 +282,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       profileDest = dest;
     } else {
       const dest = await nextDestination(result.profile?.name ?? profile.name, result.profile?.color ?? profile.color);
-      if (signal.aborted) return;
+      if (signal.aborted) return dropVault(result);
       add(await applyResult(dest, withLogins(dest, result), source.name, profileKinds, refused, consent, applyOptions));
       if (signal.aborted) return;
       if (readsSidebarFile(profile) && !sidebarMissed && result.spaces.length) {

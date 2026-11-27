@@ -7,6 +7,7 @@ const link = (url) => ({ type: "url", title: url, url });
 const DAY = 86_400_000;
 let reads = {};
 let readCalls = [];
+let discarded = [];
 let unlocked = true;
 let duringRead = () => {};
 const native = { listBrowsers: async () => "[]", importSafariExport: async () => "{}", importSafariDirect: async () => "{}", unlockBrowser: async () => null, chooseImportFile: async () => null, onWrite: () => {} };
@@ -28,7 +29,7 @@ globalThis.acTestNativeModules = {
       await native.onWrite();
       return JSON.stringify({ cookies: 0, addresses: 0, cards: 0 });
     },
-    discardImported() {},
+    discardImported: (token) => discarded.push(token),
     listBrowsers: () => native.listBrowsers(),
     chooseImportFile: (kind) => native.chooseImportFile(kind),
     importSafariExport: (_job, path) => native.importSafariExport(path),
@@ -83,6 +84,7 @@ async function until(name) {
 
 beforeEach(() => {
   readCalls = [];
+  discarded = [];
   unlocked = true;
   duringRead = () => {};
   native.chooseImportFile = async () => null;
@@ -131,7 +133,7 @@ test("different passwords for one account wait for a choice, and the chosen brow
   assert.equal(conflicts.pick, "newest");
   assert.equal(JSON.stringify(conflicts).includes("pass"), false, "the step never holds a password");
   assert.deepEqual(storedLogins(), [], "nothing is saved before the choice");
-  outcome.pickConflictVersions("chrome");
+  outcome.pickConflictVersions("chrome", step().token);
   await outcome.importChosenPasswords(step().token);
   const done = await until("done");
   assert.deepEqual(storedLogins(), [["https://bank.example", "me", "chrome-pass"], ["https://shop.example", "me", "c"]]);
@@ -149,12 +151,12 @@ test("choices made by hand start from the default, count what changed, and are w
   continueImport("choose", turnNow());
   const first = await until("conflicts");
   const bank = first.conflicts.find((c) => c.site === "bank.example");
-  outcome.openConflictList();
+  outcome.openConflictList(step().token);
   assert.equal(step().view, "list");
   assert.deepEqual(Object.values(step().draft.choices).sort(), ["brave", "chrome"], "rows start on the newest of each");
-  outcome.setConflictFilter("bank");
-  outcome.chooseConflictVersion(bank.id, "chrome");
-  outcome.closeConflictList();
+  outcome.setConflictFilter("bank", step().token);
+  outcome.chooseConflictVersion(bank.id, "chrome", step().token);
+  outcome.closeConflictList(step().token);
   assert.equal(step().pick, "custom");
   assert.equal(outcome.handChanges(step().custom), 1);
   await outcome.importChosenPasswords(step().token);
@@ -197,7 +199,8 @@ test("a kind only some ticked browsers have is offered once, a kind left unticke
   flow.takeTurn(chromium("chrome", "Chrome"));
   assert.deepEqual([...flow.useImportFlow.getState().kinds].sort(), ["bookmarks", "passwords", "tabs"]);
   const chosen = [...flow.useImportFlow.getState().run.chosen].sort();
-  flow.backTo("choose");
+  flow.patchImport({ step: { name: "profiles" } });
+  flow.backTo("choose", turnNow());
   assert.equal(flow.useImportFlow.getState().run, null);
   assert.deepEqual([...flow.useImportFlow.getState().kinds].sort(), chosen);
 });
@@ -403,7 +406,7 @@ test("password saves are counted under the consent of the turn that read them, t
   telemetry.setSharing(false, "settings");
   telemetry.setSharing(true, "settings");
   takeImportRuns();
-  outcome.pickConflictVersions("chrome");
+  outcome.pickConflictVersions("chrome", step().token);
   await outcome.importChosenPasswords(step().token);
   const done = await until("done");
   assert.deepEqual(done.notes, ["1 password wasn't changed: Ardia already has a different one saved for that account."]);
@@ -494,4 +497,69 @@ test("an access check that answers just as its browser is skipped never clears t
   const { source } = flow.importNow();
   if (source.id === "brave") assert.equal(source.needsFullDiskAccess, true, "the skipped browser's answer never reached Brave's turn");
   else assert.equal(source.id, "chrome");
+});
+
+test("a Safari export or a browser read that answers after its import ended gives its vault token back", async () => {
+  const late = deferred();
+  native.importSafariExport = () => late.promise;
+  pick([SAFARI], ["safari"]);
+  continueImport("choose", turnNow());
+  await until("safari");
+  const reading = importSafariExport("/tmp/late.zip", turnNow());
+  flow.startImport(0);
+  late.resolve(JSON.stringify({ ...JSON.parse(safariExport([])), vaultToken: "vault-safari" }));
+  await reading;
+  assert.deepEqual(discarded, ["vault-safari"]);
+
+  reads = { chrome: { bookmarks: ["https://late.example/"], tabs: [], credentials: [], vaultToken: "vault-chrome" } };
+  duringRead = () => flow.startImport(0);
+  const chrome = chromium("chrome", "Chrome");
+  chrome.profiles[0].available.push("cookies");
+  pick([chrome], ["chrome"]);
+  continueImport("choose", turnNow());
+  await settle();
+  assert.deepEqual(discarded, ["vault-safari", "vault-chrome"]);
+});
+
+test("Back drawn for Safari does nothing once Chrome's turn has begun", async () => {
+  const two = { ...chromium("chrome", "Chrome"), profiles: [chromium("chrome", "Chrome").profiles[0], { id: "Work", name: "Work", path: "w", isDefault: false, available: ["bookmarks"] }] };
+  pick([SAFARI, two], ["safari", "chrome"]);
+  continueImport("choose", turnNow());
+  await until("safari");
+  const safariToken = turnNow();
+  skipSource(safariToken);
+  assert.equal(step().name, "profiles");
+  flow.backTo("choose", safariToken);
+  flow.toggleSourceProfile("Work", true, safariToken);
+  assert.equal(step().name, "profiles");
+  assert.deepEqual(flow.importNow().sourceProfiles, ["Default"]);
+  assert.ok(flow.importNow().run);
+});
+
+test("only the latest keychain unlock may change the unlock step", async () => {
+  reads = { chrome: { bookmarks: [], tabs: [], credentials: [] } };
+  unlocked = false;
+  const attempts = [deferred(), deferred()];
+  let asked = 0;
+  native.unlockBrowser = () => attempts[asked++].promise;
+  const two = { ...chromium("chrome", "Chrome"), needsKeychain: true, profiles: [chromium("chrome", "Chrome").profiles[0], { id: "Work", name: "Work", path: "w", isDefault: false, available: ["bookmarks"] }] };
+  pick([two], ["chrome"]);
+  continueImport("choose", turnNow());
+  continueImport("profiles", turnNow());
+  assert.equal(step().name, "unlock");
+  const first = unlockAndImport(turnNow());
+  flow.backTo("profiles", turnNow());
+  continueImport("profiles", turnNow());
+  const second = unlockAndImport(turnNow());
+  assert.equal(step().unlocking, true);
+  attempts[0].resolve(Promise.reject(new Error("denied")));
+  await first;
+  assert.equal(step().name, "unlock");
+  assert.equal(step().unlocking, true, "the first attempt's denial leaves the second waiting");
+  assert.equal(step().error, null);
+  attempts[1].resolve(null);
+  await second;
+  await until("done");
+  assert.deepEqual(readCalls, ["chrome"]);
+  native.unlockBrowser = async () => null;
 });
