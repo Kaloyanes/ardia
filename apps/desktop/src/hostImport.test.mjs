@@ -302,6 +302,24 @@ test("native failures, start errors and stalls reject with their codes and stop 
   assert.equal(stalled.listeners.size, 0);
 });
 
+test("a read that answers after its import was cancelled gives back both its password and its cookie and autofill tokens", async () => {
+  const { api, calls, emit } = fixture();
+  const controller = new AbortController();
+  const running = api.importData("chrome", "Default", ["passwords", "cookies"], { signal: controller.signal });
+  await settle();
+  const jobId = calls[0].args[0];
+  controller.abort();
+  await assert.rejects(running, { code: "cancelled" });
+  await settle();
+  const vault = randomBytes(16).toString("hex");
+  emit({ jobId, type: "done", result: { passwords: { token: TOKEN, count: 1 }, vaultToken: vault, cookieCount: 3 } });
+  await settle();
+  assert.deepEqual(calls.slice(2), [
+    { method: "ArdiaImport.discardPasswords", args: [TOKEN] },
+    { method: "ArdiaImport.discardImported", args: [vault] },
+  ]);
+});
+
 test("cancelling an import cancels the native job and discards a password token that arrives late", async () => {
   const { api, calls, emit, listeners } = fixture();
   const controller = new AbortController();

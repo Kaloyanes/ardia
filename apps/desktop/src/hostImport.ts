@@ -41,6 +41,13 @@ export function pendingPasswords(result: unknown): PendingPasswords | null {
   return { token: passwords.token, count: count(passwords.count) };
 }
 
+export type HeldTokens = { vault: string | null; passwords: string | null };
+
+export function heldTokens(result: unknown): HeldTokens {
+  const vault = (result as { vaultToken?: unknown } | null)?.vaultToken;
+  return { vault: typeof vault === "string" && TOKEN.test(vault) ? vault : null, passwords: pendingPasswords(result)?.token ?? null };
+}
+
 function writtenImported(reply: unknown): ImportApi.WrittenCounts {
   const value = (reply ?? {}) as Record<string, unknown>;
   const counts: ImportApi.WrittenCounts = {
@@ -154,8 +161,9 @@ export function createHostImport(host: ArdiaHost, ImportError: ImportErrorClass,
           jobId,
           (event) => {
             if (event.type === "progress") return false;
-            const late = event.type === "done" ? pendingPasswords(event.result) : null;
-            if (late) void invoke("discardPasswords", [late.token]).catch(reportHostError);
+            const late = event.type === "done" ? heldTokens(event.result) : null;
+            if (late?.passwords) void invoke("discardPasswords", [late.passwords]).catch(reportHostError);
+            if (late?.vault) void invoke("discardImported", [late.vault]).catch(reportHostError);
             return true;
           },
           IMPORT_IDLE_MS,
