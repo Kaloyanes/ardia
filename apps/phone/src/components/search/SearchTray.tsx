@@ -33,7 +33,7 @@ import { completingFieldIsNative } from "../../platform/completingField";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { preparedIdleKey, preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
 import { useBrowse } from "../../state/browse/store";
-import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
+import { endSearchTiming, markSearchClosePhase, markSearchPhase, markSearchPresented } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab, useSelectedTabId } from "../../state/tabs/hooks";
 import { useTabs } from "../../state/tabs/store";
@@ -752,7 +752,7 @@ function StagedTray() {
     void stage.current?.present().then(() => {
       if (live.current.presentation !== presentation || live.current.closing) return;
       if (launch) launchTrayUp();
-      markSearchPhase("presented");
+      markSearchPresented();
       setPresented(true);
       stagePresented();
       searchPresented(searchState().session);

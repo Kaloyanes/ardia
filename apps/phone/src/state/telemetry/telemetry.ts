@@ -5,7 +5,7 @@ import { AppState, Platform } from "react-native";
 import { lookBudget, nativeGlassRender, systemLook, systemLookNow } from "../../platform/look";
 import { create } from "zustand";
 import { createGate, DAILY_KEY, type SharingSource } from "../../lib/telemetryGate";
-import { backdropProps, COUNTED, launchProps, launchTrayProps, legacyImportOutcome, parseDaily, pendingUsage, type Counted } from "../../lib/telemetrySchema";
+import { backdropProps, COUNTED, launchProps, launchTrayProps, legacyImportOutcome, parseDaily, pendingUsage, searchOpenProps, searchSuggestProps, type Counted } from "../../lib/telemetrySchema";
 import { canPostTelemetry, deviceFacts, JS_STARTED_AT, launchBackdropShownAt, newTelemetryId, postTelemetry, processStartedAt, setUsageConsent, takeExits, takePendingCounts } from "../../platform/telemetry";
 import { collectCrashes, jsErrorReason, MOST_CRASHES_PER_LAUNCH, PENDING_CRASH_KEY, pendingJsCrash, previousSession, SESSION_KEY, sessionMark, type PreviousSession } from "../../lib/crashReports";
 import { appearanceTelemetry, chromeStyle, colorChoiceTelemetry, glassRenderTelemetry, macLookOf, offeredInterfaceStyle, offeredScheme } from "../../lib/appearance";
@@ -154,6 +154,26 @@ export async function reportLaunchTray(trayUpAt: number) {
   trayReported = true;
   const props = launchTrayProps(await processStartedAt(), trayUpAt);
   if (props) gate.capture("perf_launch_tray", props);
+}
+
+let searchOpenReported = false;
+
+export function reportSearchOpen(openMs: number) {
+  if (searchOpenReported || isDemoSession() || !gate.isSharing()) return;
+  const props = searchOpenProps(openMs);
+  if (!props) return;
+  searchOpenReported = true;
+  gate.capture("perf_search_open", props);
+}
+
+let searchSuggestReported = false;
+
+export function reportSearchSuggest(localMs: number, remoteMs: number) {
+  if (searchSuggestReported || isDemoSession() || !gate.isSharing()) return;
+  const props = searchSuggestProps(localMs, remoteMs);
+  if (!props) return;
+  searchSuggestReported = true;
+  gate.capture("perf_search_suggest", props);
 }
 
 export function usageToday(): { day: string | null; counts: Partial<Record<Counted, number>>; sharing: boolean } {

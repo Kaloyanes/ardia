@@ -86,6 +86,8 @@ export const EVENT_FIELDS = {
   perf_launch: { launch_ms: { kind: "ms" }, js_ms: { kind: "ms" } },
   perf_backdrop: { backdrop_ms: { kind: "ms" } },
   perf_launch_tray: { tray_ms: { kind: "ms" } },
+  perf_search_open: { open_ms: { kind: "ms" } },
+  perf_search_suggest: { local_ms: { kind: "ms" }, remote_ms: { kind: "ms" } },
   usage_counts: USAGE_FIELDS,
   app_crashed: {
     kind: { kind: "enum", values: CRASH_KINDS },
@@ -302,6 +304,17 @@ export function launchTrayProps(processStart: number | null, trayUpAt: number): 
   if (processStart === null) return null;
   const tray = Math.round(trayUpAt - processStart);
   return tray >= 0 && tray <= MAX_MS ? { tray_ms: tray } : null;
+}
+
+export function searchOpenProps(openMs: number): EventProps<"perf_search_open"> | null {
+  const open = Math.round(openMs);
+  return open >= 0 && open <= MAX_MS ? { open_ms: open } : null;
+}
+
+export function searchSuggestProps(localMs: number, remoteMs: number): EventProps<"perf_search_suggest"> | null {
+  const local = Math.round(localMs);
+  const remote = Math.round(remoteMs);
+  return local >= 0 && remote >= 0 && remote <= MAX_MS && local <= MAX_MS ? { local_ms: local, remote_ms: remote } : null;
 }
 
 export const legacyImportOutcome = (outcome: "imported" | "startedFresh" | "none" | null): EventProps<"app_launched">["legacy_import"] =>

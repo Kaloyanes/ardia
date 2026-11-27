@@ -12,7 +12,7 @@ import { settled } from "../pages/store";
 import { buildSources, recentSearches, searchKey, searchesByQuery, sourcesKey } from "./sources";
 import { spaceTabs } from "../tabs/tabsState";
 import { browseForMeOffered } from "../browseForMe/offer";
-import { markSearchClosing, markSearchPhase, markSearchPressed } from "./searchTiming";
+import { markSearchClosing, markSearchLocalRows, markSearchPhase, markSearchPressed, markSearchRemoteRows, markSearchTyped } from "./searchTiming";
 import { countUsage } from "../telemetry/telemetry";
 
 export type SearchOrigin = "home" | "start" | "page";
@@ -244,7 +244,7 @@ export function whenSearchPresents(hook: ((presenting: SearchPresenting) => stri
 }
 
 export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel: boolean | null = null, page: SuggestContext | null = null, arrival: TrayArrival = "rises") {
-  markSearchPressed();
+  markSearchPressed(Date.now(), useTabs.getState().incognito);
   beginInteraction("tray open", INTERACTION_WINDOW_MS.trayOpen);
   dropQueuedDraft();
   remote = { text: "", values: [] };
@@ -285,13 +285,13 @@ export function dismissSearch(ending: SearchEnding = "cancelled") {
 
 const REMOTE_DELAY_MS = 150;
 
-type Draft = { text: string; session: number; incognito: boolean };
+type Draft = { text: string; session: number; incognito: boolean; typedAt: number };
 
 let typed: Draft | null = null;
 let frame: ReturnType<typeof requestAnimationFrame> | null = null;
 let remoteTimer: ReturnType<typeof setTimeout> | null = null;
 
-const draftNow = (text: string): Draft => ({ text, session: useSearch.getState().session, incognito: useTabs.getState().incognito });
+const draftNow = (text: string, typedAt: number = Date.now()): Draft => ({ text, session: useSearch.getState().session, incognito: useTabs.getState().incognito, typedAt });
 
 const ownsSearch = (draft: Draft) => {
   const state = useSearch.getState();
@@ -307,12 +307,14 @@ function dropQueuedDraft() {
   inFlight?.abort();
 }
 
-function showRows(text: string) {
-  const draft = draftNow(text);
+function showRows(text: string, typedAt: number = Date.now()) {
+  const draft = draftNow(text, typedAt);
+  if (text.trim()) markSearchTyped(typedAt, draft.incognito);
   catchUpSources();
   const carried = remote.text && text.startsWith(remote.text) ? remote.values : [];
   const suggested = suggestionsFor(text, carried);
   useSearch.setState({ text, rows: suggested.rows, completion: suggested.completion, completedFor: text });
+  if (text.trim()) markSearchLocalRows(typedAt);
   inFlight?.abort();
   if (remoteTimer) clearTimeout(remoteTimer);
   if (!text.trim() || !currentPreferences().searchSuggestions) return;
@@ -321,23 +323,25 @@ function showRows(text: string) {
     if (!ownsSearch(draft)) return;
     const controller = new AbortController();
     inFlight = controller;
+    const sentAt = Date.now();
     void remoteSuggestions(text, controller.signal).then((outcome) => {
       if (controller.signal.aborted || !ownsSearch(draft) || useSearch.getState().text !== text) return;
       remote = { text, values: outcome.values };
       const merged = suggestionsFor(text, outcome.values);
       useSearch.setState({ rows: merged.rows, completion: merged.completion, completedFor: text });
+      if (outcome.values.length) markSearchRemoteRows(typedAt, sentAt, false);
     });
   }, REMOTE_DELAY_MS);
 }
 
 export function typeSearch(text: string) {
-  typed = draftNow(text);
+  typed = draftNow(text, typed?.typedAt ?? Date.now());
   if (frame !== null) return;
   frame = requestAnimationFrame(() => {
     frame = null;
     const next = typed;
     typed = null;
-    if (next !== null && ownsSearch(next)) showRows(next.text);
+    if (next !== null && ownsSearch(next)) showRows(next.text, next.typedAt);
   });
 }
 
