@@ -47,9 +47,14 @@ enum ImportWriter {
   static let autofillBatch = 500
 
   @MainActor
-  static func write(_ entry: ImportVault.Entry, profile: String, kinds: Set<ImportKind>) async -> String {
+  static func write(_ entry: ImportVault.Entry, profile: String, kinds: Set<ImportKind>, cancellation: Cancellation? = nil) async -> String {
     var out: [String: Int] = ["cookies": 0, "cookiesRejected": 0, "cookiesExisting": 0, "addresses": 0, "cards": 0]
     var error: String?
+    func stopped() -> Bool {
+      guard cancellation?.isCancelled == true else { return false }
+      out["cancelled"] = 1
+      return true
+    }
     func add(_ key: String, _ reply: [String: Any], _ field: String) {
       out[key, default: 0] += (reply[field] as? NSNumber)?.intValue ?? 0
     }
@@ -57,6 +62,7 @@ enum ImportWriter {
       let wire = CookieWire.batches(entry.cookies, size: cookieBatch)
       out["cookiesRejected"] = wire.dropped
       for batch in wire.batches {
+        if stopped() { break }
         let reply = await engine("ac_cookies_import", profile: profile, args: batch)
         if let message = reply["error"] as? String {
           error = message
@@ -69,9 +75,9 @@ enum ImportWriter {
       }
       wire.batches.forEach { $0.wipe() }
     }
-    if kinds.contains(.autofill) {
+    if kinds.contains(.autofill), !stopped() {
       var start = 0
-      while start < max(entry.addresses.count, entry.cards.count) {
+      while start < max(entry.addresses.count, entry.cards.count), !stopped() {
         let addresses = Array(entry.addresses[min(start, entry.addresses.count)..<min(start + autofillBatch, entry.addresses.count)])
         let cards = Array(entry.cards[min(start, entry.cards.count)..<min(start + autofillBatch, entry.cards.count)])
         start += autofillBatch
