@@ -76,3 +76,121 @@ test("with icons docked, the edge watch reveals nothing at rest, a tab drag over
   assert.equal(edgeWatchWidth(false, true, 260, 9, ICON_STRIP.width, true), ICON_STRIP.width);
   assert.equal(edgeWatchWidth(true, true, 260, 9, ICON_STRIP.width, true), 260);
 });
+
+const { emitAppEvent } = await import("../../test-native/shell.ts");
+
+function slowController(key = "t:a", frame = { x: 9, y: 120, w: 172, h: 33 }) {
+  const calls = [];
+  let release;
+  const measured = new Promise((r) => (release = r));
+  const view = { measureInWindow: (cb) => void measured.then(() => cb(frame.x, frame.y, frame.w, frame.h)) };
+  return {
+    calls,
+    release: () => release(),
+    items: new Map([[key, { kind: "row", view }]]),
+    begin: async (k, x, y, consent) => void calls.push(["begin", k, x, y, consent]),
+    move: (x, y) => calls.push(["move", x, y]),
+    end: (commit) => calls.push(["end", commit]),
+    interrupt: () => calls.push(["interrupt"]),
+  };
+}
+
+test("Escape while the sidebar is still floating out cancels the hand-off, so no drag ever starts", async () => {
+  const controller = fakeController();
+  const drag = stripDragHandoff("w", "t:a", () => {}, 5, () => controller);
+  drag.begin(20, 80);
+  emitAppEvent({ type: "dragEscape" });
+  await tick(20);
+  drag.end(true);
+  assert.deepEqual(controller.calls, []);
+});
+
+test("a measurement that lands after the sidebar was torn down starts nothing on the controller it measured", async () => {
+  const controller = slowController();
+  let current = controller;
+  const drag = stripDragHandoff("w", "t:a", () => {}, 1, () => current);
+  drag.begin(20, 80);
+  await tick(10);
+  current = null;
+  controller.release();
+  await tick(10);
+  drag.end(true);
+  assert.deepEqual(controller.calls, []);
+});
+
+test("a measurement that lands after cancel starts nothing, and mouse-up after a hand-off reaches the controller that began it", async () => {
+  const late = slowController();
+  const cancelled = stripDragHandoff("w", "t:a", () => {}, 1, () => late);
+  cancelled.begin(20, 80);
+  await tick(10);
+  cancelled.cancel();
+  late.release();
+  await tick(10);
+  assert.deepEqual(late.calls, []);
+  const first = fakeController();
+  let current = first;
+  const handed = stripDragHandoff("w", "t:a", () => {}, 1, () => current);
+  handed.begin(20, 80);
+  await tick(20);
+  current = fakeController();
+  handed.end(true);
+  assert.deepEqual(first.calls.map((c) => c[0]), ["begin", "move", "end"]);
+  assert.deepEqual(current.calls, []);
+});
+
+test("the hand-off carries the consent period of the press, not the one current when the sidebar has settled", async () => {
+  const { setConsentPeriod } = await import("../../state/telemetry/consentPeriod.ts");
+  setConsentPeriod(false, null);
+  const controller = slowController();
+  controller.release();
+  const drag = stripDragHandoff("w", "t:a", () => {}, 5, () => controller);
+  drag.begin(20, 80);
+  setConsentPeriod(true, "later-opt-in");
+  await tick(20);
+  drag.end(true);
+  setConsentPeriod(false, null);
+  assert.equal(controller.calls[0][0], "begin");
+  assert.equal(controller.calls[0][4], null, "the press began with sharing off");
+});
+
+test("a group grabbed from the strip is held by its header row, not the middle of its open members", async () => {
+  const header = { measureInWindow: (cb) => cb(9, 300, 172, 33) };
+  const box = { measureInWindow: (cb) => cb(9, 300, 172, 300) };
+  const calls = [];
+  const controller = { items: new Map([["g:r", { kind: "group", view: box, header }]]), begin: async (...a) => void calls.push(a), move: () => {}, end: () => {}, interrupt: () => {} };
+  const drag = stripDragHandoff("w", "g:r", () => {}, 1, () => controller);
+  drag.begin(20, 310);
+  await tick(20);
+  drag.end(true);
+  assert.equal(calls[0][2], 300 + 33 / 2);
+});
+
+test("a drag begun later with the token of a press from another consent period is never counted, and one from this period is", async () => {
+  const { setConsentPeriod } = await import("../../state/telemetry/consentPeriod.ts");
+  const presses = await import("../../state/telemetry/tabPresses.ts");
+  setConsentPeriod(true, "opted-in");
+  const count = () => presses.devTabPresses().drags_without_drop;
+  const before = count();
+  const pressedWhileOff = {};
+  presses.noteDragBegan(pressedWhileOff, null);
+  presses.noteDragWithoutDrop(pressedWhileOff);
+  assert.equal(count(), before, "pressed with sharing off, begun after the opt-in");
+  const fresh = {};
+  presses.noteDragBegan(fresh, "opted-in");
+  presses.noteDragWithoutDrop(fresh);
+  assert.equal(count(), before + 1, "pressed and begun in this period");
+  setConsentPeriod(false, null);
+});
+
+test("each tab's icon sits on its row's centre in the floating sidebar, and never closer than the gap to the icon above", async () => {
+  const { stripLayout, STRIP_DIVIDER_HEIGHT } = await import("./iconStripGeometry.ts");
+  const items = [{ key: "tile", divider: false }, { key: "d", divider: true }, { key: "t:new", divider: false }, { key: "t:slack", divider: false }, { key: "t:fb", divider: false }];
+  const centers = { "t:new": 189, "t:slack": 226, "t:fb": 263 };
+  const { slots, end } = stripLayout(items, centers, 9);
+  assert.deepEqual(slots.map((s) => s.top), [9, 9 + 30 + 4, 189 - 15, 226 - 15, 263 - 15]);
+  assert.equal(slots[3].joinAbove, 226 - 15 - (189 + 15), "a group bar spans the room to the icon above");
+  assert.equal(end, 263 + 15 + 4);
+  const crowded = stripLayout(items, { "t:new": 20, "t:slack": 30 }, 9).slots;
+  assert.equal(crowded[2].top, 9 + 34 + STRIP_DIVIDER_HEIGHT, "a row the strip can't reach yet just follows");
+  assert.equal(crowded[3].top, crowded[2].top + 34);
+});

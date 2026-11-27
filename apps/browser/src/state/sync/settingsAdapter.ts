@@ -15,6 +15,11 @@ const fromRecord = (name: string, value: unknown) => (name === CLEAN_UP_KEY ? mi
 
 export const SYNCED_SETTINGS = SETTING_KEYS.filter((key) => SETTING_SPECS[key].synced);
 const TAB_SWITCHER_MODES = ["tabSwitcherOrder", "tabSwitcherView"] as const;
+const SIDEBAR_MODE_KEY = "set:sidebarMode";
+const SIDEBAR_MODE_PARTS = ["autoHideTabs", "collapsedSidebar"] as const;
+type SidebarModeRecord = { collapsed: boolean; style: Settings["collapsedSidebar"] };
+const sidebarModeOf = (v: unknown): SidebarModeRecord | null =>
+  typeof v === "object" && v !== null && typeof (v as SidebarModeRecord).collapsed === "boolean" && validSettingValue("collapsedSidebar", (v as SidebarModeRecord).style) ? (v as SidebarModeRecord) : null;
 
 export const settingsAdapter: Adapter = {
   prefix: "set:",
@@ -44,6 +49,7 @@ export const settingsAdapter: Adapter = {
       if (isMode(name) && inferred.has(name) && syncedElsewhere(name)) continue;
       values.set(recordKey(name), { v: toRecord(name, value) });
     }
+    if (SIDEBAR_MODE_PARTS.some((name) => chosen.has(name))) values.set(SIDEBAR_MODE_KEY, { v: { collapsed: settings.autoHideTabs, style: settings.collapsedSidebar } satisfies SidebarModeRecord });
     if (values.has(recordKey("shortcuts"))) {
       for (const name of TAB_SWITCHER_MODES) {
         if (values.has(recordKey(name)) || settings[name] === DEFAULT_SETTINGS[name] || fromNewerVersion(name) || syncedElsewhere(name)) continue;
@@ -64,6 +70,13 @@ function applySettingRecords(visible: ReadonlyMap<string, unknown>, changedKeys:
     if (!record || key !== recordKey(name) || !(SYNCED_SETTINGS as readonly string[]).includes(name)) continue;
     const value = fromRecord(name, record.v);
     if (validSettingValue(name as SettingKey, value)) patch[name] = value;
+  }
+  const sidebarMode = sidebarModeOf((visible.get(SIDEBAR_MODE_KEY) as { v?: unknown } | undefined)?.v);
+  if (sidebarMode) {
+    delete patch.autoHideTabs;
+    const current = store().settings;
+    if (current.autoHideTabs !== sidebarMode.collapsed) patch.autoHideTabs = sidebarMode.collapsed;
+    if (current.collapsedSidebar !== sidebarMode.style) patch.collapsedSidebar = sidebarMode.style;
   }
   const modes = TAB_SWITCHER_MODES;
   const chosen = store().settingsMeta.chosen;

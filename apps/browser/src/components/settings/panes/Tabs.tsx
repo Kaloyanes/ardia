@@ -113,7 +113,7 @@ function LayoutSection() {
         <Group>
           <Row anchor="tabs.autoHideTabs" description={autoHideConflicts.length ? <ShortcutConflict titles={autoHideConflicts} /> : sidebarModeDescription(top, mode, autoHideKeys)}>
             <CommandKeyField command="toggleSidebar" onChange={(change) => change !== "mouse" && noteSettingsPick("autoHideTabsKeys", change)} />
-            <Segmented options={top ? TAB_STRIP_MODES : SIDEBAR_MODES} value={top && mode === "icons" ? "hidden" : mode} onChange={chooseSidebarMode} />
+            <Segmented options={top ? TAB_STRIP_MODES : SIDEBAR_MODES} value={top && mode === "icons" ? "hidden" : mode} onChange={(mode) => chooseSidebarMode(mode, top)} />
           </Row>
           <Row anchor="tabs.sidebarSide">
             <Segmented options={SIDEBAR_SIDES} value={sidebarSide} onChange={chooseSidebarSide} />

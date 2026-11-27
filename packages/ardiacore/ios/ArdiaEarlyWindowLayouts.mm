@@ -39,7 +39,7 @@ NSString *StateOf(ArdiaSavedSession *session, NSString *windowId) {
   if ([settings[@"borderlessMode"] isEqual:@YES]) state[@"s.borderlessMode"] = @YES;
   if ([settings[@"minimalismMode"] isEqual:@YES]) state[@"s.minimalismMode"] = @YES;
   if ([settings[@"pageFrame"] isKindOfClass:NSNumber.class] && ![settings[@"pageFrame"] isEqual:@9]) state[@"s.pageFrame"] = settings[@"pageFrame"];
-  for (NSString *key in @[ @"tabLayout", @"profileId", @"incognito", @"iconsForWidth" ])
+  for (NSString *key in @[ @"tabLayout", @"profileId", @"incognito", @"iconsForWidth", @"collapsedSidebar" ])
     if (window[key]) state[[@"w." stringByAppendingString:key]] = window[key];
   NSNumber *autoHideTabs = [window[@"autoHideTabs"] isKindOfClass:NSNumber.class] ? window[@"autoHideTabs"]
                          : [settings[@"autoHideTabs"] isKindOfClass:NSNumber.class] ? settings[@"autoHideTabs"] : nil;

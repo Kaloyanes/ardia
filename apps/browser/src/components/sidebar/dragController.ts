@@ -7,6 +7,7 @@ import type { TabPlacement } from "../../state/pins/placing";
 import { SLIDE } from "../tabstrip/tokens";
 import { beginTabDrag, cancelTabDrag, endTabDrag, setDragPicture, updateTabDrag } from "../../state/drag/tabDrag";
 import { noteDragBegan, noteDragProfileSwitch, noteDragWithoutDrop, noteSidebarDrop } from "../../state/telemetry/tabPresses";
+import type { ConsentToken } from "../../state/telemetry/client";
 import { dropTabOnRow } from "../../state/splits/actions";
 import { arrangeLive } from "../../state/sidebar/pinnedOrder";
 import { suppressHover } from "../../state/sidebar/hover";
@@ -57,7 +58,7 @@ export class DragController extends DragTargeting {
     return !!this.session?.sources.length;
   }
 
-  async begin(key: string, x: number, y: number) {
+  async begin(key: string, x: number, y: number, consent?: ConsentToken | null) {
     const item = this.items.get(key);
     if (!item || item.kind === "tail") return;
     this.beforeMeasure?.();
@@ -65,7 +66,7 @@ export class DragController extends DragTargeting {
     const moving = lead ? movingTabsFrom(lead) : [];
     this.stopTimers();
     const session = (this.session = newDragSession(this.sourcesOf(item, moving), { x, y }, this.scrollY));
-    noteDragBegan(session);
+    noteDragBegan(session, consent);
     session.shown = this.profile;
     this.token = {};
     suppressHover(true);

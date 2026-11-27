@@ -23,7 +23,7 @@ import { joinedWithCurrent, newTabPlacement } from "../tabs/openers";
 import { handOverPins, handOverTabs, tabsClosedWithWindow } from "../tabs/sharedWindowClose";
 import { isOnlyRegularWindow, isOpenRegularWindow, isRegularWindow, isSmall, isSmallWindow, lastActiveProfile, linkProfileOf, mainWindowFor } from "./small";
 import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
-import type { AdoptId, BrowserWindow, ClosedWindow, Frame, ParkedPins, Tab, WindowKind } from "../browser/types";
+import type { AdoptId, BrowserWindow, ClosedWindow, CollapsedSidebar, Frame, ParkedPins, Tab, WindowKind } from "../browser/types";
 import { emptyWindow, smallWindow, withWindow } from "./newWindow";
 import { withWindowFrame, withWindowMaximized } from "./windowPlacement";
 import { withFullScreen } from "./fullScreenDisplay";
@@ -70,7 +70,7 @@ export type WindowsSlice = {
   setWindowMaximized(id: string, on: boolean): void;
   setWindowFullScreen(id: string, on: boolean, display?: string): void;
   toggleSidebar(windowId: string): void;
-  setSidebarCollapsed(windowId: string, collapsed: boolean): void;
+  setSidebarCollapsed(windowId: string, collapsed: boolean, style?: CollapsedSidebar): void;
   setIconsForWidth(windowId: string, on: boolean): void;
   switchProfile(windowId: string, profileId: string): void;
   moveTabsToWindow(tabIds: string[], windowId: string | null, options?: MoveOptions): string | undefined;
@@ -170,6 +170,7 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
     const from = o.tabIds?.length && !small ? s.windows[s.tabs[o.tabIds[0]!]?.windowId ?? ""] : undefined;
     if (from?.autoHideTabs !== undefined && !isSmallWindow(from)) {
       w.autoHideTabs = from.autoHideTabs;
+      if (from.collapsedSidebar) w.collapsedSidebar = from.collapsedSidebar;
       noteTornOffWindowKeptAutoHide();
     }
     let next = withWindow(s, w);
@@ -246,7 +247,7 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
   toggleSidebar(windowId) {
     get().setSidebarCollapsed(windowId, !autoHidesTabsIn(get(), windowId));
   },
-  setSidebarCollapsed: (windowId, collapsed) => set((s) => withSidebarCollapsed(s, windowId, collapsed)),
+  setSidebarCollapsed: (windowId, collapsed, style) => set((s) => withSidebarCollapsed(s, windowId, collapsed, style)),
   setIconsForWidth: (windowId, on) => set((s) => withIconsForWidth(s, windowId, on)),
 
   switchProfile(windowId, profileId) {

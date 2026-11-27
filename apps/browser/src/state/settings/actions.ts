@@ -26,8 +26,8 @@ export function chooseAddressBar(addressBar: Settings["addressBar"]) {
   noteSettingsPick("addressBar", addressBar);
 }
 
-export function chooseSidebarMode(mode: SidebarMode) {
-  useBrowser.getState().updateSettings(mode === "full" ? { autoHideTabs: false } : { autoHideTabs: true, collapsedSidebar: mode });
+export function chooseSidebarMode(mode: SidebarMode, tabsOnTop = false) {
+  useBrowser.getState().updateSettings(mode === "full" ? { autoHideTabs: false } : tabsOnTop ? { autoHideTabs: true } : { autoHideTabs: true, collapsedSidebar: mode });
   noteSettingsPick("sidebarMode", mode);
 }
 

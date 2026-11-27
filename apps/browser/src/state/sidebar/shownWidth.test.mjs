@@ -60,3 +60,15 @@ test("a Full window too narrow for its sidebar shows icons without touching the 
   followWindowWidth(id, 520);
   assert.equal(sidebarModeIn(S(), id), "full", "tabs across the top never turn into icons");
 });
+
+test("a click on the edge of a 500 pt window's floating sidebar never changes the saved 400 pt width", async () => {
+  const { resizeGesture } = await import("../../components/sidebar/resizeDrag.ts");
+  const { sidebarResizeBounds, widthToSave } = await import("./shownWidth.ts");
+  const saved = [];
+  const gesture = resizeGesture({ current: { ...sidebarResizeBounds(false, 500), direction: 1, saved: () => 400, pointerFromEdge: () => 0, onLive: () => {}, onCommit: (w, dragged) => { const kept = widthToSave(w, dragged); if (kept !== null) saved.push(kept); } } });
+  gesture.onPanResponderGrant({ nativeEvent: {} });
+  gesture.onPanResponderRelease({}, { dx: 0 });
+  assert.deepEqual(saved, []);
+  assert.deepEqual(sidebarResizeBounds(false, 500), { min: SIDEBAR_MIN_WIDTH, max: SIDEBAR_MAX_WIDTH }, "the floating sidebar isn't held to the page's room");
+  assert.deepEqual(sidebarResizeBounds(true, 600), { min: SIDEBAR_MIN_WIDTH, max: 190 });
+});

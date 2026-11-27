@@ -20,7 +20,8 @@ import { FolderOrIcon } from "./AnimatedFolder";
 import { groupTint } from "./tokens";
 import { RestingTile } from "./TileFace";
 import { dragGesture } from "./dragGesture";
-import { ICON_STRIP, stripInset } from "./iconStripGeometry";
+import { ICON_STRIP, STRIP_DIVIDER_HEIGHT, stripInset, stripLayout } from "./iconStripGeometry";
+import { useRowCenters } from "./useRowCenters";
 
 export type StripActions = {
   pressed: () => void;
@@ -34,17 +35,30 @@ const BAR = { width: 3, left: 2 } as const;
 const BADGE = 11;
 const DIVIDER_INSET = 5;
 
-export function IconStrip({ windowId, right, top, bottom, actions }: { windowId: string; right: boolean; top: number; bottom: number; actions: StripActions }) {
+type RowAlignment = { offset: number; paused: boolean; layoutKey: string };
+
+const keyOf = (code: string) => code.split("\u0001")[1] ?? code;
+const ALIGNED = new Set(["tab", "split", "group", "live"]);
+
+export function IconStrip({ windowId, right, top, bottom, actions, align }: { windowId: string; right: boolean; top: number; bottom: number; actions: StripActions; align: RowAlignment }) {
   const profileId = useWindowProfileId();
   const codes = useIconStripCodes(windowId, profileId);
+  const entries = useMemo(() => codes.map((code) => ({ code, key: keyOf(code), kind: code.slice(0, code.indexOf("\u0001")) })), [codes]);
+  const aligned = useMemo(() => entries.filter((e) => ALIGNED.has(e.kind)).map((e) => e.key), [entries]);
+  const centers = useRowCenters(windowId, aligned, align.offset, align.paused, align.layoutKey);
+  const layout = useMemo(() => stripLayout(entries.map((e) => ({ key: ALIGNED.has(e.kind) ? e.key : `${e.kind}:${e.key}`, divider: e.kind === "divider" })), centers, top), [entries, centers, top]);
   return (
     <View style={StyleSheet.absoluteFill}>
       <WindowDragRegion style={StyleSheet.absoluteFill} />
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingTop: top, paddingBottom: ICON_STRIP.gap * 2, gap: ICON_STRIP.gap }}>
-        {codes.map((code) => (
-          <StripEntry key={code.slice(0, code.indexOf("\u0001", code.indexOf("\u0001") + 1))} code={code} windowId={windowId} right={right} actions={actions} />
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ height: layout.end + SQUARE + ICON_STRIP.gap * 2 }}>
+        {entries.map((e, i) => (
+          <View key={`${e.kind}:${e.key}`} style={{ position: "absolute", left: 0, right: 0, top: layout.slots[i]!.top }}>
+            <StripEntry code={e.code} windowId={windowId} right={right} actions={actions} joinAbove={layout.slots[i]!.joinAbove} />
+          </View>
         ))}
-        <NewTabSquare windowId={windowId} actions={actions} />
+        <View style={{ position: "absolute", left: 0, right: 0, top: layout.end }}>
+          <NewTabSquare windowId={windowId} actions={actions} />
+        </View>
       </ScrollView>
       <View style={{ paddingBottom: bottom }}>
         <StripDivider />
@@ -57,12 +71,12 @@ export function IconStrip({ windowId, right, top, bottom, actions }: { windowId:
   );
 }
 
-const StripEntry = memo(function StripEntry({ code, windowId, right, actions }: { code: string; windowId: string; right: boolean; actions: StripActions }) {
+const StripEntry = memo(function StripEntry({ code, windowId, right, actions, joinAbove }: { code: string; windowId: string; right: boolean; actions: StripActions; joinAbove: number }) {
   const item = useMemo(() => stripItemOf(code), [code]);
   if (item.kind === "divider") return <StripDivider />;
   const bar = "bar" in item ? item.bar : null;
   return (
-    <StripCell bar={bar} right={right}>
+    <StripCell bar={bar} right={right} joinAbove={joinAbove}>
       {item.kind === "tile" || item.kind === "tab" ? (
         <TabSquare windowId={windowId} tabId={item.tabId} itemKey={item.key} tile={item.kind === "tile"} actions={actions} />
       ) : item.kind === "split" ? (
@@ -74,16 +88,16 @@ const StripEntry = memo(function StripEntry({ code, windowId, right, actions }: 
   );
 });
 
-function StripCell({ bar, right, children }: { bar: StripBar | null; right: boolean; children: ReactNode }) {
+function StripCell({ bar, right, joinAbove, children }: { bar: StripBar | null; right: boolean; joinAbove: number; children: ReactNode }) {
   return (
     <View style={{ height: SQUARE, paddingHorizontal: stripInset }}>
-      {bar ? <GroupBar bar={bar} right={right} /> : null}
+      {bar ? <GroupBar bar={bar} right={right} joinAbove={joinAbove} /> : null}
       {children}
     </View>
   );
 }
 
-function GroupBar({ bar, right }: { bar: StripBar; right: boolean }) {
+function GroupBar({ bar, right, joinAbove }: { bar: StripBar; right: boolean; joinAbove: number }) {
   const theme = useTheme();
   const tint = groupTint(bar.color) ?? theme.textTertiary;
   return (
@@ -93,7 +107,7 @@ function GroupBar({ bar, right }: { bar: StripBar; right: boolean }) {
         position: "absolute",
         [right ? "right" : "left"]: BAR.left,
         width: BAR.width,
-        top: bar.first ? 3 : -ICON_STRIP.gap,
+        top: bar.first ? 3 : -joinAbove,
         bottom: bar.last ? 3 : 0,
         borderTopLeftRadius: bar.first ? BAR.width : 0,
         borderTopRightRadius: bar.first ? BAR.width : 0,
@@ -107,7 +121,11 @@ function GroupBar({ bar, right }: { bar: StripBar; right: boolean }) {
 
 function StripDivider() {
   const theme = useTheme();
-  return <View style={{ height: StyleSheet.hairlineWidth, marginHorizontal: stripInset + DIVIDER_INSET, marginVertical: ICON_STRIP.gap, backgroundColor: theme.pinnedDivider }} />;
+  return (
+    <View style={{ height: STRIP_DIVIDER_HEIGHT, justifyContent: "center" }}>
+      <View style={{ height: StyleSheet.hairlineWidth, marginHorizontal: stripInset + DIVIDER_INSET, backgroundColor: theme.pinnedDivider }} />
+    </View>
+  );
 }
 
 function useSquareFill(state: { selected: boolean; hovered: boolean; pressed: boolean; tile: boolean }) {

@@ -6,10 +6,8 @@ import { noteIconsForWidth, noteSidebarDragSnap } from "../telemetry/dockCounts"
 const store = () => useBrowser.getState();
 
 export function collapseWindowToIcons(windowId: string) {
-  const s = store();
-  if (!s.windows[windowId]) return;
-  if (s.settings.collapsedSidebar !== "icons") s.updateSettings({ collapsedSidebar: "icons" });
-  store().setSidebarCollapsed(windowId, true);
+  if (!store().windows[windowId]) return;
+  store().setSidebarCollapsed(windowId, true, "icons");
   noteSidebarDragSnap("icons");
 }
 

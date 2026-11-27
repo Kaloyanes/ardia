@@ -26,3 +26,26 @@ export function handoffPoint(row: Frame | null, pointer: { x: number; y: number 
 export function stripPointerOver(x: number, right: boolean, windowWidth: number): boolean {
   return right ? x >= windowWidth - ICON_STRIP.width : x < ICON_STRIP.width;
 }
+
+export const STRIP_DIVIDER_HEIGHT = 1 + ICON_STRIP.gap * 2;
+
+export type StripSlot = { top: number; joinAbove: number };
+
+export function stripLayout(items: { key: string; divider: boolean }[], rowCenters: Readonly<Record<string, number>>, railTop: number): { slots: StripSlot[]; end: number } {
+  let next = railTop;
+  let lastBottom = railTop;
+  const slots = items.map(({ key, divider }) => {
+    if (divider) {
+      const top = next;
+      next = top + STRIP_DIVIDER_HEIGHT;
+      return { top, joinAbove: 0 };
+    }
+    const center = rowCenters[key];
+    const top = Math.round(center === undefined ? next : Math.max(next, center - ICON_STRIP.square / 2));
+    const slot = { top, joinAbove: top - lastBottom };
+    lastBottom = top + ICON_STRIP.square;
+    next = lastBottom + ICON_STRIP.gap;
+    return slot;
+  });
+  return { slots, end: next };
+}

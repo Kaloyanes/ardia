@@ -146,6 +146,13 @@ export function windowControlsPlace(s: BrowserState, windowId: string, frame: nu
 
 export const windowControlsBottom = (place: WindowControlsPlace | null): number => (place ? place.centerY + place.size / 2 : 0);
 
+export function iconStripTop(s: BrowserState, windowId: string, frame: number, chrome: WindowChrome = WINDOW_CHROME): number {
+  const top = cardTopInset(s, windowId, frame, chrome);
+  if (sidebarSideOf(s, windowId) !== "right" || !chrome.trailingWidth) return top;
+  const place = windowControlsPlace(s, windowId, frame, chrome);
+  return place ? Math.max(top, Math.ceil(windowControlsBottom(place)) + WINDOW_CONTROLS.gap) : top;
+}
+
 export function windowControlsLeading(s: BrowserState, windowId: string, chrome: WindowChrome = WINDOW_CHROME): boolean {
   const w = s.windows[windowId];
   return !!chrome.trailingWidth && !!w && !w.fullScreen && w.kind !== "small" && controlsLeadSidebar(s, windowId);

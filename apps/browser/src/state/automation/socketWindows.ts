@@ -1,5 +1,5 @@
 import type { BrowserState } from "../browser/store";
-import { activeTabId, sidebarSideOf, tabLayoutOf, tabsShownIn, autoHidesTabsIn } from "../browser/model";
+import { activeTabId, sidebarModeIn, sidebarSideOf, tabLayoutOf, autoHidesTabsIn } from "../browser/model";
 import { openInMainWindow, openLittleArdia } from "../littleArdia/actions";
 import { focusWindow } from "../windows/nativeWindow";
 import { focusedWindowOf } from "../windows/ui";
@@ -24,7 +24,8 @@ export function windowRow(s: BrowserState, id: string) {
     tabs: windowTabIds(s, id).length,
     layout: tabLayoutOf(s, id),
     sidebarSide: sidebarSideOf(s, id),
-    tabsShown: tabsShownIn(s, id),
+    tabsShown: !autoHidesTabsIn(s, id),
+    sidebarMode: sidebarModeIn(s, id),
     frame: w.frame,
     maximized: !!w.maximized,
     fullScreen: !!w.fullScreen,
@@ -53,7 +54,7 @@ function setLayout(params: Record<string, unknown>) {
   if (params.layout !== undefined && tabLayoutOf(now(), w.id) !== params.layout) now().toggleTabLayout(w.id);
   if (params.tabsShown !== undefined) now().setSidebarCollapsed(w.id, !params.tabsShown);
   const row = windowRow(now(), w.id);
-  expect((params.layout === undefined || row.layout === params.layout) && (params.tabsShown === undefined || autoHidesTabsIn(now(), w.id) === !params.tabsShown), "the layout didn't change.");
+  expect((params.layout === undefined || row.layout === params.layout) && (params.tabsShown === undefined || row.tabsShown === params.tabsShown), "the layout didn't change.");
   return row;
 }
 
