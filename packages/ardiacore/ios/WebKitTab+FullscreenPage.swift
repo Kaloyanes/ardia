@@ -38,11 +38,27 @@ extension WebKitTab {
     WebKitFullscreenPage.give(placeholders, to: self)
   }
 
+  var fullscreenWindowSeen: Bool {
+    guard let window = webView?.window else { return false }
+    return window.occlusionState.contains(.visible)
+  }
+
   func publishAdoptedFullscreen() {
     guard let view = webView else { return }
     let on = WebKitFullscreenPage.isOn(view.fullscreenState)
     pageMedia.fullscreen = on
+    watchFullscreenSight(on)
     emit("fullscreen", ["fullscreen": on])
+  }
+
+  func watchFullscreenSight(_ on: Bool) {
+    if let token = life.fullscreenSight { NotificationCenter.default.removeObserver(token) }
+    life.fullscreenSight = nil
+    guard on, !closed else { return }
+    life.fullscreenSight = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] note in
+      guard let self, let shown = self.webView?.window, (note.object as? NSWindow) === shown, self.pageHeldInFullscreen else { return }
+      self.updateSight()
+    }
   }
 
   func placeholdersWillLeave(_ window: NSWindow?) {
@@ -56,6 +72,7 @@ extension WebKitTab {
   func fullscreenPageMoved(_ state: WKWebView.FullscreenState) {
     let exit = life.fullscreenExits.changed()
     if state == .enteringFullscreen { life.fullscreenKeptShownCounted = false }
+    watchFullscreenSight(WebKitFullscreenPage.isOn(state))
     updateHidden()
     updateSight()
     guard state == .notInFullscreen else { return }

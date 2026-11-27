@@ -41,13 +41,19 @@ test("a tab that adopts a page publishes the page's current full-screen state, i
   assert.equal(tab.match(/emitEverything\(\)$/gm)?.length, 2, "both adoption paths (handed over or parked, and offered) publish it");
   const fullscreenPage = read("../ios/WebKitTab+FullscreenPage.swift");
   const publish = fullscreenPage.match(/func publishAdoptedFullscreen\(\) \{([\s\S]*?)\n  \}/)[1];
-  assert.match(publish, /let on = WebKitFullscreenPage\.isOn\(view\.fullscreenState\)\n\s+pageMedia\.fullscreen = on\n\s+emit\("fullscreen", \["fullscreen": on\]\)/);
+  assert.match(publish, /let on = WebKitFullscreenPage\.isOn\(view\.fullscreenState\)\n\s+pageMedia\.fullscreen = on\n\s+watchFullscreenSight\(on\)\n\s+emit\("fullscreen", \["fullscreen": on\]\)/);
   assert.doesNotMatch(publish, /webKit\.counted|countFullscreenPage/);
 });
 
 test("a page held in full screen counts as seen, so hiding its tab opens no automatic Picture in Picture", () => {
   const sight = read("../ios/WebKitTab+AutoPictureInPicture.swift");
-  assert.match(sight, /return WebKitFullscreenPage\.seen\(visible: visible, heldInFullscreen: pageHeldInFullscreen, windowSeen: ArdiaChromeWindowHost\.userSees\(window\)\)/);
+  assert.match(sight, /return WebKitFullscreenPage\.seen\(visible: visible, heldInFullscreen: pageHeldInFullscreen, windowSeen: ArdiaChromeWindowHost\.userSees\(window\), fullscreenWindowSeen: fullscreenWindowSeen\)/);
+  const held = read("../ios/WebKitTab+FullscreenPage.swift");
+  assert.match(held, /return window\.occlusionState\.contains\(\.visible\)/);
+  assert.match(held, /forName: NSWindow\.didChangeOcclusionStateNotification/);
+  assert.match(held, /watchFullscreenSight\(WebKitFullscreenPage\.isOn\(state\)\)/);
+  assert.match(held, /watchFullscreenSight\(on\)/);
+  assert.match(read("../ios/WebKitTab.swift"), /if closed \{ stopWatchingSight\(\); watchFullscreenSight\(false\) \}/);
   assert.match(read("../ios/WebKitTab+FullscreenPage.swift"), /updateHidden\(\)\n\s+updateSight\(\)/);
 });
 

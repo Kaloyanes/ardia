@@ -27,8 +27,8 @@ enum WebKitFullscreenPage {
     inFullscreen && page.superview != nil && page.superview !== tab
   }
 
-  static func seen(visible: Bool, heldInFullscreen: Bool, windowSeen: Bool) -> Bool {
-    heldInFullscreen || (visible && windowSeen)
+  static func seen(visible: Bool, heldInFullscreen: Bool, windowSeen: Bool, fullscreenWindowSeen: Bool) -> Bool {
+    heldInFullscreen ? fullscreenWindowSeen : visible && windowSeen
   }
 
   static func placeholders(in tab: NSView) -> [NSView] {

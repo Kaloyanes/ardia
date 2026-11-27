@@ -168,21 +168,29 @@ struct FullscreenScene {
 
   @Test func `picking another tab behind a page held in full screen opens no automatic Picture in Picture`() {
     var rule = WebKitAutoPictureInPicture()
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: true), enabled: true, playing: true) == .none)
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: true), enabled: true, playing: true) == .none)
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: false, windowSeen: true), enabled: true, playing: true) == .open)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: true, fullscreenWindowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: true, fullscreenWindowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: false, windowSeen: true, fullscreenWindowSeen: false), enabled: true, playing: true) == .open)
     var old = WebKitAutoPictureInPicture()
     #expect(old.sight(false, enabled: true, playing: true) == .open)
   }
 
   @Test func `a page held in full screen opens no automatic Picture in Picture while Ardia's own window is occluded`() {
     var rule = WebKitAutoPictureInPicture()
-    #expect(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false))
-    #expect(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false))
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false), enabled: true, playing: true) == .none)
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false), enabled: true, playing: true) == .none)
-    #expect(!WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false))
-    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false), enabled: true, playing: true) == .open)
+    #expect(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true))
+    #expect(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true))
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true), enabled: true, playing: true) == .none)
+    #expect(!WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false, fullscreenWindowSeen: false))
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false, fullscreenWindowSeen: false), enabled: true, playing: true) == .open)
+  }
+
+  @Test func `a page held in full screen asks for automatic Picture in Picture once its full-screen window leaves sight, not before`() {
+    var rule = WebKitAutoPictureInPicture()
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: false), enabled: true, playing: true) == .open)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false, fullscreenWindowSeen: true), enabled: true, playing: true) == .close)
+    #expect(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: true, fullscreenWindowSeen: false))
   }
 
   @Test func `a page whose full screen ends while it is parked for a move lands windowed in its new tab, with every registration undone`() {

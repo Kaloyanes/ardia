@@ -24,7 +24,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
   private(set) var webView: WebKitWebView?
   private var observations: [NSObject] = []
   private var started = false
-  private(set) var closed = false { didSet { if closed { stopWatchingSight() } } }
+  private(set) var closed = false { didSet { if closed { stopWatchingSight(); watchFullscreenSight(false) } } }
   private var navigationQueued = false
   var mediaFrames: [String: WKFrameInfo] {
     get { webView?.mediaFrames ?? [:] }
