@@ -24,7 +24,32 @@ const ORIGIN_PARTS = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^:/?#]*)(?::(\d+))?(
 
 const asciiLabel = (label: string) => (/^[\x00-\x7f]*$/.test(label) ? label : `xn--${punycodeEncode(label)}`);
 const IDEOGRAPHIC_DOTS = /[\u3002\uff0e\uff61]/g;
-const asciiHost = (host: string) => host.normalize("NFKC").toLowerCase().replace(IDEOGRAPHIC_DOTS, ".").split(".").map(asciiLabel).join(".");
+const ESCAPED_RUN = /(?:%[0-9a-f]{2})+/gi;
+
+const utf8Length = (lead: number) => (lead < 0x80 ? 1 : lead >= 0xc2 && lead < 0xe0 ? 2 : lead >= 0xe0 && lead < 0xf0 ? 3 : lead >= 0xf0 && lead < 0xf5 ? 4 : 0);
+
+function decodedRun(run: string): string {
+  const bytes = run.slice(1).split("%").map((hex) => parseInt(hex, 16));
+  let out = "";
+  for (let i = 0; i < bytes.length; ) {
+    const length = utf8Length(bytes[i]!);
+    const sequence = run.slice(i * 3, (i + Math.max(length, 1)) * 3);
+    let decoded: string | null = null;
+    if (length && i + length <= bytes.length) {
+      try {
+        decoded = decodeURIComponent(sequence);
+      } catch {
+        decoded = null;
+      }
+    }
+    out += decoded ?? run.slice(i * 3, i * 3 + 3);
+    i += decoded === null ? 1 : length;
+  }
+  return out;
+}
+
+const percentDecoded = (host: string) => host.replace(ESCAPED_RUN, decodedRun);
+const asciiHost = (host: string) => percentDecoded(host).normalize("NFKC").toLowerCase().replace(IDEOGRAPHIC_DOTS, ".").split(".").map(asciiLabel).join(".");
 
 export function sameOriginKey(origin: string): string {
   const found = ORIGIN_PARTS.exec(origin.trim());

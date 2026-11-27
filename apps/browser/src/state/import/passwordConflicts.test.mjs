@@ -179,3 +179,15 @@ test("logins for two Ardia profiles on one password store group together, and th
   assert.deepEqual([plan.clean.length, plan.merged], [1, 1]);
   assert.equal(conflictRows(plan.conflicts)[0].showsProfile, true);
 });
+
+test("a percent-encoded host is the same origin as its decoded form, and invalid escapes stay as they are", async () => {
+  const { sameOriginKey } = await import("./passwordConflicts.ts");
+  const ascii = "https://xn--bcher-kva.example";
+  assert.equal(sameOriginKey("https://b%C3%BCcher.example"), ascii);
+  assert.equal(sameOriginKey("https://b%c3%bccher.example/sign-in"), ascii);
+  assert.equal(sameOriginKey("https://%65xample.com"), "https://example.com");
+  assert.equal(sameOriginKey("https://b%C3cher.example"), "https://b%c3cher.example");
+  assert.equal(sameOriginKey("https://a%FFb%C3%BC.example"), sameOriginKey("https://a%FFbü.example"));
+  const plan = planLogins([login("chrome", "p", "https://b%C3%BCcher.example/", "me", "1"), login("arc", "p", "https://bücher.example/", "me", "2")], ORDER);
+  assert.equal(plan.conflicts.length, 1);
+});
