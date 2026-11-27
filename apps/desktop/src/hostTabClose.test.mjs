@@ -26,6 +26,7 @@ function linuxHost(close = "closes") {
         return Promise.resolve({ browserId: id, chromeTabId: id });
       }
       if (method === "tab.close") {
+        if (typeof close === "function") return close(args);
         if (close === "rejects") return Promise.reject(new Error("tab.close failed"));
         if (close === "closes") for (const [id, binding] of bound) if (binding.key === args.key) bound.delete(id);
         return Promise.resolve(null);
@@ -192,6 +193,74 @@ test("a tab woken before its view unmounts keeps presenting when beforeunload ke
     await a.presentation(true);
     assert.deepEqual(sent.map((call) => call.method), ["tab.viewport", "tab.presentations"]);
     assert.deepEqual(errors, []);
+    stopLifecycle();
+  } finally {
+    stop();
+  }
+});
+
+test("a resize while a tab is closing reaches the host once beforeunload keeps it and the tab wakes", async () => {
+  const { host, sent, store, view, errors, stop } = stage("defers");
+  try {
+    const stopLifecycle = startHostTabLifecycle(host, store);
+    const a = await view("a");
+    await a.viewport({ rect: RECT, visible: true });
+    store.sleep("a");
+    await settle();
+    sent.length = 0;
+    const resized = { rect: { ...RECT, height: 640 }, visible: true };
+    let applied = "pending";
+    const held = a.viewport(resized).then((result) => { applied = result; });
+    await settle();
+    assert.equal(applied, "pending");
+    assert.deepEqual(sent, []);
+    store.wake("a");
+    await held;
+    assert.equal(applied, resized);
+    assert.deepEqual(sent.filter((call) => call.method === "tab.viewport").map((call) => call.args.rect.height), [640]);
+    assert.deepEqual(errors, []);
+    stopLifecycle();
+  } finally {
+    stop();
+  }
+});
+
+test("a resize held while a tab is closing settles as not applied when its view unmounts", async () => {
+  const { host, sent, store, view, stop } = stage("closes");
+  try {
+    const stopLifecycle = startHostTabLifecycle(host, store);
+    const a = await view("a");
+    store.sleep("a");
+    await settle();
+    const held = a.viewport({ rect: RECT, visible: true });
+    a.dispose();
+    assert.equal(await held, null);
+    assert.equal(sent.filter((call) => call.method === "tab.viewport").length, 0);
+    stopLifecycle();
+  } finally {
+    stop();
+  }
+});
+
+test("a late failure of an earlier close leaves a newer close of the same tab in place", async () => {
+  const closes = [];
+  const { host, store, view, errors, stop } = stage(() => new Promise((resolve, reject) => closes.push({ resolve, reject })));
+  try {
+    const stopLifecycle = startHostTabLifecycle(host, store);
+    const a = await view("a");
+    store.sleep("a");
+    await settle();
+    store.wake("a");
+    await settle();
+    assert.equal(a.presentsNow(), true);
+    store.sleep("a");
+    await settle();
+    assert.equal(closes.length, 2);
+    closes[0].reject(new Error("tab.close failed"));
+    await settle();
+    assert.equal(a.presentsNow(), false);
+    assert.deepEqual(errors, ["[ardia host] tab.close failed"]);
+    closes[1].resolve(null);
     stopLifecycle();
   } finally {
     stop();

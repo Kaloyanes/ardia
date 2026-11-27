@@ -2,7 +2,7 @@ import type { ArdiaHost } from "./host";
 import type { CornerRadii } from "./hostExtensionView";
 import { enqueueTab } from "./hostTabQueue.ts";
 import { queueTabPresentation } from "./hostTabPresentations.ts";
-import { hostProfile, hostSupports, invokeHost } from "./host.ts";
+import { hostProfile, hostSupports, invokeHost, reportHostError } from "./host.ts";
 import { consentToken, type ConsentToken } from "../../browser/src/state/telemetry/client";
 import { noteLinuxPageViewportRejected } from "../../browser/src/state/telemetry/windowPlacementCounts";
 import { errorFor } from "../../browser/src/state/telemetry/logs";
@@ -38,6 +38,8 @@ function nativeAdoptId(adoptId: string | undefined, host: ArdiaHost): string | u
   return ADOPTED_AS_COPIES.includes(kind) && hostSupports("tab.adoptCopies", host) ? adoptId : undefined;
 }
 const UNORDERED_COMMANDS = new Set(["downloadFavicon", "webStoreRequest"]);
+const HELD_WHILE_CLOSED = Symbol("held while closed");
+type HeldViewport = { promise: Promise<TabViewport | null>; settle(result: Promise<TabViewport | null> | null): void };
 
 export class HostTab {
   host: ArdiaHost;
@@ -52,6 +54,9 @@ export class HostTab {
   viewportSend: Promise<TabViewport | null> | undefined;
   releaseScheduled = false;
   closed = false;
+  closeAttempt = 0;
+  heldViewport: HeldViewport | undefined;
+  wantedPresentation: boolean | undefined;
   page: HostPageReceiver | undefined;
 
   creating: { url: string; at: number } | null;
@@ -144,15 +149,20 @@ export class HostTab {
   }
 
   presentation(visible: boolean): Promise<void> {
+    this.wantedPresentation = visible;
     return queueTabPresentation(this, visible, () => this.ownsPage());
   }
 
   viewport(viewport: TabViewport): Promise<TabViewport | null> {
     this.nextViewport = viewport;
-    return this.viewportSend ??= enqueueTab(this.host, this.key, async () => {
+    return this.viewportSend ??= enqueueTab(this.host, this.key, async (): Promise<TabViewport | null | typeof HELD_WHILE_CLOSED> => {
       this.viewportSend = undefined;
       const latest = this.nextViewport;
       this.nextViewport = undefined;
+      if (latest && this.closed && !this.disposed && this.identity) {
+        this.nextViewport ??= latest;
+        return HELD_WHILE_CLOSED;
+      }
       if (!latest || this.disposed || !this.identity || !this.ownsPage()) return null;
       const host = this.host;
       const effective: TabViewport = latest.contentRect && !hostSupports(VIEWPORT_CLIP_CAPABILITY, host)
@@ -169,7 +179,31 @@ export class HostTab {
         if (latest.visible) noteLinuxPageViewportRejected(consent);
         throw error;
       });
-    });
+    }).then((result) => (result === HELD_WHILE_CLOSED ? this.holdViewport() : result));
+  }
+
+  holdViewport(): Promise<TabViewport | null> {
+    if (this.heldViewport) return this.heldViewport.promise;
+    let settle!: HeldViewport["settle"];
+    const promise = new Promise<TabViewport | null>((resolve) => { settle = resolve; });
+    this.heldViewport = { promise, settle };
+    return promise;
+  }
+
+  close(): number {
+    this.closed = true;
+    return ++this.closeAttempt;
+  }
+
+  undoClose(attempt: number) {
+    if (this.disposed || !this.closed || attempt !== this.closeAttempt) return;
+    this.closed = false;
+    const held = this.heldViewport;
+    this.heldViewport = undefined;
+    const viewport = this.nextViewport;
+    held?.settle(viewport ? this.viewport(viewport) : null);
+    if (!held && viewport) void this.viewport(viewport).catch(reportHostError);
+    if (this.wantedPresentation !== undefined) void this.presentation(this.wantedPresentation).catch(reportHostError);
   }
 
   shownViewport(): TabViewport | undefined {
@@ -203,6 +237,8 @@ export class HostTab {
 
   dispose() {
     this.disposed = true;
+    this.heldViewport?.settle(null);
+    this.heldViewport = undefined;
     this.page?.dispose();
     this.unsubscribe();
     this.detach();
@@ -212,8 +248,8 @@ export class HostTab {
 export function noteHostTabClosed(host: ArdiaHost, key: string): () => void {
   const owner = claims.get(host)?.get(key);
   if (!owner) return () => {};
-  owner.closed = true;
-  return () => { if (!owner.disposed) owner.closed = false; };
+  const attempt = owner.close();
+  return () => owner.undoClose(attempt);
 }
 
 export function showInPlaceOf(from: HostTab, to: HostTab, accepted?: (shown: TabViewport) => void): boolean {
