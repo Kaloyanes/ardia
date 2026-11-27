@@ -119,4 +119,19 @@ import Testing
       #expect(!LaunchLook.shows(night, appDark: false, in: themedRecalled))
     }
   }
+
+  @Test func aForcedSchemeEditReplacesTheSlotTheSystemLaunchesIn() {
+    withDefaults { defaults in
+      var light = LookColors(color: "#D95973", themeColors: ["#D95973", "#4073E6"])
+      light.themeLook = Self.sunset
+      LaunchLook.remember(light, drawnDark: false, appDark: false, in: defaults)
+      var forcedDark = light
+      forcedDark.themeLook = Self.night
+      LaunchLook.remember(forcedDark, drawnDark: true, appDark: false, in: defaults)
+      let recalled = LaunchLook.recalled(from: defaults)
+      #expect(recalled.drawn(appDark: false).colors == forcedDark && recalled.drawn(appDark: false).dark == true)
+      #expect(LaunchLook.shows(forcedDark, appDark: false, in: recalled))
+      #expect(!LaunchLook.shows(light, appDark: false, in: recalled))
+    }
+  }
 }

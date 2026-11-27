@@ -10,15 +10,18 @@ export function saveLaunchLook() {
   if (current) rememberLaunchLook(nativeLookColors(current.look, current.dark), current.dark);
 }
 
-export function useLaunchLook(look: ProfileLook, dark: boolean, ready: boolean) {
-  const settled = useSync((s) => !s.available || s.revision > 0);
+export function useLaunchLook(savedLook: ProfileLook, dark: boolean, ready: boolean) {
+  const settled = useSync((s) => !s.available || s.loaded);
   const checked = useRef(false);
   useEffect(() => {
-    current = ready ? { look, dark } : null;
-  }, [ready, look, dark]);
+    current = ready && settled ? { look: savedLook, dark } : null;
+    saveLaunchLook();
+  }, [ready, settled, savedLook, dark]);
   useEffect(() => {
     if (checked.current || !ready || !settled) return;
     checked.current = true;
-    if (launchLookMatches(nativeLookColors(look, dark), dark) === false) countUsage("launch_looks_stale");
-  }, [ready, settled, look, dark]);
+    void launchLookMatches(nativeLookColors(savedLook, dark)).then((matched) => {
+      if (matched === false) countUsage("launch_looks_stale");
+    });
+  }, [ready, settled, savedLook, dark]);
 }

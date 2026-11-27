@@ -24,7 +24,7 @@ import { SettingsView } from "./components/settings/SettingsView";
 import { SpacesView } from "./components/sync/SpacesView";
 import { ToastHost } from "./components/toasts/ToastHost";
 import { DesignProvider, followDesign, tabsMotion, useDesign, useTheme, DEFAULT_PROFILE_COLOR, FrostSource, FullSheet, OverlayHost, PROFILE_PRESETS, onDrawnMenuActionChosen, onDrawnMenuOpened, onNativeMenuOpened, ProfileLookContext, Shade, SheetBackground, SURFACES_FROST } from "./components/ui";
-import { useLook } from "./state/sync/hooks";
+import { useLook, useSavedLook } from "./state/sync/hooks";
 import { startSettingsSources } from "./state/settings/actions";
 import { startSync } from "./state/sync/actions";
 import { setSpacesDesign } from "./state/sync/store";
@@ -107,7 +107,7 @@ export default function App() {
   const dark = useDarkScheme();
   const look = useLook(PROFILE_PRESETS, DEFAULT_PROFILE_COLOR);
   useBaseSystemBars(dark);
-  useLaunchLook(look, dark, ready);
+  useLaunchLook(useSavedLook(PROFILE_PRESETS, DEFAULT_PROFILE_COLOR), dark, ready);
   useEffect(() => {
     const back = BackHandler.addEventListener("hardwareBackPress", () => useBoot.getState().ready && handleSystemBack());
     const state = AppState.addEventListener("change", (next) => {

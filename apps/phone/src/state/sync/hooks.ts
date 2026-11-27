@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { ProfileTheme } from "@ardia/core/src/theme.ts";
 import { lookForApp, type PresetSpec, type ProfileLook } from "../../lib/profileLook";
 import { usePreferences } from "../settings/store";
 import { useCustomTheme } from "../settings/themeDraft";
@@ -23,8 +24,15 @@ export function useSelectedProfile() {
 }
 
 export function useLook(presets: readonly PresetSpec[], fallback: string): ProfileLook {
+  return useLookWith(presets, fallback, useCustomTheme());
+}
+
+export function useSavedLook(presets: readonly PresetSpec[], fallback: string): ProfileLook {
+  return useLookWith(presets, fallback, usePreferences((p) => p.customTheme));
+}
+
+function useLookWith(presets: readonly PresetSpec[], fallback: string, custom: ProfileTheme | null): ProfileLook {
   const choice = usePreferences((p) => p.colorChoice);
-  const custom = useCustomTheme();
   const enabled = useSyncEnabled();
   const profile = useSelectedProfile();
   return useMemo(() => lookForApp(choice, enabled, profile, presets, fallback, custom), [choice, enabled, profile, presets, fallback, custom]);

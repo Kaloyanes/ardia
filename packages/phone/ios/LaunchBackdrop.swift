@@ -27,6 +27,11 @@ public enum LaunchBackdrop {
     recalled.withLock { $0 }
   }
 
+  static func systemIsDark() -> Bool {
+    let screen = UIApplication.shared.connectedScenes.lazy.compactMap { ($0 as? UIWindowScene)?.screen }.first
+    return (screen?.traitCollection ?? UITraitCollection.current).userInterfaceStyle == .dark
+  }
+
   public static func install(in rootView: UIView) {
     guard host == nil else { return }
     if let observer { NotificationCenter.default.removeObserver(observer) }

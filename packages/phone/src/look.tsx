@@ -54,7 +54,7 @@ type LookNative = {
   blurOverBackdrop?: () => boolean;
   lookCounts?: () => LookCounts;
   rememberLaunchLook?: (colors: LookColors, dark: boolean) => void;
-  launchLookMatches?: (colors: LookColors, dark: boolean) => boolean | null;
+  launchLookMatches?: (colors: LookColors) => Promise<boolean | null>;
 };
 
 export type BackdropDraw = "small" | "smallnograin" | "full" | "flat";
@@ -123,7 +123,7 @@ export const lookIsNative = () => hasNativeLook;
 
 export const rememberLaunchLook = (colors: LookColors, dark: boolean) => lookNative?.rememberLaunchLook?.(colors, dark);
 
-export const launchLookMatches = (colors: LookColors, dark: boolean): boolean | null => lookNative?.launchLookMatches?.(colors, dark) ?? null;
+export const launchLookMatches = async (colors: LookColors): Promise<boolean | null> => (await lookNative?.launchLookMatches?.(colors)) ?? null;
 
 const hasNativeGlass = hasNativeLook && lookNative?.hasGlass?.() === true;
 

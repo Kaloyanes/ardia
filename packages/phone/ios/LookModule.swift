@@ -68,12 +68,17 @@ public final class LookModule: Module {
     }
 
     Function("rememberLaunchLook") { (colors: [String: Any], dark: Bool) in
-      LaunchLook.remember(LookColors(sent: colors), drawnDark: dark, appDark: dark)
+      let look = LookColors(sent: colors)
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated { LaunchLook.remember(look, drawnDark: dark, appDark: LaunchBackdrop.systemIsDark()) }
+      }
     }
 
-    Function("launchLookMatches") { (colors: [String: Any], dark: Bool) -> Bool? in
-      LaunchBackdrop.recalledAtLaunch().map { LaunchLook.shows(LookColors(sent: colors), appDark: dark, in: $0) }
-    }
+    AsyncFunction("launchLookMatches") { (colors: [String: Any]) -> Bool? in
+      MainActor.assumeIsolated {
+        LaunchBackdrop.recalledAtLaunch().map { LaunchLook.shows(LookColors(sent: colors), appDark: LaunchBackdrop.systemIsDark(), in: $0) }
+      }
+    }.runOnQueue(.main)
 
     View(DeckBackdropView.self) {
       ViewName("DeckBackdrop")
