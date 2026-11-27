@@ -58,6 +58,11 @@ test("the engine's fatal note in a crash report's asi gives the fatal place, the
     assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": ["ardia-fatal internal.example.rs:8443\nardia-posted-from f internal.example.rs:8443 Chromium%20Framework+0x1\n"] } }), {
       postedFrames: [{ image: "Chromium Framework", offset: 1 }],
     }, "a dotted host is no source place, and the task's frames still come");
+    const oversized = `${"x".repeat(70)}.cc:1234567`;
+    assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [`ardia-posted-from f ${oversized} Chromium%20Framework+0x1\n`] } }), {
+      postedFrames: [{ image: "Chromium Framework", offset: 1 }],
+    }, "an oversized place is dropped whole, never cut down to a shorter one");
+    assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": ["ardia-posted-from f foo.cc:123Chromium+0x2\n"] } }), {}, "a place run into a frame is neither a place nor a frame");
     const hostile = "ardia-fatal /Users/someone/secret.cc:1\nardia-posted-from f https://example.com/a.cc:2 /Users/x/y+0x1 a b+0x2\n";
     assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [hostile] } }), { postedFrames: [{ image: "b", offset: 2 }] }, "paths and URLs are dropped as places and frames; only a plain image token is kept");
     assert.deepEqual(parsed(dir, { asi: { libsystem_c: ["abort() called"] } }), {});

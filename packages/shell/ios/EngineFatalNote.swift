@@ -4,7 +4,7 @@ enum EngineFatalNote {
   private static let place = "(?=\\S{1,80}(?: |$))[A-Za-z0-9_+-]{1,70}\\.(?:cc|cpp|cxx|c|h|hh|hpp|mm|m|swift|rs|ts|tsx|js|mjs):[1-9][0-9]{0,5}"
   private static let fatalAt = try! NSRegularExpression(pattern: "^ardia-fatal (\(place))$")
   private static let postedFrom = try! NSRegularExpression(
-    pattern: "^ardia-posted-from (\\S{1,160}) (\\S{1,80}) ?(.*)$")
+    pattern: "^ardia-posted-from (\\S{1,160}) (\\S+)(?:\\s+(.*))?$")
   private static let sourcePlace = try! NSRegularExpression(pattern: "^\(place)$")
   private static let frame = try! NSRegularExpression(pattern: "^([A-Za-z0-9_.%-]{1,192})\\+0x([0-9a-f]{1,16})$")
   private static let maxFrames = 17
