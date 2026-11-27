@@ -20,13 +20,19 @@ extension WebKitTab {
   func place(_ view: WebKitWebView) {
     let placeholders = view.fullscreenPlaceholders
     view.fullscreenPlaceholders = []
-    if WebKitFullscreenPage.isOn(view.fullscreenState) { pageMedia.fullscreen = true }
     guard WebKitFullscreenPage.heldElsewhere(view, from: self, inFullscreen: inFullscreen(view)) else {
       view.frame = bounds
       addSubview(view)
       return
     }
     WebKitFullscreenPage.give(placeholders, to: self)
+  }
+
+  func publishAdoptedFullscreen() {
+    guard let view = webView else { return }
+    let on = WebKitFullscreenPage.isOn(view.fullscreenState)
+    pageMedia.fullscreen = on
+    emit("fullscreen", ["fullscreen": on])
   }
 
   func placeholdersWillLeave(_ window: NSWindow?) {

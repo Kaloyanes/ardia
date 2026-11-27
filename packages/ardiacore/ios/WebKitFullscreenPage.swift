@@ -4,6 +4,8 @@ import WebKit
 enum WebKitFullscreenPage {
   private static let registerAdapter = NSSelectorFromString("registerScrollViewSeparatorTrackingAdapter:")
   private static let unregisterAdapter = NSSelectorFromString("unregisterScrollViewSeparatorTrackingAdapter:")
+  private typealias RegisterAdapter = @convention(c) (AnyObject, Selector, AnyObject) -> ObjCBool
+  private typealias UnregisterAdapter = @convention(c) (AnyObject, Selector, AnyObject) -> Void
 
   static func isOn(_ state: WKWebView.FullscreenState) -> Bool {
     state == .enteringFullscreen || state == .inFullscreen
@@ -26,7 +28,7 @@ enum WebKitFullscreenPage {
   }
 
   static func seen(visible: Bool, heldInFullscreen: Bool, windowSeen: Bool) -> Bool {
-    (visible || heldInFullscreen) && windowSeen
+    heldInFullscreen || (visible && windowSeen)
   }
 
   static func placeholders(in tab: NSView) -> [NSView] {
@@ -50,12 +52,14 @@ enum WebKitFullscreenPage {
 
   static func register(_ placeholders: [NSView], with window: NSWindow?) {
     guard let window, window.responds(to: registerAdapter) else { return }
-    for view in placeholders { window.perform(registerAdapter, with: view) }
+    let call = unsafeBitCast(window.method(for: registerAdapter), to: RegisterAdapter.self)
+    for view in placeholders { _ = call(window, registerAdapter, view) }
   }
 
   static func unregister(_ placeholders: [NSView], from window: NSWindow?) {
     guard let window, window.responds(to: unregisterAdapter) else { return }
-    for view in placeholders { window.perform(unregisterAdapter, with: view) }
+    let call = unsafeBitCast(window.method(for: unregisterAdapter), to: UnregisterAdapter.self)
+    for view in placeholders { call(window, unregisterAdapter, view) }
   }
 
   static func reclaims(_ page: NSView, into tab: NSView, inFullscreen: Bool, settled: Bool) -> Bool {

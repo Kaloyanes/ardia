@@ -139,6 +139,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
 
   private func emitEverything() {
     emit("ready", [:])
+    publishAdoptedFullscreen()
     queueNavigation()
     emit("progress", ["progress": webView?.estimatedProgress ?? 0])
     emitSecurity()

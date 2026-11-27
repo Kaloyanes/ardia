@@ -34,11 +34,15 @@ test("a WebKit tab hides, hands over and takes its page through the full-screen 
   for (const name of ["fullscreenMovedWithTab", "fullscreenKeptShown", "fullscreenPageReclaimed"]) assert.match(fullscreenPage, new RegExp(`countFullscreenPage\\("${name}", stamp:`));
 });
 
-test("a tab that adopts a page in full screen starts marked full screen without counting a second entry", () => {
+test("a tab that adopts a page publishes the page's current full-screen state, in or out, without counting an entry", () => {
+  const tab = read("../ios/WebKitTab.swift");
+  const everything = tab.match(/private func emitEverything\(\) \{([\s\S]*?)\n  \}/)[1];
+  assert.match(everything, /publishAdoptedFullscreen\(\)/);
+  assert.equal(tab.match(/emitEverything\(\)$/gm)?.length, 2, "both adoption paths (handed over or parked, and offered) publish it");
   const fullscreenPage = read("../ios/WebKitTab+FullscreenPage.swift");
-  const place = fullscreenPage.match(/func place\(_ view: WebKitWebView\) \{([\s\S]*?)\n  \}/)[1];
-  assert.match(place, /if WebKitFullscreenPage\.isOn\(view\.fullscreenState\) \{ pageMedia\.fullscreen = true \}/);
-  assert.doesNotMatch(place, /"fullscreen"/);
+  const publish = fullscreenPage.match(/func publishAdoptedFullscreen\(\) \{([\s\S]*?)\n  \}/)[1];
+  assert.match(publish, /let on = WebKitFullscreenPage\.isOn\(view\.fullscreenState\)\n\s+pageMedia\.fullscreen = on\n\s+emit\("fullscreen", \["fullscreen": on\]\)/);
+  assert.doesNotMatch(publish, /webKit\.counted|countFullscreenPage/);
 });
 
 test("a page held in full screen counts as seen, so hiding its tab opens no automatic Picture in Picture", () => {
@@ -55,6 +59,9 @@ test("WebKit's placeholder registration follows the placeholder from window to w
   assert.match(page, /"registerScrollViewSeparatorTrackingAdapter:"/);
   assert.match(page, /"unregisterScrollViewSeparatorTrackingAdapter:"/);
   assert.match(page, /window\.responds\(to: registerAdapter\)/);
+  assert.match(page, /typealias RegisterAdapter = @convention\(c\) \(AnyObject, Selector, AnyObject\) -> ObjCBool/);
+  assert.match(page, /typealias UnregisterAdapter = @convention\(c\) \(AnyObject, Selector, AnyObject\) -> Void/);
+  assert.doesNotMatch(page, /\.perform\(/);
 });
 
 test("a deferred reclaim keeps the page, the exit and the consent period it was scheduled with", () => {

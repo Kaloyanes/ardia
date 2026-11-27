@@ -10,8 +10,9 @@ import WebKit
 final class AdapterWindow: NSWindow {
   var adapters: [ObjectIdentifier: Int] = [:]
 
-  @objc(registerScrollViewSeparatorTrackingAdapter:) func registerAdapter(_ view: NSView) {
+  @objc(registerScrollViewSeparatorTrackingAdapter:) @discardableResult func registerAdapter(_ view: NSView) -> Bool {
     adapters[ObjectIdentifier(view), default: 0] += 1
+    return true
   }
 
   @objc(unregisterScrollViewSeparatorTrackingAdapter:) func unregisterAdapter(_ view: NSView) {
@@ -172,6 +173,36 @@ struct FullscreenScene {
     #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: false, windowSeen: true), enabled: true, playing: true) == .open)
     var old = WebKitAutoPictureInPicture()
     #expect(old.sight(false, enabled: true, playing: true) == .open)
+  }
+
+  @Test func `a page held in full screen opens no automatic Picture in Picture while Ardia's own window is occluded`() {
+    var rule = WebKitAutoPictureInPicture()
+    #expect(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false))
+    #expect(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false))
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: false), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: false), enabled: true, playing: true) == .none)
+    #expect(!WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false))
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: false, windowSeen: false), enabled: true, playing: true) == .open)
+  }
+
+  @Test func `a page whose full screen ends while it is parked for a move lands windowed in its new tab, with every registration undone`() {
+    let scene = FullscreenScene()
+    let carried = WebKitFullscreenPage.takePlaceholders(from: scene.oldTab)
+    scene.oldTab.removeFromSuperview()
+    #expect(scene.windowed.registered(scene.placeholder) == 0)
+    scene.exitFullscreen()
+    #expect(scene.page.superview == nil)
+    #expect(!WebKitFullscreenPage.isOn(.notInFullscreen))
+    let newWindow = AdapterWindow.make()
+    let newTab = NSView(frame: newWindow.contentView!.bounds)
+    newWindow.contentView!.addSubview(newTab)
+    #expect(!WebKitFullscreenPage.heldElsewhere(scene.page, from: newTab, inFullscreen: false))
+    newTab.addSubview(scene.page)
+    #expect(!carried.isEmpty)
+    #expect(newTab.subviews.allSatisfy { !WebKitFullscreenPage.isPlaceholder($0) })
+    #expect(newWindow.registered(scene.placeholder) == 0)
+    #expect(scene.windowed.registered(scene.placeholder) == 0)
+    #expect(scene.page.window === newWindow)
   }
 
   @Test func `a deferred reclaim acts only for the exit and page it was scheduled for`() {
