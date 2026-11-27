@@ -5,6 +5,7 @@ const { useBrowser } = await import("../browser/store.ts");
 const { usePages } = await import("../tabs/pageState.ts");
 const { useExtensions } = await import("./store.ts");
 const { refreshActionStates } = await import("./actionStates.ts");
+const { notePageCommit } = await import("../engines/pageDocuments.ts");
 
 const S = () => useBrowser.getState();
 const ONE = { id: "one", name: "One", enabled: true, pinned: true, hasAction: true, incognito: false };
@@ -41,6 +42,22 @@ test("a reply for a page the tab has since replaced is dropped, and one for the 
   replies[0]();
   await stale;
   assert.equal(a in useExtensions.getState().actions, false, "the reply was for the page before");
+  const fresh = refreshActionStates();
+  await new Promise((r) => setImmediate(r));
+  replies[1]();
+  await fresh;
+  assert.equal(useExtensions.getState().actions[a]?.one?.badge, "3");
+});
+
+test("a reply for the document before a reload in the same view is dropped, though the tab's readiness didn't change", async () => {
+  const { a, replies } = heldWindow();
+  notePageCommit(a, 1000);
+  const stale = refreshActionStates();
+  await new Promise((r) => setImmediate(r));
+  notePageCommit(a, 2000);
+  replies[0]();
+  await stale;
+  assert.equal(a in useExtensions.getState().actions, false, "the reply was for the document before the reload");
   const fresh = refreshActionStates();
   await new Promise((r) => setImmediate(r));
   replies[1]();

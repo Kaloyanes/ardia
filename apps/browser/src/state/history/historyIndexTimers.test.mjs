@@ -236,6 +236,31 @@ test("a change that lands while a reload's read is open is replayed onto the rea
   }
 });
 
+test("a wide batch replayed onto a reload's read list schedules no index it couldn't use", async () => {
+  const stop = await started();
+  try {
+    const builds = historyApplyStats.indexBuilds;
+    let release;
+    stub.heldHistoryQueries.reply = new Promise((resolve) => (release = resolve));
+    const reload = reloadHistory();
+    await settle();
+    const rows = Array.from({ length: 65 }, (_, i) => ({ url: `https://home${i % 50}.example/`, title: `during the read ${i}`, visits: 2 }));
+    stub.chromeHistoryEvent({ kind: "modified", profile: "", rows: rows.map((r, i) => ({ ...r, url: i < 50 ? r.url : `https://work${i}.example/` })) });
+    await settle();
+    stub.heldHistoryQueries.reply = null;
+    release();
+    await reload;
+    await settle();
+    assert.ok(listOf("").some((h) => h.title.startsWith("during the read")), "the wide batch was replayed");
+    assert.equal(historyIndexesPending(), 0, "no deadline for a list only a wide batch touched");
+    mock.timers.tick(INDEX_DEADLINE_MS);
+    assert.equal(historyApplyStats.indexBuilds, builds);
+  } finally {
+    stub.heldHistoryQueries.reply = null;
+    finish(stop);
+  }
+});
+
 test("a profile unloaded while its build is pending isn't indexed; the other profile still is", async () => {
   const stop = await started();
   try {

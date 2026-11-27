@@ -164,7 +164,7 @@ function load(engine: string): Promise<void> {
         if (state.queued.some((c) => c.kind === "deleted" && c.all)) state.again = true;
         setView(engine, list, floor);
         if (inApp(engine)) loaded.add(engine);
-        if (replayed.length) indexByDeadline(engine);
+        if (replayed.length && historyBatchUsesIndex(replayed)) indexByDeadline(engine);
       } while (state.again && inApp(engine) && readEpoch(engine) === epoch);
     } catch (error) {
       const failure = ardiaError(error);
