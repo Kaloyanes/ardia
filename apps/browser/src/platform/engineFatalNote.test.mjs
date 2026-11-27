@@ -53,8 +53,13 @@ test("the engine's fatal note in a crash report's asi gives the fatal place, the
       { image: "libfoo_bar.dylib", offset: 0x20 },
       { image: "100% sure", offset: 0x30 },
     ], "spaces and percent signs come back from their escapes and underscores stay underscores");
+    const longName = `${"soft_navigation_heuristics_".padEnd(57, "x")}.cc:123`;
+    assert.equal(parsed(dir, { asi: { "Chromium Framework": [`ardia-fatal ${longName}\nardia-posted-from f internal.example.rs:8443 Chromium%20Framework+0x1\n`] } }).fatalAt, longName, "a long source file name survives");
+    assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": ["ardia-fatal internal.example.rs:8443\nardia-posted-from f internal.example.rs:8443 Chromium%20Framework+0x1\n"] } }), {
+      postedFrames: [{ image: "Chromium Framework", offset: 1 }],
+    }, "a dotted host is no source place, and the task's frames still come");
     const hostile = "ardia-fatal /Users/someone/secret.cc:1\nardia-posted-from f https://example.com/a.cc:2 /Users/x/y+0x1 a b+0x2\n";
-    assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [hostile] } }), {}, "paths, URLs and image names with spaces are dropped");
+    assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [hostile] } }), { postedFrames: [{ image: "b", offset: 2 }] }, "paths and URLs are dropped as places and frames; only a plain image token is kept");
     assert.deepEqual(parsed(dir, { asi: { libsystem_c: ["abort() called"] } }), {});
     assert.deepEqual(parsed(dir, {}), {});
   } finally {

@@ -329,7 +329,7 @@ export const nativeCrashTermination = (namespace: string | undefined) => (namesp
 
 type PropertyValue = string | number | boolean | null;
 
-export const SOURCE_PLACE = /^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,40}\.(?:cc|cpp|cxx|c|h|hh|hpp|mm|m|swift|rs|ts|tsx|js|mjs):\d{1,6}$/;
+export const SOURCE_PLACE = /^(?=.{1,80}$)[A-Za-z0-9_+-]{1,70}\.(?:cc|cpp|cxx|c|h|hh|hpp|mm|m|swift|rs|ts|tsx|js|mjs):[1-9]\d{0,5}$/;
 const SOURCE_PLACE_KEY = /^crash_(?:fatal_at|posted_from)$/;
 const WEBUI_PAGE_KEY = /(?:^|_)webui_page$/;
 const WEBUI_PAGES_KEY = /(?:^|_)webui_pages$/;

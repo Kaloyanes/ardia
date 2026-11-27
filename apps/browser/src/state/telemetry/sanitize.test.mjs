@@ -493,10 +493,12 @@ test("a crash's source places keep their file name through cleanProperties, and 
     crash_fatal_at: null,
     crash_posted_from: null,
   });
-  for (const host of ["127.0.0.1:443", "example.com:443", "10.0.0.2:8080", "localhost:3000"]) {
+  for (const host of ["127.0.0.1:443", "example.com:443", "10.0.0.2:8080", "localhost:3000", "internal.example.rs:8443", "a.cc:0"]) {
     assert.deepEqual(cleanProperties({ crash_fatal_at: host, crash_posted_from: host }), { crash_fatal_at: null, crash_posted_from: null }, host);
   }
-  for (const place of ["task_annotator.cc:91", "RCTScrollView.m:1536", "ac_seams.mm:12", "CrashReports.swift:310", "lib.rs:4"]) {
+  const long = `${"soft_navigation_heuristics_".padEnd(57, "x")}.cc:123`;
+  assert.equal(long.length, 64);
+  for (const place of ["task_annotator.cc:91", "RCTScrollView.m:1536", "ac_seams.mm:12", "CrashReports.swift:310", "lib.rs:4", long]) {
     assert.equal(cleanProperties({ crash_posted_from: place }).crash_posted_from, place);
   }
 });

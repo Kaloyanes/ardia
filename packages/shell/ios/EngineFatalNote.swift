@@ -1,9 +1,11 @@
 import Foundation
 
 enum EngineFatalNote {
-  private static let fatalAt = try! NSRegularExpression(pattern: "^ardia-fatal ([A-Za-z0-9_.+-]{1,80}:[0-9]{1,6})$")
+  private static let place = "(?=\\S{1,80}(?: |$))[A-Za-z0-9_+-]{1,70}\\.(?:cc|cpp|cxx|c|h|hh|hpp|mm|m|swift|rs|ts|tsx|js|mjs):[1-9][0-9]{0,5}"
+  private static let fatalAt = try! NSRegularExpression(pattern: "^ardia-fatal (\(place))$")
   private static let postedFrom = try! NSRegularExpression(
-    pattern: "^ardia-posted-from (\\S{1,160}) ([A-Za-z0-9_.+-]{1,80}:-?[0-9]{1,6}|-:-?[0-9]{1,6}) ?(.*)$")
+    pattern: "^ardia-posted-from (\\S{1,160}) (\\S{1,80}) ?(.*)$")
+  private static let sourcePlace = try! NSRegularExpression(pattern: "^\(place)$")
   private static let frame = try! NSRegularExpression(pattern: "^([A-Za-z0-9_.%-]{1,192})\\+0x([0-9a-f]{1,16})$")
   private static let maxFrames = 17
 
@@ -15,7 +17,7 @@ enum EngineFatalNote {
         if let at = capture(fatalAt, line, 1) {
           out["fatalAt"] = at
         } else if let from = postedFrom.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
-          if let place = group(from, 2, line), !place.hasPrefix("-:") { out["postedFrom"] = place }
+          if let place = capture(sourcePlace, group(from, 2, line) ?? "", 0) { out["postedFrom"] = place }
           frames = parsedFrames(group(from, 3, line) ?? "")
         } else if line.hasPrefix("ardia-task-trace") {
           frames += parsedFrames(String(line.dropFirst("ardia-task-trace".count)))

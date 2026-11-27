@@ -100,7 +100,7 @@ test("an engine fatal's source place and the place its task was posted from are 
   const details = nativeCrashDetails({ fatalAt: "partition_alloc_support.cc:843", postedFrom: "login_handler.cc:430" });
   assert.equal(details.crash_fatal_at, "partition_alloc_support.cc:843");
   assert.equal(details.crash_posted_from, "login_handler.cc:430");
-  for (const bad of ["https://example.com/a.cc:1", "/Users/someone/src/a.cc:12", "a.cc", "a b.cc:1", "a.cc:1234567", "x".repeat(49) + ".cc:1"]) {
+  for (const bad of ["https://example.com/a.cc:1", "/Users/someone/src/a.cc:12", "a.cc", "a b.cc:1", "a.cc:1234567", "x".repeat(71) + ".cc:1", "internal.example.rs:8443"]) {
     assert.equal(nativeCrashDetails({ fatalAt: bad, postedFrom: bad }).crash_fatal_at, null, bad);
     assert.equal(nativeCrashDetails({ fatalAt: bad, postedFrom: bad }).crash_posted_from, null, bad);
   }
