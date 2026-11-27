@@ -32,6 +32,7 @@ globalThis.acTestNativeModules = {
     discardImported: (token) => discarded.push(token),
     listBrowsers: () => native.listBrowsers(),
     chooseImportFile: (kind) => native.chooseImportFile(kind),
+    importBookmarksHTML: async () => JSON.stringify({ type: "folder", title: "Bookmarks", children: [{ type: "folder", title: "Bar", role: "toolbar", children: [link("https://html.example/")] }] }),
     importSafariExport: (_job, path) => native.importSafariExport(path),
     importSafariDirect: () => native.importSafariDirect(),
     listExtensions: async () => "[]",
@@ -57,8 +58,10 @@ const { useBrowser } = await import("../browser/store.ts");
 const flow = await import("./flow.ts");
 const { continueImport, importUnlocked, recheckAccess, runImport, skipEncryptedData, skipSource, unlockAndImport } = await import("./runImport.ts");
 const { importSafariDirect, importSafariExport, pickSafariExport } = await import("./fileImports.ts");
-const { saveLogins } = await import("./apply.ts");
+const { emptyCounts, saveLogins } = await import("./apply.ts");
 const outcome = await import("./importOutcome.ts");
+const { endTurn } = await import("./importTurn.ts");
+const { importBookmarksHtml } = await import("./fileImports.ts");
 const { takeImportRuns } = await import("../telemetry/importRuns.ts");
 const telemetry = await import("../telemetry/client.ts");
 globalThis.fetch = async () => ({ status: 503 });
@@ -100,6 +103,7 @@ beforeEach(() => {
 });
 
 function pick(browsers, ids) {
+  endTurn();
   flow.useImportFlow.setState({ browsers, target: "default", run: null, step: { name: "choose", error: null } });
   flow.pickSources(ids);
 }
@@ -562,4 +566,56 @@ test("only the latest keychain unlock may change the unlock step", async () => {
   await until("done");
   assert.deepEqual(readCalls, ["chrome"]);
   native.unlockBrowser = async () => null;
+});
+
+test("while a run is live, the Choose screen's rows, kinds and Bookmarks HTML import change nothing", async () => {
+  reads = { chrome: { bookmarks: ["https://chrome.example/"], tabs: [], credentials: [] }, brave: { bookmarks: [], tabs: [], credentials: [] } };
+  pick([SAFARI, chromium("chrome", "Chrome")], ["safari", "chrome"]);
+  continueImport("choose", turnNow());
+  await until("safari");
+  const live = flow.importNow();
+  flow.toggleSource(chromium("chrome", "Chrome"));
+  flow.pickSources([]);
+  flow.chooseSource(chromium("chrome", "Chrome"));
+  flow.toggleImportKind("bookmarks", false);
+  assert.equal(step().name, "safari");
+  assert.equal(flow.importNow().run, live.run);
+  assert.equal(flow.importNow().kinds, live.kinds);
+
+  const picked = deferred();
+  native.chooseImportFile = () => picked.promise;
+  let braveRead = deferred();
+  duringRead = (id) => (id === "brave" ? braveRead.promise : undefined);
+  pick([chromium("chrome", "Chrome"), chromium("brave", "Brave")], ["chrome", "brave"]);
+  const html = importBookmarksHtml();
+  continueImport("choose", turnNow());
+  picked.resolve("/tmp/bookmarks.html");
+  await html;
+  await settle();
+  assert.equal(step().name, "progress", "Chrome's progress and Brave's wait are left alone");
+  assert.ok(flow.importNow().run);
+  braveRead.resolve();
+  const done = await until("done");
+  assert.deepEqual(done.sources.map((x) => x.name), ["Chrome", "Brave"]);
+  assert.equal(Object.values(S().bookmarks.nodes).some((n) => n.url === "https://html.example/"), false);
+});
+
+test("two Ardia profiles that share one password store are one account for conflicts", async () => {
+  S().hydrate({});
+  S().createWindow({ url: "https://start.example/" });
+  useBrowser.setState((s) => ({
+    profiles: { ...s.profiles, work: { ...s.profiles.default, id: "work", name: "Work", dataId: "default" } },
+    profileOrder: [...s.profileOrder, "work"],
+  }));
+  const signal = new AbortController().signal;
+  outcome.forgetCollectedLogins();
+  outcome.collectLogins("chrome", null, [{ profileId: "default", credentials: [cred("https://bank.example/", "me", "chrome", now - DAY)] }]);
+  outcome.collectLogins("edge", null, [{ profileId: "work", credentials: [cred("https://bank.example/", "me", "edge", now)] }]);
+  const ran = (id, name) => ({ source: { id, name, family: "chromium" }, counts: emptyCounts(), failures: [], notes: [], extensions: { profileId: "", found: [], groups: [] }, engines: [], skipped: false, consent: null, passwordsWritten: { keptExisting: 0, failed: 0 } });
+  flow.useImportFlow.setState({ run: { ids: ["chrome", "edge"], at: 1, chosen: [], offered: [], outcomes: [] } });
+  await outcome.finishRun([ran("chrome", "Chrome"), ran("edge", "Edge")], signal);
+  const conflicts = await until("conflicts");
+  assert.equal(conflicts.conflicts.length, 1);
+  assert.deepEqual(conflicts.conflicts[0].profileIds, ["default", "work"]);
+  assert.deepEqual(storedLogins(), []);
 });

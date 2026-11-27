@@ -1,7 +1,7 @@
 import { ardiaError } from "@ardia/core";
 import { orWarn } from "../../lib/fallback";
 import { applySafari, emptyCounts, importBookmarks, untitledLinks, type ImportKind, type SafariExport } from "./apply";
-import { finishImport, importNow, importSignal, inRun, NO_EXTENSIONS, patchImport, startProgress, updateStatus } from "./flow";
+import { choosing, finishImport, importNow, importSignal, inRun, NO_EXTENSIONS, patchImport, startProgress, updateStatus } from "./flow";
 import { importModule } from "./importApi";
 import { claimRead, claimSettle, ownsTurn, releaseRead, whileOwned, type ImportTurn } from "./importTurn";
 import { settleSource, turnFor } from "./runImport";
@@ -90,20 +90,23 @@ async function applySafariRead(turn: ImportTurn, data: SafariExport, { how, targ
 }
 
 export async function importBookmarksHtml() {
+  if (!choosing()) return;
   const api = importModule();
   const signal = importSignal();
   const consent = consentToken();
   const path = await api.chooseImportFile("bookmarksHTML");
-  if (!path || signal.aborted) return;
+  if (!path || signal.aborted || !choosing()) return;
   try {
     const root = await api.importBookmarksHTML(path);
+    if (signal.aborted || !choosing()) return;
     const failed: ImportKind[] = [];
     const bookmarks = await importBookmarks(importNow().target, root, "HTML File", consent, (kind) => failed.push(kind), signal);
     if (signal.aborted) return;
     noteUntitledBookmarks(untitledLinks(root), consent);
+    if (!choosing()) return;
     const failures = failed.map((kind) => ({ kind, profiles: [] }));
     patchImport({ source: null, picked: [], step: { name: "done", counts: { ...emptyCounts(), bookmarks }, failures, notes: [], extensions: NO_EXTENSIONS } });
   } catch {
-    if (!signal.aborted) patchImport({ step: { name: "choose", error: "The selected file is invalid. Please try again." } });
+    if (!signal.aborted && choosing()) patchImport({ step: { name: "choose", error: "The selected file is invalid. Please try again." } });
   }
 }

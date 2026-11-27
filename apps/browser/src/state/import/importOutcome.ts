@@ -58,7 +58,7 @@ const runConsent = (outcomes: SourceOutcome[]): ConsentToken | null =>
   outcomes.length && outcomes.every((o) => o.consent === outcomes[0]!.consent) ? outcomes[0]!.consent : null;
 
 export async function finishRun(outcomes: SourceOutcome[], signal: AbortSignal) {
-  const plan = planLogins(collected.splice(0), outcomes.map((o) => o.source.id));
+  const plan = planLogins(collected.splice(0), outcomes.map((o) => o.source.id), (profileId) => engineProfile(useBrowser.getState(), profileId));
   noteMultiImport({ browsers: outcomes.length, skipped: outcomes.filter((o) => o.skipped).length, merged: plan.merged, conflicts: plan.conflicts.length }, runConsent(outcomes));
   if (!plan.conflicts.length) return completeRun(outcomes, resolvedLogins(plan, {}), signal);
   const token = ++conflictTokens;

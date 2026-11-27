@@ -6,7 +6,7 @@ import type { ExtensionGroup, ExtensionListing } from "./extensionListing";
 import { importModule } from "./importApi";
 import type { ConflictPick, PasswordConflict } from "./passwordConflicts";
 import type { ConsentToken } from "../telemetry/choice";
-import { endTurn } from "./importTurn";
+import { endTurn, liveTurn } from "./importTurn";
 
 export type KindStatus = "pending" | "active" | "done" | "failed";
 type ImportStatus = Partial<Record<ImportKind, KindStatus>>;
@@ -134,7 +134,7 @@ export function startImport(delayBeforeDone: number): () => void {
       patchImport({ browsers: list });
       const preferred = takePreferredImportSource();
       const first = list.find((b) => b.id === preferred) ?? list.find((b) => !b.needsFullDiskAccess && !b.requiresExport) ?? list[0];
-      if (first) chooseSource(first);
+      if (first) showSource(first);
       else patchImport({ step: { name: "choose", error: null } });
     },
     () => {
@@ -163,13 +163,23 @@ function sourceFields(b: BrowserSource, kinds: Iterable<ImportKind>): Partial<Im
   };
 }
 
-export function chooseSource(b: BrowserSource) {
+export const choosing = () => {
+  const flow = importNow();
+  return flow.step.name === "choose" && !flow.run && !liveTurn();
+};
+
+export function showSource(b: BrowserSource) {
   patchImport({ ...sourceFields(b, availableKinds(b)), picked: [b.id], run: null, step: { name: "choose", error: null } });
+}
+
+export function chooseSource(b: BrowserSource) {
+  if (choosing()) showSource(b);
 }
 
 export const pickedBrowsers = ({ browsers, picked }: Pick<ImportFlow, "browsers" | "picked">) => browsers.filter((b) => picked.includes(b.id));
 
 export function pickSources(ids: readonly string[]) {
+  if (!choosing()) return;
   const flow = importNow();
   const next = flow.browsers.filter((b) => ids.includes(b.id));
   if (next.length === 1) return chooseSource(next[0]!);
@@ -180,6 +190,7 @@ export function pickSources(ids: readonly string[]) {
 }
 
 export function toggleSource(b: BrowserSource) {
+  if (!choosing()) return;
   const { picked } = importNow();
   pickSources(picked.includes(b.id) ? picked.filter((id) => id !== b.id) : [...picked, b.id]);
 }
@@ -209,7 +220,7 @@ const onStep = (token: number | null, ...steps: ImportStepName[]) => {
 };
 
 export function toggleImportKind(kind: ImportKind, on: boolean) {
-  if (importNow().step.name !== "choose") return;
+  if (!choosing()) return;
   const kinds = new Set(importNow().kinds);
   if (on) kinds.add(kind);
   else kinds.delete(kind);

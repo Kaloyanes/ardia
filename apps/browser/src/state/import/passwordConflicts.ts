@@ -7,7 +7,7 @@ import { originOfLogin } from "../site/savedPasswords";
 export type CollectedLogin = { browserId: string; profileId: string; credential: Credential; consent: ConsentToken | null };
 export type LoginToSave = { browserId: string; profileId: string; origin: string; username: string; password: string; consent: ConsentToken | null };
 export type ConflictVersion = { browserId: string; at: number };
-export type PasswordConflict = { id: string; profileId: string; origin: string; site: string; username: string; versions: ConflictVersion[] };
+export type PasswordConflict = { id: string; profileId: string; store: string; profileIds: string[]; origin: string; site: string; username: string; versions: ConflictVersion[] };
 export type ConflictChoices = Readonly<Record<string, string>>;
 export type ConflictPick = "newest" | "custom" | (string & {});
 
@@ -59,12 +59,12 @@ export const loginAge = (c: Pick<Credential, "created" | "lastUsed">) => Math.ma
 
 type Held = { login: LoginToSave; at: number };
 
-export function planLogins(collected: readonly CollectedLogin[], order: readonly string[]): LoginPlan {
+export function planLogins(collected: readonly CollectedLogin[], order: readonly string[], storeOf: (profileId: string) => string = (profileId) => profileId): LoginPlan {
   const groups = new Map<string, Map<string, Held>>();
   for (const { browserId, profileId, credential, consent } of collected) {
     const origin = loginOrigin(credential);
     if (!origin || !credential.password) continue;
-    const key = JSON.stringify([profileId, sameOriginKey(origin), credential.username]);
+    const key = JSON.stringify([storeOf(profileId), sameOriginKey(origin), credential.username]);
     const byBrowser = groups.get(key) ?? new Map<string, Held>();
     const at = loginAge(credential);
     const earlier = byBrowser.get(browserId);
@@ -90,7 +90,9 @@ export function planLogins(collected: readonly CollectedLogin[], order: readonly
     const id = `conflict-${conflicts.length}`;
     const { profileId, username } = first.login;
     const origin = sameOriginKey(first.login.origin);
-    conflicts.push({ id, profileId, origin, site: hostOf(origin) || origin, username, versions: held.map((h) => ({ browserId: h.login.browserId, at: h.at })) });
+    const profileIds = [...new Set(held.map((h) => h.login.profileId))];
+    const versionsOf = held.map((h) => ({ browserId: h.login.browserId, at: h.at }));
+    conflicts.push({ id, profileId, store: storeOf(profileId), profileIds, origin, site: hostOf(origin) || origin, username, versions: versionsOf });
     versions.set(id, new Map(held.map((h) => [h.login.browserId, h.login])));
   }
   return { clean, conflicts, versions, merged };
@@ -128,8 +130,8 @@ export function matchingConflicts(conflicts: readonly PasswordConflict[], filter
 export type ConflictRow = { conflict: PasswordConflict; title: string; showsProfile: boolean };
 
 export function conflictRows(conflicts: readonly PasswordConflict[]): ConflictRow[] {
-  const showsProfile = new Set(conflicts.map((c) => c.profileId)).size > 1;
-  const reads = (c: PasswordConflict) => JSON.stringify([c.site, c.username, showsProfile ? c.profileId : ""]);
+  const showsProfile = new Set(conflicts.map((c) => c.store)).size > 1 || conflicts.some((c) => c.profileIds.length > 1);
+  const reads = (c: PasswordConflict) => JSON.stringify([c.site, c.username, showsProfile ? c.store : ""]);
   const seen = new Map<string, number>();
   for (const c of conflicts) seen.set(reads(c), (seen.get(reads(c)) ?? 0) + 1);
   return conflicts.map((conflict) => ({ conflict, title: seen.get(reads(conflict))! > 1 ? conflict.origin : conflict.site, showsProfile }));

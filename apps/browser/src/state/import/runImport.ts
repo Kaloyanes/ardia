@@ -3,7 +3,7 @@ import { orWarn } from "../../lib/fallback";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { emptyCounts, type BrowserSource, type ImportKind } from "./apply";
 import {
-  chooseSource,
+  showSource,
   DIA_SIDEBAR_KINDS,
   ENCRYPTED_KINDS,
   importNow,
@@ -70,7 +70,7 @@ export async function recheckAccess(token: number | null) {
     if (!updated || updated.needsFullDiskAccess) return;
     if (!several) {
       endTurn();
-      return chooseSource(updated);
+      return showSource(updated);
     }
     takeTurn(updated);
     proceed("choose", turn);

@@ -169,3 +169,13 @@ test("hosts fold as Chromium reads them: ideographic and fullwidth dots, fullwid
   assert.notEqual(sameOriginKey("https://bücher.example."), ascii);
   assert.equal(sameOriginKey("https://bücher\u3002example\u3002"), `${ascii}.`);
 });
+
+test("logins for two Ardia profiles on one password store group together, and the row names both", async () => {
+  const { conflictRows } = await import("./passwordConflicts.ts");
+  const store = (id) => (id === "work" ? "" : id === "default" ? "" : id);
+  const plan = planLogins([login("chrome", "default", "https://a.example/", "me", "1"), login("edge", "work", "https://a.example/", "me", "2"), login("arc", "work", "https://b.example/", "me", "3"), login("edge", "default", "https://b.example/", "me", "3")], ORDER, store);
+  assert.equal(plan.conflicts.length, 1);
+  assert.deepEqual(plan.conflicts[0].profileIds, ["default", "work"]);
+  assert.deepEqual([plan.clean.length, plan.merged], [1, 1]);
+  assert.equal(conflictRows(plan.conflicts)[0].showsProfile, true);
+});

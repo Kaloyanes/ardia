@@ -86,7 +86,7 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
   const profiles = useProfileRecords();
   const order = useProfileOrder();
   const destinations = profileLabels(
-    [...new Set(step.conflicts.map((c) => c.profileId))],
+    [...new Set(step.conflicts.flatMap((c) => c.profileIds))],
     order.flatMap((id) => (profiles[id] ? [{ id, name: profiles[id].name, icon: profiles[id].icon }] : [])),
   );
   const shown = conflictRows(matchingConflicts(step.conflicts, step.filter));
@@ -112,7 +112,7 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
             <Row
               key={c.id}
               title={title}
-              description={[c.username || "No username", showsProfile ? `into ${destinations[c.profileId]}` : ""].filter(Boolean).join(" · ")}
+              description={[c.username || "No username", showsProfile ? `into ${spokenList(c.profileIds.map((id) => destinations[id]!))}` : ""].filter(Boolean).join(" · ")}
             >
               <Segmented
                 value={choices[c.id] ?? c.versions[0]!.browserId}
