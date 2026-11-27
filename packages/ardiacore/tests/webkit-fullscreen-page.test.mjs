@@ -54,6 +54,8 @@ test("a page held in full screen counts as seen, so hiding its tab opens no auto
   assert.match(held, /watchFullscreenSight\(WebKitFullscreenPage\.isOn\(state\)\)/);
   assert.match(held, /watchFullscreenSight\(on\)/);
   assert.match(read("../ios/WebKitTab.swift"), /if closed \{ stopWatchingSight\(\); watchFullscreenSight\(false\) \}/);
+  const discard = read("../ios/WebKitTab.swift").match(/func dropViewForDiscard\(\) -> WebKitWebView\? \{([\s\S]*?)\n  \}/)[1];
+  assert.ok(discard.indexOf("watchFullscreenSight(false)") >= 0 && discard.indexOf("watchFullscreenSight(false)") < discard.indexOf("webView = nil"), "a discarded page stops the full-screen sight watch before the view is dropped");
   assert.match(read("../ios/WebKitTab+FullscreenPage.swift"), /updateHidden\(\)\n\s+updateSight\(\)/);
 });
 

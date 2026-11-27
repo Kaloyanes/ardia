@@ -180,6 +180,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
 
   func dropViewForDiscard() -> WebKitWebView? {
     guard let view = webView else { return nil }
+    watchFullscreenSight(false)
     observations = []
     webView = nil
     stopListening(to: view)
