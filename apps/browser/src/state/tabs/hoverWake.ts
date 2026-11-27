@@ -97,9 +97,10 @@ export function armHoverWake(id: string) {
   if (!PLATFORM_FEATURES.sleepsTabsOverBudget || armedId === id) return;
   cancelHoverWake();
   armedId = id;
+  const consent = consentToken();
   timer = setTimeout(() => {
     timer = undefined;
     armedId = null;
-    void wakeOnHover(id, consentToken());
+    void wakeOnHover(id, consent);
   }, HOVER_WAKE_MS);
 }
