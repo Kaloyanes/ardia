@@ -40,20 +40,22 @@ import { verificationCodeDocument, verificationCodeTabGone } from "../../state/s
 import { hoverStatus } from "../../state/tabs/hoverStatus";
 import { endPageDocument, forgetPageDocument, notePageDocument } from "../../state/plugins/pageBarDocuments";
 import { arrivedOnFirstPage, leftPage, pageAskedToClose, pageEnded } from "../../state/tabs/pageEvents";
-import { handlePageCommand } from "../../state/tabs/pageCommands";
-import { setPageSelection } from "../../state/site/selection";
+import { copyLinkToSelection, searchSelection, setPageSelection } from "../../state/site/selection";
+import { shareFromPage } from "../../state/site/share";
+import { navigateFromPage } from "../../state/tabs/pageCommands";
 import { useAutoPictureInPicture } from "../../state/media/pip";
 import { requestDisplayMedia } from "../../state/media/screenShare";
 import { setNowPlaying, setPictureInPictureState } from "../../state/media/media";
 import { noteScroll } from "../../state/windows/toolbarAutoHide";
 import { closeWebNotification, showWebNotification } from "../../state/site/webNotifications";
+import { escapePressed } from "../../state/windows/unclaimedEscape";
 import { withoutFragment } from "../../lib/url";
 import { adoptOf, loadedPage, navigationOf } from "../../state/tabs/pageSession";
 import { noteCommit } from "../../state/automation/automationEvents";
 import { notePluginStateCommit } from "../../state/plugins/stateCommits";
 import { forgetUnreadIfGone, noteAppBadge, noteUnreadFavicon, noteUnreadLoading, noteUnreadPageEnded } from "../../state/tabs/unread";
 import { trackPageProcessGone } from "../../state/telemetry/diagnostics";
-import { defaultTarget, languageName, releaseTranslation, translateCrashContext, translation, useTranslatePageMenu } from "../../state/site/translate";
+import { defaultTarget, languageName, releaseTranslation, revertPage, translateCrashContext, translatePage, translation, useTranslatePageMenu } from "../../state/site/translate";
 import { translatePageMenuItems } from "../../state/site/translateMenu";
 import { notePagePress, notePagePressRefused } from "../../state/telemetry/tabPresses";
 import { noteWebKitFocusRestore } from "../../state/telemetry/pageFocusReturns";
@@ -62,6 +64,7 @@ import { noteWebKitMediaFault } from "../../state/telemetry/webkitMediaFaults";
 import { isAdoptKind } from "../../state/tabs/adoptIds";
 import { firstPagePending, isBlankAddress, noteFirstPagePending, reportedAddress, reportedTitle } from "../../state/tabs/pendingAddress";
 import { STATUS_FLIP_BAND } from "./tokens";
+import { startHidingElement } from "../../state/site/hiddenElements";
 import { forgetPeekHandover, notePeekRecipient, peekDonorTaken } from "../../state/peek/donors";
 import { promotedFromPeek } from "../../state/peek/actions";
 import { consumedCallbackUrl } from "../../state/tabs/callbackUrls";
@@ -156,9 +159,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
     };
   }, []);
   const waitsOffScreen = engine === "webkit" && warm && !visible;
-  useEffect(() => {
-    if (waitsOffScreen) noteWebKitPageKeptHidden();
-  }, [waitsOffScreen]);
+  useEffect(() => { if (waitsOffScreen) noteWebKitPageKeptHidden(); }, [waitsOffScreen]);
   const mountedProfile = useRef(profileId);
   const wentRetired = useRef(false);
   useLayoutEffect(() => {
@@ -275,9 +276,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         lastPage.current = withoutFragment(url);
         patchPage(tabId, { themeColorSource: themeColorSource ?? null });
       }}
-      onLoadError={() => {
-        pending.current = null;
-      }}
+      onLoadError={() => { pending.current = null; }}
       onDownloadNavigation={({ committedUrl, skipped }) => {
         pending.current = null;
         downloadNavigated(tabId, committedUrl, skipped);
@@ -354,7 +353,16 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
       onWindowClose={() => pageAskedToClose(tabId)}
       onTransferRefused={(from) => returnRefusedMove(tabId, from)}
       onNotification={(notification) => showWebNotification(tabId, notification)}
-      onCommand={(event) => handlePageCommand(tabId, event)}
+      onCommand={({ command, text, modifiers, share, anchor, point }) => {
+        if (command === "search") searchSelection(tabId, text, modifiers);
+        else if (command === "share" && share) void shareFromPage(tab(), share, anchor);
+        else if (command === "copyLinkToHighlight") void copyLinkToSelection(tabId);
+        else if (command === "escape") escapePressed(tabId, "page");
+        else if (command === "hideElement" && point) void startHidingElement(tabId, point);
+        else if (command === "translatePage") void translatePage(tabId, defaultTarget(), "page_menu");
+        else if (command === "showOriginal") void revertPage(tabId);
+        else if (command === "back" || command === "forward") navigateFromPage(tabId, command);
+      }}
       onSelection={(selection) => setPageSelection(tabId, selection)}
       onScroll={(state) => noteScroll(tabId, state)}
       onProtectedMedia={(request) => {

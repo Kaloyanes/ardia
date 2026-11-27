@@ -9,7 +9,7 @@ const { pageOf, patchPage } = await import("./pageState.ts");
 const { openLinkInSplit } = await import("../splits/actions.ts");
 const client = await import("../telemetry/client.ts");
 const { takeEngineSwitchCounts } = await import("../telemetry/engineSwitchCounts.ts");
-const { handlePageCommand } = await import("./pageCommands.ts");
+const { navigateFromPage } = await import("./pageCommands.ts");
 await import("../../test-native/index.ts");
 
 const S = () => useBrowser.getState();
@@ -42,8 +42,8 @@ test("back and forward page commands navigate a WebKit tab with history and coun
   });
   updateLive(tabId, { canGoBack: true, canGoForward: true });
 
-  handlePageCommand(tabId, { command: "back", text: "" });
-  handlePageCommand(tabId, { command: "forward", text: "" });
+  navigateFromPage(tabId, "back");
+  navigateFromPage(tabId, "forward");
   await flush();
   assert.deepEqual(calls, ["back", "forward"]);
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 2);
@@ -66,8 +66,8 @@ test("back and forward page commands without available history neither call the 
   });
   updateLive(tabId, { canGoBack: false, canGoForward: false });
 
-  handlePageCommand(tabId, { command: "back", text: "" });
-  handlePageCommand(tabId, { command: "forward", text: "" });
+  navigateFromPage(tabId, "back");
+  navigateFromPage(tabId, "forward");
   await flush();
   assert.deepEqual(calls, []);
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 0);
@@ -80,12 +80,12 @@ test("back page command with backToNewTab shows New Tab and counts navigation, a
   patchPage(tabId, { backToNewTab: true });
   updateLive(tabId, { canGoBack: false, canGoForward: false });
 
-  handlePageCommand(tabId, { command: "back", text: "" });
+  navigateFromPage(tabId, "back");
   await flush();
   assert.ok(pageOf(tabId).newTabShown);
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 1);
 
-  handlePageCommand(tabId, { command: "forward", text: "" });
+  navigateFromPage(tabId, "forward");
   await flush();
   assert.equal(pageOf(tabId).newTabShown, null);
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 1);
@@ -97,7 +97,7 @@ test("back page command with a missing webview does not count telemetry", async 
   const tabId = S().windows[win].tabIds[0];
   updateLive(tabId, { canGoBack: true, canGoForward: false });
 
-  handlePageCommand(tabId, { command: "back", text: "" });
+  navigateFromPage(tabId, "back");
   await flush();
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 0);
 });
@@ -111,13 +111,13 @@ test("cross-engine back counts telemetry only when confirmed", async () => {
   updateLive(tabId, { canGoBack: false, canGoForward: false });
   webviews.set(tabId, { evaluate: () => Promise.resolve(true) });
 
-  handlePageCommand(tabId, { command: "back", text: "" });
+  navigateFromPage(tabId, "back");
   await flush();
   assert.equal(S().tabs[tabId].engine, "webkit");
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 0);
 
   S().updateSettings({ engineSwitchAsksAboutUnsavedWork: false });
-  handlePageCommand(tabId, { command: "back", text: "" });
+  navigateFromPage(tabId, "back");
   await flush();
   assert.equal(S().tabs[tabId].engine, "chromium");
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 1);
@@ -137,20 +137,20 @@ test("back page command targets an inactive split pane without affecting the act
   updateLive(paneA, { canGoBack: true, canGoForward: false });
   updateLive(paneB, { canGoBack: true, canGoForward: false });
 
-  handlePageCommand(paneA, { command: "back", text: "" });
+  navigateFromPage(paneA, "back");
   await flush();
   assert.deepEqual(calls, ["paneA"]);
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 1);
 });
 
 test("back and forward page commands for an unknown tab are a safe no-op", async () => {
-  handlePageCommand("missing-tab", { command: "back", text: "" });
-  handlePageCommand("missing-tab", { command: "forward", text: "" });
+  navigateFromPage("missing-tab", "back");
+  navigateFromPage("missing-tab", "forward");
   await flush();
   assert.equal(takeEngineSwitchCounts().webkit_mouse_navigations, 0);
 });
 
-test("TabWebView delegates onCommand to handlePageCommand", () => {
+test("TabWebView routes back and forward page commands to navigateFromPage", () => {
   const source = readFileSync(new URL("../../components/window/TabWebView.tsx", import.meta.url), "utf8");
-  assert.match(source, /onCommand=\{\(event\) => handlePageCommand\(tabId, event\)\}/);
+  assert.match(source, /else if \(command === "back" \|\| command === "forward"\) navigateFromPage\(tabId, command\);/);
 });
