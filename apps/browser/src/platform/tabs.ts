@@ -22,6 +22,7 @@ export {
   type OpenWindowRequest,
   type WebNotification,
   type PageSelection,
+  type PageCommand,
   type ScrollState,
   type FocusRestoreOutcome,
   type ProtectedMediaRequest,
