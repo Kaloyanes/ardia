@@ -17,9 +17,10 @@ export const stripRail = (cardTop: number, cardBottom: number) => ({ top: Math.r
 
 export const stripBand = (draggingTab: boolean, edgeBand: number) => (draggingTab ? ICON_STRIP.width : edgeBand);
 
-export function handoffPoint(row: Frame | null, pointer: { x: number; y: number }): { x: number; y: number } {
+export function handoffPoint(row: Frame | null, pointer: { x: number; y: number }, right = false): { x: number; y: number } {
   if (!row) return pointer;
-  return { x: row.x + Math.min(row.w / 2, ICON_STRIP.square / 2 + stripInset), y: row.y + row.h / 2 };
+  const fromEdge = Math.min(row.w / 2, ICON_STRIP.square / 2 + stripInset);
+  return { x: right ? row.x + row.w - fromEdge : row.x + fromEdge, y: row.y + row.h / 2 };
 }
 
 export function stripPointerOver(x: number, right: boolean, windowWidth: number): boolean {

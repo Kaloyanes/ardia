@@ -55,6 +55,9 @@ test("a drag let go before the sidebar settles hands nothing over, and one whose
 test("the hand-off point sits on the row's icon, or the pointer when the row can't be measured", () => {
   assert.deepEqual(handoffPoint(null, { x: 3, y: 4 }), { x: 3, y: 4 });
   assert.deepEqual(handoffPoint({ x: 0, y: 0, w: 20, h: 20 }, { x: 3, y: 4 }), { x: 10, y: 10 });
+  const row = { x: 801, y: 120, w: 190, h: 33 };
+  assert.equal(handoffPoint(row, { x: 977, y: 130 }).x, 801 + ICON_STRIP.square / 2 + stripInset, "a left strip grabs near the row's left end");
+  assert.equal(handoffPoint(row, { x: 977, y: 130 }, true).x, 801 + 190 - ICON_STRIP.square / 2 - stripInset, "a right strip grabs near its right end, under the pointer");
 });
 
 test("the strip's first and last squares line up with the page card's top and bottom edges, on whole points", () => {

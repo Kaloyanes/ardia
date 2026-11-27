@@ -61,9 +61,9 @@ export function IconStripDock({ windowId, right, shown, moving, fullscreen, peek
         if (item.kind === "group") updateGroup(item.groupId, { collapsed: false });
         if (item.kind === "tileFolder") setTimeout(() => void toggleFolderPanel(windowId, item.folderId), SETTLE_MS);
       },
-      drag: (key: string) => stripDragHandoff(windowId, key, showNow, SETTLE_MS),
+      drag: (key: string) => stripDragHandoff(windowId, key, showNow, SETTLE_MS, undefined, right),
     };
-  }, [windowId, peek]);
+  }, [windowId, peek, right]);
   if (!mounted) return null;
   const enter = () => {
     clearTimeout(dwell.current);

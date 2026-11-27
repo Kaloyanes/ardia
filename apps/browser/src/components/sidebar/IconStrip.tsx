@@ -214,10 +214,8 @@ function OpenSquare({ item, actions }: { item: Extract<StripItem, { kind: "group
     <View {...handlers} {...hoverProps}>
       <Pressable
         tooltip={title}
-        onPressIn={() => {
-          actions.pressed();
-          actions.open(item);
-        }}
+        onPressIn={actions.pressed}
+        onPress={() => actions.open(item)}
       >
         {({ pressed }) => (
           <SquareFor selected={false} hovered={hovered} pressed={pressed} tile={item.kind === "tileFolder"}>
