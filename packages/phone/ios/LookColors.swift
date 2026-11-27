@@ -1,12 +1,23 @@
 import ArdiaDesign
 
-struct LookColors: Equatable {
+struct LookColors: Equatable, Sendable {
   static let incognito = "incognito"
 
   var color: String?
   var themeColors: [String]?
   var darkThemeColors: [String]?
   var themeLook: ThemeLook?
+
+  init(color: String? = nil, themeColors: [String]? = nil, darkThemeColors: [String]? = nil, themeLook: ThemeLook? = nil) {
+    self.color = color
+    self.themeColors = themeColors
+    self.darkThemeColors = darkThemeColors
+    self.themeLook = themeLook
+  }
+
+  init(sent: [String: Any]) {
+    self.init(color: sent["color"] as? String, themeColors: sent["themeColors"] as? [String], darkThemeColors: sent["darkThemeColors"] as? [String], themeLook: ThemeLook(sanitizing: sent["themeLook"]))
+  }
 
   var isIncognito: Bool { color == Self.incognito }
 

@@ -154,6 +154,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["glass_lens_withheld"],
       },
       {
+        text: "In the same daily counts, on iPhone: how often the colours Ardia showed while opening were not the ones of the space it opened in. Counts only, never which space or colours",
+        fields: ["launch_looks_stale"],
+      },
+      {
         text: "In the same daily counts: how often you opened one of the Settings panes, such as General or Tabs. Counts only, never which pane or what you changed",
         fields: ["settings_panes_opened"],
       },

@@ -67,6 +67,14 @@ public final class LookModule: Module {
       DispatchQueue.main.async { MainActor.assumeIsolated { LookHost.probe() } }
     }
 
+    Function("rememberLaunchLook") { (colors: [String: Any], dark: Bool) in
+      LaunchLook.remember(LookColors(sent: colors), drawnDark: dark, appDark: dark)
+    }
+
+    Function("launchLookMatches") { (colors: [String: Any], dark: Bool) -> Bool? in
+      LaunchBackdrop.recalledAtLaunch().map { LaunchLook.shows(LookColors(sent: colors), appDark: dark, in: $0) }
+    }
+
     View(DeckBackdropView.self) {
       ViewName("DeckBackdrop")
       Prop("color") { (view: DeckBackdropView, value: String?) in view.colors.color = value }
@@ -229,27 +237,8 @@ final class ProfileBackdropView: LookHostView {
   var softened = false
   var fadesOut = false
 
-  required init(appContext: AppContext? = nil) {
-    super.init(appContext: appContext)
-    registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ProfileBackdropView, _: UITraitCollection) in
-      view.rememberLaunchLook()
-    }
-  }
-
-  override func didMoveToWindow() {
-    super.didMoveToWindow()
-    rememberLaunchLook()
-  }
-
   func render() {
-    rememberLaunchLook()
     show(ProfileBackdrop(look: colors.look, themeLook: colors.shownThemeLook, themed: themed, softened: softened, fadesOut: fadesOut), dark: colors.isIncognito ? true : dark)
-  }
-
-  private func rememberLaunchLook() {
-    guard themed, window != nil else { return }
-    let appDark = traitCollection.userInterfaceStyle == .dark
-    LaunchLook.remember(colors, drawnDark: dark ?? appDark, appDark: appDark)
   }
 }
 

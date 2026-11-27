@@ -99,4 +99,24 @@ import Testing
       #expect(recalled.drawn(appDark: true).colors == other.withoutThemeLook)
     }
   }
+
+  @Test func aLaunchShowsTheSpaceItSavedAndNoOther() {
+    withDefaults { defaults in
+      let plain = LookColors(color: "green", themeColors: nil, darkThemeColors: nil)
+      LaunchLook.remember(plain, drawnDark: false, appDark: false, in: defaults)
+      let recalled = LaunchLook.recalled(from: defaults)
+      #expect(LaunchLook.shows(plain, appDark: false, in: recalled))
+      #expect(!LaunchLook.shows(LookColors(color: "blue", themeColors: ["#3366FF"]), appDark: false, in: recalled))
+      var themed = LookColors(color: "#D95973", themeColors: ["#D95973", "#4073E6"])
+      themed.themeLook = Self.sunset
+      #expect(!LaunchLook.shows(themed, appDark: false, in: recalled))
+      LaunchLook.remember(themed, drawnDark: false, appDark: false, in: defaults)
+      let themedRecalled = LaunchLook.recalled(from: defaults)
+      #expect(LaunchLook.shows(themed, appDark: false, in: themedRecalled))
+      #expect(LaunchLook.shows(themed, appDark: true, in: themedRecalled))
+      var night = themed
+      night.themeLook = Self.night
+      #expect(!LaunchLook.shows(night, appDark: false, in: themedRecalled))
+    }
+  }
 }

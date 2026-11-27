@@ -68,6 +68,7 @@ import type { Design } from "./lib/design";
 import { onMaterialBackSwiped } from "./components/ui/MaterialSurfaces";
 import { useTabs } from "./state/tabs/store";
 import { startUpdateChecks } from "./state/appUpdate/store";
+import { saveLaunchLook, useLaunchLook } from "./state/app/launchLook";
 
 export default function App() {
   useState(() =>
@@ -106,12 +107,16 @@ export default function App() {
   const dark = useDarkScheme();
   const look = useLook(PROFILE_PRESETS, DEFAULT_PROFILE_COLOR);
   useBaseSystemBars(dark);
+  useLaunchLook(look, dark, ready);
   useEffect(() => {
     const back = BackHandler.addEventListener("hardwareBackPress", () => useBoot.getState().ready && handleSystemBack());
     const state = AppState.addEventListener("change", (next) => {
       if (!useBoot.getState().ready) return;
       if (next === "active") appBecameActive();
-      else appWillResignActive();
+      else {
+        saveLaunchLook();
+        appWillResignActive();
+      }
     });
     return () => {
       back.remove();

@@ -1,7 +1,7 @@
 import ArdiaDesign
 import Foundation
 
-struct LaunchThemeLook: Equatable {
+struct LaunchThemeLook: Equatable, Sendable {
   var look: ThemeLook
   var dark: Bool
 }
@@ -12,7 +12,7 @@ enum LaunchLook {
   static let lightSlot = "light"
   static let darkSlot = "dark"
 
-  struct Recalled: Equatable {
+  struct Recalled: Equatable, Sendable {
     var colors = LookColors()
     var lightThemeLook: LaunchThemeLook?
     var darkThemeLook: LaunchThemeLook?
@@ -42,6 +42,12 @@ enum LaunchLook {
     }
     guard next != previous || defaults.object(forKey: key) == nil else { return }
     defaults.set(saved(next), forKey: key)
+  }
+
+  static func shows(_ colors: LookColors, appDark: Bool, in recalled: Recalled) -> Bool {
+    var expected = colors
+    expected.themeColors = expected.themeColors ?? []
+    return recalled.drawn(appDark: appDark).colors == expected
   }
 
   static func saved(_ recalled: Recalled) -> [String: Any] {

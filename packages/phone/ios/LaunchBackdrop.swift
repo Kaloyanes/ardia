@@ -17,9 +17,14 @@ public enum LaunchBackdrop {
   private static var fading = false
   private static var capTask: Task<Void, Never>?
   private nonisolated static let shown = OSAllocatedUnfairLock<Double?>(initialState: nil)
+  private nonisolated static let recalled = OSAllocatedUnfairLock<LaunchLook.Recalled?>(initialState: nil)
 
   nonisolated static func shownAtEpochMilliseconds() -> Double? {
     shown.withLock { $0 }
+  }
+
+  nonisolated static func recalledAtLaunch() -> LaunchLook.Recalled? {
+    recalled.withLock { $0 }
   }
 
   public static func install(in rootView: UIView) {
@@ -30,7 +35,9 @@ public enum LaunchBackdrop {
     capTask = nil
     contentShown = false
     fading = false
-    let host = UIHostingController(rootView: AnyView(LaunchProfileBackdrop(recalled: LaunchLook.recalled()).ignoresSafeArea()))
+    let launchLook = LaunchLook.recalled()
+    recalled.withLock { $0 = launchLook }
+    let host = UIHostingController(rootView: AnyView(LaunchProfileBackdrop(recalled: launchLook).ignoresSafeArea()))
     host.view.backgroundColor = .clear
     host.view.frame = rootView.bounds
     host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

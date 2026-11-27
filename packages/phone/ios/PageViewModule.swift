@@ -488,7 +488,7 @@ public final class PageViewModule: Module {
       }
 
       Prop("summaryLook") { (view: PageView, look: [String: Any]?) in
-        view.summaryColors = LookColors(color: look?["color"] as? String, themeColors: look?["themeColors"] as? [String], darkThemeColors: look?["darkThemeColors"] as? [String], themeLook: ThemeLook(sanitizing: look?["themeLook"]))
+        view.summaryColors = look.map(LookColors.init(sent:)) ?? LookColors()
         view.summaryDark = look?["dark"] as? Bool
       }
 

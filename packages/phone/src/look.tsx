@@ -53,6 +53,8 @@ type LookNative = {
   deckLayers?: () => boolean;
   blurOverBackdrop?: () => boolean;
   lookCounts?: () => LookCounts;
+  rememberLaunchLook?: (colors: LookColors, dark: boolean) => void;
+  launchLookMatches?: (colors: LookColors, dark: boolean) => boolean | null;
 };
 
 export type BackdropDraw = "small" | "smallnograin" | "full" | "flat";
@@ -118,6 +120,10 @@ function look<P extends ViewProps>(name: string) {
 }
 
 export const lookIsNative = () => hasNativeLook;
+
+export const rememberLaunchLook = (colors: LookColors, dark: boolean) => lookNative?.rememberLaunchLook?.(colors, dark);
+
+export const launchLookMatches = (colors: LookColors, dark: boolean): boolean | null => lookNative?.launchLookMatches?.(colors, dark) ?? null;
 
 const hasNativeGlass = hasNativeLook && lookNative?.hasGlass?.() === true;
 
