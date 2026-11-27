@@ -14,3 +14,11 @@ export const useIsSleeping = (tabId: string) => useLifecycle((l) => !!l.discarde
 export const isSleeping = (tabId: string) => !!useLifecycle.getState().discarded[tabId];
 
 export const useMemoryPressure = () => useLifecycle((l) => l.memoryPressure);
+
+const sleptByHand = new Set<string>();
+
+export const noteSleptByHand = (tabId: string) => void sleptByHand.add(tabId);
+
+export const wasSleptByHand = (tabId: string) => sleptByHand.has(tabId);
+
+export const forgetSleptByHand = (tabId: string) => void sleptByHand.delete(tabId);

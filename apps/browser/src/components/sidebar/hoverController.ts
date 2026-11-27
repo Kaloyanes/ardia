@@ -117,6 +117,7 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
   latest.current = { windowId, rowTarget, page, away };
   const isAway = () => latest.current.away.away();
   const entered = useRef<Target | null>(null);
+  const pointed = useRef<Target | null>(null);
   const inside = useRef<HoverPointerEvent | null>(null);
   const [row] = useState(() => ({}));
   const onCurrentPage = () => {
@@ -128,12 +129,13 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
     const windowId = latest.current.windowId;
     const target = cardTargetNow(latest.current.rowTarget);
     entered.current = target;
+    pointed.current = latest.current.rowTarget;
     if (holdEnterWhileScrolling(windowId, row, () => inside.current && enterRow(inside.current))) return;
     watchCovered(windowId, refresh, true);
     const enter = () => {
       if (isAway()) return;
       setHovered(true);
-      rowShown(windowId, target, latest.current.rowTarget);
+      rowShown(windowId, target, pointed.current);
     };
     rowEntered(windowId, target, event, enter, () => setHovered(true));
   });
@@ -149,7 +151,7 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
         if (dropHeldEnter(windowId, row)) return;
         setHovered(false);
         watchCovered(windowId, refresh, false);
-        rowLeft(windowId, entered.current, event, onCurrentPage(), latest.current.rowTarget);
+        rowLeft(windowId, entered.current, event, onCurrentPage(), pointed.current);
       },
     }),
   );
@@ -159,15 +161,17 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
       return;
     }
     const { windowId, rowTarget } = latest.current;
+    const target = rowTarget ?? pointed.current;
     setHovered(false);
     watchCovered(windowId, refresh, false);
-    if (rowTarget) releaseAnchor(windowId, rowTarget.id);
+    if (target) releaseAnchor(windowId, target.id);
   });
   useEffect(
     () => () => {
       const { windowId, rowTarget } = latest.current;
+      const target = rowTarget ?? pointed.current;
       watchCovered(windowId, refresh, false);
-      if (rowTarget) releaseAnchor(windowId, rowTarget.id);
+      if (target) releaseAnchor(windowId, target.id);
     },
     [],
   );

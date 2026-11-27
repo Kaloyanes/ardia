@@ -137,9 +137,9 @@ export function unusedTabsToSleep(awake: readonly TabSleepFacts[], now: number, 
   return plan;
 }
 
-const SOFT_ENGINE_KEEPS: ReadonlySet<number> = new Set([13, 23, 25]);
+export const SLEPT_PAST_SOFT_KEEPS = 200;
 
-export const onlySoftEngineKeeps = (keptBy: readonly number[]) => keptBy.length > 0 && keptBy.every((code) => SOFT_ENGINE_KEEPS.has(code));
+export const sleptPastSoftKeeps = (keptBy: readonly number[]) => keptBy.length === 1 && keptBy[0] === SLEPT_PAST_SOFT_KEEPS;
 
 const ENGINE_VETOES: Readonly<Record<number, SleepVeto>> = {
   [-1]: "notSleepable",

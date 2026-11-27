@@ -50,8 +50,8 @@ export const advancedRows = {
           explained: true,
           description: "Includes pinned tabs. A sleeping tab sends no notifications until you open it.",
           keywords: ["sleep", "unload", "unused tabs", "inactive tabs", "pinned tabs", "idle tabs", "discard", "free memory", "ram", "timeout", "after", "hours", "suspend", "hibernate", "memory saver"],
-          shown: (s: Settings) => s.memorySaver,
-          needs: "Turn on Memory Saver to use this",
+          shown: (s: Settings) => PLATFORM_FEATURES.sleepsUnusedTabs && s.memorySaver,
+          ...(PLATFORM_FEATURES.sleepsUnusedTabs ? { needs: "Turn on Memory Saver to use this" } : {}),
         },
         keepActiveSites: {
           title: "Keep these sites awake",

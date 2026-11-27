@@ -5,7 +5,7 @@ import { consentOrNow, countFor } from "./countFor";
 import type { KeptAwakeReason } from "../tabs/sleepRefusals";
 import type { MemoryPressure, SleepVeto } from "../tabs/sleepPolicy";
 
-const none = () => ({ captureIndicatorsCleared: 0, mediaCardsCleared: 0, pinnedTabsSleptByMemorySaver: 0, tabsSleptOverBudget: 0, tabsSleptOverBudgetReopened: 0, tabsOverBudgetSkippedLoading: 0, tabsOverBudgetAsksPassedOn: 0, topAppsKeptRunning: 0, topAppWindowsClosedFromNewTab: 0, topAppsUnloadedFromMenu: 0, tabsSleptFromMenu: 0, groupsSleptFromMenu: 0, menuSleepsKeptAwake: 0, menuSleepsPastAutomatic: 0, menuSleepKeptReason: null as KeptAwakeReason | null, closesWokeSleepingTab: 0, sleepVetoes: {} as Partial<Record<SleepVeto, number>>, cliTabsHeld: 0, cliTabsHeldLive: 0, cliTabsHeldUntilDisconnect: 0, cliHoldsReleasedOnDisconnect: 0, profilesKeptForCli: 0, chromeDiscardsKeptForCli: 0, tabsSleptUnderWarning: 0, tabsSleptUnderCritical: 0, memoryWarnings: 0, memoryCriticals: 0, tabsSleptUnused: 0, pinnedTabsSleptUnused: 0, tabsSleptUnusedPastSoftKeeps: 0, tabsWokenOnHover: 0, hoverWokenTabsOpened: 0 });
+const none = () => ({ captureIndicatorsCleared: 0, mediaCardsCleared: 0, pinnedTabsSleptByMemorySaver: 0, tabsSleptOverBudget: 0, tabsSleptOverBudgetReopened: 0, tabsOverBudgetSkippedLoading: 0, tabsOverBudgetAsksPassedOn: 0, topAppsKeptRunning: 0, topAppWindowsClosedFromNewTab: 0, topAppsUnloadedFromMenu: 0, tabsSleptFromMenu: 0, groupsSleptFromMenu: 0, menuSleepsKeptAwake: 0, menuSleepsPastAutomatic: 0, menuSleepKeptReason: null as KeptAwakeReason | null, closesWokeSleepingTab: 0, sleepVetoes: {} as Partial<Record<SleepVeto, number>>, cliTabsHeld: 0, cliTabsHeldLive: 0, cliTabsHeldUntilDisconnect: 0, cliHoldsReleasedOnDisconnect: 0, profilesKeptForCli: 0, chromeDiscardsKeptForCli: 0, tabsSleptUnderWarning: 0, tabsSleptUnderCritical: 0, memoryWarnings: 0, memoryCriticals: 0, tabsSleptUnused: 0, pinnedTabsSleptUnused: 0, tabsSleptUnusedPastSoftKeeps: 0, tabsWokenOnHover: 0, hoverWokenTabsOpened: 0, hoverWakesPutBack: 0 });
 
 let pending = none();
 
@@ -47,6 +47,10 @@ export function noteTabWokenOnHover(consent?: ConsentToken | null) {
 
 export function noteHoverWokenTabOpened(consent?: ConsentToken | null) {
   countFor(consentOrNow(consent), () => void pending.hoverWokenTabsOpened++);
+}
+
+export function noteHoverWakePutBack(consent: ConsentToken | null) {
+  countFor(consent, () => void pending.hoverWakesPutBack++);
 }
 
 export function noteMemoryPressure(pressure: Exclude<MemoryPressure, "normal">, consent?: ConsentToken | null) {
@@ -100,8 +104,8 @@ const VETO_FIELDS: Partial<Record<SleepVeto, string>> = {
 const vetoCounts = (vetoes: Partial<Record<SleepVeto, number>>) =>
   Object.fromEntries(Object.entries(VETO_FIELDS).map(([veto, field]) => [field, vetoes[veto as SleepVeto] ?? 0]));
 
-export function noteTabSleptOverBudgetReopened() {
-  pending.tabsSleptOverBudgetReopened++;
+export function noteTabSleptOverBudgetReopened(consent: ConsentToken | null) {
+  countFor(consent, () => void pending.tabsSleptOverBudgetReopened++);
 }
 
 export function noteBudgetSweep(skippedLoading: number, asksPassedOn: number, consent?: ConsentToken | null) {
@@ -193,5 +197,6 @@ export function takeTabSleepCounts() {
     tabs_slept_unused_past_soft_keeps: taken.tabsSleptUnusedPastSoftKeeps,
     tabs_woken_on_hover: taken.tabsWokenOnHover,
     hover_woken_tabs_opened: taken.hoverWokenTabsOpened,
+    hover_wakes_put_back: taken.hoverWakesPutBack,
   };
 }

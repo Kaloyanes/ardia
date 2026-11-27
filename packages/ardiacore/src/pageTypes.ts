@@ -311,6 +311,7 @@ export type WebViewHandle = {
   resolveUnresponsive(terminate: boolean): Promise<void>;
   discard(options?: { unload?: boolean }): Promise<DiscardOutcome>;
   sleepIfHidden(seconds: number): Promise<DiscardRefusal[]>;
+  sleepIfUnused?(seconds: number): Promise<DiscardRefusal[]>;
   wakeIfSleeping?(): Promise<boolean>;
   setFrozen(frozen: boolean): Promise<void>;
 };

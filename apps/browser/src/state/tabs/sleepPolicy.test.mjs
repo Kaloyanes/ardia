@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { capWarmPanes, warmOrder, engineVeto, FREQUENT_SWITCHES, MINUTE, onlySoftEngineKeeps, RECENTLY_AUDIBLE_MS, RECENTLY_SEEN_MS, sleepRules, sleepVeto, tabsToSleep, unusedAfterMs, unusedTabsToSleep } from "./sleepPolicy.ts";
+import { capWarmPanes, warmOrder, engineVeto, FREQUENT_SWITCHES, MINUTE, RECENTLY_AUDIBLE_MS, RECENTLY_SEEN_MS, sleepRules, sleepVeto, sleptPastSoftKeeps, tabsToSleep, unusedAfterMs, unusedTabsToSleep } from "./sleepPolicy.ts";
 import { countSwitch } from "./tabSwitches.ts";
 import { frontTabChanges } from "../windows/frontTabs.ts";
 
@@ -138,12 +138,10 @@ test("Sleep tabs unused for picks every tab hidden that long, oldest first, what
   assert.deepEqual(unusedTabsToSleep([idle("t", 300, { askAgainAt: NOW + 1 })], NOW, 60 * MINUTE).vetoed, [{ id: "t", veto: "keptRecently" }]);
 });
 
-test("the unused wait follows the setting and Memory Saver, and only notifications, pinning and background title changes are soft engine keeps", () => {
+test("the unused wait follows the setting and Memory Saver, and only the engine's own past-soft-keeps answer counts as such a sleep", () => {
   const on = (sleepUnusedTabsAfter, memorySaver = true) => unusedAfterMs({ memorySaver, sleepUnusedTabsAfter });
   assert.deepEqual(["never", "1h", "4h", "12h", "24h", "bogus"].map((v) => on(v)), [null, 60 * MINUTE, 240 * MINUTE, 720 * MINUTE, 1440 * MINUTE, null]);
   assert.equal(on("1h", false), null, "Memory Saver off sleeps nothing");
-  assert.equal(onlySoftEngineKeeps([13]), true);
-  assert.equal(onlySoftEngineKeeps([25, 23, 13]), true);
-  assert.equal(onlySoftEngineKeeps([]), false, "no keep at all isn't a soft keep");
-  for (const hard of [-1, 5, 7, 14, 24, 26, 27, 100, 101, 102, 103]) assert.equal(onlySoftEngineKeeps([25, hard]), false, `code ${hard} is never forced`);
+  assert.equal(sleptPastSoftKeeps([200]), true);
+  for (const kept of [[], [13], [25, 23, 13], [200, 26], [-1]]) assert.equal(sleptPastSoftKeeps(kept), false, `${JSON.stringify(kept)} isn't a forced sleep`);
 });

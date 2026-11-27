@@ -148,5 +148,7 @@ extension WebKitTab: PageTab {
 
   func sleepIfHidden(for seconds: Double) -> [NSNumber] { [-1] }
 
+  func sleepIfUnused(for seconds: Double) -> [NSNumber] { [-1] }
+
   func wakeIfSleeping() -> Bool { false }
 }
