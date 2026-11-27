@@ -56,7 +56,7 @@ function domainKey(host: string): string | null {
     else if (char !== "." && char.normalize("NFKC").includes(".")) return null;
     else dotted += char;
   }
-  const mapped = dotted.replace(IGNORED, "").normalize("NFKC").toLowerCase();
+  const mapped = Array.from(dotted.replace(IGNORED, "").normalize("NFKC"), (char) => char.toLowerCase()).join("");
   if (FORBIDDEN_IN_DOMAIN.test(mapped)) return null;
   return mapped.split(".").map(asciiLabel).join(".");
 }
