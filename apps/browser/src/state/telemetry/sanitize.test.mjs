@@ -493,4 +493,21 @@ test("a crash's source places keep their file name through cleanProperties, and 
     crash_fatal_at: null,
     crash_posted_from: null,
   });
+  for (const host of ["127.0.0.1:443", "example.com:443", "10.0.0.2:8080", "localhost:3000"]) {
+    assert.deepEqual(cleanProperties({ crash_fatal_at: host, crash_posted_from: host }), { crash_fatal_at: null, crash_posted_from: null }, host);
+  }
+  for (const place of ["task_annotator.cc:91", "RCTScrollView.m:1536", "ac_seams.mm:12", "CrashReports.swift:310", "lib.rs:4"]) {
+    assert.equal(cleanProperties({ crash_posted_from: place }).crash_posted_from, place);
+  }
+});
+
+test("posted-task frames keep their image names exactly, underscores, spaces and percent signs included", () => {
+  const { exceptions } = nativeCrashExceptions({
+    frames: [{ image: "Chromium Framework", offset: 1 }],
+    postedFrames: [{ image: "libfoo_bar.dylib", offset: 0x20 }, { image: "100% sure", offset: 0x30 }, { image: "Ardia Core", offset: 0x10 }, { image: "/Users/someone/x.dylib", offset: 1 }],
+  });
+  const posted = exceptions.find((e) => e.type === "PostedTask");
+  assert.deepEqual(posted.frames.slice(1).map((f) => f.module), ["Ardia Core", "100% sure", "libfoo_bar.dylib"]);
+  assert.deepEqual(posted.frames.slice(1).map((f) => f.function), ["Ardia Core + 0x10", "100% sure + 0x30", "libfoo_bar.dylib + 0x20"]);
+  assert.ok(!posted.frames[0].module.includes("/Users"), "a path still goes through the path scrubber");
 });
