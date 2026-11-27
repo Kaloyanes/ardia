@@ -1,20 +1,43 @@
 import AppKit
 import Testing
+import WebKit
 
-@objc(WKFullScreenPlaceholderView) final class StandInPlaceholder: NSView {}
+@objc(WKFullScreenPlaceholderView) final class StandInPlaceholder: NSView {
+  @objc var scrollViewFrame: NSRect { convert(bounds, to: nil) }
+  @objc var hasScrolledContentsUnderTitlebar: Bool { false }
+}
+
+final class AdapterWindow: NSWindow {
+  var adapters: [ObjectIdentifier: Int] = [:]
+
+  @objc(registerScrollViewSeparatorTrackingAdapter:) func registerAdapter(_ view: NSView) {
+    adapters[ObjectIdentifier(view), default: 0] += 1
+  }
+
+  @objc(unregisterScrollViewSeparatorTrackingAdapter:) func unregisterAdapter(_ view: NSView) {
+    adapters[ObjectIdentifier(view), default: 0] -= 1
+  }
+
+  func registered(_ view: NSView) -> Int { adapters[ObjectIdentifier(view)] ?? 0 }
+
+  static func make(width: CGFloat = 400, height: CGFloat = 300) -> AdapterWindow {
+    let window = AdapterWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    return window
+  }
+}
 
 @MainActor
 struct FullscreenScene {
-  let windowed: NSWindow
+  let windowed: AdapterWindow
   let fullscreen: NSWindow
   let oldTab = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
   let page = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
   let placeholder = StandInPlaceholder(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
 
   init() {
-    windowed = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+    windowed = AdapterWindow.make()
     fullscreen = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
-    windowed.isReleasedWhenClosed = false
     fullscreen.isReleasedWhenClosed = false
     windowed.contentView!.addSubview(oldTab)
     oldTab.addSubview(page)
@@ -23,12 +46,15 @@ struct FullscreenScene {
 
   func enterFullscreen() {
     oldTab.replaceSubview(page, with: placeholder)
+    (placeholder.window as? AdapterWindow)?.registerAdapter(placeholder)
     fullscreen.contentView!.addSubview(page)
   }
 
   func exitFullscreen() {
     page.removeFromSuperview()
-    placeholder.superview?.replaceSubview(placeholder, with: page)
+    placeholder.superview?.addSubview(page, positioned: .below, relativeTo: placeholder)
+    (placeholder.window as? AdapterWindow)?.unregisterAdapter(placeholder)
+    placeholder.removeFromSuperview()
   }
 }
 
@@ -60,8 +86,7 @@ struct FullscreenScene {
 
   @Test func `moving the page itself during full screen loses it when full screen ends`() {
     let scene = FullscreenScene()
-    let newWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
-    newWindow.isReleasedWhenClosed = false
+    let newWindow = AdapterWindow.make()
     let newTab = NSView(frame: newWindow.contentView!.bounds)
     newWindow.contentView!.addSubview(newTab)
     scene.page.removeFromSuperview()
@@ -75,8 +100,7 @@ struct FullscreenScene {
 
   @Test func `carrying the placeholder to the new tab brings the page back into it when full screen ends`() {
     let scene = FullscreenScene()
-    let newWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
-    newWindow.isReleasedWhenClosed = false
+    let newWindow = AdapterWindow.make(width: 500, height: 320)
     let newTab = NSView(frame: newWindow.contentView!.bounds)
     newWindow.contentView!.addSubview(newTab)
     let carried = WebKitFullscreenPage.takePlaceholders(from: scene.oldTab)
@@ -99,5 +123,76 @@ struct FullscreenScene {
     #expect(WebKitFullscreenPage.reclaims(scene.page, into: scene.oldTab, inFullscreen: false, settled: true))
     scene.page.removeFromSuperview()
     #expect(WebKitFullscreenPage.reclaims(scene.page, into: scene.oldTab, inFullscreen: false, settled: false))
+  }
+
+  @Test func `moving the placeholder moves WebKit's window registration with it, and the source window that stays open ends balanced`() {
+    let scene = FullscreenScene()
+    let newWindow = AdapterWindow.make(width: 500, height: 320)
+    let newTab = NSView(frame: newWindow.contentView!.bounds)
+    newWindow.contentView!.addSubview(newTab)
+    #expect(scene.windowed.registered(scene.placeholder) == 1)
+    WebKitFullscreenPage.give(WebKitFullscreenPage.takePlaceholders(from: scene.oldTab), to: newTab)
+    #expect(scene.windowed.registered(scene.placeholder) == 0)
+    #expect(newWindow.registered(scene.placeholder) == 1)
+    scene.exitFullscreen()
+    #expect(scene.oldTab.window === scene.windowed)
+    #expect(scene.windowed.registered(scene.placeholder) == 0)
+    #expect(newWindow.registered(scene.placeholder) == 0)
+    #expect(scene.page.superview === newTab)
+  }
+
+  @Test func `a placeholder handed to a tab outside any window registers once the tab joins one`() {
+    let scene = FullscreenScene()
+    let newWindow = AdapterWindow.make()
+    let newTab = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    WebKitFullscreenPage.give(WebKitFullscreenPage.takePlaceholders(from: scene.oldTab), to: newTab)
+    #expect(scene.windowed.registered(scene.placeholder) == 0)
+    newWindow.contentView!.addSubview(newTab)
+    WebKitFullscreenPage.register(WebKitFullscreenPage.placeholders(in: newTab), with: newTab.window)
+    #expect(newWindow.registered(scene.placeholder) == 1)
+    WebKitFullscreenPage.unregister(WebKitFullscreenPage.placeholders(in: newTab), from: newTab.window)
+    newTab.removeFromSuperview()
+    #expect(newWindow.registered(scene.placeholder) == 0)
+  }
+
+  @Test func `a tab adopting a page already in full screen reports the exit when full screen ends`() {
+    let adopted = WebKitFullscreenPage.isOn(.inFullscreen)
+    #expect(adopted)
+    #expect(WebKitFullscreenPage.reportsChange(was: adopted, now: .notInFullscreen))
+    #expect(!WebKitFullscreenPage.reportsChange(was: false, now: .notInFullscreen))
+    #expect(!WebKitFullscreenPage.reportsChange(was: adopted, now: .inFullscreen))
+    #expect(WebKitFullscreenPage.isOn(.enteringFullscreen))
+    #expect(!WebKitFullscreenPage.isOn(.exitingFullscreen))
+  }
+
+  @Test func `picking another tab behind a page held in full screen opens no automatic Picture in Picture`() {
+    var rule = WebKitAutoPictureInPicture()
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: true, heldInFullscreen: true, windowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: true, windowSeen: true), enabled: true, playing: true) == .none)
+    #expect(rule.sight(WebKitFullscreenPage.seen(visible: false, heldInFullscreen: false, windowSeen: true), enabled: true, playing: true) == .open)
+    var old = WebKitAutoPictureInPicture()
+    #expect(old.sight(false, enabled: true, playing: true) == .open)
+  }
+
+  @Test func `a deferred reclaim acts only for the exit and page it was scheduled for`() {
+    let scene = FullscreenScene()
+    var exits = WebKitFullscreenExits()
+    let first = exits.changed()
+    let ticket = WebKitFullscreenReclaim(generation: first, epoch: "a", page: scene.page)
+    #expect(ticket.belongs(to: exits.generation, page: scene.page))
+    _ = exits.changed()
+    #expect(!ticket.belongs(to: exits.generation, page: scene.page))
+    #expect(!ticket.belongs(to: first, page: NSView()))
+    var gone: NSView? = NSView()
+    let orphaned = WebKitFullscreenReclaim(generation: first, epoch: "a", page: gone)
+    gone = nil
+    #expect(!orphaned.belongs(to: first, page: nil))
+  }
+
+  @Test func `a deferred reclaim counts only under the consent period it was scheduled in`() {
+    let ticket = WebKitFullscreenReclaim(generation: 1, epoch: "sharing-1", page: nil)
+    #expect(ticket.counts(under: "sharing-1"))
+    #expect(!ticket.counts(under: "sharing-2"))
+    #expect(!ticket.counts(under: ""))
   }
 }

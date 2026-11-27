@@ -66,8 +66,14 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     if subview === webView { updateHidden() }
   }
 
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    placeholdersWillLeave(window)
+    super.viewWillMove(toWindow: newWindow)
+  }
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    placeholdersDidArrive(in: window)
     if window != nil { followInterfaceScale() }
     watchSight()
     showNextDialog()

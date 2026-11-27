@@ -7,7 +7,7 @@ import { runSwiftTests } from "./swift-testing.mjs";
 const read = (name) => readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 
 test("a WebKit page in full screen stays shown when its tab is hidden, and comes back into the tab it moved to", (t) => {
-  runSwiftTests(t, "fullscreen-page-test", ["../ios/WebKitFullscreenPage.swift", "./webkit-fullscreen-page.test.swift"]);
+  runSwiftTests(t, "fullscreen-page-test", ["../ios/WebKitFullscreenPage.swift", "../ios/WebKitAutoPictureInPicture.swift", "./webkit-fullscreen-page.test.swift"]);
 });
 
 test("a WebKit tab hides, hands over and takes its page through the full-screen rules", () => {
@@ -31,5 +31,40 @@ test("a WebKit tab hides, hands over and takes its page through the full-screen 
   assert.match(lifecycle, /self\?\.fullscreenPageMoved\(v\.fullscreenState\)\n\s+self\?\.fullscreenChanged\(v\.fullscreenState\)/);
   assert.match(fullscreenPage, /view\.fullscreenPlaceholders = WebKitFullscreenPage\.takePlaceholders\(from: self\)/);
   assert.match(fullscreenPage, /WebKitFullscreenPage\.give\(placeholders, to: self\)/);
-  for (const name of ["fullscreenMovedWithTab", "fullscreenKeptShown", "fullscreenPageReclaimed"]) assert.match(fullscreenPage, new RegExp(`countFullscreenPage\\("${name}"\\)`));
+  for (const name of ["fullscreenMovedWithTab", "fullscreenKeptShown", "fullscreenPageReclaimed"]) assert.match(fullscreenPage, new RegExp(`countFullscreenPage\\("${name}", stamp:`));
+});
+
+test("a tab that adopts a page in full screen starts marked full screen without counting a second entry", () => {
+  const fullscreenPage = read("../ios/WebKitTab+FullscreenPage.swift");
+  const place = fullscreenPage.match(/func place\(_ view: WebKitWebView\) \{([\s\S]*?)\n  \}/)[1];
+  assert.match(place, /if WebKitFullscreenPage\.isOn\(view\.fullscreenState\) \{ pageMedia\.fullscreen = true \}/);
+  assert.doesNotMatch(place, /"fullscreen"/);
+});
+
+test("a page held in full screen counts as seen, so hiding its tab opens no automatic Picture in Picture", () => {
+  const sight = read("../ios/WebKitTab+AutoPictureInPicture.swift");
+  assert.match(sight, /return WebKitFullscreenPage\.seen\(visible: visible, heldInFullscreen: pageHeldInFullscreen, windowSeen: ArdiaChromeWindowHost\.userSees\(window\)\)/);
+  assert.match(read("../ios/WebKitTab+FullscreenPage.swift"), /updateHidden\(\)\n\s+updateSight\(\)/);
+});
+
+test("WebKit's placeholder registration follows the placeholder from window to window", () => {
+  const tab = read("../ios/WebKitTab.swift");
+  assert.match(tab, /override func viewWillMove\(toWindow newWindow: NSWindow\?\) \{\n\s+placeholdersWillLeave\(window\)/);
+  assert.match(tab, /override func viewDidMoveToWindow\(\) \{\n\s+super\.viewDidMoveToWindow\(\)\n\s+placeholdersDidArrive\(in: window\)/);
+  const page = read("../ios/WebKitFullscreenPage.swift");
+  assert.match(page, /"registerScrollViewSeparatorTrackingAdapter:"/);
+  assert.match(page, /"unregisterScrollViewSeparatorTrackingAdapter:"/);
+  assert.match(page, /window\.responds\(to: registerAdapter\)/);
+});
+
+test("a deferred reclaim keeps the page, the exit and the consent period it was scheduled with", () => {
+  const fullscreenPage = read("../ios/WebKitTab+FullscreenPage.swift");
+  const moved = fullscreenPage.match(/func fullscreenPageMoved\([^)]*\) \{([\s\S]*?)\n  \}/)[1];
+  const ticketAt = moved.indexOf("WebKitFullscreenReclaim(generation: exit, epoch: ArdiaEvents.consentEpoch, page: webView)");
+  assert.ok(ticketAt >= 0 && ticketAt < moved.indexOf("asyncAfter"), "the ticket is taken before the reclaim is deferred");
+  const reclaim = fullscreenPage.match(/private func reclaimPage\([^)]*\) \{([\s\S]*?)\n  \}/)[1];
+  assert.match(reclaim, /ticket\.belongs\(to: life\.fullscreenExits\.generation, page: view\)/);
+  assert.match(reclaim, /guard ticket\.counts\(under: ArdiaEvents\.consentEpoch\) else \{ return \}/);
+  assert.match(reclaim, /stamp: ArdiaConsentStamp\(epoch: ticket\.epoch\)/);
+  assert.doesNotMatch(reclaim, /ArdiaConsentStamp\.begin/);
 });

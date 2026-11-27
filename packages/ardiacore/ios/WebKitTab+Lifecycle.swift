@@ -17,6 +17,7 @@ struct WebKitTabLife {
   var pageColor: String?
   var contentsBackgroundColor: NSColor?
   var fullscreenKeptShownCounted = false
+  var fullscreenExits = WebKitFullscreenExits()
 }
 
 enum WebKitTabHistory {
