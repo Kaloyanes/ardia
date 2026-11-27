@@ -34,21 +34,13 @@ export function groupWithOpener(s: BrowserState, tabId: string, openerId: string
   if (!tab || !opener) return s;
   if (opener.windowId !== tab.windowId || opener.profileId !== tab.profileId) return s;
   const w = s.windows[tab.windowId]!;
-  if (inPinnedContainer(s, openerId)) {
-    const gathered = pinnedChildGroup(s, openerId, tab.profileId);
-    if (gathered) return joinGroup(s, w, gathered, tabId);
-    if (!background || !s.settings.cmdClickCreatesTabGroup) return s;
-    return withGroup(s, [tabId], { autoUngroup: true, pinnedOpenerId: openerId })[0];
-  }
+  if (inPinnedContainer(s, openerId)) return s;
   const existing = groupOf(s, openerId);
   if (!existing && !(background && s.settings.cmdClickCreatesTabGroup)) return s;
   if (existing) return joinGroup(s, w, existing, tabId);
   const panes = splitTabIdsOf(splitOf(s, openerId)) ?? [openerId];
   return withGroup(s, [...panes, tabId], { autoUngroup: true })[0];
 }
-
-export const pinnedChildGroup = (s: Pick<BrowserState, "groups">, openerId: string, profileId: string): TabGroup | undefined =>
-  Object.values(s.groups).find((g) => g.pinnedOpenerId === openerId && g.profileId === profileId && g.tabIds.length);
 
 function joinGroup(s: BrowserState, w: BrowserWindow, group: TabGroup, tabId: string): BrowserState {
   const members = [...group.tabIds, tabId];
@@ -60,7 +52,7 @@ function joinGroup(s: BrowserState, w: BrowserWindow, group: TabGroup, tabId: st
 export function withGroup(
   s: BrowserState,
   ids: string[],
-  o: { name?: string; pinned?: boolean; autoUngroup?: boolean; pinnedOpenerId?: string; parentId?: string | null } = {},
+  o: { name?: string; pinned?: boolean; autoUngroup?: boolean; parentId?: string | null } = {},
 ): [BrowserState, string] {
   const tabs = withSplitRows(s, ids).map((id) => s.tabs[id]).filter((t): t is Tab => !!t && !t.pin);
   const first = tabs[0];
@@ -88,7 +80,6 @@ export function withGroup(
     tabIds: tabIds.filter((id) => members.has(id)),
     createdAt: Date.now(),
     ...(o.autoUngroup ? { autoUngroup: true } : {}),
-    ...(o.pinnedOpenerId ? { pinnedOpenerId: o.pinnedOpenerId } : {}),
     ...(container ? { parentId: container.id } : {}),
   };
   const groups = nestGroups({ ...leaveGroups(s.groups, members, keep), [group.id]: group });

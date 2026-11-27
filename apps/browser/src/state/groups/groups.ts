@@ -101,7 +101,7 @@ export function leaveGroups(groups: Record<string, TabGroup>, ids: Set<string>, 
   for (const g of Object.values(groups)) {
     const tabIds = keep?.has(g.id) ? g.tabIds : g.tabIds.filter((id) => !ids.has(id));
     if (tabIds.length === g.tabIds.length) next[g.id] = g;
-    else if (tabIds.length > (g.autoUngroup && !g.pinnedOpenerId ? 1 : 0)) next[g.id] = { ...g, tabIds };
+    else if (tabIds.length > (g.autoUngroup ? 1 : 0)) next[g.id] = { ...g, tabIds };
   }
   return reparent(next, groups);
 }
