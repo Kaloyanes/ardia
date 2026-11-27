@@ -43,12 +43,9 @@ export function createRemoteSuggester(fetchRemote: RemoteFetch) {
   };
 
   const ground = (keep: (flight: Flight) => boolean) => {
-    const kept: Flight[] = [];
-    for (const flight of flights) {
-      if (keep(flight)) kept.push(flight);
-      else flight.controller.abort();
-    }
-    flights = kept;
+    const grounded = flights.filter((flight) => !keep(flight));
+    flights = flights.filter(keep);
+    for (const flight of grounded) flight.controller.abort();
   };
 
   return {
@@ -60,9 +57,9 @@ export function createRemoteSuggester(fetchRemote: RemoteFetch) {
       for (const [key, values] of answers) answers.set(key, values.filter((value) => !drop(value)));
     },
     reset() {
-      ground(() => false);
       shown = null;
       shownTicket = ++asked;
+      ground(() => false);
     },
     inFlight: () => flights.length,
     ask(ask: RemoteAsk) {
@@ -74,9 +71,9 @@ export function createRemoteSuggester(fetchRemote: RemoteFetch) {
         return;
       }
       ground((flight) => flight.scope === ask.scope && ask.text.startsWith(flight.text));
-      while (flights.length >= MOST_REMOTE_IN_FLIGHT) flights.shift()!.controller.abort();
       const flight: Flight = { scope: ask.scope, text: ask.text, controller: new AbortController() };
       flights.push(flight);
+      if (flights.length > MOST_REMOTE_IN_FLIGHT) ground((other) => flights.indexOf(other) >= flights.length - MOST_REMOTE_IN_FLIGHT);
       void fetchRemote(ask.text, flight.controller.signal).then((outcome) => {
         flights = flights.filter((other) => other !== flight);
         if (flight.controller.signal.aborted || outcome.status !== "ok") return;
