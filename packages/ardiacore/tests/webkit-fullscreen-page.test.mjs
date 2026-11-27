@@ -27,7 +27,7 @@ test("a WebKit tab hides, hands over and takes its page through the full-screen 
   }
   assert.match(attach, /place\(view\)/);
   assert.doesNotMatch(attach, /addSubview\(view\)/);
-  assert.match(tab, /override func didAddSubview\(_ subview: NSView\) \{\n\s+super\.didAddSubview\(subview\)\n\s+if subview === webView \{ updateHidden\(\) \}/);
+  assert.match(fullscreenPage, /override func didAddSubview\(_ subview: NSView\) \{\n\s+super\.didAddSubview\(subview\)\n\s+if subview === webView \{ updateHidden\(\) \}/);
   assert.match(lifecycle, /self\?\.fullscreenPageMoved\(v\.fullscreenState\)\n\s+self\?\.fullscreenChanged\(v\.fullscreenState\)/);
   assert.match(fullscreenPage, /view\.fullscreenPlaceholders = WebKitFullscreenPage\.takePlaceholders\(from: self\)/);
   assert.match(fullscreenPage, /WebKitFullscreenPage\.give\(placeholders, to: self\)/);
@@ -53,7 +53,7 @@ test("a page held in full screen counts as seen, so hiding its tab opens no auto
 
 test("WebKit's placeholder registration follows the placeholder from window to window", () => {
   const tab = read("../ios/WebKitTab.swift");
-  assert.match(tab, /override func viewWillMove\(toWindow newWindow: NSWindow\?\) \{\n\s+placeholdersWillLeave\(window\)/);
+  assert.match(read("../ios/WebKitTab+FullscreenPage.swift"), /override func viewWillMove\(toWindow newWindow: NSWindow\?\) \{\n\s+placeholdersWillLeave\(window\)/);
   assert.match(tab, /override func viewDidMoveToWindow\(\) \{\n\s+super\.viewDidMoveToWindow\(\)\n\s+placeholdersDidArrive\(in: window\)/);
   const page = read("../ios/WebKitFullscreenPage.swift");
   assert.match(page, /"registerScrollViewSeparatorTrackingAdapter:"/);

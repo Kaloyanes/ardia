@@ -6,6 +6,16 @@ extension WebKitTab {
 
   private func inFullscreen(_ view: WKWebView) -> Bool { view.fullscreenState != .notInFullscreen }
 
+  override func didAddSubview(_ subview: NSView) {
+    super.didAddSubview(subview)
+    if subview === webView { updateHidden() }
+  }
+
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    placeholdersWillLeave(window)
+    super.viewWillMove(toWindow: newWindow)
+  }
+
   var pageHeldInFullscreen: Bool {
     guard let view = webView else { return false }
     return WebKitFullscreenPage.heldElsewhere(view, from: self, inFullscreen: inFullscreen(view))

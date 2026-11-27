@@ -61,16 +61,6 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     fillWithPage()
   }
 
-  override func didAddSubview(_ subview: NSView) {
-    super.didAddSubview(subview)
-    if subview === webView { updateHidden() }
-  }
-
-  override func viewWillMove(toWindow newWindow: NSWindow?) {
-    placeholdersWillLeave(window)
-    super.viewWillMove(toWindow: newWindow)
-  }
-
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     placeholdersDidArrive(in: window)
