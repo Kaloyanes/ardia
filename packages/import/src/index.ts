@@ -295,6 +295,10 @@ export const forgetUnlockedKeys = () => Native.forgetUnlockedKeys();
 
 export function writeImported(token: string, profile: string, kinds: ("cookies" | "autofill")[], options: Pick<ImportOptions, "signal"> = {}) {
   if (!options.signal) return call<WrittenCounts>(Native.writeImported(token, profile, kinds));
+  if (options.signal.aborted) {
+    Native.discardImported(token);
+    return Promise.reject(new ArdiaError("cancelled", "Import cancelled"));
+  }
   return job<WrittenCounts>({ signal: options.signal }, (jobId) => Native.writeImportedJob(jobId, token, profile, kinds));
 }
 

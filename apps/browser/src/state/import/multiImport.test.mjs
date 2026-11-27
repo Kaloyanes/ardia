@@ -9,6 +9,7 @@ let reads = {};
 let readCalls = [];
 let discarded = [];
 let cancelledJobs = [];
+let writeJobs = [];
 let unlocked = true;
 let duringRead = () => {};
 const native = { listBrowsers: async () => "[]", importSafariExport: async () => "{}", importSafariDirect: async () => "{}", unlockBrowser: async () => null, chooseImportFile: async () => null, onWrite: () => {}, writeReply: {} };
@@ -23,6 +24,7 @@ globalThis.acTestNativeModules = {
     addListener: () => ({ remove() {} }),
     cancelImport: (jobId) => cancelledJobs.push(jobId),
     writeImportedJob: async (jobId) => {
+      writeJobs.push(jobId);
       await native.onWrite(jobId);
       return JSON.stringify({ cookies: 0, addresses: 0, cards: 0, ...native.writeReply });
     },
@@ -90,6 +92,7 @@ beforeEach(() => {
   readCalls = [];
   discarded = [];
   cancelledJobs = [];
+  writeJobs = [];
   native.writeReply = {};
   unlocked = true;
   duringRead = () => {};
@@ -672,4 +675,26 @@ test("a native cookie and card write is told to stop when its import is cancelle
   released.resolve();
   await settle();
   assert.equal(takeImportRuns().import_writes_cancelled, 1);
+});
+
+test("a write asked for after its import was cancelled never reaches native and gives its token back", async () => {
+  const { importModule } = await import("../../platform/importModule.ts");
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(importModule().writeImported("vault-early", "", ["cookies"], { signal: cancelled.signal }), { code: "cancelled" });
+  assert.deepEqual(writeJobs, []);
+  assert.deepEqual(discarded, ["vault-early"]);
+});
+
+test("a cancel that lands before native has picked up the queued write still names that write", async () => {
+  const { importModule } = await import("../../platform/importModule.ts");
+  const released = deferred();
+  native.onWrite = () => released.promise;
+  native.writeReply = { cancelled: 1 };
+  const cancel = new AbortController();
+  const writing = importModule().writeImported("vault-queued", "", ["cookies"], { signal: cancel.signal });
+  cancel.abort();
+  assert.deepEqual(cancelledJobs, writeJobs, "the cancel names the job the write was queued under, before it runs");
+  released.resolve();
+  assert.equal((await writing).cancelled, 1);
 });

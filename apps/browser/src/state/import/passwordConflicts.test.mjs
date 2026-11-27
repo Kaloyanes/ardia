@@ -187,7 +187,19 @@ test("a percent-encoded host is the same origin as its decoded form, and invalid
   assert.equal(sameOriginKey("https://b%c3%bccher.example/sign-in"), ascii);
   assert.equal(sameOriginKey("https://%65xample.com"), "https://example.com");
   assert.equal(sameOriginKey("https://b%C3cher.example"), "https://b%c3cher.example");
-  assert.equal(sameOriginKey("https://a%FFb%C3%BC.example"), sameOriginKey("https://a%FFbü.example"));
   const plan = planLogins([login("chrome", "p", "https://b%C3%BCcher.example/", "me", "1"), login("arc", "p", "https://bücher.example/", "me", "2")], ORDER);
   assert.equal(plan.conflicts.length, 1);
+});
+
+test("an escape that decodes to anything but host text keeps the host as written, so it never meets a valid origin", async () => {
+  const { sameOriginKey } = await import("./passwordConflicts.ts");
+  assert.equal(sameOriginKey("https://example.com%3A8443"), "https://example.com%3a8443");
+  assert.notEqual(sameOriginKey("https://example.com%3A8443"), sameOriginKey("https://example.com:8443"));
+  assert.equal(sameOriginKey("https://example.com%2Fpath"), "https://example.com%2fpath");
+  assert.equal(sameOriginKey("https://exa%00mple.com"), "https://exa%00mple.com");
+  assert.equal(sameOriginKey("https://example%2Ecom"), "https://example.com");
+  assert.equal(sameOriginKey("https://ex%25ample.com"), "https://ex%25ample.com");
+  assert.ok(!sameOriginKey("https://exa%00mple.com").includes("\u0000"));
+  const plan = planLogins([login("chrome", "p", "https://example.com%3A8443/", "me", "same"), login("arc", "p", "https://example.com:8443/", "me", "same")], ORDER);
+  assert.deepEqual(plan.clean.map((l) => l.origin).sort(), ["https://example.com%3A8443", "https://example.com:8443"]);
 });

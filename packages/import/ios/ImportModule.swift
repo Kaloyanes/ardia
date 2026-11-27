@@ -228,17 +228,3 @@ public class ImportModule: Module, ImportNative {
     String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
   }
 }
-
-final class ImportJobs: @unchecked Sendable {
-  private let lock = NSLock()
-  private var running: [String: Cancellation] = [:]
-
-  func start(_ id: String) -> Cancellation {
-    let c = Cancellation()
-    lock.withLock { running[id] = c }
-    return c
-  }
-
-  func cancel(_ id: String) { lock.withLock { running[id] }?.cancel() }
-  func finish(_ id: String) { lock.withLock { running[id] = nil } }
-}

@@ -48,8 +48,18 @@ function decodedRun(run: string): string {
   return out;
 }
 
-const percentDecoded = (host: string) => host.replace(ESCAPED_RUN, decodedRun);
-const asciiHost = (host: string) => percentDecoded(host).normalize("NFKC").toLowerCase().replace(IDEOGRAPHIC_DOTS, ".").split(".").map(asciiLabel).join(".");
+const HOST_LABEL_TEXT = /^[\p{L}\p{M}\p{N}.-]*$/u;
+
+function percentDecoded(host: string): string | null {
+  const decoded = host.replace(ESCAPED_RUN, decodedRun);
+  return decoded === host || HOST_LABEL_TEXT.test(decoded) ? decoded : null;
+}
+
+const foldedHost = (host: string) => host.normalize("NFKC").toLowerCase().replace(IDEOGRAPHIC_DOTS, ".").split(".").map(asciiLabel).join(".");
+const asciiHost = (host: string) => {
+  const decoded = percentDecoded(host);
+  return decoded === null ? host.toLowerCase() : foldedHost(decoded);
+};
 
 export function sameOriginKey(origin: string): string {
   const found = ORIGIN_PARTS.exec(origin.trim());
