@@ -20,14 +20,14 @@ import { getDownloadSettings, setDownloadSettings, type DownloadSettings } from 
 import { getExternalAppAllowances, getPreloadPages, getSiteSettingsOrigins, getZoomLevels, setPreloadPages } from "../../platform/siteSettings";
 import { getPasswordAutofill, setPasswordAutofill } from "../../platform/passwords";
 import { orWarn } from "../../lib/fallback";
-import { menuShortcuts } from "../../platform/commands";
+import { menuShortcuts, type MenuShortcut } from "../../platform/commands";
 import { setMenuBarShortcuts } from "../commands/commandShortcuts";
 import { UNAVAILABLE_COMMANDS } from "../commands/commandCatalog";
 import { currentSettings } from "../browser/current";
 import { engineProfile } from "../browser/model";
 import { currentSyncFolder, folderInfo } from "../sync/engine";
 import { extensionsProfileId, refreshExtensions } from "../extensions/actions";
-import { cached, load, loadAll, need, resource, store, useAllLoaded, type Needed } from "./resources";
+import { cached, load, loadAll, need, resource, store, useAllLoaded, type Needed, type Resource } from "./resources";
 import { onSettingsOpen, type SettingsPane } from "./settingsWindows";
 import { FOLLOW_EVERY_MS, FOLLOW_FOR_MS, FOLLOW_UPDATE_EVERY_MS, FOLLOW_UPDATE_FOR_MS, switchOutcome, updateUnderWay, updaterBusy } from "./updateStatus";
 import { noteUpdateChannelSwitch } from "../telemetry/usage";
@@ -61,12 +61,22 @@ export const autofillEnabled = resource("autofillEnabled", (profile: string) =>
 export const autofillToggleAsked = resource("autofillToggleAsked", (profile: string, toggle: AutofillToggle) => Promise.resolve(askedValue(profile, toggle)));
 export const downloadSettings = resource("downloadSettings", (profile: string) => getDownloadSettings(profile).catch(() => null));
 export const extensionList = resource("extensions", (profile: string) => refreshExtensions(profile, consentToken()));
-export const shortcutItems = resource("menuShortcuts", () =>
-  menuShortcuts().then(
-    (items) => (setMenuBarShortcuts(items), items.filter((item) => !UNAVAILABLE_COMMANDS.has(item.id))),
-    () => [],
-  ),
+
+function offered(items: readonly MenuShortcut[]): MenuShortcut[] {
+  setMenuBarShortcuts(items);
+  const shown = items.filter((item) => !UNAVAILABLE_COMMANDS.has(item.id));
+  const held = cached(shortcutItems, []);
+  return held && JSON.stringify(held) === JSON.stringify(shown) ? held : shown;
+}
+
+export const shortcutItems: Resource<[], MenuShortcut[]> = resource(
+  "menuShortcuts",
+  () => menuShortcuts().then(offered, () => []),
+  (items) => items.length > 0,
 );
+
+export const noteMenuShortcuts = (items: readonly MenuShortcut[]) => store(shortcutItems, [], offered(items));
+
 export const engineVersion = resource("engineInfo", () => engineInfo().catch(() => null));
 const defaultProfile = () => engineProfile(useBrowser.getState(), currentSettings().defaultProfileId);
 

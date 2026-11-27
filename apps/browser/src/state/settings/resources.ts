@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 
-export type Resource<A extends unknown[], T> = { name: string; fetch: (...args: A) => Promise<T> };
+export type Resource<A extends unknown[], T> = { name: string; fetch: (...args: A) => Promise<T>; keep?: (value: T) => boolean };
 
-export const resource = <A extends unknown[], T>(name: string, fetch: (...args: A) => Promise<T>): Resource<A, T> => ({ name, fetch });
+export const resource = <A extends unknown[], T>(name: string, fetch: (...args: A) => Promise<T>, keep?: (value: T) => boolean): Resource<A, T> => ({ name, fetch, keep });
 
 const keyOf = (name: string, args: unknown[]) => JSON.stringify([name, ...args]);
 
@@ -40,6 +40,8 @@ export function useResource<A extends unknown[], T>(r: Resource<A, T>, ...args: 
   const key = keyOf(r.name, args);
   const value = useCache((s) => s[key]) as T | undefined;
   useEffect(() => {
+    const held = useCache.getState();
+    if (key in held && r.keep?.(held[key] as T)) return;
     load(r, args).catch(() => {});
   }, [key]);
   return [value, () => load(r, args, { fresh: true }).catch(() => undefined)];

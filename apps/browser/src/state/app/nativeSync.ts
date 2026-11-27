@@ -22,7 +22,7 @@ import { noteIncomingLinksRefused } from "../telemetry/externalAppCounts";
 import { startUnclaimedEscape } from "../windows/unclaimedEscape";
 import { SMALL_LIGHTS_CENTER } from "../windows/small";
 import { runCommand } from "../commands/commands";
-import { setMenuBarShortcuts } from "../commands/commandShortcuts";
+import { noteMenuShortcuts } from "../settings/paneData";
 import { finishAnimatedCloses } from "../windows/closeAnimated";
 import { followHandedBack, startKeyboardFollows } from "../focus/keyboardFollows";
 import { cancelAbandonedFocusMoves, settlingCommandFocus } from "../focus/focusHandoff";
@@ -152,7 +152,7 @@ export function startNativeSync() {
     if (menuItems === lastMenuItems) return void sent;
     lastMenuItems = menuItems;
     void sent.then(menuShortcuts).then((items) => {
-      setMenuBarShortcuts(items);
+      noteMenuShortcuts(items);
       menuTimer ??= setTimeout(syncMenu, 120);
     }, () => {});
   };
