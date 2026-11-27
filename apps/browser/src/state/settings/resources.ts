@@ -1,9 +1,10 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 
-export type Resource<A extends unknown[], T> = { name: string; fetch: (...args: A) => Promise<T>; keep?: (value: T) => boolean };
+export type ResourceHooks<T> = { keep?: (value: T) => boolean; reused?: (value: T) => void; accepted?: (value: T) => void };
+export type Resource<A extends unknown[], T> = { name: string; fetch: (...args: A) => Promise<T> } & ResourceHooks<T>;
 
-export const resource = <A extends unknown[], T>(name: string, fetch: (...args: A) => Promise<T>, keep?: (value: T) => boolean): Resource<A, T> => ({ name, fetch, keep });
+export const resource = <A extends unknown[], T>(name: string, fetch: (...args: A) => Promise<T>, hooks: ResourceHooks<T> = {}): Resource<A, T> => ({ name, fetch, ...hooks });
 
 const keyOf = (name: string, args: unknown[]) => JSON.stringify([name, ...args]);
 
@@ -19,7 +20,10 @@ export function load<A extends unknown[], T>(r: Resource<A, T>, args: A, { fresh
   generations.set(key, generation);
   const job = r.fetch(...args).then(
     (value) => {
-      if (generations.get(key) === generation) useCache.setState({ [key]: value });
+      if (generations.get(key) === generation) {
+        r.accepted?.(value);
+        useCache.setState({ [key]: value });
+      }
       return value;
     },
   );
@@ -33,6 +37,7 @@ export const cached = <A extends unknown[], T>(r: Resource<A, T>, args: A): T | 
 export function store<A extends unknown[], T>(r: Resource<A, T>, args: A, value: T) {
   const key = keyOf(r.name, args);
   generations.set(key, (generations.get(key) ?? 0) + 1);
+  r.accepted?.(value);
   useCache.setState({ [key]: value });
 }
 
@@ -41,7 +46,10 @@ export function useResource<A extends unknown[], T>(r: Resource<A, T>, ...args: 
   const value = useCache((s) => s[key]) as T | undefined;
   useEffect(() => {
     const held = useCache.getState();
-    if (key in held && r.keep?.(held[key] as T)) return;
+    if (key in held && r.keep?.(held[key] as T)) {
+      r.reused?.(held[key] as T);
+      return;
+    }
     load(r, args).catch(() => {});
   }, [key]);
   return [value, () => load(r, args, { fresh: true }).catch(() => undefined)];

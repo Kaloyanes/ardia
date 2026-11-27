@@ -79,12 +79,12 @@ test("the menu sync keeps the Settings list current without a second read, and k
   const listed = cached(shortcutItems, []);
   const revision = menuBarRevision();
 
-  noteMenuShortcuts(menuList());
+  noteMenuShortcuts(menuList(), null);
   assert.equal(cached(shortcutItems, []), listed);
   assert.equal(menuBarRevision(), revision);
 
   const extension = { id: "openExtension:x", title: "X", path: ["Extensions"], remappable: true };
-  noteMenuShortcuts([...menuList(), extension]);
+  noteMenuShortcuts([...menuList(), extension], null);
   assert.deepEqual(cached(shortcutItems, []).map((item) => item.id), ["newTab", "reload", "openExtension:x"]);
   assert.equal(menuBarRevision(), revision + 1);
 
@@ -93,4 +93,23 @@ test("the menu sync keeps the Settings list current without a second read, and k
   assert.equal(asked.calls, 1);
   assert.deepEqual(pane.value[0].map((item) => item.id), ["newTab", "reload", "openExtension:x"]);
   pane.unmount();
+});
+
+test("a Settings read that finishes after the menu sync stored a newer list changes neither that list nor the menu bar", async () => {
+  let finish = () => {};
+  menus.menuShortcuts = () => new Promise((done) => (finish = done));
+  const stale = load(shortcutItems, [], { fresh: true });
+
+  const added = { id: "openExtension:y", title: "Y", path: ["Extensions"], remappable: true };
+  const newer = [...menuList(), added];
+  noteMenuShortcuts(newer, null);
+  const listed = cached(shortcutItems, []);
+  const revision = menuBarRevision();
+
+  finish(menuList());
+  await stale;
+  assert.equal(cached(shortcutItems, []), listed, "the stale read left the newer list in the cache");
+  assert.equal(menuBarRevision(), revision, `the stale read changed the menu bar: revision ${revision} -> ${menuBarRevision()}`);
+  setMenuBarShortcuts(newer);
+  assert.equal(menuBarRevision(), revision, "the menu bar still holds the newer list");
 });

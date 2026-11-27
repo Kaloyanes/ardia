@@ -34,6 +34,8 @@ import { noteUpdateChannelSwitch } from "../telemetry/usage";
 import { consentToken } from "../telemetry/client";
 import { forgetPendingOfferToSave, passwordAutofill } from "../site/passwordManager";
 import { notePreloadPagesTurned } from "../telemetry/preloadPagesCounts";
+import type { ConsentToken } from "../telemetry/choice";
+import { noteShortcutList } from "../telemetry/shortcutListCounts";
 import { trackAutofillToggleKept } from "../telemetry/track";
 import { askedValue, rememberAsked } from "./autofillAsked";
 
@@ -63,7 +65,6 @@ export const downloadSettings = resource("downloadSettings", (profile: string) =
 export const extensionList = resource("extensions", (profile: string) => refreshExtensions(profile, consentToken()));
 
 function offered(items: readonly MenuShortcut[]): MenuShortcut[] {
-  setMenuBarShortcuts(items);
   const shown = items.filter((item) => !UNAVAILABLE_COMMANDS.has(item.id));
   const held = cached(shortcutItems, []);
   return held && JSON.stringify(held) === JSON.stringify(shown) ? held : shown;
@@ -71,11 +72,23 @@ function offered(items: readonly MenuShortcut[]): MenuShortcut[] {
 
 export const shortcutItems: Resource<[], MenuShortcut[]> = resource(
   "menuShortcuts",
-  () => menuShortcuts().then(offered, () => []),
-  (items) => items.length > 0,
+  () => {
+    noteShortcutList("read");
+    return menuShortcuts().then(offered, () => []);
+  },
+  {
+    keep: (items) => items.length > 0,
+    reused: () => noteShortcutList("reuse"),
+    accepted: (items) => {
+      if (items.length > 0) setMenuBarShortcuts(items);
+    },
+  },
 );
 
-export const noteMenuShortcuts = (items: readonly MenuShortcut[]) => store(shortcutItems, [], offered(items));
+export function noteMenuShortcuts(items: readonly MenuShortcut[], consent: ConsentToken | null) {
+  noteShortcutList("menuSync", consent);
+  store(shortcutItems, [], offered(items));
+}
 
 export const engineVersion = resource("engineInfo", () => engineInfo().catch(() => null));
 const defaultProfile = () => engineProfile(useBrowser.getState(), currentSettings().defaultProfileId);
