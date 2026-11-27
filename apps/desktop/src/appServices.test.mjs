@@ -324,6 +324,11 @@ test("the bug form names the app for Windows and Linux, and a body too long for 
   const kept = formFields(fitted.url)["what-happened"];
   assert.ok(kept.startsWith(`${LINUX_REPORT_TEMPLATE}line 0 `), kept.slice(0, 80));
   assert.ok(long.startsWith(kept));
+  for (let pad = 0; pad < 256; pad++) {
+    const emoji = bugFormPage(`${"x".repeat(7900 + pad)}😀${"y".repeat(255)}`, "0.2.50", "Linux");
+    assert.ok(emoji.url.length <= REPORT_URL_MAX_CHARS);
+    assert.doesNotThrow(() => formFields(emoji.url));
+  }
   const oneLine = bugFormPage("y".repeat(20_000), "0.2.50", "Linux");
   assert.equal(oneLine.trimmed, true);
   assert.ok(oneLine.url.length <= REPORT_URL_MAX_CHARS);

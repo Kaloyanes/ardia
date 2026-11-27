@@ -2,7 +2,7 @@ import { systemInfo } from "../../browser/src/platform/app";
 import { diagnostics } from "../../browser/src/state/commands/appCommands";
 import { openUrls } from "../../browser/src/state/browser/actions";
 import { useBrowser } from "../../browser/src/state/browser/store";
-import { capture, consentToken } from "../../browser/src/state/telemetry/client";
+import { capture, consentNow } from "../../browser/src/state/telemetry/client";
 import { openReport as openReportSheet } from "../../browser/src/state/report/actions";
 import { setReportPlatform } from "../../browser/src/platform/report";
 import { ardiaHost, type ArdiaHost } from "./host.ts";
@@ -33,6 +33,14 @@ export function adoptHostReports(host: ArdiaHost | undefined = ardiaHost) {
 
 adoptHostReports();
 
+const isLeadingSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
+function shortened(text: string): string {
+  let end = Math.max(0, text.length - TRIM_STEP_CHARS);
+  if (end > 0 && isLeadingSurrogate(text.charCodeAt(end - 1))) end -= 1;
+  return text.slice(0, end);
+}
+
 function fitted(body: string, page: (text: string) => string): ReportPage {
   let text = body;
   let url = page(text);
@@ -41,7 +49,7 @@ function fitted(body: string, page: (text: string) => string): ReportPage {
     url = page(text);
   }
   while (url.length > REPORT_URL_MAX_CHARS && text) {
-    text = text.slice(0, Math.max(0, text.length - TRIM_STEP_CHARS));
+    text = shortened(text);
     url = page(text);
   }
   return { url, trimmed: text !== body };
@@ -72,7 +80,7 @@ export function openReport(windowId: string | null, source: ReportSource = "menu
     openReportSheet(target, source);
     return Promise.resolve();
   }
-  const consent = consentToken();
+  const consent = consentNow();
   return reportPage().then(({ url, trimmed }) => {
     capture("report_sheet_opened", { source, form: "issue_page", trimmed }, consent);
     openUrls([url], target);
