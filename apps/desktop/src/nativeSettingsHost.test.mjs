@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { desktopMode } from "../desktopModes.ts";
@@ -7,6 +8,8 @@ import { desktopMode } from "../desktopModes.ts";
 const APP = fileURLToPath(new URL("../", import.meta.url));
 const LOADER = fileURLToPath(new URL("../scripts/host-test-loader.mjs", import.meta.url));
 const MODE = desktopMode(process.env.ARDIA_DESKTOP_MODE ?? "linux");
+const NO_WEBKIT_TWIN = `platformFeatures.${MODE}`;
+const MODE_HAS_WEBKIT = !existsSync(new URL(`../../browser/src/lib/${NO_WEBKIT_TWIN}.ts`, import.meta.url));
 
 const platformHook = (twin) => `import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, next) {
@@ -51,8 +54,8 @@ function launch({ twin, routes }) {
   return JSON.parse(run.stdout);
 }
 
-test("launching where there is no WebKit sends no WebKit call, so the engine has nothing to reject", () => {
-  const { calls, rejected } = launch({ twin: `platformFeatures.${MODE}`, routes: [] });
+test("launching where there is no WebKit sends no WebKit call, so the engine has nothing to reject", { skip: MODE_HAS_WEBKIT && `--mode ${MODE} runs on the Mac engine, which has WebKit` }, () => {
+  const { calls, rejected } = launch({ twin: NO_WEBKIT_TWIN, routes: [] });
   assert.deepEqual(rejected, []);
   assert.deepEqual(calls, []);
 });
