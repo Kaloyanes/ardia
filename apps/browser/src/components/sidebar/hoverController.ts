@@ -133,7 +133,7 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
     const enter = () => {
       if (isAway()) return;
       setHovered(true);
-      rowShown(windowId, target);
+      rowShown(windowId, target, latest.current.rowTarget);
     };
     rowEntered(windowId, target, event, enter, () => setHovered(true));
   });
@@ -149,7 +149,7 @@ export function useRowHoverCell(windowId: string, rowTarget: Target | null) {
         if (dropHeldEnter(windowId, row)) return;
         setHovered(false);
         watchCovered(windowId, refresh, false);
-        rowLeft(windowId, entered.current, event, onCurrentPage());
+        rowLeft(windowId, entered.current, event, onCurrentPage(), latest.current.rowTarget);
       },
     }),
   );

@@ -415,6 +415,12 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
   return [_tab sleepIfHiddenFor:seconds];
 }
 
+- (BOOL)wakeIfSleeping {
+  if (!_tab || _tab.closed || !_tab.discarded) return NO;
+  [_tab loadIfNeeded];
+  return YES;
+}
+
 - (NSString *)keptFromUnloadingBy {
   if (!_tab || _tab.closed || _tab.profile.offTheRecord || !_transferKey.length) return @"tab";
   if (_visible) return @"visible";

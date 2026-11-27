@@ -147,4 +147,6 @@ extension WebKitTab: PageTab {
   func discard(unload: Bool) -> String { discardPage(unload: unload) }
 
   func sleepIfHidden(for seconds: Double) -> [NSNumber] { [-1] }
+
+  func wakeIfSleeping() -> Bool { false }
 }

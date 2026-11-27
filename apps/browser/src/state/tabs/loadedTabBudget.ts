@@ -10,14 +10,14 @@ import { isPlaying, useMedia } from "../media/media";
 import { withSharedFamily } from "../pins/pinShare";
 import type { Settings } from "../settings/settings";
 import { withPinnedPanes } from "../splits/splits";
-import { noteBudgetSweep, noteSleepVeto, noteTabSleptOverBudget, noteTabSleptOverBudgetReopened } from "../telemetry/tabSleepCounts";
+import { noteBudgetSweep, noteSleepVeto, noteTabSleptOverBudget, noteTabSleptOverBudgetReopened, noteTabSleptUnused } from "../telemetry/tabSleepCounts";
 import { consentToken, stillValid } from "../telemetry/client";
 import type { ConsentToken } from "../telemetry/choice";
 import { hasPage } from "./pageSession";
 import { usePages } from "./pageState";
 import { shownTabIds } from "./shownTabs";
 import { isSleeping, useLifecycle } from "./sleepingTabs";
-import { engineVeto, MINUTE, sleepRules, sleepVeto, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
+import { engineVeto, MINUTE, onlySoftEngineKeeps, SLEEPS_PER_TICK, sleepRules, sleepVeto, tabsToSleep, unusedAfterMs, unusedTabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
 import { liveOf, onLiveChange } from "./tabLive";
 import { countSwitch, forgetSwitchesExcept, switchesOf } from "./tabSwitches";
 import { onFrontTabChanged } from "../windows/frontTabs";
@@ -32,6 +32,7 @@ const ANSWER_WITHIN_MS = 1500;
 const ASK_AGAIN_MS = 10 * MINUTE;
 const KEPT_RECENTLY_MS = 60 * MINUTE;
 const REOPENED_SOON_MS = 30 * MINUTE;
+const UNUSED_SWEEP_MS = 5 * MINUTE;
 
 export function loadedTabBudget(settings: Pick<Settings, "memorySaver" | "memorySaverMode">, sys: SystemState | null): LoadedTabBudget | null {
   if (!PLATFORM_FEATURES.sleepsTabsOverBudget) return null;
@@ -69,8 +70,11 @@ function sleepFacts(s: BrowserState, id: string, shown: ReadonlySet<string>, see
     pictureInPicture: !!useMedia.getState().pipOpen[id],
     loading: liveOf(id).isLoading,
     askAgainAt: askAgainAt.get(id) ?? 0,
+    reopenedSoon: reopenedSoon.has(id),
   };
 }
+
+const shownNow = (s: BrowserState) => new Set(withSharedFamily(s, withPinnedPanes(s, [...shownTabIds(s)])));
 
 export function planOverBudget(
   s: BrowserState,
@@ -82,7 +86,7 @@ export function planOverBudget(
 ): SleepPlan {
   const awake = awakeOf(s, loaded);
   if (awake.length <= budget.tabs) return { sleep: [], vetoed: [] };
-  const shown = new Set(withSharedFamily(s, withPinnedPanes(s, [...shownTabIds(s)])));
+  const shown = shownNow(s);
   return tabsToSleep(
     awake.map((id) => sleepFacts(s, id, shown, seenAt, askAgainAt)),
     now,
@@ -104,7 +108,7 @@ export function tabsOverBudget(
   return plan.sleep;
 }
 
-const COUNTED_VETOES: ReadonlySet<SleepVeto> = new Set(["cliSession", "call", "pictureInPicture", "audible", "recentlyAudible", "frequentlyUsed", "typedInput", "postedDocument", "beforeUnload", "download", "other"]);
+const COUNTED_VETOES: ReadonlySet<SleepVeto> = new Set(["cliSession", "call", "pictureInPicture", "audible", "recentlyAudible", "frequentlyUsed", "reopenedSoon", "typedInput", "postedDocument", "beforeUnload", "download", "other"]);
 const countedVetoes = new Set<string>();
 let countedIn: ConsentToken | null = null;
 
@@ -125,11 +129,11 @@ const vetoedTabOf = (key: string) => key.slice(0, key.indexOf("\n"));
 function vetoNow(id: string, budget: LoadedTabBudget, now: number): SleepVeto | "gone" | null {
   const s = useBrowser.getState();
   if (!s.tabs[id] || !webviews.has(id) || isSleeping(id)) return "gone";
-  const shown = new Set(withSharedFamily(s, withPinnedPanes(s, [...shownTabIds(s)])));
-  return sleepVeto(sleepFacts(s, id, shown, seenAt, askAgainAt), now, { hiddenMs: budget.hiddenMs, pressure: budget.pressure ?? "normal" });
+  return sleepVeto(sleepFacts(s, id, shownNow(s), seenAt, askAgainAt), now, { hiddenMs: budget.hiddenMs, pressure: budget.pressure ?? "normal" });
 }
 
 const seenAt = new Map<string, number>();
+const reopenedSoon = new Set<string>();
 const askAgainAt = new Map<string, number>();
 const sleptAt = new Map<string, number>();
 const keptAt = new Map<string, number>();
@@ -147,6 +151,7 @@ async function sweepOverBudget(budget: LoadedTabBudget | null, now: number, cons
   for (const id of shownTabIds(s)) seenAt.set(id, now);
   for (const id of seenAt.keys()) if (!s.tabs[id]) seenAt.delete(id);
   for (const id of lastAudibleAt.keys()) if (!s.tabs[id]) lastAudibleAt.delete(id);
+  for (const id of reopenedSoon) if (!s.tabs[id]) reopenedSoon.delete(id);
   for (const key of countedVetoes) if (!s.tabs[vetoedTabOf(key)]) countedVetoes.delete(key);
   forgetSwitchesExcept(s.tabs);
   for (const [id, at] of askAgainAt) if (!s.tabs[id] || at <= now) askAgainAt.delete(id);
@@ -192,11 +197,67 @@ export function noteTabWoke(tabId: string, now = Date.now()) {
   const at = sleptAt.get(tabId);
   if (at === undefined) return;
   sleptAt.delete(tabId);
-  if (now - at < REOPENED_SOON_MS) noteTabSleptOverBudgetReopened();
+  if (now - at >= REOPENED_SOON_MS) return;
+  reopenedSoon.add(tabId);
+  noteTabSleptOverBudgetReopened();
 }
 
 export function noteTabGone(tabId: string) {
   sleptAt.delete(tabId);
+  reopenedSoon.delete(tabId);
+}
+
+export function noteTabsSeen(ids: readonly (string | undefined)[], now = Date.now()) {
+  for (const id of ids) if (id) seenAt.set(id, now);
+}
+
+let sweepingUnused = false;
+
+const answered = <T,>(asked: Promise<T> | T | undefined, fallback: T) => withDeadline(Promise.resolve(asked).catch(() => fallback), ANSWER_WITHIN_MS, fallback);
+
+async function sleepPastSoftKeeps(id: string, view: NonNullable<ReturnType<typeof webviews.get>>): Promise<boolean> {
+  const s = useBrowser.getState();
+  if (!s.tabs[id] || webviews.get(id) !== view || isSleeping(id) || shownNow(s).has(id) || inUse(s, id) || heldByCli(id)) return false;
+  return (await answered(view.discard(), "refused" as const)) === "discarded";
+}
+
+export async function sleepUnusedTabs(afterMs: number | null, consent: ConsentToken | null, now = Date.now()): Promise<string[]> {
+  if (afterMs === null || sweepingUnused) return [];
+  const s = useBrowser.getState();
+  const shown = shownNow(s);
+  noteTabsSeen([...shown], now);
+  for (const [id, at] of askAgainAt) if (!s.tabs[id] || at <= now) askAgainAt.delete(id);
+  const plan = unusedTabsToSleep(
+    awakeOf(s, webviews.keys()).map((id) => sleepFacts(s, id, shown, seenAt, askAgainAt)),
+    now,
+    afterMs,
+  );
+  for (const { id, veto } of plan.vetoed) noteVeto(id, veto, consent);
+  const slept: string[] = [];
+  sweepingUnused = true;
+  try {
+    for (const id of plan.sleep.slice(0, SLEEPS_PER_TICK)) {
+      const view = webviews.get(id);
+      if (!view) continue;
+      const keptBy = await answered(view.sleepIfHidden(afterMs / 1000), undefined);
+      if (!keptBy) continue;
+      const pastSoftKeeps = onlySoftEngineKeeps(keptBy);
+      if (keptBy.length && !(pastSoftKeeps && (await sleepPastSoftKeeps(id, view)))) {
+        const veto = engineVeto(keptBy);
+        if (veto === "recentlySeen") seenAt.set(id, now);
+        else {
+          if (veto) noteVeto(id, veto, consent);
+          askAgainAt.set(id, now + ASK_AGAIN_MS);
+        }
+        continue;
+      }
+      slept.push(id);
+      noteTabSleptUnused(!!useBrowser.getState().tabs[id]?.pin, pastSoftKeeps, consent);
+    }
+  } finally {
+    sweepingUnused = false;
+  }
+  return slept;
 }
 
 function noteAudibleEnded(tabId: string, now = Date.now()) {
@@ -248,7 +309,11 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
   if (started) return;
   started = true;
   const budget = (budgetNow = () => loadedTabBudget(useBrowser.getState().settings, system()));
-  onFrontTabChanged((change) => countSwitch(change));
+  const unusedAfter = () => (PLATFORM_FEATURES.sleepsTabsOverBudget ? unusedAfterMs(useBrowser.getState().settings) : null);
+  onFrontTabChanged((change) => {
+    countSwitch(change);
+    noteTabsSeen([change.before, change.after]);
+  });
   onLiveChange((tabId, live, prev) => {
     if (prev.playingAudio && !live.playingAudio) noteAudibleEnded(tabId);
   });
@@ -264,6 +329,14 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
     needed: () => pressureArmed && underPressure(budget()) && overBudget(budget()),
     watch: (changed) => watchOverBudget(budget, changed),
   });
+  everySlowly({
+    every: UNUSED_SWEEP_MS,
+    run: () => void sleepUnusedTabs(unusedAfter(), consentToken()),
+    needed: () => unusedAfter() !== null,
+  });
+  useBrowser.subscribeTo(["settings"], (s, prev) => {
+    if (s.settings.sleepUnusedTabsAfter !== prev.settings.sleepUnusedTabsAfter || s.settings.memorySaver !== prev.settings.memorySaver) reschedule();
+  });
   afterFirstRoot(() => setTimeout(armPressureSweeps, PRESSURE_ARMS_AFTER_MS));
-  if (__DEV__) (globalThis as { acLoadedTabBudget?: unknown }).acLoadedTabBudget = { sleepTabsOverBudget, budget, tabsOverBudget, planOverBudget };
+  if (__DEV__) (globalThis as { acLoadedTabBudget?: unknown }).acLoadedTabBudget = { sleepTabsOverBudget, sleepUnusedTabs, budget, unusedAfter, tabsOverBudget, planOverBudget };
 }
