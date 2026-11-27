@@ -4,7 +4,7 @@ import { useBrowser } from "../browser/store";
 import { listPasswords } from "../site/passwords";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { noteConflictsResolved, noteMultiImport, notePasswordsKeptExisting, notePasswordsNotSaved } from "../telemetry/importRuns";
-import { emptyCounts, saveLogins, type Credential, type HeldNativeLogins, type ImportCounts, type ImportedExtension } from "./apply";
+import { emptyCounts, saveLogins, type Credential, type ImportCounts, type ImportedExtension } from "./apply";
 import { finishImport, importNow, patchImport, showAfterDoneDelay, type ConflictChoiceSet, type ImportFailure, type SourceOutcome, type SourceTally } from "./flow";
 import { listFoundExtensions } from "./listedExtensions";
 import {
@@ -21,27 +21,18 @@ import {
 } from "./passwordConflicts";
 import { adoptImportedEngine } from "./searchEngine";
 
-export type HeldLogins = { profileId: string; credentials: readonly Credential[]; native: HeldNativeLogins | null }[];
-type HeldNative = { browserId: string; profileId: string; consent: ConsentToken | null; held: HeldNativeLogins };
+export type HeldLogins = { profileId: string; credentials: readonly Credential[] }[];
 
 const collected: CollectedLogin[] = [];
-const natives: HeldNative[] = [];
-let unresolvedRun: { outcomes: SourceOutcome[]; plan: LoginPlan; signal: AbortSignal } | null = null;
+let unresolvedRun: { outcomes: SourceOutcome[]; plan: LoginPlan; signal: AbortSignal; token: number } | null = null;
+let conflictTokens = 0;
 
 export function collectLogins(browserId: string, consent: ConsentToken | null, held: HeldLogins) {
-  for (const { profileId, credentials, native } of held) {
-    for (const credential of credentials) collected.push({ browserId, profileId, credential, consent });
-    if (native) natives.push({ browserId, profileId, consent, held: native });
-  }
-}
-
-export function discardLogins(held: HeldLogins) {
-  for (const { native } of held) native?.discard();
+  for (const { profileId, credentials } of held) for (const credential of credentials) collected.push({ browserId, profileId, credential, consent });
 }
 
 export function forgetCollectedLogins() {
   collected.length = 0;
-  for (const n of natives.splice(0)) n.held.discard();
   unresolvedRun = null;
 }
 
@@ -70,9 +61,10 @@ export async function finishRun(outcomes: SourceOutcome[], signal: AbortSignal) 
   const plan = planLogins(collected.splice(0), outcomes.map((o) => o.source.id));
   noteMultiImport({ browsers: outcomes.length, skipped: outcomes.filter((o) => o.skipped).length, merged: plan.merged, conflicts: plan.conflicts.length }, runConsent(outcomes));
   if (!plan.conflicts.length) return completeRun(outcomes, resolvedLogins(plan, {}), signal);
-  unresolvedRun = { outcomes, plan, signal };
+  const token = ++conflictTokens;
+  unresolvedRun = { outcomes, plan, signal, token };
   const none: ConflictChoiceSet = { choices: {}, base: {} };
-  showAfterDoneDelay(signal, { name: "conflicts", conflicts: plan.conflicts, pick: "newest", custom: null, view: "summary", draft: none, filter: "", saving: false });
+  showAfterDoneDelay(signal, { name: "conflicts", token, conflicts: plan.conflicts, pick: "newest", custom: null, view: "summary", draft: none, filter: "", saving: false });
 }
 
 const adoptable = (o: SourceOutcome) => !o.skipped && (o.source.family === "chromium" || o.source.family === "arc") && o.engines.length > 0;
@@ -96,7 +88,7 @@ async function savedAccounts(profileIds: readonly string[]): Promise<Map<string,
   return new Map(lists);
 }
 
-async function saveRunLogins(logins: LoginToSave[], signal: AbortSignal): Promise<SaveTally[]> {
+async function saveRunLogins(outcomes: SourceOutcome[], logins: LoginToSave[], signal: AbortSignal): Promise<SaveTally[]> {
   const tallies: SaveTally[] = [];
   const tallyOf = (browserId: string, consent: ConsentToken | null) => {
     const found = tallies.find((t) => t.browserId === browserId && t.consent === consent);
@@ -115,16 +107,10 @@ async function saveRunLogins(logins: LoginToSave[], signal: AbortSignal): Promis
     else if (result === "refused" && accounts.get(l.profileId)?.has(JSON.stringify([sameOriginKey(l.origin), l.username]))) tally.keptExisting += 1;
     else if (result) tally.failed += 1;
   });
-  for (const n of natives.splice(0)) {
-    if (signal.aborted) {
-      n.held.discard();
-      continue;
-    }
-    const written = await n.held.write(n.profileId);
-    const tally = tallyOf(n.browserId, n.consent);
-    tally.saved += written.saved;
-    tally.keptExisting += written.keptExisting;
-    tally.failed += written.failed;
+  for (const o of outcomes) {
+    const tally = tallyOf(o.source.id, o.consent);
+    tally.keptExisting += o.passwordsWritten.keptExisting;
+    tally.failed += o.passwordsWritten.failed;
   }
   for (const t of tallies) {
     notePasswordsKeptExisting(t.keptExisting, t.consent);
@@ -134,7 +120,7 @@ async function saveRunLogins(logins: LoginToSave[], signal: AbortSignal): Promis
 }
 
 async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], signal: AbortSignal) {
-  const saves = await saveRunLogins(logins, signal);
+  const saves = await saveRunLogins(outcomes, logins, signal);
   if (signal.aborted) return;
   const keptExisting = saves.reduce((n, t) => n + t.keptExisting, 0);
   const consent = runConsent(outcomes);
@@ -228,9 +214,9 @@ export function closeConflictList() {
   patchImport({ step: { ...step, view: "summary", pick: "custom", custom: step.draft } });
 }
 
-export async function importChosenPasswords() {
+export async function importChosenPasswords(token: number) {
   const step = conflictStep();
-  if (!step || step.saving || !unresolvedRun) return;
+  if (!step || step.saving || !unresolvedRun || step.token !== token || unresolvedRun.token !== token) return;
   const custom = step.view === "list" ? step.draft : step.pick === "custom" ? step.custom : null;
   const pick: ConflictPick = step.view === "list" ? "custom" : step.pick;
   const choices = currentChoices(step);

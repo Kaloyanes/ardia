@@ -3,33 +3,28 @@ import { orWarn } from "../../lib/fallback";
 import { applySafari, emptyCounts, importBookmarks, untitledLinks, type ImportKind, type SafariExport } from "./apply";
 import { finishImport, importNow, importSignal, inRun, NO_EXTENSIONS, patchImport, startProgress, updateStatus } from "./flow";
 import { importModule } from "./importApi";
-import { claimRead, claimSettle, liveTurn, ownsTurn, readingNow, releaseRead, STALE, whileOwned, type ImportTurn } from "./importTurn";
-import { settleSource } from "./runImport";
+import { claimRead, claimSettle, ownsTurn, releaseRead, whileOwned, type ImportTurn } from "./importTurn";
+import { settleSource, turnFor } from "./runImport";
 import { consentToken } from "../telemetry/client";
 import { noteUntitledBookmarks } from "../telemetry/importRuns";
 
 export const openFullDiskAccessSettings = () => void importModule().openFullDiskAccessSettings();
 
-const safariTurn = (): ImportTurn | null => {
-  const turn = importNow().step.name === "safari" ? liveTurn() : null;
-  return turn && !readingNow(turn) ? turn : null;
-};
-
-export async function pickSafariExport() {
-  const turn = safariTurn();
+export async function pickSafariExport(token: number | null) {
+  const turn = turnFor(token, "safari");
   if (!turn) return;
-  const path = await whileOwned(turn, importModule().chooseImportFile("safariExport")).catch(orWarn(null));
-  if (path === STALE || !path || importNow().step.name !== "safari") return;
-  await readSafari(turn, "export", path);
+  await whileOwned(turn, importModule().chooseImportFile("safariExport"), (path) => (path && importNow().step.name === "safari" ? readSafari(turn, "export", path) : undefined)).catch(
+    orWarn(undefined),
+  );
 }
 
-export function importSafariExport(path: string) {
-  const turn = safariTurn();
+export function importSafariExport(path: string, token: number | null) {
+  const turn = turnFor(token, "safari");
   return turn ? readSafari(turn, "export", path) : Promise.resolve();
 }
 
-export function importSafariDirect() {
-  const turn = safariTurn();
+export function importSafariDirect(token: number | null) {
+  const turn = turnFor(token, "safari");
   return turn ? readSafari(turn, "direct", "") : Promise.resolve();
 }
 
@@ -42,9 +37,10 @@ async function readSafari(turn: ImportTurn, how: "export" | "direct", path: stri
   const multi = inRun(importNow());
   const api = importModule();
   startProgress(how === "export" ? EXPORT_STATUS : { bookmarks: "active", history: "active", tabs: "active", ...(cookies ? { cookies: "active" as const } : {}) }, 1);
-  let data: SafariExport | typeof STALE;
   try {
-    data = await whileOwned(turn, how === "export" ? api.importSafariExport(path, { signal: turn.signal }) : api.importSafariDirect({ signal: turn.signal }));
+    await whileOwned(turn, how === "export" ? api.importSafariExport(path, { signal: turn.signal }) : api.importSafariDirect({ signal: turn.signal }), (data) =>
+      applySafariRead(turn, data, { how, target, cookies, multi }),
+    );
   } catch (e) {
     const { code } = ardiaError(e);
     if (!ownsTurn(turn)) return;
@@ -58,12 +54,17 @@ async function readSafari(turn: ImportTurn, how: "export" | "direct", path: stri
         : code === "locked"
           ? "Ardia still doesn't have Full Disk Access. Grant it above, or use the export file below."
           : "Couldn't read Safari's data. Try the export file below.";
-    return patchImport({ step: { name: "safari", error }, ...(how === "direct" ? { fullDiskAccess: api.safariHasFullDiskAccess() } : {}) });
+    patchImport({ step: { name: "safari", error }, ...(how === "direct" ? { fullDiskAccess: api.safariHasFullDiskAccess() } : {}) });
   }
-  if (data === STALE) return;
+}
+
+type SafariApply = { how: "export" | "direct"; target: string; cookies: boolean; multi: boolean };
+
+async function applySafariRead(turn: ImportTurn, data: SafariExport, { how, target, cookies, multi }: SafariApply) {
   const { consent, signal } = turn;
   const failed: ImportKind[] = [];
   const counts = await applySafari(target, multi ? { ...data, credentials: [] } : data, cookies, (k) => failed.push(k), consent, signal);
+  if (signal.aborted) return;
   noteUntitledBookmarks(untitledLinks(data.bookmarks), consent);
   const state = (k: ImportKind) => (failed.includes(k) ? "failed" : "done");
   updateStatus(signal, () =>
@@ -77,8 +78,8 @@ async function readSafari(turn: ImportTurn, how: "export" | "direct", path: stri
     if (claimSettle(turn)) finishImport(signal, { counts, failures, notes: [], extensions: NO_EXTENSIONS });
     return;
   }
-  const outcome = { source: { id: source.id, name: source.name, family: source.family }, counts, failures, notes: [], extensions: { profileId: "", found: [], groups: [] }, engines: [], skipped: false, consent };
-  await settleSource(turn, outcome, data.credentials.length ? [{ profileId: target, credentials: data.credentials, native: null }] : []);
+  const outcome = { source: { id: source.id, name: source.name, family: source.family }, counts, failures, notes: [], extensions: { profileId: "", found: [], groups: [] }, engines: [], skipped: false, consent, passwordsWritten: { keptExisting: 0, failed: 0 } };
+  await settleSource(turn, outcome, data.credentials.length ? [{ profileId: target, credentials: data.credentials }] : []);
 }
 
 export async function importBookmarksHtml() {

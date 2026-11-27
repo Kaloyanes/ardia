@@ -22,21 +22,31 @@ import {
   type SourceOutcome,
 } from "./flow";
 import { importModule } from "./importApi";
-import { collectLogins, discardLogins, finishRun, finishSource, forgetCollectedLogins, type HeldLogins } from "./importOutcome";
+import { collectLogins, finishRun, finishSource, forgetCollectedLogins, type HeldLogins } from "./importOutcome";
 import { runImportJob } from "./importSource";
-import { claimRead, claimSettle, endTurn, liveTurn, ownsTurn, readingNow, releaseRead, STALE, startTurn as startTurnIn, whileOwned, type ImportTurn } from "./importTurn";
+import { claimRead, claimSettle, endTurn, isLiveToken, liveTurn, ownsTurn, readingNow, releaseRead, startTurn as startTurnIn, whileOwned, type ImportTurn } from "./importTurn";
 import { during } from "../app/jobActivity";
 
 let runConsent: ConsentToken | null = null;
 
-const startTurn = (consent: ConsentToken | null) => startTurnIn(consent, importSignal());
+function startTurn(consent: ConsentToken | null): ImportTurn {
+  const turn = startTurnIn(consent, importSignal());
+  patchImport({ turn: turn.token });
+  return turn;
+}
+
+export function turnFor(token: number | null, ...steps: ImportStepName[]): ImportTurn | null {
+  const turn = liveTurn();
+  return turn && isLiveToken(token) && turn.token === token && steps.includes(importNow().step.name) && !readingNow(turn) ? turn : null;
+}
 
 export function openImportSession(delayBeforeDone: number): () => void {
   forgetCollectedLogins();
   endTurn();
+  runConsent = null;
   const stop = startImport(delayBeforeDone);
   const appState = AppState.addEventListener("change", (state) => {
-    if (state === "active" && waitsForAccess(importNow())) void recheckAccess();
+    if (state === "active" && waitsForAccess(importNow())) void recheckAccess(importNow().turn);
   });
   return () => {
     stop();
@@ -46,31 +56,30 @@ export function openImportSession(delayBeforeDone: number): () => void {
   };
 }
 
-const turnFor = (consent: ConsentToken | null) => liveTurn() ?? startTurn(consent);
-
-export async function recheckAccess() {
+export async function recheckAccess(token: number | null) {
   const { step } = importNow();
   if (step.name === "safari") return patchImport({ fullDiskAccess: importModule().safariHasFullDiskAccess() });
-  const turn = liveTurn();
-  if (step.name !== "access" || !turn || readingNow(turn)) return;
-  const list = await whileOwned(turn, importModule().listBrowsers()).catch(orWarn(null));
-  if (list === STALE || !list || importNow().step.name !== "access") return;
-  const flow = importNow();
-  const several = inRun(flow);
-  patchImport({ browsers: several ? flow.browsers.map((b) => list.find((x) => x.id === b.id) ?? b) : list });
-  const updated = list.find((b) => b.id === flow.source?.id);
-  if (!updated || updated.needsFullDiskAccess) return;
-  if (!several) {
-    endTurn();
-    return chooseSource(updated);
-  }
-  takeTurn(updated);
-  proceed("choose", turn);
+  const turn = turnFor(token, "access");
+  if (!turn) return;
+  await whileOwned(turn, importModule().listBrowsers(), (list) => {
+    const flow = importNow();
+    if (flow.step.name !== "access") return;
+    const several = inRun(flow);
+    patchImport({ browsers: several ? flow.browsers.map((b) => list.find((x) => x.id === b.id) ?? b) : list });
+    const updated = list.find((b) => b.id === flow.source?.id);
+    if (!updated || updated.needsFullDiskAccess) return;
+    if (!several) {
+      endTurn();
+      return chooseSource(updated);
+    }
+    takeTurn(updated);
+    proceed("choose", turn);
+  }).catch(orWarn(null));
 }
 
-export function continueImport(from: "choose" | "profiles") {
+export function continueImport(from: "choose" | "profiles", token: number | null) {
   const flow = importNow();
-  if (flow.step.name !== from) return;
+  if (flow.step.name !== from || flow.turn !== token) return;
   if (from === "choose" && flow.picked.length > 1) {
     const consent = consentToken();
     forgetCollectedLogins();
@@ -78,9 +87,9 @@ export function continueImport(from: "choose" | "profiles") {
     runConsent = consent;
     return beginTurn();
   }
-  const turn = from === "choose" ? startTurn(consentToken()) : turnFor(consentToken());
-  if (readingNow(turn)) return;
-  proceed(from, turn);
+  if (from === "choose") return proceed("choose", startTurn(consentToken()));
+  const turn = turnFor(token, "profiles");
+  if (turn) proceed("profiles", turn);
 }
 
 function beginTurn() {
@@ -103,27 +112,24 @@ const skippedOutcome = (source: SourceOutcome["source"]): SourceOutcome => ({
   engines: [],
   skipped: true,
   consent: null,
+  passwordsWritten: { keptExisting: 0, failed: 0 },
 });
 
 const SKIPPABLE: ImportStepName[] = ["access", "safari", "profiles"];
 
-export function skipSource() {
+export function skipSource(token: number | null) {
   const flow = importNow();
-  const turn = liveTurn();
-  if (!flow.source || !turn || !inRun(flow) || !SKIPPABLE.includes(flow.step.name) || readingNow(turn)) return;
+  const turn = turnFor(token, ...SKIPPABLE);
+  if (!flow.source || !turn || !inRun(flow)) return;
   void settleSource(turn, skippedOutcome(flow.source));
 }
 
 export async function settleSource(turn: ImportTurn, settled: SourceOutcome, logins: HeldLogins = []): Promise<boolean> {
-  if (!claimSettle(turn)) {
-    discardLogins(logins);
-    return false;
-  }
+  if (!claimSettle(turn)) return false;
   const { signal, consent } = turn;
   const outcome = { ...settled, consent };
   const { run } = importNow();
   if (!run || run.ids.length < 2) {
-    discardLogins(logins);
     await finishSource(outcome, consent, signal);
     return true;
   }
@@ -161,28 +167,25 @@ const stillUnlocking = (turn: ImportTurn) => {
   return ownsTurn(turn) && step.name === "unlock" && step.unlocking;
 };
 
-export async function unlockAndImport() {
+export async function unlockAndImport(token: number | null) {
   const { source, step } = importNow();
-  if (!source || step.name !== "unlock" || step.unlocking) return;
-  const turn = turnFor(consentToken());
-  if (readingNow(turn)) return;
+  const turn = turnFor(token, "unlock");
+  if (!source || !turn || step.name !== "unlock" || step.unlocking) return;
   patchImport({ step: { name: "unlock", unlocking: true, error: step.error } });
-  let unlocked: unknown;
   try {
-    unlocked = await whileOwned(turn, importModule().unlockBrowser(source.id));
+    await whileOwned(turn, importModule().unlockBrowser(source.id), () => {
+      if (stillUnlocking(turn)) void importIn(turn, importNow().kinds, false);
+    });
   } catch {
     if (stillUnlocking(turn))
       patchImport({ step: { name: "unlock", unlocking: false, error: `macOS didn't allow access to ${source.name}'s keychain item. Try again, or skip the encrypted data.` } });
-    return;
   }
-  if (unlocked !== STALE && stillUnlocking(turn)) void importIn(turn, importNow().kinds, false);
 }
 
-export function skipEncryptedData() {
-  const { step, kinds: chosen } = importNow();
-  if (step.name !== "unlock") return;
-  const turn = turnFor(consentToken());
-  if (readingNow(turn)) return;
+export function skipEncryptedData(token: number | null) {
+  const { kinds: chosen } = importNow();
+  const turn = turnFor(token, "unlock");
+  if (!turn) return;
   const kinds = new Set(chosen);
   kinds.delete("passwords");
   kinds.delete("cookies");
@@ -190,7 +193,15 @@ export function skipEncryptedData() {
   void importIn(turn, kinds, true);
 }
 
-export const runImport = (wanted: ReadonlySet<ImportKind>, withoutKey = false) => importIn(turnFor(consentToken()), wanted, withoutKey);
+export function importUnlocked(token: number | null, wanted: ReadonlySet<ImportKind>, withoutKey: boolean) {
+  const turn = turnFor(token, "unlock");
+  return turn ? importIn(turn, wanted, withoutKey) : Promise.resolve();
+}
+
+export function runImport(wanted: ReadonlySet<ImportKind>, withoutKey = false) {
+  if (liveTurn()) return Promise.resolve();
+  return importIn(startTurn(consentToken()), wanted, withoutKey);
+}
 
 const importIn = (turn: ImportTurn, wanted: ReadonlySet<ImportKind>, withoutKey: boolean) => during("import", () => importAndSettle(turn, wanted, withoutKey));
 

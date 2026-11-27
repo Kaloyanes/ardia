@@ -98,12 +98,12 @@ export function ProfilesFooter({ flow }: { flow: ImportFlow }) {
     <>
       {canGoBackToChoose(flow) && <Button title="Back" onPress={() => backTo("choose")} />}
       <Spacer />
-      {several ? <Button title={`Skip ${source.name}`} onPress={skipSource} /> : <TargetPicker target={flow.target} onChange={setImportTarget} />}
+      {several ? <Button title={`Skip ${source.name}`} onPress={() => skipSource(flow.turn)} /> : <TargetPicker target={flow.target} onChange={setImportTarget} />}
       <Button
         title="Continue"
         kind="primary"
         disabled={bySpaces ? !spaces.length && (source.sidebar !== "zen" || !spacelessProfiles(source).some((p) => sourceProfiles.includes(p.id))) : !sourceProfiles.length}
-        onPress={() => continueImport("profiles")}
+        onPress={() => continueImport("profiles", flow.turn)}
       />
     </>
   );

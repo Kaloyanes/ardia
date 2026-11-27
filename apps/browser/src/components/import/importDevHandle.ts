@@ -33,10 +33,11 @@ export function useImportDevHandle(flow: ImportFlow) {
       pick: (ids: string[]) => pickSources(ids),
       picked: flow.picked,
       run: flow.run ? { ids: flow.run.ids, at: flow.run.at, finished: flow.run.outcomes.map((o) => ({ id: o.source.id, skipped: o.skipped })) } : null,
-      skip: skipSource,
+      skip: () => skipSource(flow.turn),
+      turn: flow.turn,
       next: () => {
         const { name } = step;
-        if (name === "choose" || name === "profiles") continueImport(name);
+        if (name === "choose" || name === "profiles") continueImport(name, flow.turn);
       },
       conflicts: conflicts
         ? {
@@ -55,12 +56,12 @@ export function useImportDevHandle(flow: ImportFlow) {
       chooseConflict: (id: string, browserId: string) => chooseConflictVersion(id, browserId),
       chooseAllConflicts: (browserId: string) => chooseAllConflicts(browserId),
       doneChoosing: closeConflictList,
-      importPasswords: () => importChosenPasswords(),
+      importPasswords: () => (conflicts ? importChosenPasswords(conflicts.token) : Promise.resolve()),
       back: () => backTo("choose"),
-      unlock: unlockAndImport,
-      skipEncrypted: skipEncryptedData,
-      importSafariDirect,
-      importSafari: importSafariExport,
+      unlock: () => unlockAndImport(flow.turn),
+      skipEncrypted: () => skipEncryptedData(flow.turn),
+      importSafariDirect: () => importSafariDirect(flow.turn),
+      importSafari: (path: string) => importSafariExport(path, flow.turn),
       close: closeImport,
       openListedExtensions: openListedExtensionsInStore,
       kinds: [...flow.kinds],

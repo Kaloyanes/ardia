@@ -8,7 +8,7 @@ import { createProfile } from "../profiles/actions";
 import { noteImportedSpaces } from "../telemetry/usage";
 import { noteArcImport, noteDiaSidebar, noteDiaTabProfiles, noteFirefoxFavicons, noteImportCore, noteImportRun, noteUntitledBookmarks } from "../telemetry/importRuns";
 import type { ConsentToken } from "../telemetry/client";
-import { adoptSpaceIdentity, applyResult, emptyCounts, holdNativeLogins, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
+import { adoptSpaceIdentity, applyResult, emptyCounts, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
 import type { BrowserProfile, BrowserSource, DiaTabsResult, ImportCounts, ImportedExtension, ImportKind, ImportedSearchEngine, ImportResult } from "./apply";
 import { diaProfilesFor, diaProfilesWithoutFolder } from "./diaTabs";
 import { importArcSpace, importDiaSpace } from "./sidebarTree";
@@ -152,11 +152,18 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
   let withheld = 0;
   const app: { read: Promise<AppTabs> | null } = { read: null };
   const held: HeldLogins = [];
-  const withLogins = (dest: string, r: ImportResult, kinds: ImportKind[]): ImportResult => {
+  const passwordsWritten = { keptExisting: 0, failed: 0 };
+  const applyOptions = {
+    signal,
+    onPasswordsWritten: (w: { keptExisting: number; failed: number }) => {
+      passwordsWritten.keptExisting += w.keptExisting;
+      passwordsWritten.failed += w.failed;
+    },
+  };
+  const withLogins = (dest: string, r: ImportResult): ImportResult => {
     if (!collecting) return r;
-    const native = kinds.includes("passwords") ? holdNativeLogins(r) : { result: r, held: null };
-    if (native.held || native.result.credentials.length) held.push({ profileId: dest, credentials: native.result.credentials, native: native.held });
-    return { ...native.result, credentials: [] };
+    if (r.credentials.length) held.push({ profileId: dest, credentials: r.credentials });
+    return { ...r, credentials: [] };
   };
   const askApp = () => (app.read ??= readAppTabs());
   if (appUpFront) void askApp();
@@ -193,7 +200,9 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
         if (fromApp.length) {
           const tabs = await askApp();
           if (signal.aborted) return;
-          total.tabs += importAppTabs(await nextDestination(profile.name, profile.color), tabs, source.profiles, profile.id, wanted)?.tabs ?? 0;
+          const into = await nextDestination(profile.name, profile.color);
+          if (signal.aborted) return;
+          total.tabs += importAppTabs(into, tabs, source.profiles, profile.id, wanted)?.tabs ?? 0;
         }
         continue;
       }
@@ -236,6 +245,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
         const shared = plan.sharesTopApps && plan.spaces.filter((p) => p.partition === partition).length > 1;
         const first = destinationIndex === 0;
         const dest = await nextDestination(name, space.color, space.emoji, head, shared);
+        if (signal.aborted) return;
         if (first && adoptSpaceIdentity(dest, space)) startersNamed += 1;
         (members[partition] ??= []).push(dest);
         arc.homes.set(space.id, dest);
@@ -246,7 +256,9 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       const dest = members[plan.dataPartition]?.[0] ?? (await nextDestination(result.profile?.name ?? profile.name, result.profile?.color));
       members[plan.dataPartition] ??= [dest];
       arc.home ||= dest;
-      add(await applyResult(dest, withLogins(dest, { ...result, favorites: [] }, profileKinds), source.name, profileKinds, refused, consent));
+      if (signal.aborted) return;
+      add(await applyResult(dest, withLogins(dest, { ...result, favorites: [] }), source.name, profileKinds, refused, consent, applyOptions));
+      if (signal.aborted) return;
       let essentials = 0;
       plan.favorites.forEach((tabs, partition) => {
         const group = members[partition] ?? [];
@@ -266,7 +278,9 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       profileDest = dest;
     } else {
       const dest = await nextDestination(result.profile?.name ?? profile.name, result.profile?.color ?? profile.color);
-      add(await applyResult(dest, withLogins(dest, result, profileKinds), source.name, profileKinds, refused, consent));
+      if (signal.aborted) return;
+      add(await applyResult(dest, withLogins(dest, result), source.name, profileKinds, refused, consent, applyOptions));
+      if (signal.aborted) return;
       if (readsSidebarFile(profile) && !sidebarMissed && result.spaces.length) {
         const r = await importDiaSpaces(dest, result, nextDestination, signal, consent);
         if (signal.aborted) return;
@@ -299,7 +313,9 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
   if (source.family === "arc") {
     const homes = { spaces: arc.homes, named: profileNamed, fallback: arc.home || target };
     const routed = arc.routing ? await importArcRouting(arc.routing, homes) : null;
+    if (signal.aborted) return;
     const archived = arc.archive ? await importArcArchive(arc.archive, homes) : null;
+    if (signal.aborted) return;
     total.rules += routed?.rules ?? 0;
     total.archived += archived?.tabs ?? 0;
     total.settings += [routed?.fallback, archived?.cleanUp].filter((o) => o === "applied").length;
@@ -336,6 +352,7 @@ export async function runImportJob({ source, wanted, withoutKey, consent, signal
       engines,
       skipped: false,
       consent,
+      passwordsWritten,
     },
     logins: held,
   };

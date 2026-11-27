@@ -148,3 +148,15 @@ test("destination profiles that share a name are told apart by their icon, or by
   const profiles = [{ id: "a", name: "Work", icon: null }, { id: "b", name: "work", icon: null }, { id: "c", name: "Home", icon: "🏠" }, { id: "d", name: "Home", icon: "🌴" }, { id: "e", name: "Solo" }];
   assert.deepEqual(profileLabels(["a", "b", "c", "d", "e", "gone"], profiles), { a: "Work (1)", b: "work (2)", c: "🏠 Home", d: "🌴 Home", e: "Solo", gone: "another profile" });
 });
+
+test("a trailing dot is its own origin, while case, a padded default port, IPv6 spelling and Unicode or punycode hosts are not", async () => {
+  const { sameOriginKey } = await import("./passwordConflicts.ts");
+  assert.notEqual(sameOriginKey("https://example.com"), sameOriginKey("https://example.com."));
+  assert.equal(sameOriginKey("https://EXAMPLE.com."), "https://example.com.");
+  assert.equal(sameOriginKey("https://bücher.example"), sameOriginKey("https://xn--bcher-kva.example"));
+  assert.equal(sameOriginKey("https://BÜCHER.example:0443"), "https://xn--bcher-kva.example");
+  assert.equal(sameOriginKey("http://[0:0:0:0:0:0:0:1]"), "http://[::1]");
+  assert.equal(sameOriginKey("http://[::FFFF:1]:0080"), "http://[::ffff:1]");
+  const plan = planLogins([login("chrome", "p", "https://example.com/", "me", "1"), login("arc", "p", "https://example.com./", "me", "2")], ORDER);
+  assert.deepEqual([plan.clean.length, plan.conflicts.length], [2, 0]);
+});

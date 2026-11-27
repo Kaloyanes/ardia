@@ -27,15 +27,18 @@ export const ownsTurn = (turn: ImportTurn) => !turn.signal.aborted && live?.toke
 
 export const liveTurn = (): ImportTurn | null => (live && !live.signal.aborted && !live.settled ? live : null);
 
-export async function whileOwned<T>(turn: ImportTurn, work: Promise<T>): Promise<T | typeof STALE> {
+export async function whileOwned<T, R>(turn: ImportTurn, work: Promise<T>, apply: (value: T) => R): Promise<R | typeof STALE> {
+  let value: T;
   try {
-    const value = await work;
-    return ownsTurn(turn) ? value : STALE;
+    value = await work;
   } catch (error) {
     if (!ownsTurn(turn)) return STALE;
     throw error;
   }
+  return ownsTurn(turn) ? apply(value) : STALE;
 }
+
+export const isLiveToken = (token: number | null) => token !== null && live?.token === token && !live.signal.aborted && !live.settled;
 
 export function claimRead(turn: ImportTurn): boolean {
   if (!ownsTurn(turn) || live!.reading) return false;

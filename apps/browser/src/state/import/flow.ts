@@ -33,6 +33,7 @@ export type SourceOutcome = {
   engines: { profile: BrowserProfile; engine?: ImportedSearchEngine }[];
   skipped: boolean;
   consent: ConsentToken | null;
+  passwordsWritten: { keptExisting: number; failed: number };
 };
 
 export type ImportRun = { ids: string[]; at: number; chosen: ImportKind[]; offered: ImportKind[]; outcomes: SourceOutcome[] };
@@ -50,6 +51,7 @@ type ImportStep =
   | { name: "progress"; status: ImportStatus; preparing: number }
   | {
       name: "conflicts";
+      token: number;
       conflicts: PasswordConflict[];
       pick: ConflictPick;
       custom: ConflictChoiceSet | null;
@@ -65,6 +67,7 @@ export type ImportFlow = {
   browsers: BrowserSource[];
   picked: string[];
   run: ImportRun | null;
+  turn: number | null;
   source: BrowserSource | null;
   sourceProfiles: string[];
   spaces: string[];
@@ -86,6 +89,7 @@ const freshFlow = (target: string): ImportFlow => ({
   browsers: [],
   picked: [],
   run: null,
+  turn: null,
   source: null,
   sourceProfiles: [],
   spaces: [],
@@ -218,6 +222,7 @@ export function backTo(name: "choose" | "profiles") {
   const first = flow.run ? pickedBrowsers(flow)[0] : undefined;
   patchImport({
     ...(flow.run && first ? { ...sourceFields(first, flow.run.chosen), run: null } : { run: null }),
+    turn: null,
     step: { name, error: null },
   });
 }

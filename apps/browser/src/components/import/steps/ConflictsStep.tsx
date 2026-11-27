@@ -154,7 +154,7 @@ export function ConflictsFooter({ flow }: { flow: ImportFlow }) {
     <>
       <Button variant="text" look="link" pad="none" title="Let me choose…" disabled={step.saving} onPress={openConflictList} />
       <Spacer />
-      <Button title={step.saving ? "Importing…" : "Import"} kind="primary" disabled={step.saving} onPress={() => void importChosenPasswords()} />
+      <Button title={step.saving ? "Importing…" : "Import"} kind="primary" disabled={step.saving} onPress={() => void importChosenPasswords(step.token)} />
     </>
   );
 }

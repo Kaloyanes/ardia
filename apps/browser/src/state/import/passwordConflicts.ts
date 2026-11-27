@@ -1,4 +1,4 @@
-import { hostOf } from "@ardia/core";
+import { hostOf, punycodeEncode } from "@ardia/core";
 import { canonicalIpv6 } from "../../lib/urlParts";
 import type { Credential } from "../../platform/importModule";
 import type { ConsentToken } from "../telemetry/choice";
@@ -22,12 +22,16 @@ export const loginOrigin = (c: Credential) => originOfLogin(c.realm?.startsWith(
 const DEFAULT_PORTS: Readonly<Record<string, number>> = { http: 80, https: 443, ftp: 21, ws: 80, wss: 443 };
 const ORIGIN_PARTS = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^:/?#]*)(?::(\d+))?(?=$|[/?#])/i;
 
+const asciiLabel = (label: string) => (/^[\x00-\x7f]*$/.test(label) ? label : `xn--${punycodeEncode(label)}`);
+const asciiHost = (host: string) => host.normalize("NFC").toLowerCase().split(".").map(asciiLabel).join(".");
+
 export function sameOriginKey(origin: string): string {
   const found = ORIGIN_PARTS.exec(origin.trim());
   if (!found) return origin.trim().toLowerCase();
   const scheme = found[1]!.toLowerCase();
-  const rawHost = found[2]!.toLowerCase();
-  const host = rawHost.startsWith("[") ? `[${canonicalIpv6(rawHost.slice(1, -1)) ?? rawHost.slice(1, -1)}]` : rawHost.replace(/\.$/, "");
+  const rawHost = found[2]!;
+  const inner = rawHost.slice(1, -1).toLowerCase();
+  const host = rawHost.startsWith("[") ? `[${canonicalIpv6(inner) ?? inner}]` : asciiHost(rawHost);
   const port = found[3] === undefined ? null : Number(found[3]);
   const shown = port === null || port === DEFAULT_PORTS[scheme] ? "" : `:${port}`;
   return `${scheme}://${host}${shown}`;
