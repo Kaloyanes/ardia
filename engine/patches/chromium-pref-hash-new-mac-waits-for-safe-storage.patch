@@ -1,0 +1,56 @@
+A profile keeps its extensions on a new Mac. Chrome checks protected preferences twice at load: first synchronously
+with the legacy HMAC alone (an empty seed for this build, plus the machine's IOPlatformUUID), then, once the Safe
+Storage key arrives, with the encrypted hash. The machine id changes when a profile moves to another Mac (Migration
+Assistant, a Time Machine restore, a copied data directory), so every HMAC fails there and the first pass removed every
+installed extension from extensions.settings, and reset developer mode, pinned tabs and startup pages, before the
+encrypted hash, which the migrated "Ardia Safe Storage" item still verifies, was ever read. In the field
+(extensions_loaded, 14 days to 2026-11-26) every fresh drop checked was an install's first launch on different
+hardware (M4 to M6, M4 Pro to M5 Pro, M1 to M5, M2 to M6, M3 Max to M5 Max), not an app update.
+
+Now, when the super MAC fails too (the whole store was hashed on another machine), the first pass leaves a value whose
+HMAC fails but which carries an encrypted hash for the second pass to decide: it is neither reset nor re-hashed there.
+A store whose super MAC still holds, such as one with a single edited entry, resets in the first pass as before, so
+that value never loads. The second pass checks the encrypted hash with the Safe Storage key; if it
+holds, the value stays and the next write stores fresh HMACs for this machine; if not, it falls back to the stored HMAC
+(chromium-pref-hash-safe-storage-key-change.patch), which still fails, and the value resets as before. Without an
+encrypted hash, or with kEncryptedPrefHashing off (no second pass), the first pass resets as it always did. This
+trusts nothing a forged HMAC doesn't already pass: with the empty seed and a readable machine id the HMAC is the weaker
+check, and the encrypted hash still decides.
+
+--- a/services/preferences/tracked/pref_hash_store_impl.cc
++++ b/services/preferences/tracked/pref_hash_store_impl.cc
+@@ -67,6 +67,10 @@
+       tracked::kDisallowLegacyPrefMacFallback);
+ }
+ 
++bool EncryptedPassDecides() {
++  return base::FeatureList::IsEnabled(tracked::kEncryptedPrefHashing);
++}
++
+ void MaybeReportWeakHash(ValidationResult validation_result,
+                          std::optional<size_t> reporting_id) {
+   if (!reporting_id.has_value()) {
+@@ -483,6 +487,10 @@
+       if (hmac_validation_result == ValidationResult::VALID_HMAC) {
+         // If we fell through from encrypted (which was unusable), a valid HMAC
+         // still means the value is UNCHANGED_HMAC.
++        return ValueState::UNCHANGED_HMAC;
++      }
++      if (value && stored_encrypted_hash.has_value() && !super_hmac_valid_ &&
++          EncryptedPassDecides()) {
+         return ValueState::UNCHANGED_HMAC;
+       }
+       return value ? ValueState::CHANGED_HMAC : ValueState::CLEARED_HMAC;
+@@ -703,7 +711,11 @@
+               outer_->pref_hash_calculator_.ValidateHmac(keyed_path, &value,
+                                                          it->second) !=
+                   ValidationResult::VALID_HMAC) {
+-            invalid_keys->push_back(key);
++            if (!(has_encrypted_hashes && !super_hmac_valid_ &&
++                  split_encrypted_hashes.contains(key) &&
++                  EncryptedPassDecides())) {
++              invalid_keys->push_back(key);
++            }
+           }
+           if (it != current_macs.end()) {
+             current_macs.erase(it);
