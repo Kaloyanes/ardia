@@ -45,7 +45,6 @@ test("moving a window, opening a background tab or another tab becoming ready as
   await settle();
   const b = S().newTab(w, { url: "https://b.com/", background: true });
   await settle();
-  asked.length = 0;
   usePages.setState((p) => ({ ready: { ...p.ready, [b]: 2 } }));
   await settle();
   assert.deepEqual(asked, [], "nothing that changes which page's actions are shown asked again");

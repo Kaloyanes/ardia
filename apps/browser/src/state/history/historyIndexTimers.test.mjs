@@ -97,6 +97,33 @@ test("a steady stream of batches every 20 ms scans the list once, then merges ev
   }
 });
 
+test("a stream of batches touching more than 64 pages, which the index can't merge, never builds an index it can't use", async () => {
+  const stop = await started();
+  try {
+    const builds = historyApplyStats.indexBuilds;
+    const scanned = historyApplyStats.scanned;
+    for (let round = 0; round < 150; round++) {
+      const rows = Array.from({ length: 65 }, (_, i) => ({ url: `https://wide${i}.example/`, title: `W${i} ${round}`, visits: round + 1 }));
+      for (const row of rows) if (round === 0) stub.chromeVisit("", row.url, row.title, Date.now() - 1000 - rows.indexOf(row));
+      await settle();
+      stub.chromeHistoryEvent({ kind: "modified", profile: "", rows });
+      await settle();
+      mock.timers.tick(20);
+    }
+    assert.ok(historyApplyStats.scanned - scanned >= 150, "every wide batch is merged by a scan");
+    assert.equal(historyApplyStats.indexBuilds, builds, "and no index is built for lists only wide batches touch");
+    assert.equal(historyIndexesPending(), 0);
+    visit("", 1);
+    await settle();
+    visit("", 2);
+    await settle();
+    assert.equal(historyApplyStats.indexBuilds, builds + 1, "a narrow batch after them still gets the index");
+    assert.equal(historyListIndexed(listOf("")), true);
+  } finally {
+    finish(stop);
+  }
+});
+
 test("a batch that changes nothing doesn't push the deadline back: the list is still indexed 2 s after its first batch", async () => {
   const stop = await started();
   try {

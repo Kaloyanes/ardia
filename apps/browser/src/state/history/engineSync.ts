@@ -4,7 +4,7 @@ import { readDocument } from "../../platform/documents";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { afterFirstWindow } from "../../lib/afterFirstWindow";
 import { MAX_HISTORY, MAX_VISIT_TIMES } from "./history";
-import { applyHistoryChanges, historyListIndexed, indexHistoryList, isListChange, type HistoryGap, type ListChange, type NoteGap } from "./historyChanges";
+import { applyHistoryChanges, historyBatchUsesIndex, historyListIndexed, indexHistoryList, isListChange, type HistoryGap, type ListChange, type NoteGap } from "./historyChanges";
 import { engineProfile, isIncognitoProfile } from "../browser/model";
 import type { HistoryEntry } from "../browser/types";
 import { isWebPageUrl } from "../../lib/url";
@@ -190,9 +190,10 @@ function applyPending() {
   const show = () => {
     during("historyApply", () => {
       for (const [engine, batch] of batches) {
-        indexBeforeAnotherScan(engine);
+        const usesIndex = historyBatchUsesIndex(batch);
+        if (usesIndex) indexBeforeAnotherScan(engine);
         setView(engine, applyHistoryChanges(viewOf(engine), batch, gapNoter(engine)));
-        indexByDeadline(engine);
+        if (usesIndex) indexByDeadline(engine);
       }
     });
     batches.clear();

@@ -14,19 +14,22 @@ let newTabDocks = 0;
 let newTabUndocks = 0;
 let lastScrollAt = -Infinity;
 let lastScrollY = 0;
+let lastScrollList = "";
 let steady = false;
 onConsentPeriodChange(() => {
   lastScrollAt = -Infinity;
   steady = false;
 });
 
-export function noteSidebarScrolled(at: number, y: number) {
+export function noteSidebarScrolled(at: number, y: number, list: string) {
+  const sameList = list === lastScrollList;
   const gap = at - lastScrollAt;
   const moved = Math.abs(y - lastScrollY);
-  const wasSteady = steady;
+  const wasSteady = sameList && steady;
   lastScrollAt = at;
   lastScrollY = y;
-  steady = gap > 0 && gap <= FRAME_PACED_GAP_MS && moved / gap >= STEADY_PT_PER_MS;
+  lastScrollList = list;
+  steady = sameList && gap > 0 && gap <= FRAME_PACED_GAP_MS && moved / gap >= STEADY_PT_PER_MS;
   if (gap > NEW_SCROLL_GAP_MS) scrolls++;
   else if (gap > STALL_GAP_MS && wasSteady) stalls++;
 }
