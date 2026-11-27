@@ -24,8 +24,11 @@ export function startHostTabLifecycle(host: ArdiaHost, store: TabStore) {
       const tab = tabs[key];
       if (closed.has(key) || tab && tab.page.kind !== "asleep") continue;
       closed.add(key);
-      noteHostTabClosed(host, key);
-      void closeHostTab(key).catch((error) => { if (!stopped) reportHostError(error); });
+      const reopen = noteHostTabClosed(host, key);
+      void closeHostTab(key).catch((error) => {
+        reopen();
+        if (!stopped) reportHostError(error);
+      });
     }
     pending.clear();
   };

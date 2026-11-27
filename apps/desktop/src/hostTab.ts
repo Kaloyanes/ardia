@@ -193,15 +193,11 @@ export class HostTab {
     void enqueueTab(this.host, this.key, async () => {
       const owners = claims.get(this.host);
       if (!this.identity || owners?.get(this.key) !== this) return;
-      if (this.closed) {
-        owners.delete(this.key);
-        return;
-      }
       await invokeHost("tab.release", { id: this.identity.browserId, claim: this.claim }, this.host);
       if (owners.get(this.key) === this) owners.delete(this.key);
     }).catch((error) => {
       this.releaseScheduled = false;
-      errorFor(consent, "[ardia host] release failed", error);
+      if (!this.closed) errorFor(consent, "[ardia host] release failed", error);
     });
   }
 
@@ -213,9 +209,11 @@ export class HostTab {
   }
 }
 
-export function noteHostTabClosed(host: ArdiaHost, key: string) {
+export function noteHostTabClosed(host: ArdiaHost, key: string): () => void {
   const owner = claims.get(host)?.get(key);
-  if (owner) owner.closed = true;
+  if (!owner) return () => {};
+  owner.closed = true;
+  return () => { owner.closed = false; };
 }
 
 export function showInPlaceOf(from: HostTab, to: HostTab, accepted?: (shown: TabViewport) => void): boolean {

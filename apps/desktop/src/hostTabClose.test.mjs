@@ -7,7 +7,7 @@ import { forgetSwitchViews, registerSwitchView, tabsSwitchedAhead, watchTabSwitc
 const RECT = { x: 240, y: 8, width: 1192, height: 884 };
 const settle = () => new Promise(setImmediate);
 
-function linuxHost() {
+function linuxHost(close = "closes") {
   const bound = new Map();
   const sent = [];
   let nextId = 20;
@@ -26,7 +26,8 @@ function linuxHost() {
         return Promise.resolve({ browserId: id, chromeTabId: id });
       }
       if (method === "tab.close") {
-        for (const [id, binding] of bound) if (binding.key === args.key) bound.delete(id);
+        if (close === "rejects") return Promise.reject(new Error("tab.close failed"));
+        if (close === "closes") for (const [id, binding] of bound) if (binding.key === args.key) bound.delete(id);
         return Promise.resolve(null);
       }
       if (method === "tab.release") {
@@ -43,9 +44,9 @@ function linuxHost() {
   return { host, sent, bound };
 }
 
-function stage() {
+function stage(close) {
   forgetSwitchViews();
-  const { host, sent, bound } = linuxHost();
+  const { host, sent, bound } = linuxHost(close);
   const listeners = new Set();
   const loaded = (id) => ({ id, page: { kind: "loaded", nav: { url: `https://${id}.test/`, seq: 1 } } });
   let state = { tabs: { a: loaded("a"), b: loaded("b") }, windows: { main: { profileId: "default", activeTabIds: { default: "a" } } } };
@@ -78,7 +79,7 @@ function stage() {
 }
 
 for (const [how, leave] of [["closed", (store) => store.remove("a")], ["put to sleep", (store) => store.sleep("a")]]) {
-  test(`a tab ${how} is not released again when its view unmounts`, async () => {
+  test(`a tab ${how} logs no release failure when its view unmounts`, async () => {
     const { host, store, view, errors, stop } = stage();
     try {
       const stopLifecycle = startHostTabLifecycle(host, store);
@@ -144,3 +145,30 @@ test("a key closed by the lifecycle gets a new owner that presents and releases 
     stop();
   }
 });
+
+for (const [close, how, closeErrors] of [
+  ["closes", "the host closes its page", []],
+  ["defers", "beforeunload keeps its page open", []],
+  ["rejects", "tab.close fails", ["[ardia host] tab.close failed"]],
+]) {
+  test(`a tab put to sleep wakes again under the same key when ${how}`, async () => {
+    const { host, sent, store, view, errors, stop } = stage(close);
+    try {
+      const stopLifecycle = startHostTabLifecycle(host, store);
+      const first = await view("a");
+      store.sleep("a");
+      await settle();
+      first.dispose();
+      await settle();
+      assert.deepEqual(sent.filter((call) => call.method === "tab.release").map((call) => call.args.claim), [first.claim]);
+      const second = await view("a");
+      assert.equal(second.presentsNow(), true);
+      await second.viewport({ rect: RECT, visible: true });
+      assert.equal(second.shownViewport()?.visible, true);
+      assert.deepEqual(errors, closeErrors);
+      stopLifecycle();
+    } finally {
+      stop();
+    }
+  });
+}
