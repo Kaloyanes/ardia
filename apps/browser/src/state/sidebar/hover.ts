@@ -247,10 +247,10 @@ function settleWhenStill(windowId: string) {
   for (const enter of held?.values() ?? []) enter();
 }
 
-export function noteRowsScrolled(windowId: string) {
+export function noteRowsScrolled(windowId: string, y: number) {
   releaseLaunchRows(windowId, "scroll");
   const now = Date.now();
-  noteSidebarScrolled(now);
+  noteSidebarScrolled(now, y);
   scrolledAt.set(windowId, now);
 }
 
