@@ -61,6 +61,11 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     fillWithPage()
   }
 
+  override func didAddSubview(_ subview: NSView) {
+    super.didAddSubview(subview)
+    if subview === webView { updateHidden() }
+  }
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     if window != nil { followInterfaceScale() }
@@ -122,7 +127,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     WebKitHub.shared.transfers.unregister(view)
     view.navigationDelegate = nil
     view.uiDelegate = nil
-    view.removeFromSuperview()
+    letGo(view)
     return view
   }
 
@@ -146,9 +151,8 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     view.isInspectable = WebKitHub.inspectable && !WebKitStores.isPrivate(profile)
     if let color = pageBackgroundColor ?? life.contentsBackgroundColor { view.underPageBackgroundColor = color }
     listen(to: view)
-    view.frame = bounds
     view.autoresizingMask = [.width, .height]
-    addSubview(view)
+    place(view)
     updateHidden()
     observe(view)
     prepareFirstPaint(view)
@@ -185,9 +189,10 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
     return view
   }
 
-  private func updateHidden() {
+  func updateHidden() {
     isHidden = !visible
-    webView?.isHidden = !visible
+    if let view = webView { view.isHidden = WebKitFullscreenPage.hidesPage(view, in: self, visible: visible) }
+    noteFullscreenPageKeptShown()
     paintBackdrop()
   }
 
@@ -208,7 +213,7 @@ final class WebKitTab: NSView, WKNavigationDelegate, WKUIDelegate {
       WebKitHub.shared.transfers.unregister(view)
       view.navigationDelegate = nil
       view.uiDelegate = nil
-      view.removeFromSuperview()
+      letGo(view)
       if WebKitHub.shared.transfers.park(view, key: key) { return }
     }
     WebKitHub.close(view)

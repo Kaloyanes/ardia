@@ -53,6 +53,9 @@ export type WebKitCount =
   | "discardWake"
   | "backdropHidden"
   | "historyRestored"
+  | "fullscreenKeptShown"
+  | "fullscreenMovedWithTab"
+  | "fullscreenPageReclaimed"
   | "unresponsive"
   | "unresponsiveEnded"
   | "downloadSkipped";
@@ -112,6 +115,9 @@ export const WEBKIT_COUNTS = {
   discardWake: "webKitDiscardWakes",
   backdropHidden: "webKitBackdropsHidden",
   historyRestored: "webKitHistoryRestores",
+  fullscreenKeptShown: "webKitFullscreenPagesKeptShown",
+  fullscreenMovedWithTab: "webKitFullscreenPagesMovedWithTab",
+  fullscreenPageReclaimed: "webKitFullscreenPagesReclaimed",
   unresponsive: "webKitUnresponsive",
   unresponsiveEnded: "webKitUnresponsiveEnded",
   downloadSkipped: "webKitDownloadsSkipped",
