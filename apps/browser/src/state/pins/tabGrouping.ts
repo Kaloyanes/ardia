@@ -5,6 +5,7 @@ import { withShownTab } from "../groups/shownTabs";
 import { inPinnedContainer, isIncognitoProfile, isPinnedRow, newId, pinKeyOf } from "../browser/model";
 import { splitOf, splitTabIdsOf, withSplitRows } from "../splits/splits";
 import { markPinned } from "./pinChoices";
+import { settledPinChildren } from "./pinChildren";
 import { withMirrorsUnpinned } from "../groups/sharedUngroupSplits";
 import type { BrowserWindow, Tab, TabGroup } from "../browser/types";
 
@@ -85,7 +86,7 @@ export function withGroup(
   const groups = nestGroups({ ...leaveGroups(s.groups, members, keep), [group.id]: group });
   tabIds = orderSections(placeGroups(tabIds, groups, w.id), s.tabs, groups);
   const window = { ...w, tabIds };
-  return [{ ...s, groups: syncGroupOrder(groups, window), windows: { ...s.windows, [w.id]: window } }, group.id];
+  return [settledPinChildren(s, { ...s, groups: syncGroupOrder(groups, window), windows: { ...s.windows, [w.id]: window } }, [...members]), group.id];
 }
 
 export function withRowsGrouped(s: BrowserState, asked: string[], o: { name?: string; pinned?: boolean }): [BrowserState, string] {

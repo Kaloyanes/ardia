@@ -4,7 +4,6 @@ import { pinHome } from "../pins/pinHomes";
 import { DEFAULT_PROFILE } from "../profiles/profiles";
 import { sanitizeSplits, splitTabIds } from "../splits/splits";
 import { orderSections } from "../groups/groups";
-import { layoutWithPinChildMarkers } from "../pins/pinChildren";
 
 type LayoutInput = {
   profiles?: Record<string, Profile>;
@@ -15,8 +14,7 @@ type LayoutInput = {
   splits?: Record<string, SplitView>;
 };
 
-export function hydratedLayout(saved: LayoutInput) {
-  const data = layoutWithPinChildMarkers(saved);
+export function hydratedLayout(data: LayoutInput) {
   const profiles = data.profiles && Object.keys(data.profiles).length ? data.profiles : { [DEFAULT_PROFILE.id]: DEFAULT_PROFILE };
   const rawWindows = data.windows ?? {};
   const profileOk = (p: string) => Object.hasOwn(profiles, p) || isIncognitoProfile(p);

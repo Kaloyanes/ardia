@@ -10,7 +10,7 @@ const { clearedTabIds } = await import("./clearedTabs.ts");
 const { pinnedAreaKeys } = await import("./pinnedArea.ts");
 const { parkWindowPins } = await import("./parkedPins.ts");
 const { takePinChildCounts } = await import("../telemetry/pinChildCounts.ts");
-const { layoutWithPinChildMarkers } = await import("./pinChildren.ts");
+const { sessionWithPinChildMarkers } = await import("./pinChildren.ts");
 const { SESSION_VERSION, loadSession } = await import("../session/persist.ts");
 const { versionedJson } = await import("../../lib/savedDocument.ts");
 const { savedDocumentValue } = await import("../session/documentJson.ts");
@@ -263,27 +263,69 @@ test("the session keeps a link under its row, and an old pinned tab's link group
 
   assert.equal(SESSION_VERSION, 11, "no new session version, so an older build still opens what this one saves");
   const legacy = {
-    tabs: { pin: { id: "pin", pin: { as: "row" } }, k1: { id: "k1" }, k2: { id: "k2" }, x: { id: "x" } },
-    groups: { g1: { id: "g1", windowId: "w", profileId: "default", tabIds: ["k1", "k2"], autoUngroup: true, pinnedOpenerId: "pin" }, g2: { id: "g2", windowId: "w", profileId: "default", tabIds: ["x"] } },
+    tabs: [{ id: "pin", pin: { as: "row" } }, { id: "k1" }, { id: "k2" }, { id: "x" }, { id: "y" }],
+    groups: [
+      { id: "g1", windowId: "w", profileId: "default", tabIds: ["k1", "k2"], autoUngroup: true, pinnedOpenerId: "pin" },
+      { id: "g2", windowId: "w", profileId: "default", tabIds: ["x"] },
+      { id: "g3", windowId: "w", profileId: "default", tabIds: ["y"], pinned: true, pinnedOpenerId: "pin" },
+    ],
+    parkedPins: { default: { tabs: [], groups: [{ id: "g4", pinned: true, pinnedOpenerId: "pin" }] } },
   };
-  const once = layoutWithPinChildMarkers(structuredClone(legacy));
-  assert.equal(layoutWithPinChildMarkers(once), once, "a second run changes nothing");
-  assert.deepEqual(Object.keys(once.groups), ["g2"]);
-  assert.deepEqual(Object.values(once.tabs).map((t) => t.pinChildOf), [undefined, "pin", "pin", undefined]);
+  const once = sessionWithPinChildMarkers(structuredClone(legacy));
+  assert.deepEqual(sessionWithPinChildMarkers(once), once, "a second run changes nothing");
+  assert.deepEqual(once.groups.map((g) => g.id), ["g2", "g3"], "a group the user pinned stays a folder");
+  assert.ok(once.groups.every((g) => !("pinnedOpenerId" in g)) && !("pinnedOpenerId" in once.parkedPins.default.groups[0]));
+  assert.deepEqual(once.tabs.map((t) => t.pinChildOf), [undefined, "pin", "pin", undefined, undefined]);
 
   const tab = (id, extra = {}) => ({ id, windowId: "w1", profileId: "default", url: `https://${id}.com/`, title: id, favicon: null, pin: null, muted: false, zoom: 1, customTitle: null, customIcon: null, pinnedUrl: null, openerId: null, page: { kind: "idle" }, createdAt: 0, lastActiveAt: 0, ...extra });
   stub.docs.set("session.json", JSON.stringify({
     version: 11,
     profiles: { default: { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 } },
     profileOrder: ["default"],
-    windows: [{ id: "w1", profileId: "default", tabIds: ["row", "k1", "k2", "x"], activeTabIds: { default: "row" }, frame: null, createdAt: 0 }],
+    windows: [{ id: "w1", profileId: "default", tabIds: ["row", "y", "k1", "k2", "x"], activeTabIds: { default: "row" }, frame: null, createdAt: 0 }],
     windowOrder: ["w1"],
-    tabs: [tab("row", { pin: { as: "row" }, pinnedUrl: "https://row.com/" }), tab("k1"), tab("k2"), tab("x")],
-    groups: [{ id: "g1", windowId: "w1", profileId: "default", name: "", icon: null, color: null, collapsed: false, pinned: false, tabIds: ["k1", "k2"], createdAt: 0, autoUngroup: true, pinnedOpenerId: "row" }],
+    tabs: [tab("row", { pin: { as: "row" }, pinnedUrl: "https://row.com/" }), tab("y"), tab("k1"), tab("k2"), tab("x")],
+    groups: [
+      { id: "g1", windowId: "w1", profileId: "default", name: "", icon: null, color: null, collapsed: false, pinned: false, tabIds: ["k1", "k2"], createdAt: 0, autoUngroup: true, pinnedOpenerId: "row" },
+      { id: "g3", windowId: "w1", profileId: "default", name: "Kept", icon: null, color: null, collapsed: false, pinned: true, tabIds: ["y"], createdAt: 0, autoUngroup: true, pinnedOpenerId: "row" },
+    ],
     splits: [],
   }));
   S().hydrate(loadSession());
-  assert.deepEqual(pinned("w1"), ["row", "k1", "k2"]);
+  assert.deepEqual(pinned("w1"), ["row", "k1", "k2", "[Kept]"]);
   assert.deepEqual(list("w1"), ["x"]);
-  assert.deepEqual(Object.keys(S().groups), []);
+  assert.deepEqual(Object.keys(S().groups), ["g3"], "the folder made from an opener group with Pin Group stays");
+  assert.equal(S().groups.g3.pinned, true);
+  assert.equal("pinnedOpenerId" in S().groups.g3, false);
+  assert.equal(S().tabs.y.pinChildOf, undefined, "its tab stays a pinned-folder tab that ⌘W only unloads");
+  assert.deepEqual([...stub.docs.keys()].filter((k) => k.includes("unreadable")), [], "converting old groups never counts as rows lost");
+});
+
+test("with tabs on top, ⌘1–9 and Shift-click follow the strip, where links sit after the pinned tabs", () => {
+  const { w, p, q, a } = pinnedRowWithLinks({ tabLayout: "top" });
+  const c1 = link(w, p, "c1");
+  const c2 = link(w, p, "c2");
+  assert.deepEqual(numberedTabs(S(), w), [p, q, c1, c2, a]);
+  S().activate(p);
+  S().clickTab(w, q, { shiftKey: true });
+  assert.deepEqual(S().selection[w], [p, q], "the range stops at the pinned tab clicked");
+  S().updateSettings({ tabLayout: "sidebar" });
+  assert.deepEqual(numberedTabs(S(), w), [p, c1, c2, q, a], "back in the sidebar they nest again");
+});
+
+test("New Group, Add to Group and a split end the link's place under its opener, like a drag does", () => {
+  const { w, p, a } = pinnedRowWithLinks();
+  const c1 = link(w, p, "c1");
+  const c2 = link(w, p, "c2");
+  const c3 = link(w, p, "c3");
+  takePinChildCounts();
+  const g = S().groupTabs([c1, a], { pinned: false });
+  assert.equal(S().tabs[c1].pinChildOf, undefined);
+  S().ungroup(g);
+  assert.ok(list(w).includes("c1") && !pinned(w).includes("c1"), "ungrouped, it stays in the list");
+  const g2 = S().createGroup([a]);
+  S().addTabsToGroup(g2, [c2]);
+  assert.equal(S().tabs[c2].pinChildOf, undefined);
+  assert.deepEqual(takePinChildCounts().pin_children_moved_out, 2);
+  if (S().createSplit([c3, a])) assert.equal(S().tabs[c3].pinChildOf, undefined);
 });

@@ -9,7 +9,7 @@ import { groupIndex, splitIndex, stableList } from "../browser/structure";
 import { tileCells } from "../pins/tileFolders";
 import { entryId, entryKey, parseEntry } from "./entryKey";
 import { sameList } from "../../lib/lists";
-import { nestedOpener, pinChildIndex, type PinChildIndex } from "../pins/pinChildren";
+import { nestedOpener, shownPinChildren, type PinChildIndex } from "../pins/pinChildren";
 
 type SidebarEntries = { tiles: string[]; cells: string[]; pinned: string[]; list: string[] };
 
@@ -24,7 +24,7 @@ function sameEntryTabs(tabs: BrowserState["tabs"], was: BrowserState["tabs"]): b
   return true;
 }
 
-export type EntriesInputs = Pick<BrowserState, "tabs" | "windows" | "groups" | "splits"> & Pick<BrowserState["settings"], "newTabOpens" | "minimalismMode">;
+export type EntriesInputs = Pick<BrowserState, "tabs" | "windows" | "groups" | "splits"> & Pick<BrowserState["settings"], "newTabOpens" | "minimalismMode" | "tabLayout">;
 
 export const entriesInputs = (s: BrowserState): EntriesInputs => ({
   tabs: s.tabs,
@@ -33,6 +33,7 @@ export const entriesInputs = (s: BrowserState): EntriesInputs => ({
   splits: s.splits,
   newTabOpens: s.settings.newTabOpens,
   minimalismMode: s.settings.minimalismMode,
+  tabLayout: s.settings.tabLayout,
 });
 
 export function sameEntriesInputs(s: BrowserState, was: EntriesInputs): boolean {
@@ -42,6 +43,7 @@ export function sameEntriesInputs(s: BrowserState, was: EntriesInputs): boolean 
     s.splits === was.splits &&
     s.settings.newTabOpens === was.newTabOpens &&
     s.settings.minimalismMode === was.minimalismMode &&
+    s.settings.tabLayout === was.tabLayout &&
     sameEntryTabs(s.tabs, was.tabs);
   if (same) was.tabs = s.tabs;
   return same;
@@ -76,10 +78,10 @@ function computeEntries(s: BrowserState, windowId: string, profileId?: string): 
   const rootGroups = groupIndex(s.groups);
   const splits = splitIndex(s.splits);
   const seen = new Set<string>();
-  const kids = pinChildIndex(s);
+  const kids = shownPinChildren(s, windowId);
   for (const id of viewTabIds(s, windowId, profileId)) {
     const tab = s.tabs[id]!;
-    if (!shownRow(s, tab) || (tab.pinChildOf && nestedOpener(s, id))) continue;
+    if (!shownRow(s, tab) || (kids.size && tab.pinChildOf && nestedOpener(s, id))) continue;
     if (tab.pin) {
       if (!isPinnedRow(tab)) tiles.push(id);
       else {
@@ -205,7 +207,7 @@ export function groupEntries(s: BrowserState, groupId: string): string[] {
   if (!g) return [];
   const cached = groupMemo.get(g);
   const groupsId = groupsIdOf(s.groups);
-  const kids = pinChildIndex(s);
+  const kids = shownPinChildren(s, g.windowId);
   if (cached && cached.splits === s.splits && cached.groupsId === groupsId && cached.kids === kids && sameEntryTabs(s.tabs, cached.tabs)) {
     cached.tabs = s.tabs;
     return cached.result;

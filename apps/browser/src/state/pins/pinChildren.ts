@@ -1,9 +1,10 @@
 import type { BrowserState } from "../browser/store";
-import type { BrowserWindow, Tab, TabGroup } from "../browser/types";
+import type { BrowserWindow, Tab } from "../browser/types";
 import { inPinnedContainer, isPinnedRow } from "../browser/model";
 import { changedIds, linkEdits } from "../browser/changes";
 import { groupIndex, pinnedGroupMembers, splitIndex } from "../browser/structure";
-import { isString } from "../../lib/decode";
+import { isFields, isString, isStringList } from "../../lib/decode";
+import type { SavedObject } from "../../lib/savedDocument";
 import { sameList } from "../../lib/lists";
 import { notePinChildrenPlaced } from "../telemetry/pinChildCounts";
 import type { ConsentToken } from "../telemetry/consentPeriod";
@@ -77,8 +78,12 @@ function steady(was: PinChildIndex | undefined, next: Map<string, readonly strin
 
 export const pinChildrenOf = (s: Indexed, openerId: string): readonly string[] => pinChildIndex(s).get(openerId) ?? NONE;
 
-export function inShownOrder(s: Indexed, ids: string[]): string[] {
-  const index = pinChildIndex(s);
+const tabsOnTop = (s: Partial<Pick<BrowserState, "windows" | "settings">>, windowId: string) => (s.windows?.[windowId]?.tabLayout || s.settings?.tabLayout) === "top";
+
+export const shownPinChildren = (s: BrowserState, windowId: string): PinChildIndex => (tabsOnTop(s, windowId) ? NO_CHILDREN : pinChildIndex(s));
+
+export function inShownOrder(s: BrowserState, windowId: string, ids: string[]): string[] {
+  const index = shownPinChildren(s, windowId);
   if (!index.size) return ids;
   const present = new Set(ids);
   const nested = new Set<string>();
@@ -140,18 +145,31 @@ export function settledPinChildren(before: BrowserState, after: BrowserState, mo
   return { ...after, tabs: linkEdits(tabs, after.tabs, edited) };
 }
 
-type GatheredGroup = TabGroup & { pinnedOpenerId?: unknown };
+const LEGACY_OPENER = "pinnedOpenerId";
 
-export function layoutWithPinChildMarkers<T extends { tabs?: Record<string, Tab>; groups?: Record<string, TabGroup> }>(data: T): T {
-  const groups = Object.values(data.groups ?? {}) as GatheredGroup[];
-  if (!groups.some((g) => "pinnedOpenerId" in g)) return data;
-  const parents = new Set(groups.map((g) => g.parentId));
+const withoutLegacyOpener = (g: unknown): unknown => {
+  if (!isFields(g) || !(LEGACY_OPENER in g)) return g;
+  const { [LEGACY_OPENER]: _, ...rest } = g;
+  return rest;
+};
+
+export function sessionWithPinChildMarkers(doc: SavedObject): SavedObject {
+  const rows = Array.isArray(doc.groups) ? doc.groups : [];
+  const parents = new Set(rows.filter(isFields).map((g) => g.parentId));
   const openerOf = new Map<string, string>();
-  const kept: Record<string, TabGroup> = {};
-  for (const { pinnedOpenerId, ...g } of groups) {
-    if (isString(pinnedOpenerId) && !g.parentId && !parents.has(g.id)) for (const id of g.tabIds) openerOf.set(id, pinnedOpenerId);
-    else kept[g.id] = g;
+  const groups: unknown[] = [];
+  for (const g of rows) {
+    const opener = isFields(g) ? g[LEGACY_OPENER] : undefined;
+    const gathered = isFields(g) && isString(opener) && g.pinned !== true && !g.parentId && !parents.has(g.id) && isStringList(g.tabIds);
+    if (gathered) for (const id of g.tabIds as string[]) openerOf.set(id, opener);
+    else groups.push(withoutLegacyOpener(g));
   }
-  const marked = (t: Tab): Tab => (openerOf.has(t.id) && !t.pinChildOf ? { ...t, pinChildOf: openerOf.get(t.id)! } : t);
-  return { ...data, groups: kept, ...(data.tabs ? { tabs: Object.fromEntries(Object.entries(data.tabs).map(([id, t]) => [id, marked(t)])) } : {}) };
+  const marked = (t: unknown): unknown => (isFields(t) && isString(t.id) && openerOf.has(t.id) && !isString(t.pinChildOf) ? { ...t, pinChildOf: openerOf.get(t.id) } : t);
+  const parked = (park: unknown): unknown => (isFields(park) && Array.isArray(park.groups) ? { ...park, groups: park.groups.map(withoutLegacyOpener) } : park);
+  return {
+    ...doc,
+    ...(Array.isArray(doc.groups) ? { groups } : {}),
+    ...(Array.isArray(doc.tabs) && openerOf.size ? { tabs: doc.tabs.map(marked) } : {}),
+    ...(isFields(doc.parkedPins) ? { parkedPins: Object.fromEntries(Object.entries(doc.parkedPins).map(([p, park]) => [p, parked(park)])) } : {}),
+  };
 }

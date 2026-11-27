@@ -177,7 +177,7 @@ export function clickedSelection(s: BrowserState, windowId: string, tabId: strin
     return { selection: next.length > 1 ? next : [], anchor: tabId };
   }
   if (!mods.shiftKey) return null;
-  const view = inShownOrder(s, viewTabIds(s, windowId));
+  const view = inShownOrder(s, windowId, viewTabIds(s, windowId));
   const anchor = (anchorOutdated(s, windowId) ? undefined : s.selectionAnchors[windowId]?.tabId) ?? active ?? tabId;
   const from = view.indexOf(anchor);
   const to = view.indexOf(tabId);

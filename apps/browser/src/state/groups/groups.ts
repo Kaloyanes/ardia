@@ -16,6 +16,7 @@ import type { CloseOptions } from "../tabs/tabs";
 import { isRegularWindow } from "../windows/small";
 import { noteSharedGroupUngroup, noteSharedGroupUnpin } from "../telemetry/sharedGroupCounts";
 import { keepUngroupedTabs, unpinsMirrors, withMirrorsUnpinned } from "./sharedUngroupSplits";
+import { settledPinChildren } from "../pins/pinChildren";
 
 export { ancestorIds, canNest, commonGroup, depthOf, depthsIn, descendantIds, groupPath, innermostGroupOf, nestGroups, reparent, rootOf, rootsIn, withParent } from "./groupNesting";
 
@@ -202,7 +203,7 @@ export const createGroupsSlice: StateCreator<BrowserState, [], [], GroupsSlice> 
       const nested = nestGroups({ ...leaveGroups(s.groups, new Set(adding)), [groupId]: { ...group, tabIds: [...group.tabIds, ...adding] } });
       const groups = adding.reduce(withShownTab, nested);
       const window = { ...w, tabIds: placeGroups(block, groups, w.id) };
-      return { groups: syncGroupOrder(groups, window), windows: { ...s.windows, [w.id]: window } };
+      return settledPinChildren(s, { ...s, groups: syncGroupOrder(groups, window), windows: { ...s.windows, [w.id]: window } }, adding);
     });
   },
 
