@@ -213,7 +213,7 @@ export function noteHostTabClosed(host: ArdiaHost, key: string): () => void {
   const owner = claims.get(host)?.get(key);
   if (!owner) return () => {};
   owner.closed = true;
-  return () => { owner.closed = false; };
+  return () => { if (!owner.disposed) owner.closed = false; };
 }
 
 export function showInPlaceOf(from: HostTab, to: HostTab, accepted?: (shown: TabViewport) => void): boolean {

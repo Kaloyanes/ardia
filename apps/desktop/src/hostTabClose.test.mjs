@@ -60,6 +60,7 @@ function stage(close) {
     subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     remove: (key) => { const { [key]: _, ...tabs } = state.tabs; set({ ...state, tabs }); },
     sleep: (key) => set({ ...state, tabs: { ...state.tabs, [key]: { ...state.tabs[key], page: { kind: "asleep" } } } }),
+    wake: (key) => set({ ...state, tabs: { ...state.tabs, [key]: loaded(key) } }),
     activate: (id) => set({ ...state, windows: { main: { ...state.windows.main, activeTabIds: { default: id } } } }),
   };
   const errors = [];
@@ -172,3 +173,27 @@ for (const [close, how, closeErrors] of [
     }
   });
 }
+
+test("a tab woken before its view unmounts keeps presenting when beforeunload kept its page", async () => {
+  const { host, sent, store, view, errors, stop } = stage("defers");
+  try {
+    const stopLifecycle = startHostTabLifecycle(host, store);
+    const a = await view("a");
+    await a.viewport({ rect: RECT, visible: true });
+    store.sleep("a");
+    await settle();
+    assert.equal(a.presentsNow(), false);
+    store.wake("a");
+    await settle();
+    assert.equal(a.presentsNow(), true);
+    sent.length = 0;
+    const moved = { ...RECT, width: RECT.width - 100 };
+    await a.viewport({ rect: moved, visible: true });
+    await a.presentation(true);
+    assert.deepEqual(sent.map((call) => call.method), ["tab.viewport", "tab.presentations"]);
+    assert.deepEqual(errors, []);
+    stopLifecycle();
+  } finally {
+    stop();
+  }
+});
