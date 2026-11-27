@@ -7,18 +7,13 @@ export const ICONS_SNAP = 40;
 
 export const ICON_PEEK_DWELL_MS = 180;
 
-export const STRIP_TOP_GAP = 6;
-
 export const stripInset = (ICON_STRIP.width - ICON_STRIP.square) / 2;
 
 export const stripPitch = ICON_STRIP.square + ICON_STRIP.gap;
 
 export const stripExpandSnap = ICON_STRIP.width + ICONS_SNAP;
 
-export function stripContentTop(frame: number, toolbar: { center: number; button: number } | null): number {
-  if (!toolbar) return frame + STRIP_TOP_GAP;
-  return Math.max(frame + STRIP_TOP_GAP, Math.round(frame + toolbar.center - ICON_STRIP.square / 2));
-}
+export const stripRail = (cardTop: number, cardBottom: number) => ({ top: Math.round(cardTop), bottom: Math.round(cardBottom) });
 
 export const stripBand = (draggingTab: boolean, edgeBand: number) => (draggingTab ? ICON_STRIP.width : edgeBand);
 

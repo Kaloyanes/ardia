@@ -1,6 +1,6 @@
 import { memo, useMemo, type ReactNode } from "react";
 import { PanResponder, Pressable, ScrollView, StyleSheet, View } from "react-native";
-import { ActivitySpinner, clippedContinuousCorners, ink, radius, Symbol, Text, useHover, weight, WindowDragRegion, withAlpha } from "../ui";
+import { ActivitySpinner, clippedContinuousCorners, ink, radius, Symbol, useHover, WindowDragRegion, withAlpha } from "../ui";
 import { useTheme } from "../ui/theme";
 import { useGroup, useIsActiveTab, useProfile, useTab, useTabLive, useWindowProfileId } from "../../state/browser/hooks";
 import { useAnyShownTab, useIconStripCodes } from "../../state/sidebar/hooks";
@@ -18,6 +18,7 @@ import { TabPressArea } from "./TabPressArea";
 import { TabIcon } from "./TabIcon";
 import { FolderOrIcon } from "./AnimatedFolder";
 import { groupTint } from "./tokens";
+import { RestingTile } from "./TileFace";
 import { dragGesture } from "./dragGesture";
 import { ICON_STRIP, stripInset } from "./iconStripGeometry";
 
@@ -31,11 +32,11 @@ const SQUARE = ICON_STRIP.square;
 const ICON = 16;
 const BAR = { width: 3, left: 2 } as const;
 const BADGE = 11;
+const DIVIDER_INSET = 5;
 
-export function IconStrip({ windowId, right, top, actions }: { windowId: string; right: boolean; top: number; actions: StripActions }) {
+export function IconStrip({ windowId, right, top, bottom, actions }: { windowId: string; right: boolean; top: number; bottom: number; actions: StripActions }) {
   const profileId = useWindowProfileId();
   const codes = useIconStripCodes(windowId, profileId);
-  const theme = useTheme();
   return (
     <View style={StyleSheet.absoluteFill}>
       <WindowDragRegion style={StyleSheet.absoluteFill} />
@@ -45,8 +46,11 @@ export function IconStrip({ windowId, right, top, actions }: { windowId: string;
         ))}
         <NewTabSquare windowId={windowId} actions={actions} />
       </ScrollView>
-      <View style={{ height: SQUARE + ICON_STRIP.gap * 3, alignItems: "center", justifyContent: "center", borderTopWidth: StyleSheet.hairlineWidth, borderColor: theme.pinnedDivider }}>
-        <SpaceSquare windowId={windowId} profileId={profileId} actions={actions} />
+      <View style={{ paddingBottom: bottom }}>
+        <StripDivider />
+        <View style={{ height: SQUARE, paddingHorizontal: stripInset }}>
+          <SpaceSquare windowId={windowId} profileId={profileId} actions={actions} />
+        </View>
       </View>
       <ProfileSwipeArea surface="strip" style={StyleSheet.absoluteFill} />
     </View>
@@ -103,15 +107,15 @@ function GroupBar({ bar, right }: { bar: StripBar; right: boolean }) {
 
 function StripDivider() {
   const theme = useTheme();
-  return <View style={{ height: StyleSheet.hairlineWidth, marginHorizontal: stripInset + 4, marginVertical: ICON_STRIP.gap, backgroundColor: theme.pinnedDivider }} />;
+  return <View style={{ height: StyleSheet.hairlineWidth, marginHorizontal: stripInset + DIVIDER_INSET, marginVertical: ICON_STRIP.gap, backgroundColor: theme.pinnedDivider }} />;
 }
 
 function useSquareFill(state: { selected: boolean; hovered: boolean; pressed: boolean; tile: boolean }) {
   const theme = useTheme();
   if (state.pressed) return theme.tabPressed;
-  if (state.selected) return state.tile ? (theme.pinnedSelectedFill ?? theme.tabSelected) : theme.tabSelected;
+  if (state.selected) return theme.tabSelected;
   if (state.hovered) return theme.tabHover;
-  return state.tile ? theme.pinnedResting : ink.clear;
+  return ink.clear;
 }
 
 function Square({ fill, stroke, children }: { fill: string; stroke?: string; children: ReactNode }) {
@@ -168,13 +172,14 @@ const TabSquare = memo(function TabSquare({ windowId, tabId, itemKey, tile, spli
 });
 
 function SquareFor({ selected, hovered, pressed, tile, children }: { selected: boolean; hovered: boolean; pressed: boolean; tile: boolean; children: ReactNode }) {
-  const theme = useTheme();
-  const fill = useSquareFill({ selected, hovered, pressed, tile });
-  return (
-    <Square fill={fill} stroke={tile && !selected ? theme.pinnedRestingStroke : undefined}>
-      {children}
-    </Square>
-  );
+  const fill = useSquareFill({ selected, hovered, pressed, tile: false });
+  if (tile)
+    return (
+      <RestingTile width={SQUARE} height={SQUARE} selected={selected} hovered={hovered} pressed={pressed}>
+        {children}
+      </RestingTile>
+    );
+  return <Square fill={fill}>{children}</Square>;
 }
 
 function Badge({ corner, color, name }: { corner: "top" | "bottom"; color: string; name: string }) {
@@ -203,7 +208,6 @@ function OpenSquare({ item, actions }: { item: Extract<StripItem, { kind: "group
   const theme = useTheme();
   const { hovered, hoverProps } = useHover();
   const group = useGroup(item.kind === "group" ? item.groupId : null, (g) => g);
-  const tint = item.kind === "group" && !item.folder ? groupTint(item.color) : null;
   const handlers = useStripDrag(item.key, actions);
   const title = item.kind === "group" ? group?.name || "Folder" : item.kind === "tileFolder" ? "Folder" : "Live Folder";
   return (
@@ -215,19 +219,11 @@ function OpenSquare({ item, actions }: { item: Extract<StripItem, { kind: "group
           actions.open(item);
         }}
       >
-        {({ pressed }) =>
-          tint ? (
-            <Square fill={withAlpha(tint, pressed ? 0.4 : hovered ? 0.32 : 0.22)} stroke={withAlpha(tint, 0.45)}>
-              <Text size="small" weight="semibold" style={{ color: tint, fontWeight: weight.semibold }}>
-                {String(item.kind === "group" ? item.count : 0)}
-              </Text>
-            </Square>
-          ) : (
-            <SquareFor selected={false} hovered={hovered} pressed={pressed} tile={item.kind === "tileFolder"}>
-              {item.kind === "live" ? <Symbol name="dot.radiowaves.left.and.right" size={13} color={theme.textSecondary} style={{ width: ICON, height: ICON }} /> : <FolderOrIcon icon={group?.icon ?? null} open={false} color={item.kind === "group" ? item.color : null} />}
-            </SquareFor>
-          )
-        }
+        {({ pressed }) => (
+          <SquareFor selected={false} hovered={hovered} pressed={pressed} tile={item.kind === "tileFolder"}>
+            {item.kind === "live" ? <Symbol name="dot.radiowaves.left.and.right" size={13} color={theme.textSecondary} style={{ width: ICON, height: ICON }} /> : <FolderOrIcon icon={group?.icon ?? null} open={item.kind === "group" && item.open} color={item.kind === "group" ? item.color : null} />}
+          </SquareFor>
+        )}
       </Pressable>
     </View>
   );

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 const { stripDragHandoff } = await import("./stripDrag.ts");
-const { handoffPoint, ICON_STRIP, stripContentTop, stripInset, stripPointerOver } = await import("./iconStripGeometry.ts");
+const { handoffPoint, ICON_STRIP, stripInset, stripPointerOver, stripRail } = await import("./iconStripGeometry.ts");
 const { edgeWatchWidth, PEEK_EDGE_STRIP, TAB_DRAG_EDGE_STRIP } = await import("../window/dockMotion.ts");
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -57,10 +57,10 @@ test("the hand-off point sits on the row's icon, or the pointer when the row can
   assert.deepEqual(handoffPoint({ x: 0, y: 0, w: 20, h: 20 }, { x: 3, y: 4 }), { x: 10, y: 10 });
 });
 
-test("the strip's first icon lines up with the toolbar's buttons, and without a toolbar sits just under the frame", () => {
-  assert.equal(stripContentTop(9, { center: 21, button: 28 }), 9 + 21 - ICON_STRIP.square / 2);
-  assert.equal(stripContentTop(9, null), 15);
-  assert.equal(stripContentTop(0, { center: 4, button: 8 }), 6, "never above the gap under the frame");
+test("the strip's first and last squares line up with the page card's top and bottom edges, on whole points", () => {
+  assert.deepEqual(stripRail(9, 9), { top: 9, bottom: 9 });
+  assert.deepEqual(stripRail(37.5, 6), { top: 38, bottom: 6 });
+  assert.equal((ICON_STRIP.width - ICON_STRIP.square) / 2, stripInset);
   assert.equal(stripPointerOver(45, false, 800), true);
   assert.equal(stripPointerOver(46, false, 800), false);
   assert.equal(stripPointerOver(760, true, 800), true);

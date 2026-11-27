@@ -13,13 +13,8 @@ export type StripItem =
   | { kind: "divider"; key: string }
   | { kind: "tab"; key: string; tabId: string; bar: StripBar | null }
   | { kind: "split"; key: string; splitId: string; tabIds: string[]; bar: StripBar | null }
-  | { kind: "group"; key: string; groupId: string; color: GroupColor | null; count: number; folder: boolean; bar: StripBar | null }
+  | { kind: "group"; key: string; groupId: string; color: GroupColor | null; open: boolean; bar: StripBar | null }
   | { kind: "live"; key: string; liveFolderId: string };
-
-const showsMembers = (s: BrowserState, groupId: string) => {
-  const g = s.groups[groupId];
-  return !!g && !g.collapsed && g.color !== null && g.color !== "none";
-};
 
 function entryItems(s: BrowserState, entry: string, bar: StripBar | null, out: StripItem[]) {
   const { kind, id } = parseEntry(entry);
@@ -33,11 +28,8 @@ function entryItems(s: BrowserState, entry: string, bar: StripBar | null, out: S
   if (kind !== "group") return;
   const g = s.groups[id];
   if (!g) return;
-  if (!showsMembers(s, id)) {
-    const folder = g.color === null || g.color === "none";
-    out.push({ kind: "group", key: entry, groupId: id, color: g.color, count: g.tabIds.length, folder, bar });
-    return;
-  }
+  out.push({ kind: "group", key: entry, groupId: id, color: g.color, open: !g.collapsed, bar });
+  if (g.collapsed) return;
   const members = groupEntries(s, id);
   members.forEach((member, i) => entryItems(s, member, { color: g.color, first: i === 0, last: i === members.length - 1 }, out));
 }
@@ -73,7 +65,7 @@ export const stripItemCode = (item: StripItem): string => {
     case "split":
       return [item.kind, item.key, item.splitId, item.tabIds.join(","), bar].join(SEP);
     case "group":
-      return [item.kind, item.key, item.groupId, item.color ?? "", String(item.count), item.folder ? 1 : 0, bar].join(SEP);
+      return [item.kind, item.key, item.groupId, item.color ?? "", item.open ? 1 : 0, bar].join(SEP);
     case "live":
       return [item.kind, item.key, item.liveFolderId].join(SEP);
   }
@@ -86,7 +78,7 @@ const barOf = (code: string | undefined): StripBar | null => {
 };
 
 export function stripItemOf(code: string): StripItem {
-  const [kind, key, a = "", b = "", c = "", d = "", e = ""] = code.split(SEP) as [StripItem["kind"], string, ...string[]];
+  const [kind, key, a = "", b = "", c = "", d = ""] = code.split(SEP) as [StripItem["kind"], string, ...string[]];
   switch (kind) {
     case "tile":
       return { kind, key, tabId: a };
@@ -99,7 +91,7 @@ export function stripItemOf(code: string): StripItem {
     case "split":
       return { kind, key, splitId: a, tabIds: b ? b.split(",") : [], bar: barOf(c) };
     case "group":
-      return { kind, key, groupId: a, color: (b || null) as GroupColor | null, count: Number(c), folder: d === "1", bar: barOf(e) };
+      return { kind, key, groupId: a, color: (b || null) as GroupColor | null, open: c === "1", bar: barOf(d) };
     case "live":
       return { kind, key, liveFolderId: a };
   }

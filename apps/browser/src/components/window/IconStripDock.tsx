@@ -4,7 +4,7 @@ import { useSettings } from "../../state/browser/hooks";
 import { useWindowSettings } from "../../state/browser/keyedWatch";
 import { autoHidesTabsIn, iconStripIn } from "../../state/browser/model";
 import { useWindowRootWidth } from "../../state/windows/rootSize";
-import { useAddressBarInSidebar, useCardTopInset } from "../../state/windows/layout";
+import { useCardTopInset } from "../../state/windows/layout";
 import { expandWindowSidebar, followWindowWidth } from "../../state/sidebar/sidebarMode";
 import { toggleFolderPanel } from "../../state/sidebar/tileFolderUi";
 import { updateGroup } from "../../state/groups/actions";
@@ -12,10 +12,9 @@ import type { StripItem } from "../../state/sidebar/iconStrip";
 import { noteIconStripPeek, noteIconStripPress } from "../../state/telemetry/dockCounts";
 import { consentToken } from "../../state/telemetry/client";
 import { IconStrip, type StripActions } from "../sidebar/IconStrip";
-import { ICON_PEEK_DWELL_MS, ICON_STRIP, stripContentTop, stripExpandSnap } from "../sidebar/iconStripGeometry";
+import { ICON_PEEK_DWELL_MS, ICON_STRIP, stripExpandSnap, stripRail } from "../sidebar/iconStripGeometry";
 import { stripDragHandoff } from "../sidebar/stripDrag";
 import { useResizeDrag } from "../sidebar/useResizeDrag";
-import { useToolbarRow } from "../toolbar/useToolbarRow";
 import { useCardFrame } from "./cardFrame";
 import { PEEK_IN_MS } from "./tokens";
 import { dockedCardInset } from "./dockMotion";
@@ -43,9 +42,7 @@ export function IconStripDock({ windowId, right, shown, moving, fullscreen, peek
   const collapsedByChoice = useWindowSettings(windowId, (s) => autoHidesTabsIn(s, windowId));
   const frame = useCardFrame();
   const cardTop = useCardTopInset(frame.inset);
-  const toolbarRow = useToolbarRow();
-  const addressInSidebar = useAddressBarInSidebar();
-  const top = stripContentTop(cardTop, addressInSidebar ? null : toolbarRow);
+  const rail = stripRail(cardTop, frame.inset);
   const slide = peek.current.slide;
   const under = useMemo(() => ({ opacity: slide.interpolate({ inputRange: [0, 1], outputRange: [1, 0], extrapolate: "clamp" }) }), [slide]);
   const actions = useMemo<StripActions>(() => {
@@ -86,7 +83,7 @@ export function IconStripDock({ windowId, right, shown, moving, fullscreen, peek
       style={{ position: "absolute", [right ? "right" : "left"]: 0, top: 0, bottom: 0, width: ICON_STRIP.width }}
     >
       <Animated.View style={[StyleSheet.absoluteFill, under]}>
-        <IconStrip windowId={windowId} right={right} top={top} actions={actions} />
+        <IconStrip windowId={windowId} right={right} top={rail.top} bottom={rail.bottom} actions={actions} />
       </Animated.View>
       {collapsedByChoice && shown ? <StripEdge windowId={windowId} right={right} /> : null}
     </View>

@@ -30,29 +30,27 @@ test("Top Apps come first as one column, then a divider, then the tabs in sideba
   assert.deepEqual(kinds(items), [`tile:${t.google}`, `tile:${t.youtube}`, "divider", `tab:${t.slack}`, `tab:${t.facebook}`, `tab:${t.netflix}`, `tab:${t.github}`, `tab:${t.docs}`]);
 });
 
-test("an open tab group shows its members with a bar in its colour, and a collapsed one is one square with its count", () => {
+test("every group and folder shows its own icon, and while it's open its tabs follow it with a bar in its colour", () => {
   const t = seeded();
   const group = S().createGroup([t.facebook, t.netflix], { name: "Watch", color: "red" });
+  const folder = S().createGroup([t.github, t.docs], { name: "Code" });
+  S().updateGroup(folder, { color: null });
   let items = iconStripItems(S(), t.w, t.profile);
-  const members = items.filter((i) => i.kind === "tab" && i.bar);
-  assert.deepEqual(members.map((i) => [i.tabId, i.bar]), [
-    [t.facebook, { color: "red", first: true, last: false }],
-    [t.netflix, { color: "red", first: false, last: true }],
+  const after = (groupId) => items.slice(items.findIndex((i) => i.kind === "group" && i.groupId === groupId));
+  assert.deepEqual(after(group).slice(0, 3).map((i) => [i.kind, i.kind === "group" ? i.open : i.tabId, i.bar]), [
+    ["group", true, null],
+    ["tab", t.facebook, { color: "red", first: true, last: false }],
+    ["tab", t.netflix, { color: "red", first: false, last: true }],
   ]);
+  assert.deepEqual(after(folder).slice(0, 3).map((i) => [i.kind, i.kind === "group" ? i.open : i.tabId, i.bar]), [
+    ["group", true, null],
+    ["tab", t.github, { color: null, first: true, last: false }],
+    ["tab", t.docs, { color: null, first: false, last: true }],
+  ], "a folder without a colour follows the same rule");
   S().updateGroup(group, { collapsed: true });
   items = iconStripItems(S(), t.w, t.profile);
-  const square = items.find((i) => i.kind === "group");
-  assert.deepEqual(square && { id: square.groupId, color: square.color, count: square.count, folder: square.folder }, { id: group, color: "red", count: 2, folder: false });
-  assert.equal(items.some((i) => i.kind === "tab" && i.tabId === t.facebook), false);
-});
-
-test("a folder without a colour is one folder square, open or not, so a click can open it in the full sidebar", () => {
-  const t = seeded();
-  const folder = S().createGroup([t.github, t.docs], { name: "Code" });
-  const square = iconStripItems(S(), t.w, t.profile).find((i) => i.kind === "group");
-  assert.equal(square?.groupId, folder);
-  assert.equal(square?.folder, true);
-  assert.equal(square?.count, 2);
+  assert.deepEqual(after(group)[0].open, false);
+  assert.equal(items.some((i) => i.kind === "tab" && i.tabId === t.facebook), false, "a closed group keeps its tabs inside");
 });
 
 test("every item survives its string code, so the strip re-renders only when one changes", () => {
