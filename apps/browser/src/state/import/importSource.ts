@@ -8,13 +8,13 @@ import { createProfile } from "../profiles/actions";
 import { noteImportedSpaces } from "../telemetry/usage";
 import { noteArcImport, noteDiaSidebar, noteDiaTabProfiles, noteFirefoxFavicons, noteImportCore, noteImportRun, noteUntitledBookmarks } from "../telemetry/importRuns";
 import type { ConsentToken } from "../telemetry/client";
-import { adoptSpaceIdentity, applyResult, emptyCounts, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
+import { adoptSpaceIdentity, applyResult, emptyCounts, holdNativeLogins, importFavorites, importDiaProfile, profileColorFor, profileNamed, untitledLinks } from "./apply";
 import type { BrowserProfile, BrowserSource, DiaTabsResult, ImportCounts, ImportedExtension, ImportKind, ImportedSearchEngine, ImportResult } from "./apply";
 import { diaProfilesFor, diaProfilesWithoutFolder } from "./diaTabs";
 import { importArcSpace, importDiaSpace } from "./sidebarTree";
 import { arcNotes, importArcArchive, importArcRouting, withArcGlyph } from "./arcExtras";
 import { planSidebar } from "./sidebarPlan";
-import { APP_TAB_KINDS, ARC_ONCE_KINDS, DIA_SIDEBAR_KINDS, importNow, IMPORT_KINDS, importSignal, importsBySpaces, startProgress, updateStatus, type SourceOutcome } from "./flow";
+import { APP_TAB_KINDS, ARC_ONCE_KINDS, DIA_SIDEBAR_KINDS, importNow, IMPORT_KINDS, importsBySpaces, startProgress, updateStatus, type SourceOutcome } from "./flow";
 import { importModule } from "./importApi";
 import type { HeldLogins } from "./importOutcome";
 import type { ExtensionGroup } from "./extensionListing";
@@ -111,10 +111,11 @@ const nothingRead = (browserId: string, profileId: string, failed: ImportKind[])
   warnings: [],
 });
 
-export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<ImportKind>, withoutKey: boolean, consent: ConsentToken | null, collecting: boolean): Promise<{ outcome: SourceOutcome; logins: HeldLogins } | undefined> {
+export type SourceJob = { source: BrowserSource; wanted: ReadonlySet<ImportKind>; withoutKey: boolean; consent: ConsentToken | null; signal: AbortSignal; collecting: boolean };
+
+export async function runImportJob({ source, wanted, withoutKey, consent, signal, collecting }: SourceJob): Promise<{ outcome: SourceOutcome; logins: HeldLogins } | undefined> {
   const { sourceProfiles, spaces, target } = importNow();
   const api = importModule();
-  const signal = importSignal();
   const bySpaces = importsBySpaces(source);
   const selected = source.profiles.filter((p) => sourceProfiles.includes(p.id) || (bySpaces && p.spaces?.some((sp) => spaces.includes(sp.id))));
   const tabsLocked = (p: BrowserProfile) => withoutKey && !!p.tabsNeedKey;
@@ -151,10 +152,11 @@ export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<Im
   let withheld = 0;
   const app: { read: Promise<AppTabs> | null } = { read: null };
   const held: HeldLogins = [];
-  const withLogins = (dest: string, r: ImportResult): ImportResult => {
-    if (!collecting || !r.credentials.length) return r;
-    held.push({ profileId: dest, credentials: r.credentials });
-    return { ...r, credentials: [] };
+  const withLogins = (dest: string, r: ImportResult, kinds: ImportKind[]): ImportResult => {
+    if (!collecting) return r;
+    const native = kinds.includes("passwords") ? holdNativeLogins(r) : { result: r, held: null };
+    if (native.held || native.result.credentials.length) held.push({ profileId: dest, credentials: native.result.credentials, native: native.held });
+    return { ...native.result, credentials: [] };
   };
   const askApp = () => (app.read ??= readAppTabs());
   if (appUpFront) void askApp();
@@ -244,7 +246,7 @@ export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<Im
       const dest = members[plan.dataPartition]?.[0] ?? (await nextDestination(result.profile?.name ?? profile.name, result.profile?.color));
       members[plan.dataPartition] ??= [dest];
       arc.home ||= dest;
-      add(await applyResult(dest, withLogins(dest, { ...result, favorites: [] }), source.name, profileKinds, refused, consent));
+      add(await applyResult(dest, withLogins(dest, { ...result, favorites: [] }, profileKinds), source.name, profileKinds, refused, consent));
       let essentials = 0;
       plan.favorites.forEach((tabs, partition) => {
         const group = members[partition] ?? [];
@@ -264,7 +266,7 @@ export async function runImportJob(source: BrowserSource, wanted: ReadonlySet<Im
       profileDest = dest;
     } else {
       const dest = await nextDestination(result.profile?.name ?? profile.name, result.profile?.color ?? profile.color);
-      add(await applyResult(dest, withLogins(dest, result), source.name, profileKinds, refused, consent));
+      add(await applyResult(dest, withLogins(dest, result, profileKinds), source.name, profileKinds, refused, consent));
       if (readsSidebarFile(profile) && !sidebarMissed && result.spaces.length) {
         const r = await importDiaSpaces(dest, result, nextDestination, signal, consent);
         if (signal.aborted) return;

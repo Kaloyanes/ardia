@@ -34,7 +34,10 @@ export function useImportDevHandle(flow: ImportFlow) {
       picked: flow.picked,
       run: flow.run ? { ids: flow.run.ids, at: flow.run.at, finished: flow.run.outcomes.map((o) => ({ id: o.source.id, skipped: o.skipped })) } : null,
       skip: skipSource,
-      next: continueImport,
+      next: () => {
+        const { name } = step;
+        if (name === "choose" || name === "profiles") continueImport(name);
+      },
       conflicts: conflicts
         ? {
             count: conflicts.conflicts.length,

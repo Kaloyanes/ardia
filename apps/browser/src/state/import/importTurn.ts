@@ -1,25 +1,57 @@
-import { importSignal } from "./flow";
+import type { ConsentToken } from "../telemetry/choice";
 
-export type ImportTurn = { signal: AbortSignal; turn: number };
+export type ImportTurn = { token: number; signal: AbortSignal; consent: ConsentToken | null };
 
-let turnCount = 0;
-let readingTurn: number | null = null;
+type LiveTurn = ImportTurn & { controller: AbortController; reading: boolean; settled: boolean };
 
-export const currentTurn = (): ImportTurn => ({ signal: importSignal(), turn: turnCount });
+let tokens = 0;
+let live: LiveTurn | null = null;
 
-export const ownsTurn = (held: ImportTurn) => !held.signal.aborted && held.signal === importSignal() && held.turn === turnCount;
+export const STALE: unique symbol = Symbol("stale");
 
-export function nextTurn() {
-  turnCount += 1;
-  readingTurn = null;
+export function startTurn(consent: ConsentToken | null, session: AbortSignal): ImportTurn {
+  live?.controller.abort();
+  const controller = new AbortController();
+  if (session.aborted) controller.abort();
+  else session.addEventListener("abort", () => controller.abort(), { once: true });
+  live = { token: ++tokens, signal: controller.signal, consent, controller, reading: false, settled: false };
+  return live;
 }
 
-export function claimRead(): ImportTurn | null {
-  if (readingTurn === turnCount) return null;
-  readingTurn = turnCount;
-  return currentTurn();
+export function endTurn() {
+  live?.controller.abort();
+  live = null;
 }
 
-export function releaseRead(held: ImportTurn) {
-  if (readingTurn === held.turn) readingTurn = null;
+export const ownsTurn = (turn: ImportTurn) => !turn.signal.aborted && live?.token === turn.token && !live.settled;
+
+export const liveTurn = (): ImportTurn | null => (live && !live.signal.aborted && !live.settled ? live : null);
+
+export async function whileOwned<T>(turn: ImportTurn, work: Promise<T>): Promise<T | typeof STALE> {
+  try {
+    const value = await work;
+    return ownsTurn(turn) ? value : STALE;
+  } catch (error) {
+    if (!ownsTurn(turn)) return STALE;
+    throw error;
+  }
+}
+
+export function claimRead(turn: ImportTurn): boolean {
+  if (!ownsTurn(turn) || live!.reading) return false;
+  live!.reading = true;
+  return true;
+}
+
+export function releaseRead(turn: ImportTurn) {
+  if (live?.token === turn.token) live.reading = false;
+}
+
+export const readingNow = (turn: ImportTurn) => live?.token === turn.token && live.reading;
+
+export function claimSettle(turn: ImportTurn): boolean {
+  if (!ownsTurn(turn)) return false;
+  live!.settled = true;
+  live!.reading = false;
+  return true;
 }

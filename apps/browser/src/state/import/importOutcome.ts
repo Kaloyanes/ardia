@@ -1,8 +1,10 @@
 import { orWarn } from "../../lib/fallback";
+import { engineProfile } from "../browser/model";
 import { useBrowser } from "../browser/store";
+import { listPasswords } from "../site/passwords";
 import { consentToken, type ConsentToken } from "../telemetry/client";
-import { noteConflictsResolved, noteMultiImport, notePasswordsKeptExisting } from "../telemetry/importRuns";
-import { emptyCounts, saveLogins, type Credential, type ImportCounts, type ImportedExtension } from "./apply";
+import { noteConflictsResolved, noteMultiImport, notePasswordsKeptExisting, notePasswordsNotSaved } from "../telemetry/importRuns";
+import { emptyCounts, saveLogins, type Credential, type HeldNativeLogins, type ImportCounts, type ImportedExtension } from "./apply";
 import { finishImport, importNow, patchImport, showAfterDoneDelay, type ConflictChoiceSet, type ImportFailure, type SourceOutcome, type SourceTally } from "./flow";
 import { listFoundExtensions } from "./listedExtensions";
 import {
@@ -11,6 +13,7 @@ import {
   planLogins,
   resolutionOf,
   resolvedLogins,
+  sameOriginKey,
   type CollectedLogin,
   type ConflictPick,
   type LoginPlan,
@@ -18,17 +21,27 @@ import {
 } from "./passwordConflicts";
 import { adoptImportedEngine } from "./searchEngine";
 
-export type HeldLogins = { profileId: string; credentials: readonly Credential[] }[];
+export type HeldLogins = { profileId: string; credentials: readonly Credential[]; native: HeldNativeLogins | null }[];
+type HeldNative = { browserId: string; profileId: string; consent: ConsentToken | null; held: HeldNativeLogins };
 
 const collected: CollectedLogin[] = [];
+const natives: HeldNative[] = [];
 let unresolvedRun: { outcomes: SourceOutcome[]; plan: LoginPlan; signal: AbortSignal } | null = null;
 
-export function collectLogins(browserId: string, profileId: string, credentials: readonly Credential[]) {
-  for (const credential of credentials) collected.push({ browserId, profileId, credential });
+export function collectLogins(browserId: string, consent: ConsentToken | null, held: HeldLogins) {
+  for (const { profileId, credentials, native } of held) {
+    for (const credential of credentials) collected.push({ browserId, profileId, credential, consent });
+    if (native) natives.push({ browserId, profileId, consent, held: native });
+  }
+}
+
+export function discardLogins(held: HeldLogins) {
+  for (const { native } of held) native?.discard();
 }
 
 export function forgetCollectedLogins() {
   collected.length = 0;
+  for (const n of natives.splice(0)) n.held.discard();
   unresolvedRun = null;
 }
 
@@ -55,9 +68,8 @@ const runConsent = (outcomes: SourceOutcome[]): ConsentToken | null =>
 
 export async function finishRun(outcomes: SourceOutcome[], signal: AbortSignal) {
   const plan = planLogins(collected.splice(0), outcomes.map((o) => o.source.id));
-  const consent = runConsent(outcomes);
-  noteMultiImport({ browsers: outcomes.length, skipped: outcomes.filter((o) => o.skipped).length, merged: plan.merged, conflicts: plan.conflicts.length }, consent);
-  if (!plan.conflicts.length) return completeRun(outcomes, resolvedLogins(plan, {}), consent, signal);
+  noteMultiImport({ browsers: outcomes.length, skipped: outcomes.filter((o) => o.skipped).length, merged: plan.merged, conflicts: plan.conflicts.length }, runConsent(outcomes));
+  if (!plan.conflicts.length) return completeRun(outcomes, resolvedLogins(plan, {}), signal);
   unresolvedRun = { outcomes, plan, signal };
   const none: ConflictChoiceSet = { choices: {}, base: {} };
   showAfterDoneDelay(signal, { name: "conflicts", conflicts: plan.conflicts, pick: "newest", custom: null, view: "summary", draft: none, filter: "", saving: false });
@@ -72,18 +84,66 @@ function addCounts(into: ImportCounts, from: ImportCounts) {
 const KEPT_EXISTING = (n: number) =>
   `${n === 1 ? "1 password wasn't" : `${n} passwords weren't`} changed: Ardia already has a different one saved for ${n === 1 ? "that account" : "those accounts"}.`;
 
-async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], saveConsent: ConsentToken | null, signal: AbortSignal) {
-  const results = await saveLogins(logins, saveConsent, signal);
+type SaveTally = { browserId: string; consent: ConsentToken | null; saved: number; keptExisting: number; failed: number };
+
+async function savedAccounts(profileIds: readonly string[]): Promise<Map<string, Set<string> | null>> {
+  const lists = await Promise.all(
+    profileIds.map(async (profileId) => {
+      const list = await listPasswords(engineProfile(useBrowser.getState(), profileId)).catch(orWarn(null));
+      return [profileId, list ? new Set(list.map((p) => JSON.stringify([sameOriginKey(p.origin), p.username]))) : null] as const;
+    }),
+  );
+  return new Map(lists);
+}
+
+async function saveRunLogins(logins: LoginToSave[], signal: AbortSignal): Promise<SaveTally[]> {
+  const tallies: SaveTally[] = [];
+  const tallyOf = (browserId: string, consent: ConsentToken | null) => {
+    const found = tallies.find((t) => t.browserId === browserId && t.consent === consent);
+    if (found) return found;
+    const made = { browserId, consent, saved: 0, keptExisting: 0, failed: 0 };
+    tallies.push(made);
+    return made;
+  };
+  const results = await saveLogins(logins, signal);
+  const refused = logins.filter((_, i) => results[i] === "refused");
+  const accounts = refused.length ? await savedAccounts([...new Set(refused.map((l) => l.profileId))]) : new Map<string, Set<string> | null>();
+  logins.forEach((l, i) => {
+    const tally = tallyOf(l.browserId, l.consent);
+    const result = results[i];
+    if (result === "saved") tally.saved += 1;
+    else if (result === "refused" && accounts.get(l.profileId)?.has(JSON.stringify([sameOriginKey(l.origin), l.username]))) tally.keptExisting += 1;
+    else if (result) tally.failed += 1;
+  });
+  for (const n of natives.splice(0)) {
+    if (signal.aborted) {
+      n.held.discard();
+      continue;
+    }
+    const written = await n.held.write(n.profileId);
+    const tally = tallyOf(n.browserId, n.consent);
+    tally.saved += written.saved;
+    tally.keptExisting += written.keptExisting;
+    tally.failed += written.failed;
+  }
+  for (const t of tallies) {
+    notePasswordsKeptExisting(t.keptExisting, t.consent);
+    notePasswordsNotSaved(t.failed, t.consent);
+  }
+  return tallies;
+}
+
+async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], signal: AbortSignal) {
+  const saves = await saveRunLogins(logins, signal);
   if (signal.aborted) return;
-  const keptExisting = results.filter((r) => r === "refused").length;
-  notePasswordsKeptExisting(keptExisting, saveConsent);
+  const keptExisting = saves.reduce((n, t) => n + t.keptExisting, 0);
   const consent = runConsent(outcomes);
   const imported = outcomes.filter((o) => !o.skipped);
   const tallies: SourceTally[] = imported.map((o) => ({ id: o.source.id, name: o.source.name, counts: { ...o.counts } }));
-  logins.forEach((l, i) => {
-    const tally = tallies.find((t) => t.id === l.browserId);
-    if (results[i] === "saved" && tally) tally.counts.passwords += 1;
-  });
+  for (const s of saves) {
+    const tally = tallies.find((t) => t.id === s.browserId);
+    if (tally) tally.counts.passwords += s.saved;
+  }
   const total = emptyCounts();
   for (const t of tallies) addCounts(total, t.counts);
   dismissBookmarksOffer(total);
@@ -94,6 +154,10 @@ async function completeRun(outcomes: SourceOutcome[], logins: LoginToSave[], sav
   const found = new Map<string, ImportedExtension>();
   for (const o of imported) for (const e of o.extensions.found) if (!found.has(e.id)) found.set(e.id, e);
   const failures: ImportFailure[] = imported.flatMap((o) => o.failures.map((f) => ({ ...f, browser: o.source.name })));
+  for (const o of imported) {
+    const unsaved = saves.some((s) => s.browserId === o.source.id && s.failed > 0);
+    if (unsaved && !failures.some((f) => f.browser === o.source.name && f.kind === "passwords")) failures.push({ kind: "passwords", profiles: [], browser: o.source.name });
+  }
   const notes = [
     ...outcomes.filter((o) => o.skipped).map((o) => `${o.source.name} was skipped.`),
     ...imported.flatMap((o) => o.notes.map((n) => `${o.source.name}: ${n}`)),
@@ -175,5 +239,5 @@ export async function importChosenPasswords() {
   unresolvedRun = null;
   patchImport({ step: { ...step, saving: true } });
   noteConflictsResolved({ resolution: resolutionOf(pick), changedByHand: handChanges(custom) }, consent);
-  await completeRun(outcomes, resolvedLogins(plan, choices), consent, signal);
+  await completeRun(outcomes, resolvedLogins(plan, choices), signal);
 }

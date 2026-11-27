@@ -1,10 +1,11 @@
 import { hostOf } from "@ardia/core";
-import { originOf, urlParts } from "../../lib/urlParts";
+import { canonicalIpv6 } from "../../lib/urlParts";
 import type { Credential } from "../../platform/importModule";
+import type { ConsentToken } from "../telemetry/choice";
 import { originOfLogin } from "../site/savedPasswords";
 
-export type CollectedLogin = { browserId: string; profileId: string; credential: Credential };
-export type LoginToSave = { browserId: string; profileId: string; origin: string; username: string; password: string };
+export type CollectedLogin = { browserId: string; profileId: string; credential: Credential; consent: ConsentToken | null };
+export type LoginToSave = { browserId: string; profileId: string; origin: string; username: string; password: string; consent: ConsentToken | null };
 export type ConflictVersion = { browserId: string; at: number };
 export type PasswordConflict = { id: string; profileId: string; origin: string; site: string; username: string; versions: ConflictVersion[] };
 export type ConflictChoices = Readonly<Record<string, string>>;
@@ -18,9 +19,35 @@ export type LoginPlan = {
 };
 
 export const loginOrigin = (c: Credential) => originOfLogin(c.realm?.startsWith("http") ? c.realm : c.url);
+const DEFAULT_PORTS: Readonly<Record<string, number>> = { http: 80, https: 443, ftp: 21, ws: 80, wss: 443 };
+const ORIGIN_PARTS = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^:/?#]*)(?::(\d+))?(?=$|[/?#])/i;
+
 export function sameOriginKey(origin: string): string {
-  const parts = urlParts(origin);
-  return parts?.authority && parts.host ? originOf(parts) : origin.toLowerCase();
+  const found = ORIGIN_PARTS.exec(origin.trim());
+  if (!found) return origin.trim().toLowerCase();
+  const scheme = found[1]!.toLowerCase();
+  const rawHost = found[2]!.toLowerCase();
+  const host = rawHost.startsWith("[") ? `[${canonicalIpv6(rawHost.slice(1, -1)) ?? rawHost.slice(1, -1)}]` : rawHost.replace(/\.$/, "");
+  const port = found[3] === undefined ? null : Number(found[3]);
+  const shown = port === null || port === DEFAULT_PORTS[scheme] ? "" : `:${port}`;
+  return `${scheme}://${host}${shown}`;
+}
+
+export type ProfileName = { id: string; name: string; icon?: string | null };
+
+export function profileLabels(ids: readonly string[], profiles: readonly ProfileName[]): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const id of ids) {
+    const own = profiles.find((p) => p.id === id);
+    if (!own) {
+      labels[id] = "another profile";
+      continue;
+    }
+    const namesakes = profiles.filter((p) => p.name.trim().toLowerCase() === own.name.trim().toLowerCase());
+    const iconsDiffer = namesakes.filter((p) => (p.icon ?? "") === (own.icon ?? "")).length === 1 && !!own.icon;
+    labels[id] = namesakes.length < 2 ? own.name : iconsDiffer ? `${own.icon} ${own.name}` : `${own.name} (${namesakes.indexOf(own) + 1})`;
+  }
+  return labels;
 }
 
 export const loginAge = (c: Pick<Credential, "created" | "lastUsed">) => Math.max(c.lastUsed ?? 0, c.created ?? 0);
@@ -29,14 +56,14 @@ type Held = { login: LoginToSave; at: number };
 
 export function planLogins(collected: readonly CollectedLogin[], order: readonly string[]): LoginPlan {
   const groups = new Map<string, Map<string, Held>>();
-  for (const { browserId, profileId, credential } of collected) {
+  for (const { browserId, profileId, credential, consent } of collected) {
     const origin = loginOrigin(credential);
     if (!origin || !credential.password) continue;
     const key = JSON.stringify([profileId, sameOriginKey(origin), credential.username]);
     const byBrowser = groups.get(key) ?? new Map<string, Held>();
     const at = loginAge(credential);
     const earlier = byBrowser.get(browserId);
-    if (!earlier || at >= earlier.at) byBrowser.set(browserId, { login: { browserId, profileId, origin, username: credential.username, password: credential.password }, at });
+    if (!earlier || at >= earlier.at) byBrowser.set(browserId, { login: { browserId, profileId, origin, username: credential.username, password: credential.password, consent }, at });
     groups.set(key, byBrowser);
   }
   const rank = (id: string) => {

@@ -14,8 +14,8 @@ import {
   pickConflictVersions,
   setConflictFilter,
 } from "../../../state/import/importOutcome";
-import { conflictBrowsers, conflictRows, matchingConflicts, newerCounts } from "../../../state/import/passwordConflicts";
-import { useProfileRecords } from "../../../state/profiles/hooks";
+import { conflictBrowsers, conflictRows, matchingConflicts, newerCounts, profileLabels } from "../../../state/import/passwordConflicts";
+import { useProfileOrder, useProfileRecords } from "../../../state/profiles/hooks";
 import { Button, Group, Row, SearchField, Segmented, space, Symbol, Text, useTheme } from "../../ui";
 import { Spacer, Title } from "../Parts";
 import { BrowserIcon, ChoiceRow } from "../Rows";
@@ -84,6 +84,11 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
   const nameOf = (id: string) => browsers.find((b) => b.id === id)?.name ?? id;
   const iconOf = (id: string) => browsers.find((b) => b.id === id)?.iconPath;
   const profiles = useProfileRecords();
+  const order = useProfileOrder();
+  const destinations = profileLabels(
+    [...new Set(step.conflicts.map((c) => c.profileId))],
+    order.flatMap((id) => (profiles[id] ? [{ id, name: profiles[id].name, icon: profiles[id].icon }] : [])),
+  );
   const shown = conflictRows(matchingConflicts(step.conflicts, step.filter));
   const choices = step.draft.choices;
   const now = Date.now();
@@ -107,7 +112,7 @@ function ChooseEach({ flow, step }: { flow: ImportFlow; step: ConflictsStep }) {
             <Row
               key={c.id}
               title={title}
-              description={[c.username || "No username", showsProfile ? `into ${profiles[c.profileId]?.name ?? "another profile"}` : ""].filter(Boolean).join(" · ")}
+              description={[c.username || "No username", showsProfile ? `into ${destinations[c.profileId]}` : ""].filter(Boolean).join(" · ")}
             >
               <Segmented
                 value={choices[c.id] ?? c.versions[0]!.browserId}

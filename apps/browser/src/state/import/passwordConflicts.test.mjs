@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { changedChoices, choicesFor, conflictBrowsers, loginAge, matchingConflicts, newerCounts, newestVersion, planLogins, resolutionOf, resolvedLogins } = await import("./passwordConflicts.ts");
 
-const login = (browserId, profileId, url, username, password, times = {}) => ({ browserId, profileId, credential: { url, username, password, ...times } });
+const login = (browserId, profileId, url, username, password, times = {}) => ({ browserId, profileId, credential: { url, username, password, ...times }, consent: null });
 const ORDER = ["chrome", "arc", "firefox"];
 
 test("the same password for the same account from several browsers is saved once, under the first browser", () => {
@@ -16,7 +16,7 @@ test("the same password for the same account from several browsers is saved once
   );
   assert.deepEqual(plan.conflicts, []);
   assert.equal(plan.merged, 2);
-  assert.deepEqual(plan.clean, [{ browserId: "chrome", profileId: "p", origin: "https://mail.example", username: "me", password: "same" }]);
+  assert.deepEqual(plan.clean, [{ browserId: "chrome", profileId: "p", origin: "https://mail.example", username: "me", password: "same", consent: null }]);
 });
 
 test("different passwords for one account make one conflict naming every browser that has it, in run order", () => {
@@ -130,4 +130,21 @@ test("rows that would read the same show their full origin, and the profile show
   assert.deepEqual(conflictRows(plan.conflicts).map((r) => [r.title, r.showsProfile]), [["https://www.site.example", false], ["http://site.example", false]]);
   const two = planLogins([login("chrome", "a", "https://x.example/", "me", "1"), login("arc", "a", "https://x.example/", "me", "2"), login("chrome", "b", "https://x.example/", "me", "3"), login("arc", "b", "https://x.example/", "me", "4")], ORDER);
   assert.deepEqual(conflictRows(two.conflicts).map((r) => [r.title, r.showsProfile]), [["x.example", true], ["x.example", true]]);
+});
+
+test("a zero-padded default port and an expanded IPv6 address are the same origin", async () => {
+  const { sameOriginKey } = await import("./passwordConflicts.ts");
+  assert.equal(sameOriginKey("https://Accounts.Example.test:0443"), "https://accounts.example.test");
+  assert.equal(sameOriginKey("http://site.example:080"), "http://site.example");
+  assert.equal(sameOriginKey("https://site.example:8443"), "https://site.example:8443");
+  assert.equal(sameOriginKey("http://[0:0:0:0:0:0:0:1]:8080"), "http://[::1]:8080");
+  assert.equal(sameOriginKey("http://[::1]:8080"), "http://[::1]:8080");
+  const plan = planLogins([login("chrome", "p", "https://a.example:0443/x", "me", "1"), login("arc", "p", "https://A.EXAMPLE", "me", "2")], ORDER);
+  assert.equal(plan.conflicts.length, 1);
+});
+
+test("destination profiles that share a name are told apart by their icon, or by their place", async () => {
+  const { profileLabels } = await import("./passwordConflicts.ts");
+  const profiles = [{ id: "a", name: "Work", icon: null }, { id: "b", name: "work", icon: null }, { id: "c", name: "Home", icon: "🏠" }, { id: "d", name: "Home", icon: "🌴" }, { id: "e", name: "Solo" }];
+  assert.deepEqual(profileLabels(["a", "b", "c", "d", "e", "gone"], profiles), { a: "Work (1)", b: "work (2)", c: "🏠 Home", d: "🌴 Home", e: "Solo", gone: "another profile" });
 });

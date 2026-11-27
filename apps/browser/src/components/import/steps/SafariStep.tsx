@@ -6,14 +6,14 @@ import { ErrorText, FileDrop, FullDiskAccessSteps, Spacer, TargetPicker, Title }
 import { importLayout } from "../tokens";
 import { backTo, canGoBackToChoose, closeImport, inRun, runStepLabel, setImportTarget, setSafariCookies, type ImportFlow } from "../../../state/import/flow";
 import { recheckAccess, skipSource } from "../../../state/import/runImport";
-import { chooseSafariExport, importSafariDirect, importSafariExport, openFullDiskAccessSettings } from "../../../state/import/fileImports";
+import { importSafariDirect, importSafariExport, openFullDiskAccessSettings, pickSafariExport } from "../../../state/import/fileImports";
 
 const EXPORT_STEPS = ["Open Safari", "File menu › Export Browsing Data to File", `Upload the .zip file to ${APP}`];
 
 export function SafariBody({ flow }: { flow: ImportFlow }) {
   const { source, fullDiskAccess, safariCookies, step } = flow;
   const error = step.name === "safari" ? step.error : null;
-  const drop = <FileDrop onFile={(path) => void importSafariExport(path)} onChoose={chooseSafariExport} />;
+  const drop = <FileDrop onFile={(path) => void importSafariExport(path)} onChoose={() => void pickSafariExport()} />;
   if (fullDiskAccess)
     return (
       <>

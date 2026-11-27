@@ -88,24 +88,30 @@ export async function importHistory(
   return added;
 }
 
-export async function saveLogins(logins: readonly Omit<LoginToSave, "browserId">[], consent: ConsentToken | null, signal?: AbortSignal): Promise<PasswordSaveResult[]> {
-  const tally = passwordImportTally("browser", consent);
+export async function saveLogins(logins: readonly Omit<LoginToSave, "browserId">[], signal?: AbortSignal): Promise<PasswordSaveResult[]> {
+  const tallies = new Map<ConsentToken | null, ReturnType<typeof passwordImportTally>>();
+  const tallyFor = (consent: ConsentToken | null) => tallies.get(consent) ?? tallies.set(consent, passwordImportTally("browser", consent)).get(consent)!;
   const results: PasswordSaveResult[] = [];
   for (const l of logins) {
     if (signal?.aborted) break;
-    results.push(await tally.settle(savePassword(engineProfile(useBrowser.getState(), l.profileId), l.origin, l.username, asSecret("password", l.password))));
+    results.push(await tallyFor(l.consent).settle(savePassword(engineProfile(useBrowser.getState(), l.profileId), l.origin, l.username, asSecret("password", l.password))));
   }
-  tally.done();
+  for (const tally of tallies.values()) tally.done();
   return results;
 }
 
-async function importPasswords(profileId: string, credentials: Credential[], consent: ConsentToken | null): Promise<number> {
+async function importPasswords(profileId: string, credentials: Credential[], consent: ConsentToken | null, signal?: AbortSignal): Promise<number> {
   const logins = credentials.flatMap((c) => {
     const origin = loginOrigin(c);
-    return origin && c.password ? [{ profileId, origin, username: c.username, password: c.password }] : [];
+    return origin && c.password ? [{ profileId, origin, username: c.username, password: c.password, consent }] : [];
   });
-  return (await saveLogins(logins, consent)).filter((r) => r === "saved").length;
+  return (await saveLogins(logins, signal)).filter((r) => r === "saved").length;
 }
+
+export type NativeLoginsWritten = { saved: number; keptExisting: number; failed: number };
+export type HeldNativeLogins = { write(profileId: string): Promise<NativeLoginsWritten>; discard(): void };
+
+export const holdNativeLogins = (result: ImportResult): { result: ImportResult; held: HeldNativeLogins | null } => ({ result, held: null });
 
 async function importNative(
   profileId: string,
@@ -173,14 +179,21 @@ export async function applyResult(
   return counts;
 }
 
-export async function applySafari(profileId: string, data: SafariExport, cookies = true, onFailed?: (kind: ImportKind) => void, consent?: ConsentToken | null): Promise<ImportCounts> {
+export async function applySafari(
+  profileId: string,
+  data: SafariExport,
+  cookies = true,
+  onFailed?: (kind: ImportKind) => void,
+  consent?: ConsentToken | null,
+  signal?: AbortSignal,
+): Promise<ImportCounts> {
   const counts = emptyCounts();
   counts.bookmarks = await importBookmarks(profileId, data.bookmarks, "Safari", consent, onFailed);
   const history = data.profiles.find((p) => !p.name)?.history ?? data.profiles[0]?.history ?? [];
   counts.history = await importHistory(profileId, history, onFailed, consent);
   Object.assign(counts, await importNative(profileId, data.vaultToken, cookies ? ["cookies", "autofill"] : ["autofill"], onFailed));
   if (data.tabs.length) counts.tabs += importTabs(profileId, data.tabs, "Imported");
-  counts.passwords = await importPasswords(profileId, data.credentials, consent ?? null);
+  counts.passwords = signal?.aborted ? 0 : await importPasswords(profileId, data.credentials, consent ?? null, signal);
   return counts;
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { asSecret } from "@ardia/core";
 import { CHOOSER_DEADLINE_MS, IMPORT_IDLE_MS, MAX_SPACE_IDS, UNLOCK_DEADLINE_MS, UNLOCK_LIFETIME_MS, createHostImport, nativeSpaceIds, pendingPasswords } from "./hostImport.ts";
-import { applyPendingPasswords, applyResult, setImportPasswordSink } from "./importApply.ts";
+import { applyPendingPasswords, applyResult, holdNativeLogins, setImportPasswordSink } from "./importApply.ts";
 import { IMPORT_HANDLE_LIFETIME_MS, claimImportHandle, isImportHandle, issueImportHandles } from "./importHandles.ts";
 import { savePassword } from "./importedPasswordSave.ts";
 import { randomBytes } from "node:crypto";
@@ -492,6 +492,27 @@ test("the Linux applyResult adds natively written passwords to the shared counts
   const counts = await applyResult("default", result, "Google Chrome", ["passwords"], (k) => failed.push(k));
   assert.equal(counts.passwords, 0);
   assert.deepEqual(failed, ["passwords"]);
+});
+
+test("in a several-browser run the Linux passwords are held, then written at the end with what was kept and what failed", async () => {
+  const result = { browserId: "chrome", profileId: "Default", history: [], historyCount: 0, tabs: [], tabGroups: [], credentials: [],
+    cookieCount: 0, addressCount: 0, cardCount: 0, spaces: [], favorites: [], favicons: [], failed: [], warnings: [], passwords: { token: TOKEN, count: 4 } };
+  const written = sink({ added: 2, existing: 0, conflicts: 1, invalid: 1 });
+  setImportPasswordSink(written);
+  try {
+    const { result: rest, held } = holdNativeLogins(result);
+    assert.equal("passwords" in rest, false, "applyResult no longer sees the token, so it writes nothing during the turn");
+    assert.equal((await applyResult("default", rest, "Google Chrome", ["passwords"])).passwords, 0);
+    assert.deepEqual(written.log, []);
+    assert.deepEqual(await held.write("default"), { saved: 2, keptExisting: 1, failed: 1 });
+    assert.deepEqual(written.log, [["write", TOKEN, ""]]);
+    const { held: dropped } = holdNativeLogins(result);
+    dropped.discard();
+    assert.deepEqual(written.log.at(-1), ["discard", TOKEN]);
+  } finally {
+    setImportPasswordSink(null);
+  }
+  assert.equal(holdNativeLogins(result).held, null, "with no native sink nothing is held");
 });
 
 test("the Passwords pane's savePassword claims import handles instead of saving them as passwords", async () => {

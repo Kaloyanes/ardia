@@ -86,7 +86,7 @@ export function ChooseFooter({ flow }: { flow: ImportFlow }) {
       <Spacer />
       <TargetPicker target={flow.target} onChange={setImportTarget} />
       <Button title="Cancel" onPress={closeImport} />
-      <Button title="Continue" kind="primary" disabled={nothing} onPress={continueImport} />
+      <Button title="Continue" kind="primary" disabled={nothing} onPress={() => continueImport("choose")} />
     </>
   );
 }

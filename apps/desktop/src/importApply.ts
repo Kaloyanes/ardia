@@ -1,4 +1,4 @@
-import { applyResult as sharedApplyResult, type ImportCounts } from "../../browser/src/state/import/apply.ts";
+import { applyResult as sharedApplyResult, type HeldNativeLogins, type ImportCounts } from "../../browser/src/state/import/apply.ts";
 import { engineProfile, isIncognitoProfile } from "../../browser/src/state/browser/model.ts";
 import { useBrowser } from "../../browser/src/state/browser/store.ts";
 import type { ImportKind, ImportResult } from "../../browser/src/platform/importModule.ts";
@@ -57,4 +57,29 @@ export async function applyResult(
   if (sink) counts.passwords += await applyPendingPasswords(sink, profileId, result, requested, onFailed);
   else if (requested.includes("passwords") && result && (result as { passwords?: unknown }).passwords) onFailed?.("passwords");
   return counts;
+}
+
+export function holdNativeLogins(result: ImportResult): { result: ImportResult; held: HeldNativeLogins | null } {
+  const pending = sink?.pending(result) ?? null;
+  const writer = sink;
+  if (!pending || !writer) return { result, held: null };
+  const { passwords: _held, ...rest } = result as ImportResult & { passwords?: unknown };
+  return {
+    result: rest as ImportResult,
+    held: {
+      async write(profileId: string) {
+        if (isIncognitoProfile(profileId)) {
+          writer.discard(pending.token);
+          return { saved: 0, keptExisting: 0, failed: pending.count };
+        }
+        try {
+          const written = await writer.write(pending.token, engineProfile(useBrowser.getState(), profileId));
+          return { saved: written.added, keptExisting: written.conflicts, failed: written.invalid };
+        } catch {
+          return { saved: 0, keptExisting: 0, failed: pending.count };
+        }
+      },
+      discard: () => writer.discard(pending.token),
+    },
+  };
 }

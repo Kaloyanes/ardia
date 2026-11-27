@@ -103,7 +103,7 @@ export function ProfilesFooter({ flow }: { flow: ImportFlow }) {
         title="Continue"
         kind="primary"
         disabled={bySpaces ? !spaces.length && (source.sidebar !== "zen" || !spacelessProfiles(source).some((p) => sourceProfiles.includes(p.id))) : !sourceProfiles.length}
-        onPress={continueImport}
+        onPress={() => continueImport("profiles")}
       />
     </>
   );

@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { orWarn } from "../../lib/fallback";
 import { IMPORT_WINDOW_ID, takePreferredImportSource } from "../settings/settingsWindows";
 import { requestWindowClose } from "../windows/windowClose";
 import { defaultTarget, openInWebStore, type BrowserProfile, type BrowserSource, type ImportCounts, type ImportedExtension, type ImportedSearchEngine, type ImportKind } from "./apply";
@@ -7,6 +6,7 @@ import type { ExtensionGroup, ExtensionListing } from "./extensionListing";
 import { importModule } from "./importApi";
 import type { ConflictPick, PasswordConflict } from "./passwordConflicts";
 import type { ConsentToken } from "../telemetry/choice";
+import { endTurn } from "./importTurn";
 
 export type KindStatus = "pending" | "active" | "done" | "failed";
 type ImportStatus = Partial<Record<ImportKind, KindStatus>>;
@@ -214,6 +214,7 @@ export const setSafariCookies = (safariCookies: boolean) => patchImport({ safari
 export function backTo(name: "choose" | "profiles") {
   const flow = importNow();
   if (name === "profiles") return patchImport({ step: { name } });
+  endTurn();
   const first = flow.run ? pickedBrowsers(flow)[0] : undefined;
   patchImport({
     ...(flow.run && first ? { ...sourceFields(first, flow.run.chosen), run: null } : { run: null }),
@@ -222,20 +223,6 @@ export function backTo(name: "choose" | "profiles") {
 }
 export const closeImport = () => requestWindowClose(IMPORT_WINDOW_ID);
 export const cancelImport = () => requestWindowClose(IMPORT_WINDOW_ID, () => session.abort());
-
-export async function refreshedAccess(): Promise<BrowserSource | null> {
-  const api = importModule();
-  if (importNow().step.name === "safari") {
-    patchImport({ fullDiskAccess: api.safariHasFullDiskAccess() });
-    return null;
-  }
-  const { signal } = session;
-  const list = await api.listBrowsers().catch(orWarn(null));
-  if (!list || signal.aborted) return null;
-  patchImport({ browsers: list });
-  const updated = list.find((b) => b.id === importNow().source?.id);
-  return updated && !updated.needsFullDiskAccess ? updated : null;
-}
 
 export function openFoundExtensions() {
   const { step, target } = importNow();

@@ -90,6 +90,7 @@ const multiCounts = {
   import_passwords_merged: 0,
   import_password_conflicts: 0,
   import_passwords_kept_existing: 0,
+  import_passwords_not_saved: 0,
   import_conflicts_newest: 0,
   import_conflicts_browser: 0,
   import_conflicts_custom: 0,
@@ -110,6 +111,13 @@ export function noteConflictsResolved(choice: { resolution: "newest" | "browser"
   countFor(consent, () => {
     multiCounts[`import_conflicts_${choice.resolution}`] += 1;
     multiCounts.import_conflict_rows_changed += choice.changedByHand;
+  });
+}
+
+export function notePasswordsNotSaved(count: number, consent: ConsentToken | null) {
+  if (!count) return;
+  countFor(consent, () => {
+    multiCounts.import_passwords_not_saved += count;
   });
 }
 

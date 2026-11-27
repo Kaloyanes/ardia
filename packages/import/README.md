@@ -60,7 +60,7 @@ Shared code: `Model.swift` (`ImportKind`, `ImportResult` and the other result ty
    into the profile's Chrome favicon database with `ac_favicons_set`, so they survive a relaunch without a page load.
    `apps/browser/src/platform/importModule.ts` loads the package lazily.
    Several browsers can be ticked on the choose step: `flow.ts` keeps the queue in `ImportFlow.run`, and each browser
-   takes its own turn through these steps (`runImport.ts` `settleSource` moves on, also after a skip or a failure).
+   takes its own turn through these steps (`importTurn.ts` owns the turn: anything started in it is dropped once the next one starts; `runImport.ts` `settleSource` moves on once per turn, also after a skip or a failure).
    In such a run, passwords aren't saved as they arrive: `importOutcome.ts` holds them, `passwordConflicts.ts` groups
    them by destination profile, origin and username, and differing ones wait on the conflicts step before anything
    is saved. One browser alone still saves them as they arrive.
