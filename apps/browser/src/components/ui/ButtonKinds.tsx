@@ -4,7 +4,7 @@ import { Symbol } from "./Symbol";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useHover } from "./useHover";
 import { HoverFill, HoverSwap } from "./HoverFill";
-import { hex, spaceActionFill, themeFor, useTheme, type Theme } from "./theme";
+import { hex, themeFor, useTheme, type Theme } from "./theme";
 import { ThemeOverride } from "./ThemeOverride";
 import { capsule, closeOnArt, clippedContinuousCorners, continuousCorners, opacity, pillHeight, radius as radii, space, stepperSize, font as typeScale, weight as weights } from "./tokens";
 import { buttonMotion, usePressScaleMotion } from "./motion";
@@ -21,7 +21,7 @@ function pillLook(theme: Theme, tone: "prompt" | "chip", primary: boolean, press
       ? { fill: theme.textPrimary, text: theme.onPrimary, dim: pressed || hovered }
       : { fill: pressed ? theme.toolbarPressed : hovered ? theme.toolbarHover : theme.urlPill, text: theme.textPrimary, dim: false };
   return primary
-    ? { fill: spaceActionFill(theme, pressed ? theme.goButtonPressed : hovered ? theme.goButtonHover : theme.goButton), text: theme.onPrimary, dim: false }
+    ? { fill: pressed ? theme.goButtonPressed : hovered ? theme.goButtonHover : theme.goButton, text: theme.onPrimary, dim: false }
     : { fill: pressed ? theme.promptFillPressed : hovered ? theme.promptFillHover : theme.promptFill, text: theme.textPrimary, dim: false };
 }
 

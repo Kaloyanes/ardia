@@ -166,22 +166,20 @@ const hslOf = (color: string) => {
   return rgbToHsl(r / 255, g / 255, b / 255);
 };
 
-const spaceActionFills = new Map<string, string>();
+const spaceGoFills = new WeakMap<Theme, string>();
 
-export function spaceActionFill(theme: Theme, fill: string): string {
+export function spaceGoFill(theme: Theme): string {
+  const stock = stockRoles(theme).goButton;
   const space = theme.powerUpColor;
-  if (!space || (theme.profileColor === "plum" && !theme.custom)) return fill;
-  const key = `${fill}|${space}`;
-  let shown = spaceActionFills.get(key);
-  if (shown === undefined) {
-    const [, saturation, lightness] = hslOf(fill);
+  if (!space || theme.goButton !== stock || (theme.profileColor === "plum" && !theme.custom)) return theme.goButton;
+  let fill = spaceGoFills.get(theme);
+  if (fill === undefined) {
+    const [, saturation, lightness] = hslOf(stock);
     const [hue, spaceSaturation] = hslOf(space);
-    const alpha = parseColor(fill)[3];
-    const rgb = hslToRgb(hue, Math.min(saturation, spaceSaturation), lightness).map((channel) => channel * 255);
-    shown = toHex(alpha < 1 ? [...rgb, alpha * 255] : rgb);
-    spaceActionFills.set(key, shown);
+    fill = toHex(hslToRgb(hue, Math.min(saturation, spaceSaturation), lightness).map((channel) => channel * 255));
+    spaceGoFills.set(theme, fill);
   }
-  return shown;
+  return fill;
 }
 
 export const quietGoLabel = (theme: Theme): string => readableInk(theme, quietInk(theme), idleGoFill(theme), over(stockRoles(theme).goButtonIdle, stockRoles(theme).ntpBarSolid));
