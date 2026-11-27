@@ -59,3 +59,9 @@ test("a theme file's own Go colour is kept as written, not re-hued", () => {
   const theme = profileTheme({ color: "purple" }, true, "own", palette);
   assert.equal(spaceGoFill(theme), own);
 });
+
+test("a theme file that keeps the stock Go fill but sets its own label colour keeps the stock fill, so its label reads as written", () => {
+  const palette = { revision: 2, dark: { ...colorRoles.dark, onPrimary: "#595959" }, light: colorRoles.light };
+  const theme = profileTheme({ color: "purple" }, true, "own", palette);
+  assert.equal(spaceGoFill(theme), theme.goButton);
+});

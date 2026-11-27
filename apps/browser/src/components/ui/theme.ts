@@ -169,12 +169,12 @@ const hslOf = (color: string) => {
 const spaceGoFills = new WeakMap<Theme, string>();
 
 export function spaceGoFill(theme: Theme): string {
-  const stock = stockRoles(theme).goButton;
+  const stock = stockRoles(theme);
   const space = theme.powerUpColor;
-  if (!space || theme.goButton !== stock || (theme.profileColor === "plum" && !theme.custom)) return theme.goButton;
+  if (!space || theme.goButton !== stock.goButton || theme.onPrimary !== stock.onPrimary || (theme.profileColor === "plum" && !theme.custom)) return theme.goButton;
   let fill = spaceGoFills.get(theme);
   if (fill === undefined) {
-    const [, saturation, lightness] = hslOf(stock);
+    const [, saturation, lightness] = hslOf(stock.goButton);
     const [hue, spaceSaturation] = hslOf(space);
     fill = toHex(hslToRgb(hue, Math.min(saturation, spaceSaturation), lightness).map((channel) => channel * 255));
     spaceGoFills.set(theme, fill);
