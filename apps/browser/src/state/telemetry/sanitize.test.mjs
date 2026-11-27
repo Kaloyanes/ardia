@@ -483,3 +483,14 @@ test("a crash with the engine's posted-task frames sends them as their own entry
   assert.deepEqual(exceptions[1].frames.map((f) => f.function), ["Chromium Framework + 0x2b092fc", "Chromium Framework + 0x83ab024"]);
   assert.deepEqual(nativeCrashExceptions({ frames: [], postedFrames: [] }).exceptions.map((e) => e.type), ["Crash"]);
 });
+
+test("a crash's source places keep their file name through cleanProperties, and anything else in those fields is dropped", () => {
+  assert.deepEqual(cleanProperties({ crash_fatal_at: "logging.cc:843", crash_posted_from: "login_handler.cc:430" }), {
+    crash_fatal_at: "logging.cc:843",
+    crash_posted_from: "login_handler.cc:430",
+  });
+  assert.deepEqual(cleanProperties({ crash_fatal_at: "https://example.com/a.cc:1", crash_posted_from: "/Users/someone/a.cc:2" }), {
+    crash_fatal_at: null,
+    crash_posted_from: null,
+  });
+});

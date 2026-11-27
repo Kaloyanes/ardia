@@ -29,8 +29,8 @@ test("the engine's fatal note in a crash report's asi gives the fatal place, the
     execFileSync("xcrun", ["swiftc", "-O", join(dir, "EngineFatalNote.swift"), join(dir, "main.swift"), "-o", join(dir, "run")], { stdio: "pipe" });
     const note = [
       "ardia-fatal partition_alloc_support.cc:843",
-      "ardia-posted-from LoginHandler::BuildViewAndNotify login_handler.cc:430 Chromium_Framework+0x83ab024",
-      "ardia-task-trace Chromium_Framework+0x2b092fc Chromium_Framework+0x2c378fc",
+      "ardia-posted-from LoginHandler::BuildViewAndNotify login_handler.cc:430 Chromium%20Framework+0x83ab024",
+      "ardia-task-trace Chromium%20Framework+0x2b092fc Chromium%20Framework+0x2c378fc",
       "",
     ].join("\n");
     assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [note] } }), {
@@ -42,11 +42,17 @@ test("the engine's fatal note in a crash report's asi gives the fatal place, the
         { image: "Chromium Framework", offset: 0x2c378fc },
       ],
     });
-    const unnamed = "ardia-fatal logging.cc:12\nardia-posted-from - -:-1 Chromium_Framework+0x10\nardia-task-trace\n";
+    const unnamed = "ardia-fatal logging.cc:12\nardia-posted-from - -:-1 Chromium%20Framework+0x10\nardia-task-trace\n";
     assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [unnamed] } }), {
       fatalAt: "logging.cc:12",
       postedFrames: [{ image: "Chromium Framework", offset: 0x10 }],
     });
+    const names = "ardia-fatal check.cc:7\nardia-posted-from f a.cc:1 Ardia%20Core+0x10\nardia-task-trace libfoo_bar.dylib+0x20 100%25%20sure+0x30\n";
+    assert.deepEqual(parsed(dir, { asi: { "Ardia Core": [names] } }).postedFrames, [
+      { image: "Ardia Core", offset: 0x10 },
+      { image: "libfoo_bar.dylib", offset: 0x20 },
+      { image: "100% sure", offset: 0x30 },
+    ], "spaces and percent signs come back from their escapes and underscores stay underscores");
     const hostile = "ardia-fatal /Users/someone/secret.cc:1\nardia-posted-from f https://example.com/a.cc:2 /Users/x/y+0x1 a b+0x2\n";
     assert.deepEqual(parsed(dir, { asi: { "Chromium Framework": [hostile] } }), {}, "paths, URLs and image names with spaces are dropped");
     assert.deepEqual(parsed(dir, { asi: { libsystem_c: ["abort() called"] } }), {});

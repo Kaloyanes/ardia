@@ -326,6 +326,8 @@ export const nativeCrashTermination = (namespace: string | undefined) => (namesp
 
 type PropertyValue = string | number | boolean | null;
 
+export const SOURCE_PLACE = /^[A-Za-z0-9_.+-]{1,48}:\d{1,6}$/;
+const SOURCE_PLACE_KEY = /^crash_(?:fatal_at|posted_from)$/;
 const WEBUI_PAGE_KEY = /(?:^|_)webui_page$/;
 const WEBUI_PAGES_KEY = /(?:^|_)webui_pages$/;
 const WEBUI_PAGE_NAME = "[a-z0-9-]{1,32}(?:/[a-z0-9-]{1,32})?";
@@ -352,7 +354,8 @@ export function cleanProperties(props: Record<string, unknown>): Record<string, 
     else if (typeof value === "number") {
       if (Number.isFinite(value)) out[key] = value;
     } else if (typeof value === "string") {
-      out[key] = WEBUI_PAGE_KEY.test(key) ? scrubWebuiPage(value) : WEBUI_PAGES_KEY.test(key) ? scrubWebuiPages(value) : scrubText(value, 64);
+      if (SOURCE_PLACE_KEY.test(key)) out[key] = SOURCE_PLACE.test(value) ? value : null;
+      else out[key] = WEBUI_PAGE_KEY.test(key) ? scrubWebuiPage(value) : WEBUI_PAGES_KEY.test(key) ? scrubWebuiPages(value) : scrubText(value, 64);
     }
   }
   return out;

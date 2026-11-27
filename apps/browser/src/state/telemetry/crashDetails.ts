@@ -1,3 +1,5 @@
+import { SOURCE_PLACE } from "./sanitize";
+
 const EXCEPTION_CODES = /^0x([0-9a-f]{1,16})(?:, 0x([0-9a-f]{1,16})(?:, 0x[0-9a-f]{1,16}){0,2})?$/;
 const MAX_CODE = 0xffffffff;
 const NULL_PAGE_END = 0x100000n;
@@ -27,8 +29,6 @@ const THREADS: [RegExp, string][] = [
   [/^com\.apple\.NSEventThread$/, "appkit_events"],
   [/^com\.apple\./, "apple_other"],
 ];
-
-const SOURCE_PLACE = /^[A-Za-z0-9_.+-]{1,48}:\d{1,6}$/;
 
 type NativeCrashDetails = {
   exceptionType?: string;

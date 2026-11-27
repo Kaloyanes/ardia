@@ -4,7 +4,7 @@ enum EngineFatalNote {
   private static let fatalAt = try! NSRegularExpression(pattern: "^ardia-fatal ([A-Za-z0-9_.+-]{1,80}:[0-9]{1,6})$")
   private static let postedFrom = try! NSRegularExpression(
     pattern: "^ardia-posted-from (\\S{1,160}) ([A-Za-z0-9_.+-]{1,80}:-?[0-9]{1,6}|-:-?[0-9]{1,6}) ?(.*)$")
-  private static let frame = try! NSRegularExpression(pattern: "^([A-Za-z0-9_.-]{1,64})\\+0x([0-9a-f]{1,16})$")
+  private static let frame = try! NSRegularExpression(pattern: "^([A-Za-z0-9_.%-]{1,192})\\+0x([0-9a-f]{1,16})$")
   private static let maxFrames = 17
 
   static func fields(_ body: [String: Any]) -> [String: Any] {
@@ -30,9 +30,10 @@ enum EngineFatalNote {
     text.split(separator: " ").compactMap { token -> [String: Any]? in
       let word = String(token)
       guard let match = frame.firstMatch(in: word, range: NSRange(word.startIndex..., in: word)),
-        let image = group(match, 1, word), let hex = group(match, 2, word), let offset = Int(hex, radix: 16)
+        let encoded = group(match, 1, word), let image = encoded.removingPercentEncoding, !image.isEmpty, image.count <= 64,
+        let hex = group(match, 2, word), let offset = Int(hex, radix: 16)
       else { return nil }
-      return ["image": image.replacingOccurrences(of: "_", with: " "), "offset": offset]
+      return ["image": image, "offset": offset]
     }
   }
 

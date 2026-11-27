@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <atomic>
 #include <string>
 
 #include "base/location.h"
@@ -30,6 +31,7 @@ __attribute__((used, section("__DATA,__crash_info")))
 CrashReporterAnnotations g_crash_info = {5, 0, 0, 0, 0, 0, 0, 0};
 
 char g_fatal_note[2048];
+std::atomic<bool> g_fatal_note_taken{false};
 logging::LogMessageHandlerFunction g_previous_handler = nullptr;
 
 const char* BaseName(const char* path) {
@@ -65,13 +67,19 @@ size_t AppendAddress(size_t used, uintptr_t address) {
       !info.dli_fbase) {
     return Append(used, " 0x%lx", static_cast<unsigned long>(address));
   }
-  char image[65];
-  strlcpy(image, BaseName(info.dli_fname), sizeof(image));
-  for (char* c = image; *c; ++c) {
-    if (*c == ' ') {
-      *c = '_';
+  char image[193];
+  size_t length = 0;
+  for (const char* c = BaseName(info.dli_fname);
+       *c && length + 4 <= sizeof(image) && length < 3 * 64; ++c) {
+    if (*c == ' ' || *c == '%') {
+      length += static_cast<size_t>(snprintf(image + length,
+                                             sizeof(image) - length, "%%%02X",
+                                             static_cast<unsigned char>(*c)));
+    } else {
+      image[length++] = *c;
     }
   }
+  image[length] = '\0';
   uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
   return Append(used, " %s+0x%lx", image,
                 static_cast<unsigned long>(address - base));
@@ -104,7 +112,8 @@ bool NoteFatal(int severity,
                int line,
                size_t message_start,
                const std::string& text) {
-  if (severity == logging::LOGGING_FATAL) {
+  if (severity == logging::LOGGING_FATAL &&
+      !g_fatal_note_taken.exchange(true, std::memory_order_acq_rel)) {
     WriteFatalNote(file, line);
   }
   return g_previous_handler &&
